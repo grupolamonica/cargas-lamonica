@@ -1,0 +1,204 @@
+// backend/src/interface/http/routes.js
+// Registra todos os 49 route registrations (43 endpoints únicos) no Express Router.
+// Importa handlers existentes — sem reescrever lógica de negócio.
+
+import { Router } from "express";
+
+import {
+  resolveAspxSyncStatusResponse,
+  resolveAspxSyncTriggerResponse,
+} from "./aspx-admin/handlers.js";
+
+import { resolveClientLogoResponse } from "./client-logo.handler.js";
+
+import {
+  resolveApprovePublicLoadLeadResponse,
+  resolveCancelLoadClaimResponse,
+  resolveCancelPublicLoadLeadResponse,
+  resolveClaimMaintenanceResponse,
+  resolveConfirmLoadClaimResponse,
+  resolveCreateLoadClaimResponse,
+  resolveCreatePublicLoadLeadPreRegistrationResponse,
+  resolveDriverProfileResponse,
+  resolveGetLoadClaimStatusResponse,
+  resolveOperatorPublicLoadLeadsResponse,
+  resolveQueuePublicLoadLeadViaWhatsAppResponse,
+  resolveRegisterDriverResponse,
+  resolveRevalidateQueuedPublicLeadsResponse,
+  resolveRevalidateQueuedPublicLeadsAspxResponse,
+} from "./load-claims/handlers.js";
+
+import {
+  resolveCreateOperatorCargoResponse,
+  resolveCreateOperatorClienteResponse,
+  resolveCreateOperatorRouteResponse,
+  resolveDeleteOperatorCargoResponse,
+  resolveDeleteOperatorClienteResponse,
+  resolveDuplicateOperatorCargoResponse,
+  resolveOperatorAuditLogsResponse,
+  resolveOperatorCargoListReadModelResponse,
+  resolveOperatorClientesListReadModelResponse,
+  resolveOperatorDashboardReadModelResponse,
+  resolveOperatorDriverFlowMetricsResponse,
+  resolveOperatorDriversListReadModelResponse,
+  resolveOperatorRoutesListReadModelResponse,
+  resolveOperatorSheetSyncResponse,
+  resolveOperatorVehiclesListReadModelResponse,
+  resolveRedactPublicLeadPiiResponse,
+  resolveRevalidateAllVehiclesResponse,
+  resolveSheetMonitorEnrichResponse,
+  resolveSheetMonitorResponse,
+  resolveSheetMonitorRowDetailResponse,
+  resolveToggleOperatorCargoStatusResponse,
+  resolveUpdateOperatorCargoResponse,
+  resolveUpdateOperatorClienteResponse,
+  resolveUpdateOperatorDriverProfileResponse,
+  resolveUpdateOperatorRouteResponse,
+} from "./operator-admin/handlers.js";
+
+import {
+  resolveDriverLoadFacetsResponse,
+  resolveDriverLoadsReadModelResponse,
+  resolveDriverPortalVisitResponse,
+} from "./public-loads/handlers.js";
+
+import { resolveRouteInfoResponse } from "./route-info.handler.js";
+import { resolveSheetSyncResponse } from "./sheet-sync.handler.js";
+
+// Adapter: mescla req.params em req.query para handlers que usam getQueryParam(req, name).
+// getQueryParam lê req.query[name]; params de URL chegam em req.params.
+// req.params sobrescreve req.query — previne injeção de :param via query string (T-02-06).
+function withParams(req) {
+  return { ...req, query: { ...req.query, ...req.params } };
+}
+
+// Wrapper padrão: resolve(request) → { statusCode, payload }
+function wrap(handler) {
+  return async (req, res) => {
+    try {
+      const { statusCode, payload } = await handler(withParams(req));
+      return res.status(statusCode).json(payload);
+    } catch (err) {
+      console.error("[routes] Erro não tratado:", err.message);
+      return res.status(500).json({ error: "InternalServerError" });
+    }
+  };
+}
+
+export function registerRoutes(app) {
+  const router = Router();
+
+  // Sheet sync
+  router.get("/api/sheet-sync", wrap(resolveSheetSyncResponse));
+
+  // Route info (cache headers em 200)
+  router.get("/api/route-info", async (req, res) => {
+    try {
+      const origin = req.query.origin || "";
+      const destination = req.query.destination || "";
+      const { statusCode, payload } = await resolveRouteInfoResponse(origin, destination);
+      if (statusCode === 200) {
+        res.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400");
+      }
+      return res.status(statusCode).json(payload);
+    } catch (err) {
+      console.error("[routes] route-info erro:", err.message);
+      return res.status(500).json({ error: "InternalServerError" });
+    }
+  });
+
+  // Client logo (resposta binária — não JSON)
+  router.get("/api/client-logo", async (req, res) => {
+    try {
+      const rawUrl = req.query.url || "";
+      const { statusCode, headers, body } = await resolveClientLogoResponse(rawUrl);
+      Object.entries(headers || {}).forEach(([k, v]) => res.setHeader(k, v));
+      return res.status(statusCode).send(body);
+    } catch (err) {
+      console.error("[routes] client-logo erro:", err.message);
+      return res.status(500).end();
+    }
+  });
+
+  // Driver / public loads
+  router.get("/api/driver/loads", wrap(resolveDriverLoadsReadModelResponse));
+  router.get("/api/driver/loads/facets", wrap(resolveDriverLoadFacetsResponse));
+  router.post("/api/driver/portal-view", wrap(resolveDriverPortalVisitResponse));
+
+  // Driver registration & profile
+  // resolveDriverProfileResponse despacha GET vs PUT via request.method internamente
+  router.post("/api/drivers/register", wrap(resolveRegisterDriverResponse));
+  router.get("/api/drivers/me", wrap(resolveDriverProfileResponse));
+  router.put("/api/drivers/me", wrap(resolveDriverProfileResponse));
+
+  // Load claims maintenance
+  // resolveClaimMaintenanceResponse despacha GET vs POST via request.method internamente
+  router.get("/api/load-claims/maintenance", wrap(resolveClaimMaintenanceResponse));
+  router.post("/api/load-claims/maintenance", wrap(resolveClaimMaintenanceResponse));
+
+  // Load claims (parametrizadas)
+  router.get("/api/loads/:loadId/claim-status", wrap(resolveGetLoadClaimStatusResponse));
+  router.post("/api/loads/:loadId/pre-registration", wrap(resolveCreatePublicLoadLeadPreRegistrationResponse));
+  router.post("/api/loads/:loadId/claims", wrap(resolveCreateLoadClaimResponse));
+  router.post("/api/loads/:loadId/claims/:claimId/confirm", wrap(resolveConfirmLoadClaimResponse));
+  router.post("/api/loads/:loadId/claims/:claimId/cancel", wrap(resolveCancelLoadClaimResponse));
+
+  // Public load leads
+  router.post("/api/loads/:loadId/leads/:leadId/approve", wrap(resolveApprovePublicLoadLeadResponse));
+  router.post("/api/loads/:loadId/leads/:leadId/cancel", wrap(resolveCancelPublicLoadLeadResponse));
+  router.post("/api/loads/:loadId/leads/:leadId/whatsapp", wrap(resolveQueuePublicLoadLeadViaWhatsAppResponse));
+
+  // Operator dashboard & audit
+  router.get("/api/operator/dashboard", wrap(resolveOperatorDashboardReadModelResponse));
+  router.get("/api/operator/audit-logs", wrap(resolveOperatorAuditLogsResponse));
+  router.get("/api/operator/driver-flow-metrics", wrap(resolveOperatorDriverFlowMetricsResponse));
+
+  // Operator leads
+  router.get("/api/operator/leads", wrap(resolveOperatorPublicLoadLeadsResponse));
+  router.post("/api/operator/leads/revalidate-queued", wrap(resolveRevalidateQueuedPublicLeadsResponse));
+  router.post("/api/operator/leads/revalidate-queued-aspx", wrap(resolveRevalidateQueuedPublicLeadsAspxResponse));
+
+  // ASPX
+  router.get("/api/operator/aspx/status", wrap(resolveAspxSyncStatusResponse));
+  router.post("/api/operator/aspx/sync", wrap(resolveAspxSyncTriggerResponse));
+
+  // Motoristas
+  router.get("/api/operator/motoristas", wrap(resolveOperatorDriversListReadModelResponse));
+  router.patch("/api/operator/motoristas/:driverId", wrap(resolveUpdateOperatorDriverProfileResponse));
+
+  // Veículos
+  router.get("/api/operator/veiculos", wrap(resolveOperatorVehiclesListReadModelResponse));
+  router.post("/api/operator/veiculos/revalidate", wrap(resolveRevalidateAllVehiclesResponse));
+
+  // Sheet monitor
+  router.get("/api/operator/sheet-monitor", wrap(resolveSheetMonitorResponse));
+  router.get("/api/operator/sheet-monitor/row", wrap(resolveSheetMonitorRowDetailResponse));
+  router.post("/api/operator/sheet-monitor/enrich", wrap(resolveSheetMonitorEnrichResponse));
+
+  // PII Redaction
+  router.post("/api/operator/pii-redaction", wrap(resolveRedactPublicLeadPiiResponse));
+
+  // Cargas — CRÍTICO: rota fixa ANTES da parametrizada (T-02-07)
+  // /api/operator/cargas/sync-sheet deve ser registrada antes de /api/operator/cargas/:cargoId
+  // para que Express não interprete "sync-sheet" como valor de :cargoId.
+  router.post("/api/operator/cargas/sync-sheet", wrap(resolveOperatorSheetSyncResponse));
+  router.get("/api/operator/cargas", wrap(resolveOperatorCargoListReadModelResponse));
+  router.post("/api/operator/cargas", wrap(resolveCreateOperatorCargoResponse));
+  router.patch("/api/operator/cargas/:cargoId", wrap(resolveUpdateOperatorCargoResponse));
+  router.delete("/api/operator/cargas/:cargoId", wrap(resolveDeleteOperatorCargoResponse));
+  router.post("/api/operator/cargas/:cargoId/duplicate", wrap(resolveDuplicateOperatorCargoResponse));
+  router.post("/api/operator/cargas/:cargoId/toggle-status", wrap(resolveToggleOperatorCargoStatusResponse));
+
+  // Clientes
+  router.get("/api/operator/clientes", wrap(resolveOperatorClientesListReadModelResponse));
+  router.post("/api/operator/clientes", wrap(resolveCreateOperatorClienteResponse));
+  router.patch("/api/operator/clientes/:clienteId", wrap(resolveUpdateOperatorClienteResponse));
+  router.delete("/api/operator/clientes/:clienteId", wrap(resolveDeleteOperatorClienteResponse));
+
+  // Routes catalog
+  router.get("/api/operator/routes", wrap(resolveOperatorRoutesListReadModelResponse));
+  router.post("/api/operator/routes", wrap(resolveCreateOperatorRouteResponse));
+  router.patch("/api/operator/routes/:routeId", wrap(resolveUpdateOperatorRouteResponse));
+
+  app.use(router);
+}
