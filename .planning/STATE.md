@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 03-03-PLAN.md
-last_updated: "2026-04-24T17:00:36Z"
+status: executing
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-04-24T17:49:07.622Z"
 progress:
   total_phases: 5
-  completed_phases: 2
-  total_plans: 5
-  completed_plans: 9
+  completed_phases: 3
+  total_plans: 9
+  completed_plans: 11
   percent: 100
 ---
 
@@ -32,17 +32,17 @@ progress:
 
 ## Current Position
 
-**Phase:** 3 — IN PROGRESS
-**Plan:** 3/3 complete
-**Status:** Phase 3 Plan 3 complete — docker-compose.yml + traefik.yml + docker-compose.override.yml
-**Progress:** [██████████] 100%
+**Phase:** 5 — EXECUTING
+**Plan:** 1/3 executed
+**Status:** Phase 5 executing — 05-01 complete (deploy.yml + rollback.yml), 05-02 and 05-03 pending
+**Progress:** [██████████] 100% planned
 
 ```
 Phase 1: Structural Split + Clean Architecture   [x] COMPLETE (Plans 1+2+3+4 done)
 Phase 2: Backend Runtime Migration               [x] COMPLETE (Plans 1+2 done)
 Phase 3: Dockerization                           [x] COMPLETE (Plans 1+2+3 done)
-Phase 4: Communication & Env Configuration       [ ] Not started
-Phase 5: CI/CD + VPS Deploy + Cleanup            [ ] Not started
+Phase 4: Communication & Env Configuration       [x] COMPLETE (Plan 1 done)
+Phase 5: CI/CD + VPS Deploy + Cleanup            [~] EXECUTING (1/3 plans done — 05-01 complete)
 ```
 
 ## Performance Metrics
@@ -63,6 +63,7 @@ Phase 5: CI/CD + VPS Deploy + Cleanup            [ ] Not started
 | 3 | 1 | ~5min | 2/2 | 3 created | 2026-04-24 |
 | Phase 03-dockerization P02 | 5m | 2 tasks | 2 files |
 | 3 | 3 | ~2min | 2/2 | 3 created | 2026-04-24 |
+| 05-cicd-vps-deploy | 05-01 | ~5min | 2/2 | 2 created | 2026-04-24 |
 
 ## Accumulated Context
 
@@ -74,6 +75,9 @@ Phase 5: CI/CD + VPS Deploy + Cleanup            [ ] Not started
 | Clean architecture (domain/application/infrastructure/interface) | Separar regras de negócio de integrações externas; facilita testes e evolução | Approved |
 | Docker Compose (não k8s) | Escala atual não justifica k8s; compose é simples de operar em VPS single-host | Approved |
 | GHCR como registry | Integração nativa com GitHub Actions, free para repos privados sob org | Approved |
+| GITHUB_TOKEN for GHCR (no extra PAT) | packages:write permission per-job; no GHCR_TOKEN secret needed | Approved (Phase 5 Plan 1) |
+| SHA tag format: sha-<full-sha> | docker/metadata-action type=sha,format=long; rollback uses exact 40-char sha prefix | Approved (Phase 5 Plan 1) |
+| docker-compose.deploy.yml runtime override | VPS-side file generated per deploy/rollback; pins exact SHA; never committed to repo | Approved (Phase 5 Plan 1) |
 | Traefik como reverse proxy | TLS automático (Let's Encrypt), descoberta por labels, zero-config para novos containers | Approved (Phase 3 Plan 3) |
 | Monorepo (não split repos) | Único repo com `frontend/` + `backend/` facilita contracts e deploy atômico | Approved |
 | Backend HTTP framework: Express v4 | Express escolhido — brownfield-friendly, zero-drama, middleware porta direto de api/[...route].mjs | Approved (Phase 2 Plan 1) |
@@ -131,11 +135,11 @@ Validated capabilities from PROJECT.md — todas devem continuar funcionando ao 
 
 ## Session Continuity
 
-**Stopped at:** Completed 03-03-PLAN.md
+**Stopped at:** Completed 05-01-PLAN.md
 
-**Next action:** Execute Phase 4 — Communication & Env Configuration (CORS, .env.example, ALLOWED_ORIGINS docs)
+**Next action:** Execute Phase 5 — CI/CD + VPS Deploy + Cleanup
 
-**Resume hint:** Phase 3 complete. docker-compose.yml (23f464e): frontend+backend+Traefik v3 on lamonica-net, env_file backend.env, healthchecks, DOMAIN placeholder. traefik.yml (23f464e): entryPoints web+websecure, ACME letsencrypt, exposedByDefault:false. docker-compose.override.yml (4e67c37): vite dev port 8080 (builder target), node --watch port 3001, reverse-proxy on production profile.
+**Resume hint:** Phases 1-4 complete. Phase 5 has 3 plans ready: 05-01 (deploy.yml + rollback.yml, Wave 1), 05-02 (scripts/smoke-test.sh, Wave 1), 05-03 (README + traefik ACME email + Vercel cleanup, Wave 2). Key decisions: Traefik replaces central Nginx on VPS (user confirmed), GHCR org=grupolamonica, branch=main, smoke tests=curl ~10 endpoints. VPS: 76.13.169.177.
 
 ---
 
