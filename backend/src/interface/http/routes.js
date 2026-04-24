@@ -69,7 +69,12 @@ import { resolveSheetSyncResponse } from "./sheet-sync.handler.js";
 // getQueryParam lê req.query[name]; params de URL chegam em req.params.
 // req.params sobrescreve req.query — previne injeção de :param via query string (T-02-06).
 function withParams(req) {
-  return { ...req, query: { ...req.query, ...req.params } };
+  const safeParams = Object.fromEntries(
+    Object.entries(req.params).filter(
+      ([k]) => k !== "__proto__" && k !== "constructor" && k !== "prototype"
+    )
+  );
+  return { ...req, query: { ...req.query, ...safeParams } };
 }
 
 // Wrapper padrão: resolve(request) → { statusCode, payload }
@@ -94,8 +99,8 @@ export function registerRoutes(app) {
   // Route info (cache headers em 200)
   router.get("/api/route-info", async (req, res) => {
     try {
-      const origin = req.query.origin || "";
-      const destination = req.query.destination || "";
+      const origin = (req.query.origin || "").slice(0, 256);
+      const destination = (req.query.destination || "").slice(0, 256);
       const { statusCode, payload } = await resolveRouteInfoResponse(origin, destination);
       if (statusCode === 200) {
         res.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400");
