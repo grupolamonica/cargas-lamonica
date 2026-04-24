@@ -174,6 +174,30 @@ const schemaSql = `
   );
 
   CREATE UNIQUE INDEX ux_vehicles_plate ON public.vehicles (plate);
+
+  CREATE TABLE public.motoristas_historico (
+    cpf              TEXT PRIMARY KEY,
+    nome             TEXT NOT NULL,
+    cnh              TEXT,
+    cnh_validade     TEXT,
+    cnh_categoria    TEXT,
+    cnh_security     TEXT,
+    rg               TEXT,
+    telefone         TEXT,
+    nascimento       TEXT,
+    driver_kind      TEXT,
+    estado           TEXT,
+    cidade           TEXT,
+    angellira_query_id   INTEGER,
+    angellira_sent_date  TIMESTAMPTZ,
+    angellira_limit_date TIMESTAMPTZ,
+    raw_json         JSONB,
+    aspx_found       BOOLEAN NOT NULL DEFAULT FALSE,
+    aspx_display_name TEXT,
+    aspx_matched_at  TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
 `;
 
 function createDatabase() {
@@ -186,6 +210,21 @@ function createDatabase() {
     returns: DataType.uuid,
     impure: true,
     implementation: () => crypto.randomUUID(),
+  });
+
+  // pg-mem does not implement jsonb_build_object natively.
+  // Register for the arity used in fetchOperatorHistoricoDriverSummaries (14 key-value pairs = 28 text args).
+  db.public.registerFunction({
+    name: "jsonb_build_object",
+    args: Array(28).fill(DataType.text),
+    returns: DataType.jsonb,
+    implementation: (...kv) => {
+      const result = {};
+      for (let i = 0; i < kv.length; i += 2) {
+        if (kv[i] != null) result[kv[i]] = kv[i + 1] ?? null;
+      }
+      return result;
+    },
   });
 
   db.public.none(schemaSql);

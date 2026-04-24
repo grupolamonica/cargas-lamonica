@@ -20,7 +20,11 @@ const { mockValidatePublicLeadPreRegistration } = vi.hoisted(() => ({
 vi.mock("./public-lead-validation.js", () => ({
   validatePublicLeadPreRegistration: mockValidatePublicLeadPreRegistration,
   rehydrateStoredValidationSummary: (summary, fallback = {}) => {
-    if (!summary || typeof summary !== "object") {
+    if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+      return null;
+    }
+
+    if (!summary.driver || !summary.vigency || !Array.isArray(summary.plates)) {
       return null;
     }
 
