@@ -6,6 +6,7 @@ import "./infrastructure/config/load-env.js"; // side-effect: popula process.env
 import crypto from "node:crypto";
 import express from "express";
 import { getPostgresPool } from "./infrastructure/pg/postgres.js";
+import { registerRoutes } from "./interface/http/routes.js";
 
 // ─── Constantes de middleware ─────────────────────────────────────────────────
 
@@ -102,9 +103,9 @@ app.get("/health", async (req, res) => {
   });
 });
 
-// ─── Placeholder para rotas de negócio (registradas no Plano 02) ─────────────
-// O Plano 02 importará e chamará registerRoutes(app) aqui.
-// Por ora, qualquer /api/* retorna 404 até o Plano 02 ser executado.
+// ─── Rotas de negócio ─────────────────────────────────────────────────────────
+// Chamada via Plano 02 — registra os 43 endpoints no Express Router.
+// Posicionado após middlewares globais, antes de app.listen().
 
 // ─── Inicialização ────────────────────────────────────────────────────────────
 
@@ -124,7 +125,10 @@ async function bootstrap() {
     );
   }
 
-  // 3. Iniciar HTTP server
+  // 3. Registrar rotas de negócio (43 endpoints)
+  registerRoutes(app);
+
+  // 4. Iniciar HTTP server
   const server = app.listen(PORT, () => {
     console.log(`[lamonica-backend] Servidor ouvindo em http://localhost:${PORT}`);
     console.log(`[lamonica-backend] GET /health disponível`);
