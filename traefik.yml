@@ -1,0 +1,62 @@
+# traefik.yml — Traefik v3 static configuration
+# Lamonica Cargas reverse proxy
+#
+# Dynamic configuration (routing rules) lives in Docker labels on containers.
+
+# ── API / Dashboard ──────────────────────────────────────────────────────────
+# Dashboard disabled in production — enable only in dev via docker-compose.override.yml
+api:
+  dashboard: false
+  insecure: false
+
+# ── Entry Points ─────────────────────────────────────────────────────────────
+entryPoints:
+  web:
+    address: ":80"
+    # Redirect all HTTP to HTTPS
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+  websecure:
+    address: ":443"
+    http:
+      tls:
+        certResolver: letsencrypt
+
+# ── Certificate Resolvers (Let's Encrypt ACME) ───────────────────────────────
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      # Replace with real email before production deploy (Phase 4)
+      email: "admin@lamonica.example.com"
+      storage: /etc/traefik/acme/acme.json
+      # Use HTTP-01 challenge (requires port 80 accessible from internet)
+      httpChallenge:
+        entryPoint: web
+
+# ── Providers ────────────────────────────────────────────────────────────────
+providers:
+  docker:
+    # Only expose containers with traefik.enable=true label
+    exposedByDefault: false
+    # Network to use when multiple networks are attached
+    network: lamonica-net
+    # Watch for Docker events (service start/stop)
+    watch: true
+  file:
+    # Allow dynamic config files in /etc/traefik/dynamic/ if needed later
+    directory: /etc/traefik/dynamic
+    watch: true
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+log:
+  level: INFO
+
+accessLog:
+  # Enable access logs for debugging; consider disabling in high-traffic prod
+  filePath: ""
+  # Empty filePath = stdout

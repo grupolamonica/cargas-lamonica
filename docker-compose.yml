@@ -1,0 +1,107 @@
+# docker-compose.yml — Production stack
+# Lamonica Cargas: frontend (nginx) + backend (Express) + Traefik v3 reverse proxy
+#
+# Domain placeholder: set DOMAIN env var before `docker compose up` in production.
+# Phase 4 will finalize CORS + internal networking.
+
+services:
+
+  # ── Frontend (nginx:alpine serving Vite dist) ────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # VITE_* build args — override with actual values at build time
+        # Example: docker compose build --build-arg VITE_SUPABASE_URL=https://...
+        VITE_API_BASE_URL: ""
+        VITE_SUPABASE_URL: ""
+        VITE_SUPABASE_ANON_KEY: ""
+    image: lamonica-frontend:latest
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+    # No ports exposed directly — Traefik handles edge routing
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      # Route all non-/api traffic to frontend
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN:-lamonica.example.com}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.frontend.loadbalancer.server.port=80"
+      # HTTP → HTTPS redirect (handled by Traefik entryPoint redirect, but explicit router for clarity)
+      - "traefik.http.routers.frontend-http.rule=Host(`${DOMAIN:-lamonica.example.com}`)"
+      - "traefik.http.routers.frontend-http.entrypoints=web"
+      - "traefik.http.routers.frontend-http.middlewares=redirect-to-https"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # ── Backend (Express on port 3001) ──────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: lamonica-backend:latest
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+    # No ports exposed directly — Traefik routes /api/* to backend:3001
+    env_file:
+      - backend.env
+    environment:
+      # Override: ensure production values
+      NODE_ENV: production
+      PORT: "3001"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "traefik.enable=true"
+      # Route /api/* to backend
+      - "traefik.http.routers.backend.rule=Host(`${DOMAIN:-lamonica.example.com}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.backend.entrypoints=websecure"
+      - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.backend.loadbalancer.server.port=3001"
+      - "traefik.http.routers.backend-http.rule=Host(`${DOMAIN:-lamonica.example.com}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.backend-http.entrypoints=web"
+      - "traefik.http.routers.backend-http.middlewares=redirect-to-https"
+
+  # ── Reverse Proxy (Traefik v3) ───────────────────────────────────────────────
+  reverse-proxy:
+    image: traefik:v3
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Static config file
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      # Docker socket — Traefik discovers services via Docker labels
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Persist ACME certificates across restarts
+      - traefik-certs:/etc/traefik/acme
+    labels:
+      - "traefik.enable=true"
+
+# ── Networks ─────────────────────────────────────────────────────────────────
+networks:
+  lamonica-net:
+    name: lamonica-net
+    driver: bridge
+
+# ── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  traefik-certs:
+    driver: local
