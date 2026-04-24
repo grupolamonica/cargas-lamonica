@@ -31,8 +31,7 @@ entryPoints:
 certificatesResolvers:
   letsencrypt:
     acme:
-      # Replace with real email before production deploy (Phase 4)
-      email: "admin@lamonica.example.com"
+      email: "antonio.magalhaes@grupolamonica.com.br"
       storage: /etc/traefik/acme/acme.json
       # Use HTTP-01 challenge (requires port 80 accessible from internet)
       httpChallenge:
