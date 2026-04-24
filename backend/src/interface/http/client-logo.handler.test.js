@@ -46,7 +46,7 @@ describe("client logo proxy guards", () => {
   });
 
   it("blocks redirects that attempt to leave the public internet", async () => {
-    mockLookup.mockResolvedValueOnce([{ address: "93.184.216.34" }]);
+    mockLookup.mockResolvedValue([{ address: "93.184.216.34" }]);
 
     vi.stubGlobal(
       "fetch",
@@ -67,21 +67,29 @@ describe("client logo proxy guards", () => {
   });
 
   it("rejects images that exceed the configured size limit", async () => {
-    mockLookup.mockResolvedValueOnce([{ address: "93.184.216.34" }]);
+    mockLookup.mockResolvedValue([{ address: "93.184.216.34" }]);
     vi.stubEnv("CLIENT_LOGO_MAX_BYTES", "16");
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response("small-image-body", {
-          status: 200,
-          headers: {
-            "content-type": "image/png",
-            "content-length": "32",
-          },
-        }),
-      ),
-    );
+    mockHttpsRequest.mockImplementation((_url, _options, callback) => {
+      const responseStream = new PassThrough();
+      responseStream.statusCode = 200;
+      responseStream.headers = {
+        "content-type": "image/png",
+        "content-length": "32",
+      };
+
+      queueMicrotask(() => {
+        callback(responseStream);
+        responseStream.end(Buffer.alloc(32));
+      });
+
+      return {
+        on: vi.fn(),
+        destroy: vi.fn(),
+        end: vi.fn(),
+        setTimeout: vi.fn(),
+      };
+    });
 
     const response = await resolveClientLogoResponse("https://example.com/logo.png");
 

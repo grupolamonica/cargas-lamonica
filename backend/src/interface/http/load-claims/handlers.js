@@ -328,11 +328,10 @@ export async function resolveDriverProfileResponse(request) {
 
 export async function resolveRegisterOperatorResponse() {
   return {
-    statusCode: 501,
+    statusCode: 404,
     payload: {
-      error: "NotImplemented",
-      code: "OPERATOR_SELF_REGISTRATION_DISABLED",
-      message: "Operator registration via API is disabled. Use the supabase:create-operator admin script.",
+      code: "NOT_FOUND",
+      message: "Resource not found.",
     },
   };
 }

@@ -210,7 +210,9 @@ describe("load-claims handlers", () => {
     });
 
     await resolveGetLoadClaimStatusResponse({
-      headers: {},
+      headers: {
+        authorization: "Bearer mock-token",
+      },
       query: {
         loadId: "load-1",
         leadId: "lead-1",
