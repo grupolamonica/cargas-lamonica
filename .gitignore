@@ -1,6 +1,17 @@
 # GSD planning docs (local-only in multi-repo workspace)
 .planning/
 
+# Per-module node_modules and dist
+frontend/node_modules/
+frontend/dist/
+backend/node_modules/
+backend/dist/
+
+# Python scripts
+scripts/.venv/
+scripts/**/__pycache__/
+scripts/**/*.pyc
+
 # Logs
 logs
 *.log

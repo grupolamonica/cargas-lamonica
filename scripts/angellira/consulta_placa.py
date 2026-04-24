@@ -1,0 +1,192 @@
+import os
+import re
+import sys
+import time
+from datetime import datetime
+
+import requests
+
+sys.stdout.reconfigure(encoding="utf-8")
+
+USUARIO = os.getenv("ANGELLIRA_USER", "").strip()
+SENHA = os.getenv("ANGELLIRA_PASSWORD", "").strip()
+EMPRESA_ID = os.getenv("ANGELLIRA_EMPRESA_ID", "").strip()
+
+
+def validar_configuracao():
+    missing = [
+        env_name
+        for env_name, value in (
+            ("ANGELLIRA_USER", USUARIO),
+            ("ANGELLIRA_PASSWORD", SENHA),
+            ("ANGELLIRA_EMPRESA_ID", EMPRESA_ID),
+        )
+        if not value
+    ]
+
+    if missing:
+        print(f"❌ Variáveis ausentes: {', '.join(missing)}")
+        return False
+
+    return True
+
+
+def obter_token_automatico():
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        print("🔑 Efetuando login inicial...")
+        res_login = session.post(
+            "https://auth.angellira.com.br/auth",
+            json={"login": USUARIO, "pass": SENHA, "lang": "pt-br"},
+            timeout=15,
+        )
+
+        if res_login.status_code != 200:
+            print(f"❌ Erro no login: {res_login.status_code}")
+            return None
+
+        print("🔑 Solicitando token final (grant)...")
+
+        payload_grant = {
+            "company": EMPRESA_ID,
+            "user": '{"userName":"","userId":-1}',
+        }
+
+        headers_grant = {
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": "https://auth.angellira.com.br",
+            "Referer": f"https://auth.angellira.com.br/grant?client=Angellira&scope=&company={EMPRESA_ID}",
+        }
+
+        res_grant = session.post(
+            "https://auth.angellira.com.br/auth/grant",
+            data=payload_grant,
+            headers=headers_grant,
+            timeout=15,
+            allow_redirects=True,
+        )
+
+        token = None
+
+        try:
+            token = res_grant.json().get("token")
+        except Exception:
+            token = None
+
+        if not token:
+            url_final = res_grant.url
+            if "access_token=" in url_final:
+                token = url_final.split("access_token=")[1].split("&")[0]
+            elif "token=" in url_final:
+                token = url_final.split("token=")[1].split("&")[0]
+
+        if token:
+            print("✅ Token obtido automaticamente!")
+            return token
+
+        print(f"❌ Falha no grant. Status: {res_grant.status_code}")
+        print(f"URL final: {res_grant.url}")
+        print(f"Resposta bruta: {res_grant.text[:200]}...")
+        return None
+
+    except Exception as error:
+        print(f"💥 Erro: {error}")
+        return None
+
+
+def limpar_placa(placa):
+    return re.sub(r"[^A-Za-z0-9]", "", str(placa)).upper()
+
+
+def buscar_por_placa(placa, token):
+    url = "https://api.angellira.com.br/profile/query"
+    params = {
+        "q": limpar_placa(placa),
+        "detailed": "true",
+        "since": "2000-01-01",
+        "qFor": "plate",
+        "sort[]": "-sentDate",
+    }
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=15)
+        return response.json() if response.status_code == 200 else None
+    except Exception:
+        return None
+
+
+def executar():
+    if not validar_configuracao():
+        return
+
+    token = obter_token_automatico()
+    if not token:
+        return
+
+    placas_para_consultar = ["MJD5F07"]
+
+    print(f"\n{'=' * 60}\n🚛 CONSULTA DE VEÍCULOS POR PLACA\n{'=' * 60}")
+
+    for placa in placas_para_consultar:
+        print(f"🔍 Placa: {placa}", end=" ", flush=True)
+
+        result = None
+        for _ in range(3):
+            result = buscar_por_placa(placa, token)
+            if result and result.get("data"):
+                break
+            time.sleep(2)
+
+        if result and result.get("data"):
+            item = result["data"][0]
+            history = item.get("history", {}) or {}
+            status = item.get("status", {}).get("description", "N/A")
+
+            cab_marca = history.get("cabBrand") or "N/A"
+            cab_modelo = history.get("cabModel") or "N/A"
+            cab_cor = history.get("cabColor") or "N/A"
+            cab_antt = history.get("cabAntt") or "N/A"
+            cab_uf = history.get("cabUF") or "N/A"
+            cab_renavam = history.get("cabRenavam") or "N/A"
+
+            validity_raw = item.get("limitDate", "N/A")
+            validity = validity_raw
+            if "T" in str(validity_raw):
+                try:
+                    dt_validity = datetime.fromisoformat(validity_raw.replace("Z", "+00:00"))
+                    validity = dt_validity.strftime("%d/%m/%Y")
+                except Exception:
+                    validity = validity_raw.split("T")[0]
+
+            raw_sent_date = item.get("sentDate", "")
+            formatted_sent_date = "N/A"
+            if raw_sent_date:
+                try:
+                    dt = datetime.fromisoformat(raw_sent_date.replace("Z", "+00:00"))
+                    formatted_sent_date = dt.strftime("%d/%m/%Y %H:%M")
+                except Exception:
+                    formatted_sent_date = raw_sent_date
+
+            print(
+                "-> "
+                f"{cab_marca} {cab_modelo} | ✅ {status} | 📆 Vigência: {validity} | "
+                f"🕒 Última atualização: {formatted_sent_date} | ANTT: {cab_antt} | UF: {cab_uf} | "
+                f"Renavam: {cab_renavam} | Cor: {cab_cor}"
+            )
+        else:
+            print("-> Não encontrado após 3 tentativas.")
+
+        time.sleep(1.2)
+
+
+if __name__ == "__main__":
+    executar()
