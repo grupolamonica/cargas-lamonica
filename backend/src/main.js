@@ -56,6 +56,7 @@ app.use((req, res, next) => {
 
   // OPTIONS preflight — responde 204 e encerra
   if (req.method === "OPTIONS") {
+    if (!allowedOrigin) return res.status(403).end();
     return res.status(204).end();
   }
 
@@ -64,8 +65,11 @@ app.use((req, res, next) => {
 
 // Middleware X-Correlation-Id — lê da request ou gera, ecoa na response
 app.use((req, res, next) => {
+  const incoming = req.headers["x-correlation-id"];
   const correlationId =
-    req.headers["x-correlation-id"] || crypto.randomUUID();
+    incoming && /^[\w\-]{1,64}$/.test(incoming)
+      ? incoming
+      : crypto.randomUUID();
   req.correlationId = correlationId; // disponível para handlers via req
   res.setHeader("X-Correlation-Id", correlationId);
   next();
@@ -149,7 +153,7 @@ async function bootstrap() {
         await getPostgresPool().end();
         console.log("[lamonica-backend] pg Pool drenado");
       } catch (err) {
-        console.error("[lamonica-backend] Erro ao drenar pg Pool:", err.message);
+        console.error("[lamonica-backend] Erro ao drenar pg Pool:", err);
       }
 
       console.log("[lamonica-backend] Shutdown completo");
@@ -168,6 +172,6 @@ async function bootstrap() {
 }
 
 bootstrap().catch((err) => {
-  console.error("[lamonica-backend] Falha no bootstrap:", err.message);
+  console.error("[lamonica-backend] Falha no bootstrap:", err);
   process.exit(1);
 });
