@@ -1,0 +1,35 @@
+# Dependencies (always reinstalled in container)
+node_modules
+
+# Vite build output (rebuilt inside container)
+dist
+
+# Environment files (secrets must not enter build context)
+.env
+.env.*
+!.env.example
+
+# Version control
+.git
+.gitignore
+
+# Planning and docs (not needed in image)
+.planning
+*.md
+!README.md
+
+# Tests (not shipped in production image)
+tests
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+src/**/*.test.*
+src/**/*.spec.*
+
+# Editor and OS artifacts
+.DS_Store
+*.swp
+*.swo
+.idea
+.vscode
