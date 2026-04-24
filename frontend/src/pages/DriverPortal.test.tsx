@@ -2,6 +2,10 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: { auth: { getSession: vi.fn(), signInWithPassword: vi.fn(), signOut: vi.fn() } },
+}));
+
 import DriverPortal from "@/pages/DriverPortal";
 
 const { mockUseQuery } = vi.hoisted(() => ({
@@ -294,10 +298,10 @@ describe("DriverPortal", () => {
       .find((options) => options?.queryKey?.[1] === "loads-facets");
 
     expect(loadsQueryOptions).toMatchObject({
-      staleTime: 5_000,
+      staleTime: 30_000,
       refetchOnWindowFocus: true,
       refetchOnReconnect: true,
-      refetchInterval: 15_000,
+      refetchInterval: 45_000,
     });
     expect(facetsQueryOptions).toMatchObject({
       staleTime: 30_000,

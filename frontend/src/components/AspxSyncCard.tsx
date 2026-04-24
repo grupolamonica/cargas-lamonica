@@ -80,7 +80,7 @@ export function AspxSyncCard() {
   });
 
   // Para o polling quando lastSyncAt avancar, ou depois de POLL_MAX_ATTEMPTS.
-  const lastSyncAt = data?.drivers.lastSyncAt || null;
+  const lastSyncAt = data?.drivers?.lastSyncAt || null;
   const [baselineSyncAt, setBaselineSyncAt] = useState<string | null>(null);
   const [pollAttempts, setPollAttempts] = useState(0);
 
@@ -97,7 +97,7 @@ export function AspxSyncCard() {
     if (lastSyncAt && baselineSyncAt !== null && lastSyncAt !== baselineSyncAt) {
       setPollingAfterTrigger(false);
       setBaselineSyncAt(null);
-      toast.success(`ASPx atualizado: ${data?.drivers.total ?? 0} motoristas no portal.`);
+      toast.success(`ASPx atualizado: ${data?.drivers?.total ?? 0} motoristas no portal.`);
       queryClient.invalidateQueries({ queryKey: ["operator", "motoristas-read-model"] });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -15,12 +15,14 @@ const {
   mockFetchLoadClaimStatus,
   mockToastError,
   mockToastSuccess,
+  mockToastInfo,
 } = vi.hoisted(() => ({
   mockCreatePublicLoadLeadPreRegistration: vi.fn(),
   mockFetchDriverLoadAlternatives: vi.fn(),
   mockFetchLoadClaimStatus: vi.fn(),
   mockToastError: vi.fn(),
   mockToastSuccess: vi.fn(),
+  mockToastInfo: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-query", async () => {
@@ -56,6 +58,7 @@ vi.mock("sonner", () => ({
   toast: {
     error: mockToastError,
     success: mockToastSuccess,
+    info: mockToastInfo,
   },
 }));
 

@@ -1,6 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: { auth: { getSession: vi.fn(), signInWithPassword: vi.fn(), signOut: vi.fn() } },
+}));
+
 import ManageRoutes from "@/pages/ManageRoutes";
 
 const { mockUseQuery, mockUseQueryClient } = vi.hoisted(() => ({

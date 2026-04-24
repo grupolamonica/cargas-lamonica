@@ -24,6 +24,10 @@ vi.mock("@/components/DashboardHeader", () => ({
   default: ({ title }: { title: string }) => <div>{title}</div>,
 }));
 
+vi.mock("@/components/AspxSyncCard", () => ({
+  AspxSyncCard: () => null,
+}));
+
 vi.mock("@/services/apiClient", () => ({
   getOperatorAccessToken: vi.fn().mockResolvedValue("test-token"),
 }));

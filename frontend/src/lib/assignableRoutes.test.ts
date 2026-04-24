@@ -1,3 +1,9 @@
+import { vi } from "vitest";
+
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: { auth: { getSession: vi.fn(), signInWithPassword: vi.fn(), signOut: vi.fn() } },
+}));
+
 import {
   applyAssignableRouteToCargoDraft,
   buildCargoTotalPayment,

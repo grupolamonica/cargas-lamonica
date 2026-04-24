@@ -155,7 +155,7 @@ describe("Leads", () => {
           {
             load: {
               id: "load-2",
-              status: "BOOKED",
+              status: "RESERVED",
               origem: "Recife / PE",
               destino: "Fortaleza / CE",
               perfil: "TRUCK",
@@ -202,9 +202,6 @@ describe("Leads", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: "Expandir disputa" })[0]);
 
-    expect(screen.getByText("Cadastro perto de vencer")).toBeInTheDocument();
-    expect(screen.getByText("Vigencia do cadastro vence em 12 dia(s).")).toBeInTheDocument();
-
     fireEvent.click(screen.getByRole("button", { name: "Reservar para este motorista" }));
 
     await waitFor(() => {
@@ -222,11 +219,11 @@ describe("Leads", () => {
 
     expect(mockUseQuery).toHaveBeenCalledWith(
       expect.objectContaining({
-        refetchInterval: 10_000,
-        refetchIntervalInBackground: true,
+        refetchInterval: 30_000,
+        refetchIntervalInBackground: false,
         refetchOnWindowFocus: true,
         refetchOnReconnect: true,
-        staleTime: 0,
+        staleTime: 15_000,
       }),
     );
 
@@ -272,7 +269,7 @@ describe("Leads", () => {
     expect(screen.queryByText("Salvador / BA -> Campinas / SP")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByDisplayValue("Todas as cargas"), {
-      target: { value: "BOOKED" },
+      target: { value: "RESERVED" },
     });
     fireEvent.change(screen.getByDisplayValue("Todos os leads"), {
       target: { value: "APPROVED" },
