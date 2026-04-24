@@ -1,0 +1,32 @@
+{
+  "name": "lamonica-cargas-backend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:rls": "vitest run server/security/rls.behavior.test.js",
+    "claims:maintenance": "node server/scripts/process-expired-load-claims.mjs",
+    "sheet-sync": "node server/scripts/sync-sheet-loads.mjs",
+    "routes:import-standard": "node server/scripts/import-standard-route-catalog.mjs",
+    "security:rollout-check": "node server/scripts/security-rollout-check.mjs",
+    "release:check": "node server/scripts/release-readiness-check.mjs",
+    "supabase:setup": "node server/scripts/configure-supabase-project.mjs",
+    "supabase:create-operator": "node server/scripts/create-initial-operator.mjs",
+    "supabase:verify-login": "node server/scripts/verify-auth-login.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.16.3",
+    "@supabase/supabase-js": "^2.97.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4",
+    "pg-mem": "^3.0.14",
+    "@types/node": "^22.16.5"
+  }
+}

@@ -1,0 +1,622 @@
+import { useDeferredValue, useEffect, useState } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import {
+  AlertTriangle,
+  Copy,
+  CreditCard,
+  ExternalLink,
+  Link2,
+  MapPinned,
+  Package,
+  Search,
+  Truck,
+} from "lucide-react";
+import { Link } from "react-router-dom";
+import { toast } from "sonner";
+
+import DashboardHeader from "@/components/DashboardHeader";
+import {
+  fetchAssignableRoutes,
+  resolveAssignableRouteForCargo,
+} from "@/lib/assignableRoutes";
+import { resolveCargoPublicationReadiness } from "@/lib/loadPublication";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { buildCargoPublicPath, buildCargoShareUrl } from "@/lib/cargoLinks";
+import { formatCargoStatusLabel } from "@/lib/cargoStatus";
+import { formatCurrency, buildTotalPayment } from "@/lib/currency";
+import { buildLoadingDateTime, buildOperationalDateLabel, formatEstimatedTime } from "@/lib/estimatedTime";
+import {
+  type OperatorDashboardItem,
+  fetchOperatorDashboard,
+} from "@/services/readModels";
+
+const OPEN_STATUS = "OPEN";
+const PAGE_SIZE = 8;
+const ROUTES_QUERY_KEY = ["admin", "assignable-routes"] as const;
+const ADMIN_ROUTES_QUERY_OPTIONS = {
+  staleTime: 60_000,
+  gcTime: 10 * 60_000,
+  refetchOnWindowFocus: false,
+  refetchOnReconnect: false,
+  placeholderData: keepPreviousData,
+} as const;
+
+function formatMaybeText(value?: string | null, fallback = "Não informado") {
+  const trimmedValue = value?.trim();
+  return trimmedValue ? trimmedValue : fallback;
+}
+
+function buildRouteMetric(value: number | null, unit: string, prefix = "") {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "A confirmar";
+  }
+
+  return `${prefix}${value.toLocaleString("pt-BR", {
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+    maximumFractionDigits: 2,
+  })} ${unit}`;
+}
+
+function buildPaymentBreakdownLabel({
+  valor,
+  bonus,
+  total,
+  source,
+}: {
+  valor: number | null;
+  bonus: number | null;
+  total: number | null;
+  source: "cargo" | "route" | "mixed" | "none";
+}) {
+  if (total === null) {
+    return "Sem valor e bônus configurados";
+  }
+
+  if (typeof bonus === "number" && bonus > 0) {
+    if (typeof valor === "number" && Number.isFinite(valor)) {
+      return `Base ${formatCurrency(valor)} + bônus ${formatCurrency(bonus)}`;
+    }
+
+    return `Bônus ${formatCurrency(bonus)} liberado`;
+  }
+
+  if (source === "route" || source === "mixed") {
+    return "Valor padrão da rota atribuído";
+  }
+
+  return "Sem bônus configurado";
+}
+
+function LoadingGrid() {
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      {Array.from({ length: 4 }, (_, index) => (
+        <Skeleton key={`operator-card-${index}`} className="h-[420px] rounded-[28px]" />
+      ))}
+    </div>
+  );
+}
+
+function PaginationControls({
+  page,
+  totalPages,
+  totalCount,
+  pageSize,
+  isFetching,
+  onPrevious,
+  onNext,
+}: {
+  page: number;
+  totalPages: number;
+  totalCount: number;
+  pageSize: number;
+  isFetching: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  if (totalCount === 0) {
+    return null;
+  }
+
+  const start = (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, totalCount);
+
+  return (
+    <div className="admin-card-surface mt-5 flex flex-col gap-3 rounded-[28px] border px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <p className="text-sm font-semibold text-foreground">
+          Exibindo {start} a {end} de {totalCount} carga{totalCount === 1 ? "" : "s"}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Página {page} de {Math.max(totalPages, 1)}
+        </p>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          className="rounded-full"
+          onClick={onPrevious}
+          disabled={page <= 1 || isFetching}
+        >
+          Anterior
+        </Button>
+        <Button
+          type="button"
+          className="rounded-full"
+          onClick={onNext}
+          disabled={page >= totalPages || isFetching}
+        >
+          Próxima
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+const OperatorDashboard = () => {
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("todos");
+  const [visibilityFilter, setVisibilityFilter] = useState("todos");
+  const [page, setPage] = useState(1);
+  const [detailCargo, setDetailCargo] = useState<OperatorDashboardItem | null>(null);
+  const deferredSearch = useDeferredValue(search.trim());
+  const deferredStatusFilter = useDeferredValue(statusFilter);
+  const deferredVisibilityFilter = useDeferredValue(visibilityFilter);
+  const hasActiveFilters =
+    deferredSearch.length > 0 || deferredStatusFilter !== "todos" || deferredVisibilityFilter !== "todos";
+
+  useEffect(() => {
+    setPage(1);
+  }, [deferredSearch, deferredStatusFilter, deferredVisibilityFilter]);
+
+  const {
+    data,
+    error,
+    isFetching,
+    isLoading,
+  } = useQuery({
+    queryKey: ["operator", "dashboard-read-model", deferredSearch, deferredStatusFilter, deferredVisibilityFilter, page],
+    queryFn: () =>
+      fetchOperatorDashboard({
+        page: String(page),
+        pageSize: String(PAGE_SIZE),
+        search: deferredSearch,
+        status: deferredStatusFilter,
+        driverVisibility: deferredVisibilityFilter,
+      }),
+    placeholderData: keepPreviousData,
+    staleTime: 15_000,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const {
+    data: routes = [],
+    error: routesError,
+    isFetching: routesFetching,
+  } = useQuery({
+    queryKey: ROUTES_QUERY_KEY,
+    queryFn: fetchAssignableRoutes,
+    ...ADMIN_ROUTES_QUERY_OPTIONS,
+  });
+
+  useEffect(() => {
+    if (error) {
+      toast.error("Erro ao carregar o painel do operador");
+    }
+  }, [error]);
+
+  useEffect(() => {
+    if (routesError) {
+      toast.error("Erro ao carregar o catálogo de rotas");
+    }
+  }, [routesError]);
+
+  const cargos = data?.items || [];
+  const summary = data?.summary || {
+    activeCount: 0,
+    draftCount: 0,
+    templateCount: 0,
+  };
+  const meta = data?.meta || {
+    page,
+    pageSize: PAGE_SIZE,
+    totalCount: 0,
+    totalPages: 1,
+    hasNextPage: false,
+    maxPageSize: PAGE_SIZE,
+    correlationId: "",
+  };
+  const loading = isLoading && !cargos.length;
+
+  const copyText = async (value: string, successMessage: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success(successMessage);
+    } catch {
+      toast.error("Não foi possível copiar agora");
+    }
+  };
+
+  return (
+    <div>
+      <DashboardHeader title="Links" />
+
+      <main className="space-y-5 p-6 lg:p-8">
+        <section className="admin-panel overflow-hidden p-5 lg:p-6">
+          <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+            <div className="space-y-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">Distribuição de links</p>
+                <h2 className="mt-3 text-2xl font-semibold tracking-tight text-foreground">
+                  Central para compartilhar cargas específicas com o motorista
+                </h2>
+              </div>
+              <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+                As cargas agora são consultadas por uma camada autoritativa, com busca e paginação no backend para reduzir overfetching e scraping por volume.
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Card className="border-primary/10 bg-primary/5 shadow-none">
+                <CardContent className="p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-primary/70">Ativas</p>
+                  <p className="mt-2 text-3xl font-black tracking-tight text-primary">{summary.activeCount}</p>
+                </CardContent>
+              </Card>
+              <Card className="border-border/70 bg-white/80 shadow-none">
+                <CardContent className="p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Rascunhos</p>
+                  <p className="mt-2 text-3xl font-black tracking-tight text-foreground">{summary.draftCount}</p>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_220px_220px_auto]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Pesquisar por ID, cliente, origem, destino ou perfil..."
+                className="h-12 rounded-2xl border-border/80 bg-white/92 pl-11 pr-4"
+              />
+            </div>
+
+            <select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value)}
+              className="h-12 rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
+            >
+              <option value="todos">Todos os status</option>
+              <option value={OPEN_STATUS}>Abertas</option>
+              <option value="DRAFT">Rascunhos</option>
+              <option value="RESERVED">Reservadas</option>
+              <option value="BOOKED">Fechadas</option>
+              <option value="EXPIRED">Expiradas</option>
+              <option value="CANCELLED">Canceladas</option>
+              <option value="COMPLETED">Concluídas</option>
+              <option value="FAILED">Falhas</option>
+            </select>
+
+            <select
+              value={visibilityFilter}
+              onChange={(event) => setVisibilityFilter(event.target.value)}
+              className="h-12 rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
+            >
+              <option value="todos">Toda visibilidade</option>
+              <option value="PUBLIC">Pública</option>
+              <option value="PREMIUM">Premium</option>
+            </select>
+
+            <Button
+              type="button"
+              variant="outline"
+              className="h-12 rounded-2xl"
+              onClick={() => {
+                setSearch("");
+                setStatusFilter("todos");
+                setVisibilityFilter("todos");
+              }}
+              disabled={!hasActiveFilters}
+            >
+              Limpar filtros
+            </Button>
+          </div>
+
+          {(isFetching || routesFetching) && !loading ? (
+            <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-primary/12 bg-primary/8 px-3 py-1 text-xs font-semibold text-primary">
+              Atualizando página do painel
+            </div>
+          ) : null}
+        </section>
+
+        {loading ? (
+          <LoadingGrid />
+        ) : cargos.length === 0 ? (
+          <section className="admin-panel flex min-h-[260px] flex-col items-center justify-center gap-4 p-10 text-center">
+            <Package className="h-14 w-14 text-muted-foreground/35" />
+            <div className="space-y-1">
+              <p className="text-lg font-bold text-foreground">Nenhuma carga encontrada</p>
+              <p className="text-sm text-muted-foreground">
+                {hasActiveFilters
+                  ? "Ajuste os filtros para encontrar a carga ou o cliente que você quer compartilhar."
+                  : "Ajuste a busca para encontrar a carga ou o cliente que você quer compartilhar."}
+              </p>
+            </div>
+          </section>
+        ) : (
+          <>
+            <section className="grid gap-4 xl:grid-cols-2">
+              {cargos.map((cargo: OperatorDashboardItem) => {
+                const loadingDate = buildLoadingDateTime(cargo.sheet_data_carregamento, cargo.data, cargo.horario);
+                const sharePath = buildCargoPublicPath(cargo.id);
+                const shareUrl = buildCargoShareUrl(window.location.origin, cargo.id);
+                const matchedRoute = resolveAssignableRouteForCargo(routes, {
+                  route_key: "",
+                  origem: cargo.origem,
+                  destino: cargo.destino,
+                });
+                const publication = resolveCargoPublicationReadiness(
+                  {
+                    perfil: cargo.perfil,
+                    valor: cargo.valor,
+                    bonus: cargo.bonus,
+                    distancia_km: cargo.distancia_km,
+                    duracao_horas: cargo.duracao_horas,
+                  },
+                  matchedRoute,
+                );
+                const totalPayment =
+                  publication.totalPayment !== null ? publication.totalPayment : buildTotalPayment(cargo.valor, cargo.bonus);
+                const distanceKm = publication.distancia_km;
+                const durationHours = publication.tempo_estimado_horas ?? publication.duracao_horas;
+                const isShareReady = cargo.status === OPEN_STATUS && !cargo.is_template && publication.isReady;
+
+                return (
+                  <article
+                    key={cargo.id}
+                    className="admin-panel overflow-hidden rounded-[28px] border border-white/80 bg-white/92 p-5 shadow-[0_24px_60px_-40px_hsl(215_25%_12%/0.24)]"
+                  >
+                    <div className="flex flex-col gap-4">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap gap-2">
+                            <Badge className={cargo.status === OPEN_STATUS ? "bg-accent/10 text-accent" : "bg-muted text-muted-foreground"}>
+                              {formatCargoStatusLabel(cargo.status)}
+                            </Badge>
+                            {!publication.isReady ? <Badge className="bg-amber-100 text-amber-900">Pendente no portal</Badge> : null}
+                            <Badge
+                              className={
+                                cargo.driver_visibility === "PREMIUM"
+                                  ? "bg-[hsl(34_94%_52%/0.12)] text-[hsl(28_92%_45%)]"
+                                  : "bg-sky-100 text-sky-800"
+                              }
+                            >
+                              {cargo.driver_visibility === "PREMIUM" ? "Premium" : "Pública"}
+                            </Badge>
+                            <Badge variant="outline" className="border-border/60 bg-white/70 text-foreground">
+                              {cargo.sheet_lh ? `LH ${cargo.sheet_lh}` : `ID ${cargo.id}`}
+                            </Badge>
+                          </div>
+
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-primary/60">Carga específica</p>
+                            <h3 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
+                              {cargo.origem} {"\u2192"} {cargo.destino}
+                            </h3>
+                            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                              Cliente: {formatMaybeText(cargo.cliente?.nome, "Não vinculado")} | Perfil: {publication.perfil || "A confirmar"}
+                            </p>
+                          </div>
+
+                          {!publication.isReady ? (
+                            <div className="admin-tint-warning rounded-[22px] border p-4 shadow-none">
+                              <div className="flex items-start gap-3">
+                                <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
+                                  <AlertTriangle className="h-4 w-4" />
+                                </span>
+                                <div className="space-y-1">
+                                  <p className="text-sm font-semibold">Publicacao pausada para motorista</p>
+                                  <p className="text-xs leading-relaxed text-amber-900/80">
+                                    {publication.alertSummary || "Complete os dados da carga antes de compartilhar este link."}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="rounded-full"
+                            onClick={() => void copyText(cargo.id, "ID da carga copiado")}
+                          >
+                            <Copy className="h-4 w-4" />
+                            Copiar ID
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="rounded-full"
+                            disabled={!isShareReady}
+                            onClick={() => void copyText(shareUrl, "Link direto copiado")}
+                          >
+                            <Link2 className="h-4 w-4" />
+                            Copiar link
+                          </Button>
+                          {isShareReady ? (
+                            <Button asChild className="rounded-full">
+                              <Link to={sharePath} target="_blank" rel="noreferrer">
+                                <ExternalLink className="h-4 w-4" />
+                                Abrir carga
+                              </Link>
+                            </Button>
+                          ) : (
+                            <Button type="button" className="rounded-full" disabled>
+                              <ExternalLink className="h-4 w-4" />
+                              Abrir carga
+                            </Button>
+                          )}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="rounded-full"
+                            onClick={() => setDetailCargo(cargo)}
+                          >
+                            Detalhes
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </section>
+
+            <PaginationControls
+              page={meta.page}
+              totalPages={meta.totalPages}
+              totalCount={meta.totalCount}
+              pageSize={meta.pageSize}
+              isFetching={isFetching}
+              onPrevious={() => setPage((currentPage) => Math.max(currentPage - 1, 1))}
+              onNext={() => setPage((currentPage) => Math.min(currentPage + 1, meta.totalPages))}
+            />
+          </>
+        )}
+      </main>
+
+      <Dialog open={detailCargo !== null} onOpenChange={(open) => !open && setDetailCargo(null)}>
+        <DialogContent className="max-w-3xl">
+          {detailCargo ? (() => {
+            const matchedRoute = resolveAssignableRouteForCargo(routes, {
+              route_key: "",
+              origem: detailCargo.origem,
+              destino: detailCargo.destino,
+            });
+            const publication = resolveCargoPublicationReadiness(
+              {
+                perfil: detailCargo.perfil,
+                valor: detailCargo.valor,
+                bonus: detailCargo.bonus,
+                distancia_km: detailCargo.distancia_km,
+                duracao_horas: detailCargo.duracao_horas,
+              },
+              matchedRoute,
+            );
+            const loadingDate = buildLoadingDateTime(detailCargo.sheet_data_carregamento, detailCargo.data, detailCargo.horario);
+            const totalPayment = publication.totalPayment !== null ? publication.totalPayment : buildTotalPayment(detailCargo.valor, detailCargo.bonus);
+            const distanceKm = publication.distancia_km;
+            const durationHours = publication.tempo_estimado_horas ?? publication.duracao_horas;
+
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>
+                    {detailCargo.origem} {"\u2192"} {detailCargo.destino}
+                  </DialogTitle>
+                  <DialogDescription>
+                    {detailCargo.sheet_lh ? `LH ${detailCargo.sheet_lh}` : `ID ${detailCargo.id}`}
+                    {" \u00b7 "}
+                    Cliente: {formatMaybeText(detailCargo.cliente?.nome, "Não vinculado")}
+                    {" \u00b7 "}
+                    Perfil: {publication.perfil || "A confirmar"}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  <Card className="border-border/60 bg-muted/20 shadow-none">
+                    <CardContent className="p-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Carregamento</p>
+                      <p className="mt-2 text-sm font-semibold text-foreground">
+                        {buildOperationalDateLabel(detailCargo.sheet_data_carregamento, detailCargo.data, detailCargo.horario)}
+                      </p>
+                    </CardContent>
+                  </Card>
+                  <Card className="border-border/60 bg-muted/20 shadow-none">
+                    <CardContent className="p-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Descarga</p>
+                      <p className="mt-2 text-sm font-semibold text-foreground">
+                        {buildOperationalDateLabel(detailCargo.sheet_data_descarga)}
+                      </p>
+                    </CardContent>
+                  </Card>
+                  <Card className="border-border/60 bg-muted/20 shadow-none">
+                    <CardContent className="p-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Tempo estimado</p>
+                      <p className="mt-2 text-sm font-semibold text-foreground">
+                        {formatEstimatedTime(loadingDate, detailCargo.sheet_data_descarga)}
+                      </p>
+                    </CardContent>
+                  </Card>
+                  <Card className="border-border/60 bg-muted/20 shadow-none">
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                        <MapPinned className="h-3.5 w-3.5 text-primary" />
+                        Distância
+                      </div>
+                      <p className="mt-2 text-sm font-semibold text-foreground">{buildRouteMetric(distanceKm, "km")}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{buildRouteMetric(durationHours, "h", "~")}</p>
+                    </CardContent>
+                  </Card>
+                  <Card className="border-border/60 bg-muted/20 shadow-none">
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                        <CreditCard className="h-3.5 w-3.5 text-primary" />
+                        Pagamento
+                      </div>
+                      <p className="mt-2 text-sm font-semibold text-foreground">
+                        {totalPayment !== null ? formatCurrency(totalPayment) : "Sem valor definido"}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {buildPaymentBreakdownLabel({
+                          valor: publication.valor,
+                          bonus: publication.bonus,
+                          total: publication.totalPayment,
+                          source: publication.compensationSource,
+                        })}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {formatMaybeText(detailCargo.cliente?.forma_pagamento)} | {formatMaybeText(detailCargo.cliente?.prazo_pagamento)}
+                      </p>
+                    </CardContent>
+                  </Card>
+                  <Card className="border-border/60 bg-muted/20 shadow-none">
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                        <Truck className="h-3.5 w-3.5 text-primary" />
+                        Cliente e veículo
+                      </div>
+                      <p className="mt-2 text-sm font-semibold text-foreground">{formatMaybeText(detailCargo.cliente?.nome, "Não vinculado")}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {formatMaybeText(detailCargo.cliente?.tipo_veiculo)} | Peso: {formatMaybeText(detailCargo.cliente?.peso)}
+                      </p>
+                    </CardContent>
+                  </Card>
+                </div>
+              </>
+            );
+          })() : null}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
+export default OperatorDashboard;
