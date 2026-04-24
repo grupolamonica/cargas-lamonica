@@ -9,15 +9,15 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:rls": "vitest run server/security/rls.behavior.test.js",
-    "claims:maintenance": "node server/scripts/process-expired-load-claims.mjs",
-    "sheet-sync": "node server/scripts/sync-sheet-loads.mjs",
-    "routes:import-standard": "node server/scripts/import-standard-route-catalog.mjs",
-    "security:rollout-check": "node server/scripts/security-rollout-check.mjs",
-    "release:check": "node server/scripts/release-readiness-check.mjs",
-    "supabase:setup": "node server/scripts/configure-supabase-project.mjs",
-    "supabase:create-operator": "node server/scripts/create-initial-operator.mjs",
-    "supabase:verify-login": "node server/scripts/verify-auth-login.mjs"
+    "test:rls": "vitest run src/security/rls.behavior.test.js",
+    "claims:maintenance": "node src/scripts/process-expired-load-claims.mjs",
+    "sheet-sync": "node src/scripts/sync-sheet-loads.mjs",
+    "routes:import-standard": "node src/scripts/import-standard-route-catalog.mjs",
+    "security:rollout-check": "node src/scripts/security-rollout-check.mjs",
+    "release:check": "node src/scripts/release-readiness-check.mjs",
+    "supabase:setup": "node src/scripts/configure-supabase-project.mjs",
+    "supabase:create-operator": "node src/scripts/create-initial-operator.mjs",
+    "supabase:verify-login": "node src/scripts/verify-auth-login.mjs"
   },
   "dependencies": {
     "pg": "^8.16.3",

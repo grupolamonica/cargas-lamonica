@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
-    include: ["server/**/*.{test,spec}.{js,mjs,ts}"],
+    include: ["src/**/*.{test,spec}.{js,mjs,ts}"],
   },
   resolve: {
     alias: {},
