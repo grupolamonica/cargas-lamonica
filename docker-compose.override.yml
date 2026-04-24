@@ -1,0 +1,67 @@
+# docker-compose.override.yml — Development overrides
+# Automatically merged with docker-compose.yml by `docker compose up`
+#
+# Dev mode changes:
+# - frontend: runs vite dev (port 8080) with bind mount of src/ — HMR hot reload
+# - backend:  runs node --watch (Node 22 built-in) with bind mount of src/ — zero-dep hot reload
+# - reverse-proxy: disabled in dev — vite dev proxy handles /api routing to backend:3001
+#   (vite.config.ts already has proxy: { "/api": "http://localhost:3001" })
+#
+# Usage:
+#   docker compose up                   # uses docker-compose.yml + this override
+#   docker compose up --no-override     # production mode only (ignores this file)
+
+services:
+
+  # ── Frontend dev: vite dev server (port 8080, HMR) ──────────────────────────
+  frontend:
+    # Override the CMD to run vite dev instead of nginx
+    # Use the same node:22-slim builder stage image (not the nginx runtime)
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: builder
+    # Expose vite dev port to host (vite.config.ts sets server.port: 8080)
+    ports:
+      - "8080:8080"
+    # Bind mount src for HMR — changes reflect without rebuild
+    volumes:
+      - ./frontend/src:/app/src:delegated
+      - ./frontend/public:/app/public:delegated
+      # Exclude host node_modules — container has its own
+      - /app/node_modules
+    environment:
+      NODE_ENV: development
+    command: ["npx", "vite", "--host", "0.0.0.0"]
+    # No Traefik labels in dev — direct port access
+    labels: []
+    # In dev frontend doesn't need to wait for backend health
+    depends_on: []
+
+  # ── Backend dev: node --watch (built-in Node 22 file watcher) ────────────────
+  backend:
+    # Override CMD to node --watch
+    command: ["node", "--watch", "src/main.js"]
+    # Expose backend port to host for direct curl/Postman access
+    ports:
+      - "3001:3001"
+    # Bind mount src for hot reload — changes trigger automatic restart via --watch
+    volumes:
+      - ./backend/src:/app/src:delegated
+      # Exclude host node_modules
+      - /app/node_modules
+    environment:
+      NODE_ENV: development
+      PORT: "3001"
+    # In dev load env from local .env file (not backend.env which may not exist yet)
+    env_file:
+      - backend/.env
+
+  # ── Disable Traefik in dev ───────────────────────────────────────────────────
+  # Traefik is only needed in production for TLS + domain routing.
+  # In dev: vite proxy (/api → localhost:3001) handles frontend→backend routing.
+  reverse-proxy:
+    profiles:
+      - production
+    # Setting a profile means this service only starts with: docker compose --profile production up
+    # Running plain `docker compose up` will skip reverse-proxy in dev.
