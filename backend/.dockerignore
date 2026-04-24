@@ -1,0 +1,41 @@
+# Dependencies (reinstalled in container via npm ci)
+node_modules
+
+# Environment files (secrets must not enter build context)
+.env
+.env.*
+!.env.example
+
+# Version control
+.git
+.gitignore
+
+# Planning and docs (not needed in image)
+.planning
+*.md
+!README.md
+
+# Tests and test fixtures (not shipped in production image)
+src/**/*.test.js
+src/**/*.behavior.test.js
+src/**/*.spec.js
+src/**/*.test.mjs
+src/**/*.spec.mjs
+
+# Dev scripts (not needed at runtime — referenced via package.json scripts)
+# Note: src/scripts/ are kept — some are used operationally (process-expired-load-claims, etc.)
+
+# Editor and OS artifacts
+.DS_Store
+*.swp
+*.swo
+.idea
+.vscode
+
+# Build artifacts (not applicable to backend, but defensive exclusion)
+dist
+build
+
+# Supabase local dev (not needed in container)
+supabase/.branches
+supabase/.temp
