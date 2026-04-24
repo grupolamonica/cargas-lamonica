@@ -1,0 +1,75 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Full git SHA of the image to roll back to (e.g. abc1234def5678...)'
+        required: true
+        type: string
+      confirm:
+        description: 'Type "rollback" to confirm'
+        required: true
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  FRONTEND_IMAGE: ghcr.io/grupolamonica/lamonica-frontend
+  BACKEND_IMAGE: ghcr.io/grupolamonica/lamonica-backend
+
+jobs:
+  rollback:
+    name: Rollback to SHA
+    runs-on: ubuntu-latest
+    environment: production
+    if: ${{ github.event.inputs.confirm == 'rollback' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate SHA tag exists in GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker manifest inspect ghcr.io/grupolamonica/lamonica-frontend:sha-${{ github.event.inputs.sha }} > /dev/null
+          docker manifest inspect ghcr.io/grupolamonica/lamonica-backend:sha-${{ github.event.inputs.sha }} > /dev/null
+          echo "SHA tag sha-${{ github.event.inputs.sha }} found in GHCR. Proceeding."
+
+      - name: Rollback via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/apps/lamonica
+
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+            ROLLBACK_SHA="${{ github.event.inputs.sha }}"
+            FRONTEND_TAG="ghcr.io/grupolamonica/lamonica-frontend:sha-${ROLLBACK_SHA}"
+            BACKEND_TAG="ghcr.io/grupolamonica/lamonica-backend:sha-${ROLLBACK_SHA}"
+
+            docker pull "${FRONTEND_TAG}"
+            docker pull "${BACKEND_TAG}"
+
+            cat > docker-compose.deploy.yml << EOF
+            services:
+              frontend:
+                image: ${FRONTEND_TAG}
+              backend:
+                image: ${BACKEND_TAG}
+            EOF
+
+            docker compose -f docker-compose.yml -f docker-compose.deploy.yml --profile production up -d --remove-orphans
+            echo "Rollback to sha-${ROLLBACK_SHA} complete."
+
+      - name: Verify rollback with smoke tests
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/apps/lamonica
+            bash scripts/smoke-test.sh http://${{ secrets.VPS_HOST }}
