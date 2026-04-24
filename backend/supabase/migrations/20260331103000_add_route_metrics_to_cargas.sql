@@ -1,0 +1,3 @@
+ALTER TABLE public.cargas
+ADD COLUMN IF NOT EXISTS distancia_km NUMERIC,
+ADD COLUMN IF NOT EXISTS duracao_horas NUMERIC;

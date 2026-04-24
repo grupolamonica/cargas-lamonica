@@ -1,0 +1,12 @@
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime'
+      AND schemaname = 'public'
+      AND tablename = 'load_public_leads'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.load_public_leads;
+  END IF;
+END $$;
