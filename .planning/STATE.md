@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-04-24T16:57:19.499Z"
+stopped_at: Completed 03-03-PLAN.md
+last_updated: "2026-04-24T17:00:36Z"
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 5
-  completed_plans: 8
+  completed_plans: 9
   percent: 100
 ---
 
@@ -33,14 +33,14 @@ progress:
 ## Current Position
 
 **Phase:** 3 — IN PROGRESS
-**Plan:** 1/N complete
-**Status:** Phase 3 Plan 1 complete — frontend/Dockerfile (node:22-slim → nginx:alpine) + nginx.conf + .dockerignore
+**Plan:** 3/3 complete
+**Status:** Phase 3 Plan 3 complete — docker-compose.yml + traefik.yml + docker-compose.override.yml
 **Progress:** [██████████] 100%
 
 ```
 Phase 1: Structural Split + Clean Architecture   [x] COMPLETE (Plans 1+2+3+4 done)
 Phase 2: Backend Runtime Migration               [x] COMPLETE (Plans 1+2 done)
-Phase 3: Dockerization                           [~] In progress (Plan 1/N done)
+Phase 3: Dockerization                           [x] COMPLETE (Plans 1+2+3 done)
 Phase 4: Communication & Env Configuration       [ ] Not started
 Phase 5: CI/CD + VPS Deploy + Cleanup            [ ] Not started
 ```
@@ -62,6 +62,7 @@ Phase 5: CI/CD + VPS Deploy + Cleanup            [ ] Not started
 | Phase 02-backend-runtime-migration P02 | 3min | 2 tasks | 2 files |
 | 3 | 1 | ~5min | 2/2 | 3 created | 2026-04-24 |
 | Phase 03-dockerization P02 | 5m | 2 tasks | 2 files |
+| 3 | 3 | ~2min | 2/2 | 3 created | 2026-04-24 |
 
 ## Accumulated Context
 
@@ -73,7 +74,7 @@ Phase 5: CI/CD + VPS Deploy + Cleanup            [ ] Not started
 | Clean architecture (domain/application/infrastructure/interface) | Separar regras de negócio de integrações externas; facilita testes e evolução | Approved |
 | Docker Compose (não k8s) | Escala atual não justifica k8s; compose é simples de operar em VPS single-host | Approved |
 | GHCR como registry | Integração nativa com GitHub Actions, free para repos privados sob org | Approved |
-| Traefik como reverse proxy | TLS automático (Let's Encrypt), descoberta por labels, zero-config para novos containers | Provisional — confirmar na Phase 3 |
+| Traefik como reverse proxy | TLS automático (Let's Encrypt), descoberta por labels, zero-config para novos containers | Approved (Phase 3 Plan 3) |
 | Monorepo (não split repos) | Único repo com `frontend/` + `backend/` facilita contracts e deploy atômico | Approved |
 | Backend HTTP framework: Express v4 | Express escolhido — brownfield-friendly, zero-drama, middleware porta direto de api/[...route].mjs | Approved (Phase 2 Plan 1) |
 | No pg in frontend package.json | Strict dep boundary: frontend deps only in frontend, backend deps only in backend | Approved (Phase 1 Plan 1) |
@@ -89,12 +90,16 @@ Phase 5: CI/CD + VPS Deploy + Cleanup            [ ] Not started
 | withParams adapter em vez de modificar handlers | Preserva 100% da lógica de negócio existente no Express sem reescrita | Approved (Phase 2 Plan 2) |
 | Ordem de registro fixas antes parametrizadas | Express resolve por ordem de registro — /cargas/sync-sheet antes de /cargas/:cargoId (T-02-07) | Approved (Phase 2 Plan 2) |
 | node:22-slim (floating 22.x) para frontend builder | Satisfaz engines.node >=18.0.0; usa npm ci (lockfile presente, builds reprodutíveis) | Approved (Phase 3 Plan 1) |
+| Traefik HTTP→HTTPS redirect no entryPoint (não por router) | v3 clean pattern — redirect configurado uma vez, não replicado em cada router label | Approved (Phase 3 Plan 3) |
+| reverse-proxy em production profile no override | Plain docker compose up skips Traefik; vite proxy (/api → localhost:3001) serve dev | Approved (Phase 3 Plan 3) |
+| ACME email placeholder (admin@lamonica.example.com) | YAML não expande variáveis shell — placeholder estático; Phase 4 substitui pelo real | Approved (Phase 3 Plan 3) |
+| frontend builder stage target no override | Reutiliza Dockerfile existente sem Dockerfile.dev separado; vite disponível na imagem builder | Approved (Phase 3 Plan 3) |
 | VITE_* ARGs com default empty string no Dockerfile | Backward-compat com dev (empty = /api/* relativo); sem segredo no frontend image | Approved (Phase 3 Plan 1) |
 | nginx:alpine runtime (não node) | Footprint mínimo <200MB; serve static assets eficientemente | Approved (Phase 3 Plan 1) |
 
 ### Decisions Pending
 
-- **Traefik vs alternativa (Phase 3):** Confirmar Traefik ou avaliar Caddy/Nginx com certbot no VPS.
+None.
 
 ### Active Todos
 
@@ -126,12 +131,12 @@ Validated capabilities from PROJECT.md — todas devem continuar funcionando ao 
 
 ## Session Continuity
 
-**Stopped at:** Completed 03-02-PLAN.md
+**Stopped at:** Completed 03-03-PLAN.md
 
-**Next action:** Execute Phase 3 Plan 2+ — backend Dockerfile, docker-compose.yml, Traefik TLS, .env.example
+**Next action:** Execute Phase 4 — Communication & Env Configuration (CORS, .env.example, ALLOWED_ORIGINS docs)
 
-**Resume hint:** Phase 3 Plan 1 complete (commit 242a422). frontend/Dockerfile: node:22-slim builder → nginx:alpine runtime. nginx.conf: SPA fallback, 1y cache /assets/*, no-cache index.html. .dockerignore: excludes node_modules/dist/.env/.git/.planning/tests.
+**Resume hint:** Phase 3 complete. docker-compose.yml (23f464e): frontend+backend+Traefik v3 on lamonica-net, env_file backend.env, healthchecks, DOMAIN placeholder. traefik.yml (23f464e): entryPoints web+websecure, ACME letsencrypt, exposedByDefault:false. docker-compose.override.yml (4e67c37): vite dev port 8080 (builder target), node --watch port 3001, reverse-proxy on production profile.
 
 ---
 
-*Last updated: 2026-04-24 after Phase 3 Plan 1 completion*
+*Last updated: 2026-04-24 after Phase 3 Plan 3 completion*

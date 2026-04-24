@@ -1,0 +1,190 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  FRONTEND_IMAGE: ghcr.io/grupolamonica/lamonica-frontend
+  BACKEND_IMAGE: ghcr.io/grupolamonica/lamonica-backend
+
+jobs:
+  # ── Gate: tests must pass before any build ──────────────────────────────────
+  test:
+    name: Test + Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            frontend/package-lock.json
+            backend/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: frontend
+
+      - name: Install backend deps
+        run: npm ci
+        working-directory: backend
+
+      - name: Lint frontend
+        run: npm run lint --if-present
+        working-directory: frontend
+
+      - name: Lint backend
+        run: npm run lint --if-present
+        working-directory: backend
+
+      - name: Test frontend
+        run: npm run test -- --run
+        working-directory: frontend
+
+      - name: Test backend
+        run: npm run test -- --run
+        working-directory: backend
+
+  # ── Build frontend image + push to GHCR ─────────────────────────────────────
+  build-frontend:
+    name: Build Frontend
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      sha_tag: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.FRONTEND_IMAGE }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
+            VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
+            VITE_API_BASE_URL=${{ secrets.VITE_API_BASE_URL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Build backend image + push to GHCR ──────────────────────────────────────
+  build-backend:
+    name: Build Backend
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      sha_tag: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.BACKEND_IMAGE }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Deploy to VPS via SSH ───────────────────────────────────────────────────
+  deploy-vps:
+    name: Deploy VPS
+    needs: [build-frontend, build-backend]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/apps/lamonica
+
+            # Authenticate with GHCR
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+            # Pull new images (tagged by SHA)
+            docker pull ghcr.io/grupolamonica/lamonica-frontend:sha-${{ github.sha }}
+            docker pull ghcr.io/grupolamonica/lamonica-backend:sha-${{ github.sha }}
+
+            # Update docker-compose.yml to pin exact SHA tags
+            export FRONTEND_TAG="ghcr.io/grupolamonica/lamonica-frontend:sha-${{ github.sha }}"
+            export BACKEND_TAG="ghcr.io/grupolamonica/lamonica-backend:sha-${{ github.sha }}"
+
+            # Write a deploy-override that pins the SHA tags
+            cat > docker-compose.deploy.yml << EOF
+            services:
+              frontend:
+                image: ${FRONTEND_TAG}
+              backend:
+                image: ${BACKEND_TAG}
+            EOF
+
+            # Bring up with the pinned images (production profile for Traefik)
+            docker compose -f docker-compose.yml -f docker-compose.deploy.yml --profile production up -d --remove-orphans
+
+            # Clean up old images (keep last 3)
+            docker image prune -f --filter "until=72h" || true
+
+      - name: Run smoke tests
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/apps/lamonica
+            bash scripts/smoke-test.sh http://${{ secrets.VPS_HOST }}
