@@ -404,15 +404,16 @@ async function resequenceWaitlist(client, loadId) {
   });
 
   if (claimIdsToUpdate.length > 0) {
-    await client.query(
-      `
-        UPDATE public.load_claims
-        SET queue_position = v.expected_position
-        FROM unnest($1::uuid[], $2::int[]) AS v(claim_id, expected_position)
-        WHERE load_claims.id = v.claim_id
-      `,
-      [claimIdsToUpdate, expectedPositions],
-    );
+    for (let i = 0; i < claimIdsToUpdate.length; i++) {
+      await client.query(
+        `
+          UPDATE public.load_claims
+          SET queue_position = $2
+          WHERE id = $1
+        `,
+        [claimIdsToUpdate[i], expectedPositions[i]],
+      );
+    }
   }
 
   return waitlistClaims.length;
@@ -426,40 +427,40 @@ async function rejectRemainingWaitlistClaims(client, { loadId, correlationId, ac
   }
 
   const claimIds = waitlistClaims.map((c) => c.id);
+  const idPlaceholders = claimIds.map((_, i) => `$${i + 3}`).join(", ");
 
   const { rows: rejectedClaims } = await client.query(
     `
       UPDATE public.load_claims
       SET status = $1, queue_position = NULL, rejected_reason = $2
-      WHERE id = ANY($3::uuid[])
+      WHERE id IN (${idPlaceholders})
       RETURNING *
     `,
-    [CLAIM_STATUS.REJECTED, "LOAD_BOOKED_BY_ANOTHER_DRIVER", claimIds],
+    [CLAIM_STATUS.REJECTED, "LOAD_BOOKED_BY_ANOTHER_DRIVER", ...claimIds],
   );
 
   if (rejectedClaims.length > 0) {
-    await client.query(
-      `
-        INSERT INTO public.load_claim_events (
-          load_id, claim_id, driver_id, event_type, event_payload_json,
-          actor_type, actor_id, correlation_id
-        )
-        SELECT
-          $1, v.claim_id, v.driver_id, $2, $3::jsonb,
-          $4, $5, $6
-        FROM unnest($7::uuid[], $8::uuid[]) AS v(claim_id, driver_id)
-      `,
-      [
-        loadId,
-        CLAIM_EVENT_TYPE.CLAIM_REJECTED,
-        JSON.stringify({ reason: "LOAD_BOOKED_BY_ANOTHER_DRIVER" }),
-        actorType,
-        actorId ?? null,
-        correlationId ?? null,
-        rejectedClaims.map((c) => c.id),
-        rejectedClaims.map((c) => c.driver_id),
-      ],
-    );
+    for (const rejectedClaim of rejectedClaims) {
+      await client.query(
+        `
+          INSERT INTO public.load_claim_events (
+            load_id, claim_id, driver_id, event_type, event_payload_json,
+            actor_type, actor_id, correlation_id
+          )
+          VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
+        `,
+        [
+          loadId,
+          rejectedClaim.id,
+          rejectedClaim.driver_id,
+          CLAIM_EVENT_TYPE.CLAIM_REJECTED,
+          JSON.stringify({ reason: "LOAD_BOOKED_BY_ANOTHER_DRIVER" }),
+          actorType,
+          actorId ?? null,
+          correlationId ?? null,
+        ],
+      );
+    }
   }
 }
 
@@ -468,14 +469,15 @@ async function batchGetDriverProfiles(client, driverIds) {
     return new Map();
   }
 
+  const placeholders = driverIds.map((_, i) => `$${i + 1}`).join(", ");
   const { rows } = await client.query(
     `
       SELECT *
       FROM public.driver_profiles
-      WHERE user_id = ANY($1::uuid[])
+      WHERE user_id IN (${placeholders})
       FOR UPDATE
     `,
-    [driverIds],
+    driverIds,
   );
 
   return new Map(rows.map((row) => [row.user_id, row]));
