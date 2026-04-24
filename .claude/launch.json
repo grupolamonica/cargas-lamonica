@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vite-dev",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--config", "vite.config.ts"],
+      "port": 8080,
+      "cwd": "lan-a-cargas-main"
+    }
+  ]
+}
