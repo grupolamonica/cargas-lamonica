@@ -157,6 +157,31 @@ bash scripts/smoke-test.sh http://76.13.169.177
 
 > **Finding the SHA:** In GitHub Actions, each run shows the full commit SHA. Use the SHA from the last known-good deploy run.
 
+## Ativar TLS (HTTPS) para um Domínio
+
+**Pré-requisito:** DNS do domínio apontando para `76.13.169.177`.
+
+```bash
+# No VPS, como antonio-magalhaes:
+cd /opt/apps/lamonica
+bash scripts/enable-ssl.sh cargas.lamonica.com.br
+```
+
+O script:
+1. Verifica se o DNS resolve para o VPS (avisa se não)
+2. Descomenta `certificatesResolvers` no `/opt/platform/traefik/traefik.yml`
+3. Atualiza `ALLOWED_ORIGINS` no `backend.env`
+4. Reinicia Traefik (Let's Encrypt emite certificado automaticamente)
+5. Reinicia backend com `docker-compose.domain.yml`
+6. Aguarda até 2 minutos e testa o HTTPS
+
+**Nota:** O script substitui `/opt/scripts/enable-ssl.sh` (nginx-based, root-owned). Não editar o legado.
+
+**Diagnóstico se o certificado não chegar:**
+```bash
+docker logs traefik 2>&1 | grep -i "acme\|certificate\|error" | tail -20
+```
+
 ## Backup de Dados Críticos
 
 O script `scripts/backup-lamonica.sh` faz backup de:
