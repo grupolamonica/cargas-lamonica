@@ -1409,6 +1409,7 @@ function groupLeadsForOperator(rows) {
         sheetMotorista: row.load_sheet_motorista || null,
         sheetCavalo: row.load_sheet_cavalo || null,
         sheetCarreta: row.load_sheet_carreta || null,
+        sheetStatus: row.load_sheet_status || null,
       },
       queueCount: 0,
       totalLeads: 0,
@@ -1475,7 +1476,8 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
               cargas.sheet_data_descarga AS load_sheet_data_descarga,
               cargas.sheet_motorista AS load_sheet_motorista,
               cargas.sheet_cavalo AS load_sheet_cavalo,
-              cargas.sheet_carreta AS load_sheet_carreta
+              cargas.sheet_carreta AS load_sheet_carreta,
+              cargas.sheet_status AS load_sheet_status
             FROM public.load_public_leads AS leads
             INNER JOIN public.cargas
               ON cargas.id = leads.load_id

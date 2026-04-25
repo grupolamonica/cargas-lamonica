@@ -132,7 +132,25 @@ async function bootstrap() {
   // 3. Registrar rotas de negócio (43 endpoints)
   registerRoutes(app);
 
-  // 4. Iniciar HTTP server
+  // 4. Periodic sheet sync — every 5 min, no-op if GOOGLE_SHEET_ID not set
+  {
+    let sheetSyncRunning = false;
+    setInterval(async () => {
+      if (sheetSyncRunning || !process.env.GOOGLE_SHEET_ID) return;
+      sheetSyncRunning = true;
+      try {
+        const { syncGoogleSheetLoads, createSupabaseAdminClient } = await import("./application/google-sheets/google-sheet-loads.js");
+        await syncGoogleSheetLoads({ supabaseClient: createSupabaseAdminClient() });
+        console.info("[sheet-sync-periodic] sync concluído");
+      } catch (err) {
+        console.error("[sheet-sync-periodic] erro:", err?.message);
+      } finally {
+        sheetSyncRunning = false;
+      }
+    }, 5 * 60 * 1000);
+  }
+
+  // 5. Iniciar HTTP server
   const server = app.listen(PORT, () => {
     console.log(`[lamonica-backend] Servidor ouvindo em http://localhost:${PORT}`);
     console.log(`[lamonica-backend] GET /health disponível`);

@@ -1118,7 +1118,16 @@ export async function syncGoogleSheetLoads({
 
     const sheetRow = allSheetRowsByLh.get(existingLoad.sheet_lh.trim());
     if (sheetRow) {
-      staleInSheet.push({ id: existingLoad.id, motorista: sheetRow.motoristas?.trim() || null });
+      staleInSheet.push({
+        id: existingLoad.id,
+        motorista: sheetRow.motoristas?.trim() || null,
+        cavalo: sheetRow.cavalo?.trim() || null,
+        carreta: sheetRow.carreta?.trim() || null,
+        tipo: sheetRow.tipo?.trim() || null,
+        dataCarregamento: sheetRow.carregamentoLabel || null,
+        dataDescarga: sheetRow.descargaLabel || null,
+        sheetStatus: sheetRow.status?.trim() || null,
+      });
     } else {
       staleTrulyGone.push(existingLoad.id);
     }
@@ -1132,15 +1141,39 @@ export async function syncGoogleSheetLoads({
         `
           UPDATE public.cargas c
           SET
-            sheet_motorista = v.motorista,
-            sheet_synced_at = $1,
+            sheet_motorista         = v.motorista,
+            sheet_cavalo            = v.cavalo,
+            sheet_carreta           = v.carreta,
+            sheet_tipo              = v.tipo,
+            sheet_data_carregamento = v.data_carregamento,
+            sheet_data_descarga     = v.data_descarga,
+            sheet_status            = v.sheet_status,
+            sheet_synced_at         = $1,
             status = CASE WHEN c.status IN ('OPEN', 'RESERVED') THEN 'BOOKED' ELSE c.status END
           FROM (
-            SELECT UNNEST($2::uuid[]) AS id, UNNEST($3::text[]) AS motorista
+            SELECT
+              UNNEST($2::uuid[])  AS id,
+              UNNEST($3::text[])  AS motorista,
+              UNNEST($4::text[])  AS cavalo,
+              UNNEST($5::text[])  AS carreta,
+              UNNEST($6::text[])  AS tipo,
+              UNNEST($7::text[])  AS data_carregamento,
+              UNNEST($8::text[])  AS data_descarga,
+              UNNEST($9::text[])  AS sheet_status
           ) AS v
           WHERE c.id = v.id
         `,
-        [syncedAt, staleInSheet.map((s) => s.id), staleInSheet.map((s) => s.motorista)],
+        [
+          syncedAt,
+          staleInSheet.map((s) => s.id),
+          staleInSheet.map((s) => s.motorista),
+          staleInSheet.map((s) => s.cavalo),
+          staleInSheet.map((s) => s.carreta),
+          staleInSheet.map((s) => s.tipo),
+          staleInSheet.map((s) => s.dataCarregamento),
+          staleInSheet.map((s) => s.dataDescarga),
+          staleInSheet.map((s) => s.sheetStatus),
+        ],
       );
     });
 
@@ -1166,6 +1199,7 @@ export async function syncGoogleSheetLoads({
             sheet_motorista        = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_motorista END,
             sheet_cavalo           = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_cavalo END,
             sheet_carreta          = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_carreta END,
+            sheet_status           = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_status END,
             sheet_synced_at = NULL,
             status = CASE
               WHEN status = 'OPEN' THEN 'EXPIRED'
