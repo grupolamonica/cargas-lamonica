@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 
 import "../../infrastructure/config/load-env.js";
 
-import { ForbiddenError, UnauthorizedError, ValidationError } from "./errors.js";
+import { ForbiddenError, UnauthorizedError, ValidationError } from "../../domain/load-claims/errors.js";
 import { getOperatorAccessLevel, getUserRole, normalizeOperatorAccessLevel } from "./operator-access.js";
 
 function getRequiredEnv(name) {

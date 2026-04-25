@@ -26,6 +26,14 @@ dist
 dist-ssr
 *.local
 
+# Environment files — NEVER commit credentials
+.env
+.env.*
+!.env.example
+backend.env
+backend/.env
+frontend/.env
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

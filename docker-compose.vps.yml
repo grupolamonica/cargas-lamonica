@@ -1,0 +1,38 @@
+# docker-compose.vps.yml — VPS production without domain (no Traefik, direct ports)
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build
+#
+# Requires on VPS:
+#   - backend.env file at this directory (copy from backend/.env.example and fill in)
+#   - VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY exported in shell (or set in .env at project root)
+#
+# Frontend (nginx) proxies /api/* to backend internally — no Traefik needed.
+# When you get a domain: use docker-compose.yml + --profile production (Traefik with TLS).
+
+services:
+
+  frontend:
+    build:
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+        VITE_API_BASE_URL: ""
+    ports:
+      - "80:80"
+    labels: []
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  backend:
+    ports:
+      - "127.0.0.1:3001:3001"
+    labels: []
+    env_file:
+      - backend.env
+
+  # Disable Traefik — frontend nginx handles /api routing internally
+  reverse-proxy:
+    profiles:
+      - traefik-disabled

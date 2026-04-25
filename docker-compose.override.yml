@@ -33,6 +33,12 @@ services:
     environment:
       NODE_ENV: development
     command: ["npx", "vite", "--host", "0.0.0.0"]
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     # No Traefik labels in dev — direct port access
     labels: []
     # In dev frontend doesn't need to wait for backend health
