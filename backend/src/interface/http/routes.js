@@ -74,7 +74,8 @@ function withParams(req) {
       ([k]) => k !== "__proto__" && k !== "constructor" && k !== "prototype"
     )
   );
-  return { ...req, query: { ...req.query, ...safeParams } };
+  req.query = { ...req.query, ...safeParams };
+  return req;
 }
 
 // Wrapper padrão: resolve(request) → { statusCode, payload }
