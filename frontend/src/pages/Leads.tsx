@@ -1,6 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User } from "lucide-react";
+import { Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User } from "lucide-react";
+import { differenceInDays } from "date-fns";
 import { toast } from "sonner";
 
 import DashboardHeader from "@/components/DashboardHeader";
@@ -9,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { buildDisplayDateTime, formatFullDateTime, formatShortDateTime } from "@/lib/dateDisplay";
 import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
-import { approveOperatorLoadLead, cancelOperatorLoadLead, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type OperatorLeadGroup } from "@/services/loadClaims";
+import { approveOperatorLoadLead, cancelOperatorLoadLead, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type OperatorLeadGroup, type PublicLeadValidationSummary } from "@/services/loadClaims";
 import { fetchSheetMonitor, type SheetMonitorRow } from "@/services/readModels";
 
 interface SheetAllocation {
@@ -25,6 +26,37 @@ const LEADS_QUERY_KEY = ["operator", "public-load-leads"];
 const EMPTY_GROUPS: OperatorLeadGroup[] = [];
 // Status terminais — cargas nesses estados so aparecem em "Historico fila".
 const TERMINAL_LOAD_STATUSES = ["EXPIRED", "CANCELLED", "COMPLETED", "FAILED", "BOOKED"] as const;
+
+interface VigenciaItem {
+  label: string;
+  daysLeft: number; // negativo = já vencido
+}
+
+function buildVigenciaItems(validation: PublicLeadValidationSummary): VigenciaItem[] {
+  const items: VigenciaItem[] = [];
+  const today = new Date();
+
+  // Motorista
+  const driverUntil = validation.driver.angelira.validUntil;
+  if (driverUntil) {
+    items.push({
+      label: "Motorista",
+      daysLeft: differenceInDays(new Date(driverUntil), today),
+    });
+  }
+
+  // Placas
+  for (const plate of validation.plates) {
+    if (plate.validUntil) {
+      items.push({
+        label: plate.label,
+        daysLeft: differenceInDays(new Date(plate.validUntil), today),
+      });
+    }
+  }
+
+  return items;
+}
 
 function buildRouteLabel(group: OperatorLeadGroup) {
   return `${group.load.origem} -> ${group.load.destino}`;
@@ -553,6 +585,14 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                 Boolean(sheetAllocation) ||
                 Boolean(group.load.sheetMotorista);
 
+              // Vigência: busca o lead APPROVED e computa itens próximos de vencer (≤ 30 dias)
+              const approvedLead = group.leads.find((l) => l.status === "APPROVED");
+              const vigenciaItems =
+                isReserved && approvedLead?.validation
+                  ? buildVigenciaItems(approvedLead.validation).filter((item) => item.daysLeft <= 30)
+                  : [];
+              const hasVigenciaAlert = vigenciaItems.length > 0;
+
               // Próxima do horário: carregamento programado dentro das próximas 6h (ou já passou em até 1h).
               // Só pinta de amarelo quando ainda não está reservada — evita conflito visual com o ring verde.
               const loadDateTime = buildDisplayDateTime(group.load.data, group.load.horario);
@@ -667,6 +707,33 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                             {group.load.sheetMotorista}
                           </span>
                         ) : null}
+                        {hasVigenciaAlert && (
+                          <span
+                            className="inline-flex items-center gap-1.5"
+                            title={vigenciaItems.map((i) => `${i.label}: ${i.daysLeft < 0 ? "VENCIDO" : `${i.daysLeft}d`}`).join(" | ")}
+                          >
+                            {vigenciaItems.map((item) => {
+                              const expired = item.daysLeft < 0;
+                              const urgent = item.daysLeft >= 0 && item.daysLeft <= 7;
+                              return (
+                                <span
+                                  key={item.label}
+                                  className={cn(
+                                    "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.65rem] font-bold",
+                                    expired
+                                      ? "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300"
+                                      : urgent
+                                        ? "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
+                                        : "bg-yellow-50 text-yellow-700 dark:bg-yellow-500/15 dark:text-yellow-300",
+                                  )}
+                                >
+                                  <Clock className="h-3 w-3" />
+                                  {item.label}: {item.daysLeft < 0 ? "Vencido" : `${item.daysLeft}d`}
+                                </span>
+                              );
+                            })}
+                          </span>
+                        )}
                         {group.load.sheetCavalo ? (
                           <span className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/20 px-3 py-1.5 text-xs font-semibold text-muted-foreground" title="Veículo (planilha)">
                             <Truck className="h-3.5 w-3.5" />
