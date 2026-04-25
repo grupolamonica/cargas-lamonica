@@ -83,6 +83,7 @@ services:
       - backend.env
     environment:
       ASPX_ALLOW_PLAYWRIGHT_LOGIN: "1"
+      PYTHONUNBUFFERED: "1"
 
 # ── Networks ──────────────────────────────────────────────────────────────
 networks:

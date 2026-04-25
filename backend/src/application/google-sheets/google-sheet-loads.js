@@ -1150,14 +1150,16 @@ export async function syncGoogleSheetLoads({
     );
   }
 
-  // Cargas completamente removidas da planilha: desvincula sheet_lh, expira OPEN.
+  // Cargas completamente removidas da planilha: expira OPEN, transita RESERVED→BOOKED.
+  // sheet_lh preservado em cargas RESERVED (identidade permanente da carga na fila).
+  // Apenas cargas OPEN limpam sheet_lh ao expirar.
   if (staleTrulyGone.length > 0) {
     await withPgClient(async (pgClient) => {
       await pgClient.query(
         `
           UPDATE public.cargas
           SET
-            sheet_lh = NULL,
+            sheet_lh = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_lh END,
             sheet_tipo = NULL,
             sheet_data_carregamento = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_data_carregamento END,
             sheet_data_descarga    = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_data_descarga END,
