@@ -120,6 +120,7 @@ export interface OperatorLeadGroup {
     sheetMotorista: string | null;
     sheetCavalo: string | null;
     sheetCarreta: string | null;
+    sheetStatus?: string | null;
   };
   queueCount: number;
   totalLeads: number;

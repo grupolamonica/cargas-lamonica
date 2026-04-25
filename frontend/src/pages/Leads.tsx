@@ -740,6 +740,11 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                             {[group.load.sheetCavalo, group.load.sheetCarreta].filter(Boolean).join(" · ")}
                           </span>
                         ) : null}
+                        {group.load.sheetStatus ? (
+                          <span className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/20 px-3 py-1.5 text-xs font-semibold text-muted-foreground" title="Status (planilha)">
+                            {group.load.sheetStatus}
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                   </div>
