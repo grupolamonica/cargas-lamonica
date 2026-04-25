@@ -314,6 +314,17 @@ export async function closeTestDatabase() {
   db = null;
 }
 
+export async function withPgClient(callback) {
+  const currentPool = requirePool();
+  const client = await currentPool.connect();
+
+  try {
+    return await callback(client);
+  } finally {
+    client.release();
+  }
+}
+
 export async function withPgTransaction(callback) {
   const currentPool = requirePool();
   const turn = transactionQueue;

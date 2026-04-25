@@ -5,6 +5,7 @@ import { LOAD_STATUS, PUBLIC_LEAD_STATUS } from "../../domain/load-claims/consta
 vi.mock("../../infrastructure/pg/postgres.js", async () => {
   const harness = await import("./test-harness.js");
   return {
+    withPgClient: harness.withPgClient,
     withPgTransaction: harness.withPgTransaction,
   };
 });
