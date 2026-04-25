@@ -45,10 +45,14 @@ jobs:
       - name: Test frontend
         run: npm run test -- --run
         working-directory: frontend
+        env:
+          TZ: America/Sao_Paulo
 
       - name: Test backend
         run: npm run test -- --run
         working-directory: backend
+        env:
+          TZ: America/Sao_Paulo
 
   # ── Build frontend image + push to GHCR ─────────────────────────────────────
   build-frontend:
