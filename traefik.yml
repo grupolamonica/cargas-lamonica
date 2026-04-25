@@ -13,7 +13,7 @@ global:
 # Dashboard accessible at http://localhost:8080 (bound to 127.0.0.1 only)
 api:
   dashboard: true
-  insecure: true
+  insecure: false
 
 # ── Entry Points ──────────────────────────────────────────────────────────
 entryPoints:
@@ -57,3 +57,10 @@ log:
   level: INFO
 
 accessLog: {}
+
+# ── Metrics ───────────────────────────────────────────────────────────────
+metrics:
+  prometheus:
+    addEntryPointsLabels: true
+    addServicesLabels: true
+    addRoutersLabels: true
