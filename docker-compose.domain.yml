@@ -1,0 +1,40 @@
+# docker-compose.domain.yml — HTTPS/domain overlay for Lamonica Cargas
+#
+# Apply AFTER docker-compose.vps.yml when DNS is live:
+#   DOMAIN=lamonica.grupolamonica.com.br \
+#   docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.domain.yml up -d
+#
+# This overlay adds:
+#   - HTTPS Traefik routers with Let's Encrypt TLS
+#   - HTTP → HTTPS redirect
+#   - Host-based routing (more specific than PathPrefix, takes priority)
+
+services:
+
+  frontend:
+    labels:
+      # HTTPS router — host-based, higher priority
+      - "traefik.http.routers.lmc-frontend-https.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.lmc-frontend-https.entrypoints=websecure"
+      - "traefik.http.routers.lmc-frontend-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.lmc-frontend-https.priority=10"
+      - "traefik.http.services.lmc-frontend.loadbalancer.server.port=80"
+      # HTTP → HTTPS redirect
+      - "traefik.http.routers.lmc-frontend-http.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.lmc-frontend-http.entrypoints=web"
+      - "traefik.http.routers.lmc-frontend-http.middlewares=lmc-https-redirect"
+      - "traefik.http.middlewares.lmc-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.lmc-https-redirect.redirectscheme.permanent=true"
+
+  backend:
+    labels:
+      # HTTPS router for /api
+      - "traefik.http.routers.lmc-backend-https.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || Path(`/health`))"
+      - "traefik.http.routers.lmc-backend-https.entrypoints=websecure"
+      - "traefik.http.routers.lmc-backend-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.lmc-backend-https.priority=20"
+      - "traefik.http.services.lmc-backend.loadbalancer.server.port=3001"
+      # HTTP /api → HTTPS redirect
+      - "traefik.http.routers.lmc-backend-http.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || Path(`/health`))"
+      - "traefik.http.routers.lmc-backend-http.entrypoints=web"
+      - "traefik.http.routers.lmc-backend-http.middlewares=lmc-https-redirect"

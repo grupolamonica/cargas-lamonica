@@ -1,61 +1,59 @@
-# traefik.yml — Traefik v3 static configuration
-# Lamonica Cargas reverse proxy
+# traefik.yml — Platform-level Traefik static config
+# Lives at /opt/platform/traefik/traefik.yml on VPS.
+# This file in the repo is the source of truth — deploy manually or via CI.
 #
-# Dynamic configuration (routing rules) lives in Docker labels on containers.
+# IP-only mode: HTTP only on port 80. No TLS until a domain is configured.
+# Domain mode: uncomment the certificatesResolvers section and websecure entrypoint.
 
-# ── API / Dashboard ──────────────────────────────────────────────────────────
-# Dashboard disabled in production — enable only in dev via docker-compose.override.yml
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+# ── API / Dashboard ────────────────────────────────────────────────────────
+# Dashboard accessible at http://localhost:8080 (bound to 127.0.0.1 only)
 api:
-  dashboard: false
-  insecure: false
+  dashboard: true
+  insecure: true
 
-# ── Entry Points ─────────────────────────────────────────────────────────────
+# ── Entry Points ──────────────────────────────────────────────────────────
 entryPoints:
   web:
     address: ":80"
-    # Redirect all HTTP to HTTPS
-    http:
-      redirections:
-        entryPoint:
-          to: websecure
-          scheme: https
-          permanent: true
+    # Uncomment when domain is live to auto-redirect HTTP → HTTPS:
+    # http:
+    #   redirections:
+    #     entryPoint:
+    #       to: websecure
+    #       scheme: https
+    #       permanent: true
 
   websecure:
     address: ":443"
-    http:
-      tls:
-        certResolver: letsencrypt
+    # Uncomment when domain is live:
+    # http:
+    #   tls:
+    #     certResolver: letsencrypt
 
-# ── Certificate Resolvers (Let's Encrypt ACME) ───────────────────────────────
-certificatesResolvers:
-  letsencrypt:
-    acme:
-      email: "antonio.magalhaes@grupolamonica.com.br"
-      storage: /etc/traefik/acme/acme.json
-      # Use HTTP-01 challenge (requires port 80 accessible from internet)
-      httpChallenge:
-        entryPoint: web
+# ── Certificate Resolvers (uncomment when domain is live) ─────────────────
+# certificatesResolvers:
+#   letsencrypt:
+#     acme:
+#       email: "antonio.magalhaes@grupolamonica.com.br"
+#       storage: /etc/traefik/acme/acme.json
+#       httpChallenge:
+#         entryPoint: web
 
-# ── Providers ────────────────────────────────────────────────────────────────
+# ── Providers ─────────────────────────────────────────────────────────────
 providers:
   docker:
-    # Only expose containers with traefik.enable=true label
+    # Only expose containers explicitly labelled traefik.enable=true
     exposedByDefault: false
-    # Network to use when multiple networks are attached
-    network: lamonica-net
-    # Watch for Docker events (service start/stop)
-    watch: true
-  file:
-    # Allow dynamic config files in /etc/traefik/dynamic/ if needed later
-    directory: /etc/traefik/dynamic
+    # Network used to reach containers (must match labels: traefik.docker.network)
+    network: platform_public
     watch: true
 
-# ── Logging ──────────────────────────────────────────────────────────────────
+# ── Logging ───────────────────────────────────────────────────────────────
 log:
   level: INFO
 
-accessLog:
-  # Enable access logs for debugging; consider disabling in high-traffic prod
-  filePath: ""
-  # Empty filePath = stdout
+accessLog: {}

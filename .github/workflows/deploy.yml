@@ -172,8 +172,8 @@ jobs:
                 image: ${BACKEND_TAG}
             EOF
 
-            # Bring up with the pinned images (production profile for Traefik)
-            docker compose -f docker-compose.yml -f docker-compose.deploy.yml --profile production up -d --remove-orphans
+            # Bring up with pinned images (Traefik is platform-level, no profile needed)
+            docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.deploy.yml up -d --remove-orphans
 
             # Clean up old images (keep last 3)
             docker image prune -f --filter "until=72h" || true

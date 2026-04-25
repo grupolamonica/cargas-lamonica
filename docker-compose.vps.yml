@@ -1,14 +1,16 @@
-# docker-compose.vps.yml — VPS production without domain (no Traefik, direct ports)
+# docker-compose.vps.yml — VPS overrides for Lamonica Cargas
 #
-# Usage:
-#   docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build
+# Usage (IP-only, no domain):
+#   docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d
+#
+# Usage (with domain + TLS, after DNS is live):
+#   DOMAIN=lamonica.grupolamonica.com.br \
+#   docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.domain.yml up -d
 #
 # Requires on VPS:
-#   - backend.env file at this directory (copy from backend/.env.example and fill in)
-#   - VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY exported in shell (or set in .env at project root)
-#
-# Frontend (nginx) proxies /api/* to backend internally — no Traefik needed.
-# When you get a domain: use docker-compose.yml + --profile production (Traefik with TLS).
+#   - backend.env in this directory (real credentials)
+#   - Platform Traefik running: /opt/platform/traefik/
+#   - Docker networks: platform_public, platform_monitoring (created by platform)
 
 services:
 
@@ -18,21 +20,9 @@ services:
         VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
         VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
         VITE_API_BASE_URL: ""
-    ports:
-      - "80:80"
-    labels: []
-    depends_on:
-      backend:
-        condition: service_healthy
+    # No ports: Traefik handles edge traffic on port 80/443
 
   backend:
-    ports:
-      - "127.0.0.1:3001:3001"
-    labels: []
     env_file:
       - backend.env
-
-  # Disable Traefik — frontend nginx handles /api routing internally
-  reverse-proxy:
-    profiles:
-      - traefik-disabled
+    # No ports exposed directly: Traefik routes /api/* here
