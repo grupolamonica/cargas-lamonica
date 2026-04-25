@@ -5,7 +5,7 @@
 #
 # Requires on VPS:
 #   - backend.env file at this directory (copy from backend/.env.example and fill in)
-#   - VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY exported in shell (or set in .env at project root)
+#   - VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY exported in shell (or set in .env at project root)
 #
 # Frontend (nginx) proxies /api/* to backend internally — no Traefik needed.
 # When you get a domain: use docker-compose.yml + --profile production (Traefik with TLS).
@@ -16,7 +16,7 @@ services:
     build:
       args:
         VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
-        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
         VITE_API_BASE_URL: ""
     ports:
       - "80:80"
