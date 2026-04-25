@@ -152,6 +152,10 @@ jobs:
             set -euo pipefail
             cd /opt/apps/lamonica
 
+            # Sync repo config (compose files, scripts, Dockerfiles) to this commit
+            git fetch origin main
+            git reset --hard origin/main
+
             # Authenticate with GHCR
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
@@ -172,8 +176,8 @@ jobs:
                 image: ${BACKEND_TAG}
             EOF
 
-            # Bring up with pinned images (Traefik is platform-level, no profile needed)
-            docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.deploy.yml up -d --remove-orphans
+            # Bring up with pinned images; aspx-renewal builds locally from scripts/aspx-sync/
+            docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.deploy.yml up -d --build --remove-orphans
 
             # Clean up old images (keep last 3)
             docker image prune -f --filter "until=72h" || true

@@ -75,6 +75,8 @@ export interface OverviewHeroMetrics {
   approvedToday: number;
   // Cargas OPEN cujo hor\u00e1rio de carregamento j\u00e1 passou (atrasadas).
   overdueLoads: number;
+  // Cargas RESERVED via candidatura (motorista aprovado aguardando confirma\u00e7\u00e3o).
+  reservedCount: number;
 }
 
 export interface OverviewAttentionLoad {
@@ -357,6 +359,7 @@ export function buildOverviewSnapshot(
       bookedCount,
       approvedToday,
       overdueLoads,
+      reservedCount: reservedLoads.length,
     },
     attentionLoads: buildAttentionLoads(cargos, loadInterestById, now),
     recentActivity: buildActivityFeed(cargos, leads, claims, now),

@@ -413,5 +413,84 @@ def main() -> None:
     print("Sync ASPx finalizado.")
 
 
+# ==============================
+# RENEW LOOP (servico Docker persistente)
+# ==============================
+_RENEW_CHECK_INTERVAL_SEC = 3600       # verifica a cada 1h
+_RENEW_THRESHOLD_SEC = 12 * 3600      # renova se < 12h restantes
+
+
+def _cookies_remaining_seconds() -> float | None:
+    """Retorna segundos ate expirar ou None se nao encontrado / expirado."""
+    url = (
+        f"{SUPABASE_URL}/rest/v1/aspx_credentials"
+        "?id=eq.1&select=cookies_expires_at"
+    )
+    try:
+        r = requests.get(url, headers=_sb_headers(), timeout=15)
+        r.raise_for_status()
+        rows = r.json()
+    except requests.RequestException:
+        return None
+    if not rows:
+        return None
+    exp_str = rows[0].get("cookies_expires_at")
+    if not exp_str:
+        return None
+    try:
+        exp_dt = datetime.fromisoformat(exp_str.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (exp_dt - datetime.now(timezone.utc)).total_seconds()
+
+
+def renew_loop() -> None:
+    """Loop de renovacao de cookies via Playwright headless.
+
+    Iniciado como servico Docker persistente na VPS.
+    Verifica a cada 1h; renova quando faltam < 12h para expirar.
+    Requer ASPX_ALLOW_PLAYWRIGHT_LOGIN=1.
+    """
+    if not ALLOW_PLAYWRIGHT_LOGIN:
+        raise SystemExit(
+            "FALHA: --renew-loop requer ASPX_ALLOW_PLAYWRIGHT_LOGIN=1"
+        )
+
+    print(
+        f"[renew-loop] Iniciado. "
+        f"Verifica a cada {_RENEW_CHECK_INTERVAL_SEC // 3600}h, "
+        f"renova se < {_RENEW_THRESHOLD_SEC // 3600}h restantes."
+    )
+
+    while True:
+        try:
+            remaining = _cookies_remaining_seconds()
+            needs_renew = remaining is None or remaining < _RENEW_THRESHOLD_SEC
+
+            if needs_renew:
+                if remaining is None:
+                    print("[renew-loop] Cookie expirado ou ausente — renovando...")
+                else:
+                    print(f"[renew-loop] Cookie expira em {int(remaining // 3600)}h — renovando...")
+
+                email, senha, device_id = carregar_credenciais_aspx()
+                new_cookies = _login_playwright(email, senha, device_id)
+                _salvar_cookies(new_cookies)
+                print("[renew-loop] Cookie renovado com sucesso.")
+            else:
+                print(f"[renew-loop] Cookie valido por mais {int(remaining // 3600)}h — nada a fazer.")
+
+        except SystemExit as exc:
+            print(f"[renew-loop] Erro fatal: {exc}", file=sys.stderr)
+        except Exception as exc:
+            print(f"[renew-loop] Erro inesperado: {exc}", file=sys.stderr)
+
+        print(f"[renew-loop] Proxima verificacao em {_RENEW_CHECK_INTERVAL_SEC // 3600}h.")
+        time.sleep(_RENEW_CHECK_INTERVAL_SEC)
+
+
 if __name__ == "__main__":
-    main()
+    if "--renew-loop" in sys.argv:
+        renew_loop()
+    else:
+        main()

@@ -1099,17 +1099,59 @@ export async function syncGoogleSheetLoads({
   }
 
   const currentSheetKeys = new Set(sheetLoadPayloads.map((load) => load.sheet_lh));
-  const staleSheetLoadIds = (existingSheetLoads || [])
-    .filter((load) => load.sheet_lh && load.sheet_lh.trim() !== "" && !currentSheetKeys.has(load.sheet_lh))
-    .map((load) => load.id);
 
-  // Instead of deleting stale cargas (which would CASCADE DELETE associated leads),
-  // unlink them from the sheet by clearing sheet_lh. The cargo and all its
-  // associated data (leads, claims, events) are preserved as manual cargas.
-  // Also expire OPEN cargas so they stop appearing to drivers — the spreadsheet
-  // is the source of truth for availability.
-  // Single raw pg UPDATE for atomicity — avoids partial-unlink state from batch loops.
-  if (staleSheetLoadIds.length > 0) {
+  // Parse ALL rows (including non-available) to differentiate two kinds of stale loads:
+  // - staleInSheet: operator assigned driver/status → row still exists in sheet, preserve sheet_lh
+  //   so Histórico can look up the live sheet status via sheetLh.
+  // - staleTrulyGone: row was completely removed → clear sheet_lh, EXPIRED (OPEN only).
+  const allSheetRows = parseAllGoogleSheetRows(csvText);
+  const allSheetRowsByLh = new Map(
+    allSheetRows.filter((r) => r.lh && r.lh.trim()).map((r) => [r.lh.trim(), r]),
+  );
+
+  const staleInSheet = [];   // still present in sheet (closed by operator)
+  const staleTrulyGone = []; // completely removed from sheet
+
+  for (const existingLoad of existingSheetLoads || []) {
+    if (!existingLoad.sheet_lh?.trim()) continue;
+    if (currentSheetKeys.has(existingLoad.sheet_lh)) continue;
+
+    const sheetRow = allSheetRowsByLh.get(existingLoad.sheet_lh.trim());
+    if (sheetRow) {
+      staleInSheet.push({ id: existingLoad.id, motorista: sheetRow.motoristas?.trim() || null });
+    } else {
+      staleTrulyGone.push(existingLoad.id);
+    }
+  }
+
+  // Cargas fechadas pelo operador na planilha (motorista ou status preenchido):
+  // preserva sheet_lh para que o Histórico busque o status ao vivo pelo LH.
+  if (staleInSheet.length > 0) {
+    await withPgClient(async (pgClient) => {
+      await pgClient.query(
+        `
+          UPDATE public.cargas c
+          SET
+            sheet_motorista = v.motorista,
+            sheet_synced_at = $1,
+            status = CASE WHEN c.status IN ('OPEN', 'RESERVED') THEN 'BOOKED' ELSE c.status END
+          FROM (
+            SELECT UNNEST($2::uuid[]) AS id, UNNEST($3::text[]) AS motorista
+          ) AS v
+          WHERE c.id = v.id
+        `,
+        [syncedAt, staleInSheet.map((s) => s.id), staleInSheet.map((s) => s.motorista)],
+      );
+    });
+
+    console.info(
+      `[google-sheet-loads] ${staleInSheet.length} cargas fechadas pela planilha (OPEN/RESERVED→BOOKED, sheet_lh preservado)`,
+      { count: staleInSheet.length },
+    );
+  }
+
+  // Cargas completamente removidas da planilha: desvincula sheet_lh, expira OPEN.
+  if (staleTrulyGone.length > 0) {
     await withPgClient(async (pgClient) => {
       await pgClient.query(
         `
@@ -1123,16 +1165,20 @@ export async function syncGoogleSheetLoads({
             sheet_cavalo           = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_cavalo END,
             sheet_carreta          = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_carreta END,
             sheet_synced_at = NULL,
-            status = CASE WHEN status = 'OPEN' THEN 'EXPIRED' ELSE status END
+            status = CASE
+              WHEN status = 'OPEN' THEN 'EXPIRED'
+              WHEN status = 'RESERVED' THEN 'BOOKED'
+              ELSE status END
           WHERE id = ANY($1::uuid[])
         `,
-        [staleSheetLoadIds],
+        [staleTrulyGone],
       );
     });
 
-    console.info(`[google-sheet-loads] unlinked ${staleSheetLoadIds.length} stale cargas from sheet (expired OPEN ones, preserved data)`, {
-      count: staleSheetLoadIds.length,
-    });
+    console.info(
+      `[google-sheet-loads] ${staleTrulyGone.length} cargas removidas da planilha (OPEN→EXPIRED, RESERVED→BOOKED)`,
+      { count: staleTrulyGone.length },
+    );
   }
 
   // Persist a full snapshot (all rows + summary) so the Sheet Monitor

@@ -425,7 +425,7 @@ export async function validatePublicLeadPreRegistration({
     });
   }
 
-  const [angeliraDriverLookup, aspxDriverLookup, ...plateResults] = await Promise.all([
+  const [angeliraRaw, aspxDriverLookup, ...plateResults] = await Promise.all([
     useCachedAngellira
       ? Promise.resolve(cachedAngellira.angelliraResult)
       : lookupAngelliraDriverByCpf(payload.cpf, {
@@ -446,6 +446,29 @@ export async function validatePublicLeadPreRegistration({
       }));
     }),
   ]);
+
+  // Se Angellira retornou UNAVAILABLE e não havia cache fresco, tenta stale cache (7d).
+  // Evita rejeitar candidatura por indisponibilidade temporária do serviço externo.
+  let angeliraDriverLookup = angeliraRaw;
+  if (angeliraRaw.status === "UNAVAILABLE" && !useCachedAngellira && payload.cpf) {
+    try {
+      const staleCache = await lookupCachedAngelliraValidation({
+        documentNumber: payload.cpf,
+        correlationId,
+        maxAgeMs: 7 * 24 * 60 * 60 * 1000,
+      });
+      if (staleCache?.found) {
+        angeliraDriverLookup = { ...staleCache.angelliraResult, fromStaleCache: true };
+        logStructuredEvent("info", "driver-validation.public-lead.angellira_stale_cache_fallback", {
+          correlationId: correlationId || null,
+          loadId,
+          driverName: staleCache.driverName || null,
+        });
+      }
+    } catch {
+      // stale cache miss — mantém UNAVAILABLE
+    }
+  }
 
   const driverRegisteredSomewhere = Boolean(angeliraDriverLookup.found || aspxDriverLookup.found);
   const allRequiredPlatesFound = plateResults.every((plateResult) => plateResult.found);

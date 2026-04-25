@@ -317,8 +317,8 @@ const Overview = () => {
             />
           </section>
 
-          {/* 4 Signal Cards (agora acima dos picos de acesso/candidatura) */}
-          <section className="grid gap-4 xl:grid-cols-4">
+          {/* 5 Signal Cards */}
+          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             <SignalCard
               label="Rascunhos pendentes"
               value={formatNumber(snapshot.hero.draftCount)}
@@ -343,7 +343,50 @@ const Overview = () => {
               note="Cargas OPEN cujo hor\u00e1rio de carregamento j\u00e1 passou."
               icon={AlertTriangle}
             />
+            <SignalCard
+              label="Reservadas (candidatura)"
+              value={formatNumber(snapshot.hero.reservedCount)}
+              note="Cargas com motorista reservado via candidatura aguardando confirmacao."
+              icon={Truck}
+            />
           </section>
+
+          {/* Insight: conversao candidatura \u2192 reserva */}
+          {(() => {
+            const total = snapshot.hero.activeLoads + snapshot.hero.reservedCount;
+            const rate = total > 0 ? Math.round((snapshot.hero.reservedCount / total) * 100) : 0;
+            const hasReserved = snapshot.hero.reservedCount > 0;
+            return (
+              <section className="admin-card-surface-strong rounded-[24px] border px-5 py-4 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.18)]">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/12 text-emerald-700 dark:text-emerald-300">
+                      <Truck className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Insight &mdash; Candidaturas</p>
+                      <p className="mt-0.5 text-sm font-semibold text-foreground">
+                        {hasReserved
+                          ? `${snapshot.hero.reservedCount} carga${snapshot.hero.reservedCount === 1 ? "" : "s"} reservada${snapshot.hero.reservedCount === 1 ? "" : "s"} via candidatura \u2014 ${rate}% das cargas ativas com motorista confirmado`
+                          : "Nenhuma carga reservada via candidatura no momento"}
+                      </p>
+                    </div>
+                  </div>
+                  {hasReserved && (
+                    <div className="ml-13 sm:ml-0 flex items-center gap-2">
+                      <div className="h-2 w-32 overflow-hidden rounded-full bg-muted/40">
+                        <div
+                          className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                          style={{ width: `${rate}%` }}
+                        />
+                      </div>
+                      <span className="text-sm font-bold text-emerald-700 dark:text-emerald-300">{rate}%</span>
+                    </div>
+                  )}
+                </div>
+              </section>
+            );
+          })()}
 
           <DriverFlowInsights />
 

@@ -668,12 +668,15 @@ export default function SheetMonitor() {
     mutationFn: () => fetchSheetMonitor({ refresh: true }),
     onSuccess: (freshData) => {
       queryClient.setQueryData([...SHEET_MONITOR_QUERY_KEY], freshData);
+      handleStartEnrich(true);
     },
   });
 
   // ── Enrich loop ──────────────────────────────────────────────────────────────
+  const enrichForceRef = useRef(false);
+
   const enrichMutation = useMutation({
-    mutationFn: () => enrichSheetMonitor(),
+    mutationFn: () => enrichSheetMonitor({ force: enrichForceRef.current }),
     onSuccess: (data) => {
       setEnrichProgress((p) => ({
         done: (p?.done ?? 0) + data.enriched,
@@ -691,8 +694,9 @@ export default function SheetMonitor() {
     },
   });
 
-  const handleStartEnrich = () => {
+  const handleStartEnrich = (force = false) => {
     enrichingRef.current = true;
+    enrichForceRef.current = force;
     setEnrichProgress(null);
     enrichMutation.mutate();
   };

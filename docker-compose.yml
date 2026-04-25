@@ -70,6 +70,20 @@ services:
       - "traefik.http.routers.lmc-backend.priority=10"
       - "traefik.http.services.lmc-backend.loadbalancer.server.port=3001"
 
+  # ── ASPX cookie renewal (persistent container on VPS) ────────────────────
+  aspx-renewal:
+    build:
+      context: ./scripts/aspx-sync
+      dockerfile: Dockerfile
+    image: lamonica-aspx-renewal:latest
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+    env_file:
+      - backend.env
+    environment:
+      ASPX_ALLOW_PLAYWRIGHT_LOGIN: "1"
+
 # ── Networks ──────────────────────────────────────────────────────────────
 networks:
   lamonica-net:

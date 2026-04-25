@@ -119,11 +119,13 @@ export async function enrichSheetMonitorRows(supabaseClient, correlationId, { fo
 
   // 6. Determine what needs Angellira calls
   const uniqueCpfs = [...new Set(Object.values(nameToCpf))];
-  const platesToFetch = uniquePlates.filter((p) => !vehiclesByPlate[p]);
+  // force=true: re-query all plates (ignores DB cache) so "Atualizar planilha" always
+  // re-validates plates even when they exist in vehicles table.
+  const platesToFetch = force ? uniquePlates : uniquePlates.filter((p) => !vehiclesByPlate[p]);
 
   // 7. Fire Angellira concurrently
   const { lookupAngelliraDriverByCpf, lookupAngelliraPlate } =
-    await import("../driver-validation/angellira-client.js");
+    await import("../../infrastructure/angellira/angellira-client.js");
 
   const angelliraDrivers = {};
   const angelliraVehicles = {};

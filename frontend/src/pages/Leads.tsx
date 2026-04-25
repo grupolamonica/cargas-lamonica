@@ -74,10 +74,14 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     const map = new Map<string, SheetAllocation>();
     const rows: SheetMonitorRow[] = sheetData?.items ?? [];
     for (const row of rows) {
-      if (row.lh && row.motoristas && row.motoristas.trim()) {
+      // Include rows with motorista OR with status — needed for Histórico where
+      // sheet_lh is preserved and status column carries the operator's closure label.
+      const hasMotorista = Boolean(row.motoristas?.trim());
+      const hasStatus = Boolean(row.status?.trim());
+      if (row.lh && (hasMotorista || hasStatus)) {
         map.set(row.lh.trim(), {
-          driverName: row.motoristas.trim(),
-          status: (row.status || "").trim(),
+          driverName: row.motoristas?.trim() ?? "",
+          status: row.status?.trim() ?? "",
         });
       }
     }
@@ -609,13 +613,29 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                         </div>
                         <h3 className="mt-2 text-xl font-semibold tracking-tight text-foreground">{routeLabel}</h3>
                         <p className="mt-1 text-sm text-muted-foreground">
-                          Perfil {group.load.perfil} | Status {sheetAllocation ? "Reservado (planilha)" : group.load.status} | {group.queueCount} na fila
+                          Perfil {group.load.perfil} | Status{" "}
+                          {historicoMode && sheetAllocation?.status
+                            ? sheetAllocation.status
+                            : sheetAllocation
+                              ? "Reservado (planilha)"
+                              : group.load.status}{" "}
+                          | {group.queueCount} na fila
                         </p>
                         {sheetAllocation ? (
                           <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-300/60 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-500/10 dark:text-emerald-200">
                             <Truck className="h-3.5 w-3.5" />
-                            Reservado externamente: {sheetAllocation.driverName}
-                            {sheetAllocation.status ? ` · ${sheetAllocation.status}` : ""}
+                            {historicoMode ? (
+                              <>
+                                Planilha
+                                {sheetAllocation.driverName ? `: ${sheetAllocation.driverName}` : ""}
+                                {sheetAllocation.status ? ` · ${sheetAllocation.status}` : ""}
+                              </>
+                            ) : (
+                              <>
+                                Reservado externamente: {sheetAllocation.driverName}
+                                {sheetAllocation.status ? ` · ${sheetAllocation.status}` : ""}
+                              </>
+                            )}
                           </div>
                         ) : null}
                       </div>
