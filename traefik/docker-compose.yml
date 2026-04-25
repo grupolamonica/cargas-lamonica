@@ -1,0 +1,53 @@
+name: traefik
+
+services:
+  traefik:
+    image: traefik:v3
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-certs:/etc/traefik/acme
+    networks:
+      - platform_public
+      - platform_monitoring
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=platform_public"
+      # Dashboard router with BasicAuth — requires api.insecure: false in traefik.yml
+      # Priority 100 ensures it wins over app catch-all routers (lmc-frontend priority=1)
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`) || PathPrefix(`/api`) || PathPrefix(`/dashboard`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.middlewares=traefik-auth"
+      - "traefik.http.routers.dashboard.entrypoints=web"
+      - "traefik.http.routers.dashboard.priority=100"
+      # ALTERAR: substituir hash antes de exposição pública
+      # Gerar com: echo $(htpasswd -nB admin) | sed -e 's/\$/\$\$/g'
+      - "traefik.http.middlewares.traefik-auth.basicauth.users=admin:$$2b$$12$$qzT3sE3nSNDm/.m9iE1Ime.Q7XzKr.VRCpFctNY6GOPtUuYCoQoc2"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  traefik-certs:
+    name: traefik_certs
+
+networks:
+  platform_public:
+    external: true
+    name: platform_public
+  platform_monitoring:
+    external: true
+    name: platform_monitoring

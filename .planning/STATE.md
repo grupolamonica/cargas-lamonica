@@ -3,21 +3,21 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-03-PLAN.md
-last_updated: "2026-04-24T17:57:18.512Z"
+stopped_at: 06-03-PLAN.md Task 3 checkpoint:human-verify — aguardando verificação Prometheus no VPS
+last_updated: "2026-04-25T10:05:00Z"
 progress:
-  total_phases: 5
-  completed_phases: 4
-  total_plans: 9
-  completed_plans: 13
-  percent: 100
+  total_phases: 6
+  completed_phases: 5
+  total_plans: 13
+  completed_plans: 14
+  percent: 35
 ---
 
 # Project State — Lamonica Cargas
 
 **Project:** Lamonica Cargas (LMC)
 **Milestone:** v1-refactor-arch-docker-vps
-**Last updated:** 2026-04-24
+**Last updated:** 2026-04-25 — Completed quick task 260425-a1b: LH fixo + vigência card
 
 ## Project Reference
 
@@ -32,10 +32,10 @@ progress:
 
 ## Current Position
 
-**Phase:** 5 — COMPLETE
-**Plan:** 3/3 executed
-**Status:** Phase 5 COMPLETE — 05-01 (deploy.yml + rollback.yml), 05-02 (scripts/smoke-test.sh), 05-03 (README runbook + Vercel cleanup + traefik ACME email) all done
-**Progress:** [██████████] 100% complete
+**Phase:** 6 — In progress
+**Plan:** 2/4 executed
+**Status:** Phase 6 executing — 06-01 (GitHub Actions secrets), 06-02 (backup-lamonica.sh + README backup), 06-03 tasks 1+2 done. 06-03 Task 3 (checkpoint:human-verify Prometheus target) pendente. 06-04 (enable-ssl.sh) pending.
+**Progress:** [███░░░░░░░] 35% complete
 
 ```
 Phase 1: Structural Split + Clean Architecture   [x] COMPLETE (Plans 1+2+3+4 done)
@@ -43,6 +43,7 @@ Phase 2: Backend Runtime Migration               [x] COMPLETE (Plans 1+2 done)
 Phase 3: Dockerization                           [x] COMPLETE (Plans 1+2+3 done)
 Phase 4: Communication & Env Configuration       [x] COMPLETE (Plan 1 done)
 Phase 5: CI/CD + VPS Deploy + Cleanup            [x] COMPLETE (Plans 1+2+3 done)
+Phase 6: VPS Server Hardening and CI/CD Config   [ ] IN PROGRESS (2/4 done)
 ```
 
 ## Performance Metrics
@@ -66,6 +67,8 @@ Phase 5: CI/CD + VPS Deploy + Cleanup            [x] COMPLETE (Plans 1+2+3 done)
 | 05-cicd-vps-deploy | 05-01 | ~5min | 2/2 | 2 created | 2026-04-24 |
 | 05-cicd-vps-deploy | 05-02 | ~1min | 1/1 | 1 created | 2026-04-24 |
 | Phase 05-cicd-vps-deploy P05-03 | 2min | 2 tasks | 4 files |
+| 06-vps-server-hardening | 06-02 | ~5min | 2/2 | 2 created/modified | 2026-04-25 |
+| 06-vps-server-hardening | 06-03 | ~8min | 2/3 (checkpoint) | 1 created, 1 modified | 2026-04-25 |
 
 ## Accumulated Context
 
@@ -104,14 +107,26 @@ Phase 5: CI/CD + VPS Deploy + Cleanup            [x] COMPLETE (Plans 1+2+3 done)
 | nginx:alpine runtime (não node) | Footprint mínimo <200MB; serve static assets eficientemente | Approved (Phase 3 Plan 1) |
 | Smoke test: 401 for auth-boundary endpoints | 401 proves Traefik routing + Express auth middleware active; avoids needing real creds in CI | Approved (Phase 5 Plan 2) |
 | smoke-test.sh BASE_URL as $1 | Same script usable in CI (secrets.VPS_HOST) and locally against dev VPS | Approved (Phase 5 Plan 2) |
+| api.insecure=false no Traefik | Dashboard protegido via router Docker label + BasicAuth middleware; não exposto em 8080 sem auth | Approved (Phase 6 Plan 3) |
+| metrics.prometheus sem entrypoint separado | Endpoint em traefik:8080/metrics (porta internal traefik) — Prometheus scrape é interno, não exposto | Approved (Phase 6 Plan 3) |
 
 ### Decisions Pending
 
 None.
 
+### Roadmap Evolution
+
+- Phase 6 added: VPS Server Hardening and CI/CD Configuration (2026-04-25) — GitHub Actions secrets, backups, Traefik métricas + enable-ssl.sh migrado
+
 ### Active Todos
 
-- Plan + Execute Phase 3 (Dockerization) — context captured 2026-04-24, decisions locked
+- Plan + Execute Phase 6 (VPS Server Hardening) — contexto capturado no relatório VPS 2026-04-25
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260425-a1b | Fix sheet_lh permanência + vigência card motorista alocado | 2026-04-25 | 48e9ad6 | [260425-a1b-lh-fixo-vigencia-card](./quick/260425-a1b-lh-fixo-vigencia-card/) |
 
 ### Blockers
 
@@ -139,11 +154,11 @@ Validated capabilities from PROJECT.md — todas devem continuar funcionando ao 
 
 ## Session Continuity
 
-**Stopped at:** Completed 05-03-PLAN.md
+**Stopped at:** 06-03-PLAN.md Task 3 checkpoint:human-verify — Tasks 1+2 completas (traefik.yml + configure-prometheus-traefik.sh). Aguardando execução do script no VPS e confirmação do Prometheus target "traefik".
 
-**Next action:** All phases complete. Project ready for VPS onboarding per README.md runbook.
+**Next action:** Após verificação no VPS, continuar 06-03 Task 3 e depois executar 06-04-PLAN.md (enable-ssl.sh).
 
-**Resume hint:** All 5 phases complete. Milestone v1-refactor-arch-docker-vps delivered. Key deliverables: clean architecture frontend/backend, Docker containers, GitHub Actions CI/CD (deploy.yml + rollback.yml), smoke tests, README operational runbook, Traefik with real ACME email.
+**Resume hint:** Phase 6 in progress (2.5/4 done). 06-03 tasks 1+2 commitadas (fff521b, 38520d2). Task 3 = checkpoint humano: executar script VPS + verificar Prometheus target.
 
 ---
 

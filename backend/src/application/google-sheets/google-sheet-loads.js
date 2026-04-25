@@ -1195,7 +1195,7 @@ export async function syncGoogleSheetLoads({
 
   return {
     availableLoadsCount: sheetLoadPayloads.length,
-    unlinkedLoadsCount: staleSheetLoadIds.length,
+    unlinkedLoadsCount: staleInSheet.length + staleTrulyGone.length,
     skippedInvalidLoadsCount: invalidRows.length,
     sheetUrl,
   };

@@ -15,6 +15,9 @@ api:
   dashboard: true
   insecure: false
 
+# ── Ping (healthcheck endpoint at /ping on traefik entrypoint :8080) ──────
+ping: {}
+
 # ── Entry Points ──────────────────────────────────────────────────────────
 entryPoints:
   web:
