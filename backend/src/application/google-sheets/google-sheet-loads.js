@@ -1157,6 +1157,7 @@ export async function syncGoogleSheetLoads({
         `
           UPDATE public.cargas
           SET
+            sheet_lh = NULL,
             sheet_tipo = NULL,
             sheet_data_carregamento = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_data_carregamento END,
             sheet_data_descarga    = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_data_descarga END,
