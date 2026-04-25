@@ -157,6 +157,29 @@ bash scripts/smoke-test.sh http://76.13.169.177
 
 > **Finding the SHA:** In GitHub Actions, each run shows the full commit SHA. Use the SHA from the last known-good deploy run.
 
+## Backup de Dados Críticos
+
+O script `scripts/backup-lamonica.sh` faz backup de:
+- `/opt/apps/lamonica/backend.env` — segredos runtime (não versionado)
+- `/opt/apps/lamonica/.env` — variáveis de build Supabase (não versionado)
+- Volume Docker `traefik_certs` — certificados TLS Let's Encrypt
+
+Backups ficam em `/opt/backups/` com timestamp. Retenção: 7 dias.
+
+**Executar manualmente:**
+```bash
+# No VPS, como antonio-magalhaes:
+cd /opt/apps/lamonica
+bash scripts/backup-lamonica.sh
+```
+
+**Agendar via cron (recomendado — diário às 03:00):**
+```bash
+crontab -e
+# Adicionar:
+0 3 * * * cd /opt/apps/lamonica && bash scripts/backup-lamonica.sh >> /opt/backups/backup.log 2>&1
+```
+
 ## Environment Variables
 
 ```
