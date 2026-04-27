@@ -1800,10 +1800,19 @@ export async function fetchOperatorVehiclesListReadModel({ query, correlationId 
           v.updated_at,
           dp.user_id AS linked_driver_id,
           dp.full_name AS linked_driver_name,
-          dp.phone AS linked_driver_phone
+          COALESCE(dp.phone, lpl.phone) AS linked_driver_phone
         FROM public.vehicles v
         LEFT JOIN public.driver_profiles dp
           ON REPLACE(REPLACE(dp.document_number, '.', ''), '-', '') = v.linked_driver_cpf
+        LEFT JOIN LATERAL (
+          SELECT phone
+          FROM public.load_public_leads
+          WHERE REPLACE(REPLACE(cpf, '.', ''), '-', '') = v.linked_driver_cpf
+            AND v.linked_driver_cpf IS NOT NULL
+            AND phone IS NOT NULL AND phone <> ''
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) lpl ON true
         ${whereClause}
         ORDER BY v.updated_at DESC NULLS LAST, v.created_at DESC NULLS LAST
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
