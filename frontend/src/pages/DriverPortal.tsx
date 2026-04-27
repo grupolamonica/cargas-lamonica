@@ -1,29 +1,19 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { parseISO } from "date-fns";
 import {
   Activity,
-  AlertCircle,
-  ArrowRight,
   BellRing,
   CalendarIcon,
   ChevronDown,
-  CheckCircle2,
   Compass,
   MapPin,
-  Navigation,
   Package,
-  PackageX,
   SlidersHorizontal,
   Truck,
   X,
 } from "lucide-react";
-import { addDays, format, isSameDay, isToday, parseISO, startOfToday } from "date-fns";
-import { ptBR } from "date-fns/locale";
-import { toast } from "sonner";
 
 import FilterChip from "@/components/FilterChip";
-import LoadCard from "@/components/LoadCard";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import {
@@ -42,57 +32,20 @@ import {
   DrawerTitle,
 } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { formatShortDateTime } from "@/lib/dateDisplay";
-import {
-  buildDriverLeadNotifications,
-  shouldContinuePollingDriverLeadStatus,
-  type DriverLeadNotification,
-  type DriverLeadNotificationStatusEntry,
-} from "@/lib/driverLeadNotifications";
-import { buildCargoPublicPath } from "@/lib/cargoLinks";
-import {
-  dismissDriverLeadNotification,
-  DRIVER_LEAD_STORAGE_EVENT,
-  readAllStoredLeadStates,
-  readDismissedDriverLeadNotificationIds,
-  removeStoredLeadState,
-  type StoredLeadState,
-} from "@/lib/driverLeadStorage";
-import {
-  buildLoadingDateTime,
-  buildOperationalDateLabel,
-  buildRouteEstimatedDurationLabel,
-} from "@/lib/estimatedTime";
 import { cn } from "@/lib/utils";
-import { formatCurrency, buildTotalPayment } from "@/lib/currency";
-import { fetchLoadClaimStatus } from "@/services/loadClaims";
-import { fetchDriverLoadFacets, fetchDriverLoads } from "@/services/readModels";
+import { DriverClaimWorkflow } from "@/components/driver/DriverClaimWorkflow";
+import { DriverLoadsList } from "@/components/driver/DriverLoadsList";
+import {
+  useDriverLoads,
+  getFilterLabel,
+  buildPeriodLabel,
+  toDateInputValue,
+  toMobileDateLabel,
+  toFilterDateLabel,
+} from "@/hooks/useDriverLoads";
+import { useLeadNotifications } from "@/hooks/useLeadNotifications";
 import lamonicaLogo from "@/assets/lamonica-logo.png";
 
-interface Cargo {
-  id: string;
-  data: string;
-  horario: string;
-  origem: string;
-  destino: string;
-  distancia_km?: number | null;
-  duracao_horas?: number | null;
-  tempo_estimado_horas?: number | null;
-  perfil: string;
-  valor: number | null;
-  bonus: number | null;
-  clienteId?: string | null;
-  clienteNome?: string | null;
-  clienteDescricao?: string | null;
-  carregamentoLabel?: string | null;
-  descargaLabel?: string | null;
-}
-
-interface FilterOption {
-  label: string;
-  value: string;
-}
-const PAGE_SIZE = 12;
 const DRIVER_SUPPORT_WHATSAPP_NUMBER = "557199050085";
 const DRIVER_CADASTRO_MESSAGE =
   "Olá, quero fazer meu cadastro para receber cargas da Lamonica.";
@@ -121,127 +74,8 @@ const DRIVER_FAQ_ITEMS = [
   },
 ] as const;
 
-const normalizeText = (value: string) =>
-  value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toLowerCase();
-
-const splitLocation = (location: string) => {
-  const trimmedLocation = location.trim();
-  const matchedLocation = trimmedLocation.match(/^(.*?)(?:\s*\/\s*|\s*,\s*|\s+-\s+)([A-Za-z]{2})$/);
-
-  if (matchedLocation) {
-    return {
-      city: matchedLocation[1].trim(),
-      uf: matchedLocation[2].toUpperCase(),
-    };
-  }
-
-  return { city: trimmedLocation, uf: "" };
-};
-
-const buildPaymentDetailsLabel = (valor: number | null, bonus: number | null) => {
-  const hasValor = typeof valor === "number" && Number.isFinite(valor);
-  const hasBonus = typeof bonus === "number" && Number.isFinite(bonus) && bonus > 0;
-
-  if (hasValor && hasBonus) {
-    return `${formatCurrency(valor)} da carga + ${formatCurrency(bonus)} de bônus por concluir a entrega`;
-  }
-
-  if (hasBonus) {
-    return `${formatCurrency(bonus)} de bônus por concluir a entrega`;
-  }
-
-  return null;
-};
-
-const buildDriverPaymentDetailsLabel = (valor: number | null, bonus: number | null) => {
-  const hasValor = typeof valor === "number" && Number.isFinite(valor);
-  const hasBonus = typeof bonus === "number" && Number.isFinite(bonus) && bonus > 0;
-
-  if (hasValor && hasBonus) {
-    return `${formatCurrency(valor)} da carga + ${formatCurrency(bonus)} de b\u00f4nus por concluir a entrega seguindo as normas pedidas`;
-  }
-
-  if (hasBonus) {
-    return `${formatCurrency(bonus)} de b\u00f4nus por concluir a entrega seguindo as normas pedidas`;
-  }
-
-  return null;
-};
-
-const buildDateLabel = (cargo: Cargo) => {
-  const loadingDate = buildLoadingDateTime(cargo.carregamentoLabel, cargo.data, cargo.horario);
-
-  if (!loadingDate) {
-    return "Coleta a confirmar";
-  }
-
-  const baseDate = isToday(loadingDate)
-    ? "hoje"
-    : format(loadingDate, "dd/MM", { locale: ptBR });
-
-  return `Coleta ${baseDate} às ${format(loadingDate, "HH:mm")}`;
-};
-
-const toDateInputValue = (date?: Date) => (date ? format(date, "yyyy-MM-dd") : "");
-
 const buildDriverSupportWhatsAppUrl = (message: string) =>
   `https://wa.me/${DRIVER_SUPPORT_WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
-
-const toMobileDateLabel = (date?: Date) =>
-  date ? format(date, "dd/MM/yyyy", { locale: ptBR }) : "Selecionar";
-
-const toFilterDateLabel = (date?: Date) =>
-  date ? format(date, "dd/MM", { locale: ptBR }) : "";
-
-const buildPeriodLabel = (dateFrom?: Date, dateTo?: Date) => {
-  if (dateFrom && dateTo) {
-    return `${toFilterDateLabel(dateFrom)} - ${toFilterDateLabel(dateTo)}`;
-  }
-
-  if (dateFrom) {
-    return `A partir de ${toFilterDateLabel(dateFrom)}`;
-  }
-
-  if (dateTo) {
-    return `Até ${toFilterDateLabel(dateTo)}`;
-  }
-
-  return "Qualquer data";
-};
-
-const formatLocationLabel = (location: string) => {
-  const { city, uf } = splitLocation(location);
-  return uf ? `${city}/${uf}` : city;
-};
-
-const buildCompactLocationLabel = (location?: string) => {
-  if (!location) {
-    return "";
-  }
-
-  const { city, uf } = splitLocation(location);
-  return uf || city;
-};
-
-const buildAvailableLoadsLabel = (count: number) => {
-  if (count === 1) {
-    return "1 carga disponível";
-  }
-
-  return `${count} cargas disponíveis`;
-};
-
-const formatRouteMetric = (value: number) =>
-  value.toLocaleString("pt-BR", {
-    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
-    maximumFractionDigits: 2,
-  });
-
-const formatRouteDistanceLabel = (distanceKm: number) => `${formatRouteMetric(distanceKm)} km`;
 
 interface NotificationTriggerButtonProps {
   count: number;
@@ -291,228 +125,61 @@ const NotificationTriggerButton = ({
   </button>
 );
 
-const buildLocationOptions = (locations: string[]) => {
-  const optionsMap = new Map<string, FilterOption>();
-
-  locations.forEach((location) => {
-    const label = formatLocationLabel(location);
-    const key = normalizeText(label);
-
-    if (label && !optionsMap.has(key)) {
-      optionsMap.set(key, {
-        value: label,
-        label,
-      });
-    }
-  });
-
-  return Array.from(optionsMap.values()).sort((optionA, optionB) =>
-    optionA.label.localeCompare(optionB.label, "pt-BR"),
-  );
-};
-
-const getFilterLabel = (value: string, options: FilterOption[], fallback: string) => {
-  if (!value) {
-    return fallback;
-  }
-
-  return options.find((option) => option.value === value)?.label || value;
-};
-
-const matchesLocationFilter = (location: string, filter: string) => {
-  if (!filter) {
-    return true;
-  }
-
-  const normalizedFilter = normalizeText(filter);
-  const { city, uf } = splitLocation(location);
-  const formattedLocation = formatLocationLabel(location);
-
-  return (
-    normalizeText(location).includes(normalizedFilter) ||
-    normalizeText(formattedLocation).includes(normalizedFilter) ||
-    normalizeText(city).includes(normalizedFilter) ||
-    normalizeText(uf) === normalizedFilter
-  );
-};
-
 const DriverPortal = () => {
-  const [searchParams] = useSearchParams();
-  const [origemFilter, setOrigemFilter] = useState(searchParams.get("origem") || "");
-  const [destinoFilter, setDestinoFilter] = useState(searchParams.get("destino") || "");
-  const [perfilFilter, setPerfilFilter] = useState(searchParams.get("perfil") || "");
-  const [page, setPage] = useState(1);
-  const [dateFrom, setDateFrom] = useState<Date | undefined>();
-  const [dateTo, setDateTo] = useState<Date | undefined>();
+  const {
+    origemFilter, setOrigemFilter,
+    destinoFilter, setDestinoFilter,
+    perfilFilter, setPerfilFilter,
+    page,
+    dateFrom, setDateFrom,
+    dateTo, setDateTo,
+    mobileOrigemDraft, setMobileOrigemDraft,
+    mobileDestinoDraft, setMobileDestinoDraft,
+    mobilePerfilDraft, setMobilePerfilDraft,
+    mobileDateFromDraft, setMobileDateFromDraft,
+    mobileDateToDraft, setMobileDateToDraft,
+    cargas,
+    isFetching,
+    meta,
+    totalMatchingLoads,
+    uniqueStates,
+    uniqueProfilesCount,
+    loading,
+    totalPages,
+    isPageTransitioning,
+    origemOptions,
+    destinoOptions,
+    perfis,
+    activeFilterCount,
+    hasActiveFilters,
+    activeFilterSummaryItems,
+    mobileFilterGuide,
+    desktopStickyRoute,
+    isTodayQuickFilter,
+    isTomorrowQuickFilter,
+    clearAllFilters,
+    clearMobileDraftFilters,
+    syncMobileDraftsWithApplied,
+    applyMobileFilters,
+    handlePageChange,
+    handleTodayQuickFilter,
+    handleTomorrowQuickFilter,
+  } = useDriverLoads();
+
+  const { notifications, notificationCount, handleDismissNotification } = useLeadNotifications();
+
   const [isMobileFilterDrawerOpen, setIsMobileFilterDrawerOpen] = useState(false);
-  const [mobileOrigemDraft, setMobileOrigemDraft] = useState(searchParams.get("origem") || "");
-  const [mobileDestinoDraft, setMobileDestinoDraft] = useState(searchParams.get("destino") || "");
-  const [mobilePerfilDraft, setMobilePerfilDraft] = useState(searchParams.get("perfil") || "");
-  const [mobileDateFromDraft, setMobileDateFromDraft] = useState<Date | undefined>();
-  const [mobileDateToDraft, setMobileDateToDraft] = useState<Date | undefined>();
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isFaqOpen, setIsFaqOpen] = useState(false);
   const [isLoadInterestDialogOpen, setIsLoadInterestDialogOpen] = useState(false);
   const [showStickyBar, setShowStickyBar] = useState(false);
-  const [storedLeadStates, setStoredLeadStates] = useState<StoredLeadState[]>(() => readAllStoredLeadStates());
-  const [dismissedLeadNotificationIds, setDismissedLeadNotificationIds] = useState<string[]>(() =>
-    readDismissedDriverLeadNotificationIds(),
-  );
   const showStickyBarRef = useRef(false);
   const scrollFrameRef = useRef<number | null>(null);
   const desktopFiltersRef = useRef<HTMLDivElement | null>(null);
   const mobileFiltersRef = useRef<HTMLDivElement | null>(null);
   const resultsSectionRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    setPage(1);
-  }, [origemFilter, destinoFilter, perfilFilter, dateFrom, dateTo]);
-
-  const deferredOrigemFilter = useDeferredValue(origemFilter);
-  const deferredDestinoFilter = useDeferredValue(destinoFilter);
-  const deferredPerfilFilter = useDeferredValue(perfilFilter);
   const cadastroHref = buildDriverSupportWhatsAppUrl(DRIVER_CADASTRO_MESSAGE);
-
-  useEffect(() => {
-    // Registra visita \u00fanica por sess\u00e3o para o "Pico de acesso" do painel do operador.
-    try {
-      const STORAGE_KEY = "lamonica-driver-portal-visit-recorded";
-      if (typeof window !== "undefined" && !sessionStorage.getItem(STORAGE_KEY)) {
-        sessionStorage.setItem(STORAGE_KEY, "1");
-        void fetch("/api/driver/portal-view", { method: "POST" }).catch(() => {
-          // fire-and-forget, silencioso
-        });
-      }
-    } catch {
-      // sessionStorage indispon\u00edvel (modo privado): ignora
-    }
-  }, []);
-  const trackedLeadStates = useMemo(
-    () => storedLeadStates.filter((state) => state.stage === "PRE_REGISTERED" || state.stage === "QUEUED"),
-    [storedLeadStates],
-  );
-  const trackedLeadStatesSignature = useMemo(
-    () => trackedLeadStates.map((state) => `${state.loadId}:${state.leadId}`),
-    [trackedLeadStates],
-  );
-  const hasQueuedTrackedLeadStates = useMemo(
-    () => trackedLeadStates.some((state) => state.stage === "QUEUED"),
-    [trackedLeadStates],
-  );
-
-  useEffect(() => {
-    const syncLeadClientState = () => {
-      setStoredLeadStates(readAllStoredLeadStates());
-      setDismissedLeadNotificationIds(readDismissedDriverLeadNotificationIds());
-    };
-
-    syncLeadClientState();
-    window.addEventListener("storage", syncLeadClientState);
-    window.addEventListener(DRIVER_LEAD_STORAGE_EVENT, syncLeadClientState);
-
-    return () => {
-      window.removeEventListener("storage", syncLeadClientState);
-      window.removeEventListener(DRIVER_LEAD_STORAGE_EVENT, syncLeadClientState);
-    };
-  }, []);
-
-  const { data: driverLeadStatusEntries = [] } = useQuery({
-    queryKey: ["driver", "lead-notifications", trackedLeadStatesSignature],
-    enabled: trackedLeadStates.length > 0,
-    queryFn: async (): Promise<DriverLeadNotificationStatusEntry[]> =>
-      Promise.all(
-        trackedLeadStates.map(async (state) => {
-          try {
-            return {
-              state,
-              status: await fetchLoadClaimStatus(state.loadId, undefined, state.leadId),
-              error: null,
-            };
-          } catch (error) {
-            return {
-              state,
-              status: null,
-              error: error instanceof Error ? error.message : "Não foi possível atualizar o status desta candidatura.",
-            };
-          }
-        }),
-      ),
-    staleTime: 10_000,
-    gcTime: 10 * 60_000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchInterval: (query) => {
-      const currentEntries = query.state.data as DriverLeadNotificationStatusEntry[] | undefined;
-
-      if (!hasQueuedTrackedLeadStates) {
-        return false;
-      }
-
-      if (!currentEntries?.length) {
-        return 30_000;
-      }
-
-      return currentEntries.some(shouldContinuePollingDriverLeadStatus) ? 30_000 : false;
-    },
-  });
-
-  const {
-    data: loadsResponse,
-    error: loadsError,
-    isFetching,
-    isLoading,
-  } = useQuery({
-    queryKey: [
-      "driver",
-      "loads-read-model",
-      deferredOrigemFilter,
-      deferredDestinoFilter,
-      deferredPerfilFilter,
-      toDateInputValue(dateFrom),
-      toDateInputValue(dateTo),
-      page,
-    ],
-    queryFn: () =>
-      fetchDriverLoads({
-        origem: deferredOrigemFilter,
-        destino: deferredDestinoFilter,
-        perfil: deferredPerfilFilter,
-        dateFrom: toDateInputValue(dateFrom),
-        dateTo: toDateInputValue(dateTo),
-        page: String(page),
-        pageSize: String(PAGE_SIZE),
-      }),
-    placeholderData: keepPreviousData,
-    staleTime: 30_000,
-    gcTime: 5 * 60_000,
-    refetchOnWindowFocus: true,
-    refetchOnReconnect: true,
-    refetchInterval: 45_000,
-  });
-
-  const {
-    data: facetsResponse,
-    error: facetsError,
-  } = useQuery({
-    queryKey: ["driver", "loads-facets"],
-    queryFn: fetchDriverLoadFacets,
-    staleTime: 30_000,
-    gcTime: 10 * 60_000,
-    refetchOnWindowFocus: true,
-    refetchOnReconnect: true,
-  });
-
-  useEffect(() => {
-    if (loadsError) {
-      toast.error("Erro ao carregar cargas ativas");
-    }
-  }, [loadsError]);
-
-  useEffect(() => {
-    if (facetsError) {
-      toast.error("Erro ao carregar filtros do portal");
-    }
-  }, [facetsError]);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -559,267 +226,10 @@ const DriverPortal = () => {
       }
     };
   }, [isFaqOpen, isLoadInterestDialogOpen, isMobileFilterDrawerOpen, isNotificationsOpen]);
-  const cargas = useMemo<Cargo[]>(() => loadsResponse?.items || [], [loadsResponse?.items]);
-  const deferredFiltered = useDeferredValue(cargas);
-  const totalMatchingLoads = loadsResponse?.summary.totalCount || 0;
-  const uniqueStates = loadsResponse?.summary.uniqueStateCount || 0;
-  const uniqueProfilesCount = loadsResponse?.summary.uniqueProfileCount || 0;
-  const loading = isLoading && !cargas.length;
-  const meta = loadsResponse?.meta || {
-    page,
-    pageSize: PAGE_SIZE,
-    totalCount: 0,
-    totalPages: 1,
-    hasNextPage: false,
-    maxPageSize: PAGE_SIZE,
-    correlationId: "",
-  };
-  const totalPages = Math.max(meta.totalPages, 1);
-  const isPageTransitioning = isFetching && page !== meta.page;
-  const dismissedLeadNotificationIdSet = useMemo(
-    () => new Set(dismissedLeadNotificationIds),
-    [dismissedLeadNotificationIds],
-  );
-  const driverLeadNotifications = useMemo(
-    () =>
-      buildDriverLeadNotifications(driverLeadStatusEntries).filter(
-        (notification) => !dismissedLeadNotificationIdSet.has(notification.id),
-      ),
-    [dismissedLeadNotificationIdSet, driverLeadStatusEntries],
-  );
-  const notificationCount = driverLeadNotifications.length;
-
-  const origemOptions = useMemo(
-    () => buildLocationOptions(facetsResponse?.origemOptions || []),
-    [facetsResponse?.origemOptions],
-  );
-
-  const destinoOptions = useMemo(
-    () => buildLocationOptions(facetsResponse?.destinoOptions || []),
-    [facetsResponse?.destinoOptions],
-  );
-
-  const perfis = useMemo(
-    () => [...(facetsResponse?.perfilOptions || [])].sort((a, b) => a.localeCompare(b, "pt-BR")),
-    [facetsResponse?.perfilOptions],
-  );
-
-  const activeFilterCount = useMemo(() => {
-    return (
-      (origemFilter ? 1 : 0) +
-      (destinoFilter ? 1 : 0) +
-      (perfilFilter ? 1 : 0) +
-      (dateFrom || dateTo ? 1 : 0)
-    );
-  }, [origemFilter, destinoFilter, perfilFilter, dateFrom, dateTo]);
-
-  const hasActiveFilters = activeFilterCount > 0;
-
-  const activeFilterSummaryItems = useMemo(() => {
-    return [
-      origemFilter ? `Origem: ${getFilterLabel(origemFilter, origemOptions, "Todas")}` : "",
-      destinoFilter ? `Destino: ${getFilterLabel(destinoFilter, destinoOptions, "Todos")}` : "",
-      perfilFilter ? `Veículo: ${perfilFilter}` : "",
-      dateFrom || dateTo ? `Período: ${buildPeriodLabel(dateFrom, dateTo)}` : "",
-    ].filter(Boolean);
-  }, [origemFilter, destinoFilter, perfilFilter, dateFrom, dateTo, origemOptions, destinoOptions]);
-
-  const mobileFilterSummary = useMemo(() => {
-    return activeFilterSummaryItems.length > 0 ? activeFilterSummaryItems.join(" | ") : "Todas as cargas ativas";
-  }, [activeFilterSummaryItems]);
-
-  const mobileFilterGuide = useMemo(() => {
-    if (!totalMatchingLoads) {
-      if (hasActiveFilters) {
-        return {
-          eyebrow: "Busca atual",
-          title: "Nenhuma carga apareceu com esse recorte.",
-          description: "Tire um filtro ou toque em limpar para abrir mais opções de saída.",
-        };
-      }
-
-      return {
-        eyebrow: "Radar do momento",
-        title: "Nenhuma carga aberta agora.",
-        description: "As próximas oportunidades entram aqui automaticamente. Vale conferir de novo em instantes.",
-      };
-    }
-
-    if (!hasActiveFilters) {
-      return {
-        eyebrow: "Radar do momento",
-        title: `${buildAvailableLoadsLabel(totalMatchingLoads)} para você acompanhar agora.`,
-        description: "Toque em Filtros para focar a próxima saída por origem, destino, veículo ou período.",
-      };
-    }
-
-    return {
-      eyebrow: "Busca atual",
-      title:
-        totalMatchingLoads === 1
-          ? "1 carga combina com o filtro que você escolheu."
-          : `${totalMatchingLoads} cargas combinam com o filtro que você escolheu.`,
-      description: mobileFilterSummary,
-    };
-  }, [hasActiveFilters, mobileFilterSummary, totalMatchingLoads]);
-
-  const desktopStickyRoute = useMemo(() => {
-    const originLabel = origemFilter
-      ? getFilterLabel(origemFilter, origemOptions, "Todas as origens")
-      : "Todas as origens";
-    const destinationLabel = destinoFilter
-      ? getFilterLabel(destinoFilter, destinoOptions, "Todos os destinos")
-      : "Todos os destinos";
-
-    return {
-      originLabel: buildCompactLocationLabel(originLabel) || "Todas",
-      destinationLabel: buildCompactLocationLabel(destinationLabel) || "Todos",
-    };
-  }, [origemFilter, destinoFilter, origemOptions, destinoOptions]);
-
-  const today = startOfToday();
-  const tomorrow = addDays(today, 1);
-
-  const isTodayQuickFilter = useMemo(() => {
-    return Boolean(dateFrom && dateTo && isSameDay(dateFrom, today) && isSameDay(dateTo, today));
-  }, [dateFrom, dateTo, today]);
-
-  const isTomorrowQuickFilter = useMemo(() => {
-    return Boolean(dateFrom && dateTo && isSameDay(dateFrom, tomorrow) && isSameDay(dateTo, tomorrow));
-  }, [dateFrom, dateTo, tomorrow]);
-
-  const syncMobileDraftsWithApplied = () => {
-    setMobileOrigemDraft(origemFilter);
-    setMobileDestinoDraft(destinoFilter);
-    setMobilePerfilDraft(perfilFilter);
-    setMobileDateFromDraft(dateFrom);
-    setMobileDateToDraft(dateTo);
-  };
-
-  const clearAllFilters = () => {
-    setOrigemFilter("");
-    setDestinoFilter("");
-    setPerfilFilter("");
-    setDateFrom(undefined);
-    setDateTo(undefined);
-
-    setMobileOrigemDraft("");
-    setMobileDestinoDraft("");
-    setMobilePerfilDraft("");
-    setMobileDateFromDraft(undefined);
-    setMobileDateToDraft(undefined);
-  };
-
-  const clearMobileDraftFilters = () => {
-    setMobileOrigemDraft("");
-    setMobileDestinoDraft("");
-    setMobilePerfilDraft("");
-    setMobileDateFromDraft(undefined);
-    setMobileDateToDraft(undefined);
-  };
-
-  const handlePageChange = (nextPage: number) => {
-    if (nextPage === page || nextPage < 1 || nextPage > totalPages) {
-      return;
-    }
-
-    setPage(nextPage);
-
-    if (typeof window !== "undefined" && window.innerWidth < 1024) {
-      window.requestAnimationFrame(() => {
-        resultsSectionRef.current?.scrollIntoView?.({
-          behavior: "smooth",
-          block: "start",
-        });
-      });
-    }
-  };
-
-  const applyMobileFilters = () => {
-    setOrigemFilter(mobileOrigemDraft);
-    setDestinoFilter(mobileDestinoDraft);
-    setPerfilFilter(mobilePerfilDraft);
-    setDateFrom(mobileDateFromDraft);
-    setDateTo(mobileDateToDraft);
-    setIsMobileFilterDrawerOpen(false);
-  };
-
-  const handleTodayQuickFilter = () => {
-    setDateFrom(today);
-    setDateTo(today);
-    setMobileDateFromDraft(today);
-    setMobileDateToDraft(today);
-  };
-
-  const handleTomorrowQuickFilter = () => {
-    setDateFrom(tomorrow);
-    setDateTo(tomorrow);
-    setMobileDateFromDraft(tomorrow);
-    setMobileDateToDraft(tomorrow);
-  };
 
   const handleDesktopStickyBarClick = () => {
     desktopFiltersRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
-
-  const handleDismissLeadNotification = (notification: DriverLeadNotification) => {
-    dismissDriverLeadNotification(notification.id);
-    removeStoredLeadState(notification.loadId);
-    setStoredLeadStates(readAllStoredLeadStates());
-    setDismissedLeadNotificationIds(readDismissedDriverLeadNotificationIds());
-  };
-
-  const cargoCards = useMemo(() => {
-    return deferredFiltered.map((cargo, index) => {
-      const origin = splitLocation(cargo.origem);
-      const destination = splitLocation(cargo.destino);
-      const loadingScheduleLabel = buildOperationalDateLabel(
-        cargo.carregamentoLabel,
-        cargo.data,
-        cargo.horario,
-      );
-      const totalPaymentValue = buildTotalPayment(cargo.valor, cargo.bonus);
-      const paymentLabel = totalPaymentValue !== null ? formatCurrency(totalPaymentValue) : "A combinar";
-      const paymentDetailsLabel = buildDriverPaymentDetailsLabel(cargo.valor, cargo.bonus);
-      const routeDistanceLabel =
-        typeof cargo.distancia_km === "number" && Number.isFinite(cargo.distancia_km)
-          ? formatRouteDistanceLabel(cargo.distancia_km)
-          : "A confirmar";
-      const routeDurationLabel = buildRouteEstimatedDurationLabel({
-        routeEstimatedHours: cargo.tempo_estimado_horas,
-        fallbackDurationHours: cargo.duracao_horas,
-      });
-      return (
-        <LoadCard
-          key={cargo.id}
-          id={cargo.id.slice(0, 8).toUpperCase()}
-          loadId={cargo.id}
-          dateTime={buildDateLabel(cargo)}
-          clienteId={cargo.clienteId}
-          clienteNome={cargo.clienteNome}
-          clienteDescricao={cargo.clienteDescricao}
-          carregamentoLabel={loadingScheduleLabel}
-          descargaLabel={cargo.descargaLabel}
-          origemCidade={origin.city}
-          origemEstado={origin.uf}
-          destinoCidade={destination.city}
-          destinoEstado={destination.uf}
-          tipoVeiculo={cargo.perfil}
-          secondaryLabel="Percurso recomendado"
-          SecondaryIcon={Navigation}
-          secondaryValue={routeDistanceLabel}
-          secondarySupportText={routeDurationLabel}
-          pagamento={paymentLabel}
-          paymentDetails={paymentDetailsLabel}
-          routeDistanceLabel={routeDistanceLabel}
-          routeDurationLabel={routeDurationLabel}
-          detailsHref={`/motorista/cargas/${cargo.id}`}
-          index={index}
-          onInterestDialogOpenChange={setIsLoadInterestDialogOpen}
-        />
-      );
-    });
-  }, [deferredFiltered]);
 
   const paginationControls =
     totalMatchingLoads > 0 ? (
@@ -841,7 +251,7 @@ const DriverPortal = () => {
             type="button"
             variant="outline"
             className="rounded-full"
-            onClick={() => handlePageChange(page - 1)}
+            onClick={() => handlePageChange(page - 1, resultsSectionRef)}
             disabled={page <= 1 || isFetching}
           >
             Anterior
@@ -849,7 +259,7 @@ const DriverPortal = () => {
           <Button
             type="button"
             className="rounded-full"
-            onClick={() => handlePageChange(page + 1)}
+            onClick={() => handlePageChange(page + 1, resultsSectionRef)}
             disabled={page >= totalPages || isFetching}
           >
             Próxima
@@ -857,41 +267,6 @@ const DriverPortal = () => {
         </div>
       </div>
     ) : null;
-
-  const resultsContent = loading ? (
-    <div className="flex min-h-[220px] flex-col items-center justify-center gap-4 rounded-3xl border border-border/50 bg-card px-6 py-12 text-center premium-shadow">
-      <div className="h-10 w-10 rounded-full border-2 border-primary/20 border-t-primary animate-spin" />
-      <p className="text-sm font-medium text-muted-foreground">Carregando cargas...</p>
-    </div>
-  ) : deferredFiltered.length === 0 ? (
-    <div className="flex min-h-[220px] flex-col items-center justify-center gap-4 rounded-3xl border border-border/50 bg-card px-6 py-12 text-center premium-shadow animate-slide-up">
-      <PackageX className="h-14 w-14 text-muted-foreground/35" />
-      <div>
-        <p className="text-lg font-bold text-foreground">Nenhuma carga encontrada</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Não encontrou uma carga? Toque em limpar filtros para ver tudo de novo ou confira se ela ainda está disponível.
-        </p>
-      </div>
-      {hasActiveFilters ? (
-        <Button
-          type="button"
-          variant="outline"
-          onClick={clearAllFilters}
-          className="rounded-2xl px-5 font-semibold"
-        >
-          Limpar filtros
-        </Button>
-      ) : (
-        <p className="text-sm font-medium text-muted-foreground">
-          As cargas são atualizadas periodicamente sem precisar carregar a lista inteira no navegador.
-        </p>
-      )}
-    </div>
-  ) : (
-    <div className="space-y-5 xl:grid xl:grid-cols-2 xl:gap-4 xl:space-y-0">
-      {cargoCards}
-    </div>
-  );
 
   return (
     <div className="driver-theme relative min-h-screen bg-background">
@@ -1367,7 +742,7 @@ const DriverPortal = () => {
               <PopoverTrigger asChild>
                 <button
                   type="button"
-                  title={`${dateFrom ? format(dateFrom, "dd/MM", { locale: ptBR }) : "Início"} - ${dateTo ? format(dateTo, "dd/MM", { locale: ptBR }) : "Fim"}`}
+                  title={`${toFilterDateLabel(dateFrom) || "Início"} - ${toFilterDateLabel(dateTo) || "Fim"}`}
                   className={cn(
                     "group relative flex min-h-[70px] w-full min-w-0 items-center gap-2 rounded-xl border border-border/60 bg-card px-3 py-2.5 text-sm transition-all duration-300 ease-out sm:gap-2.5 sm:rounded-2xl sm:px-4 sm:py-3",
                     "hover:-translate-y-0.5 hover:border-primary/25 hover:premium-shadow",
@@ -1383,9 +758,9 @@ const DriverPortal = () => {
                       Período
                     </span>
                     <span className="mt-1 block truncate whitespace-nowrap text-sm font-bold leading-none text-card-foreground">
-                      {dateFrom ? format(dateFrom, "dd/MM", { locale: ptBR }) : "Início"}
+                      {toFilterDateLabel(dateFrom) || "Início"}
                       {" - "}
-                      {dateTo ? format(dateTo, "dd/MM", { locale: ptBR }) : "Fim"}
+                      {toFilterDateLabel(dateTo) || "Fim"}
                     </span>
                   </div>
                 </button>
@@ -1433,128 +808,13 @@ const DriverPortal = () => {
           </div>
         </div>
 
-        <Dialog open={isNotificationsOpen} onOpenChange={setIsNotificationsOpen}>
-          <DialogContent
-            overlayClassName="bg-[hsl(223_56%_10%/0.76)] backdrop-blur-[2px]"
-            className="driver-theme left-0 right-0 top-auto bottom-0 max-h-[86vh] w-full translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-t-[28px] rounded-b-none border-x-0 border-b-0 bg-[linear-gradient(180deg,hsl(0_0%_100%),hsl(220_33%_98%))] p-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom sm:left-[50%] sm:right-auto sm:top-[50%] sm:bottom-auto sm:max-h-[82vh] sm:w-[min(100%-2rem,54rem)] sm:max-w-[54rem] sm:translate-x-[-50%] sm:translate-y-[-50%] sm:rounded-[30px] sm:border"
-          >
-            <DialogHeader className="border-b border-border/50 px-4 pb-4 pt-5 text-left sm:px-5 sm:pb-5 sm:pt-5">
-              <div className="flex items-start gap-3 pr-10">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-[0_14px_30px_-22px_hsl(224_94%_37%/0.7)]">
-                  <BellRing className="h-4.5 w-4.5" />
-                </div>
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-primary/60 sm:text-[11px]">
-                    Atualizações das suas candidaturas
-                  </p>
-                  <DialogTitle className="mt-1 text-lg font-bold tracking-tight text-foreground sm:text-xl">
-                    Central de notificações do motorista
-                  </DialogTitle>
-                  <DialogDescription className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                    Aqui ficam guardadas as cargas em que você já se candidatou e também os retornos enviados pela equipe.
-                  </DialogDescription>
-                </div>
-              </div>
-            </DialogHeader>
-
-            <div className="max-h-[calc(86vh-7.5rem)] overflow-y-auto px-3 py-3 sm:max-h-[calc(82vh-8.5rem)] sm:px-4 sm:py-4">
-              {notificationCount ? (
-                <div className="grid gap-3">
-                  {driverLeadNotifications.map((notification) => {
-                    const routeLabel = `${notification.origem} -> ${notification.destino}`;
-                    const happenedAtLabel = formatShortDateTime(notification.happenedAt, "Agora");
-
-                    return (
-                      <article
-                        key={notification.id}
-                        className={cn(
-                          "rounded-[22px] border p-3.5 shadow-[0_18px_34px_-28px_hsl(223_56%_12%/0.22)] sm:rounded-[26px] sm:p-4",
-                          notification.kind === "APPROVED"
-                            ? "border-emerald-200 bg-[linear-gradient(135deg,hsl(145_77%_95%),hsl(148_46%_90%))]"
-                            : notification.kind === "ALLOCATED_TO_OTHER_DRIVER"
-                              ? "border-amber-200 bg-amber-50"
-                              : "border-primary/20 bg-[linear-gradient(135deg,hsl(224_84%_97%),hsl(223_68%_93%))]",
-                        )}
-                      >
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
-                          <div
-                            className={cn(
-                              "flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl sm:mt-0.5 sm:h-10 sm:w-10",
-                              notification.kind === "APPROVED"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : notification.kind === "ALLOCATED_TO_OTHER_DRIVER"
-                                  ? "bg-amber-100 text-amber-700"
-                                  : "bg-primary/12 text-primary",
-                            )}
-                          >
-                            {notification.kind === "APPROVED" ? (
-                              <CheckCircle2 className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
-                            ) : notification.kind === "ALLOCATED_TO_OTHER_DRIVER" ? (
-                              <AlertCircle className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
-                            ) : (
-                              <Activity className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
-                            )}
-                          </div>
-
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-                              <p className="text-sm font-semibold text-foreground sm:text-base">{notification.title}</p>
-                              <span className="max-w-full rounded-full bg-white/72 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                                {routeLabel}
-                              </span>
-                            </div>
-
-                            <p className="mt-2 text-[13px] leading-6 text-muted-foreground sm:text-sm sm:leading-relaxed">
-                              {notification.message}
-                            </p>
-                            <p className="mt-2 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                              Atualizado em {happenedAtLabel}
-                            </p>
-
-                            <div className="mt-3 flex flex-col gap-2 sm:mt-4 sm:flex-row sm:flex-wrap sm:items-center">
-                              <Link
-                                to={buildCargoPublicPath(notification.loadId)}
-                                className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 sm:w-auto"
-                                onClick={() => setIsNotificationsOpen(false)}
-                              >
-                                {notification.kind === "PRE_REGISTERED"
-                                  ? "Abrir carga"
-                                  : notification.kind === "QUEUED"
-                                    ? "Acompanhar candidatura"
-                                    : "Abrir carga"}
-                                <ArrowRight className="h-4 w-4" />
-                              </Link>
-
-                              <button
-                                type="button"
-                                onClick={() => handleDismissLeadNotification(notification)}
-                                className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-border/70 bg-white/85 px-4 py-2.5 text-sm font-semibold text-muted-foreground transition-colors hover:bg-white hover:text-foreground sm:w-auto"
-                              >
-                                Remover da central
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="flex min-h-[240px] flex-col items-center justify-center gap-4 rounded-[24px] border border-border/60 bg-white/82 px-6 py-10 text-center shadow-[0_18px_34px_-28px_hsl(223_56%_12%/0.18)]">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-[20px] bg-primary/10 text-primary">
-                    <BellRing className="h-6 w-6" />
-                  </div>
-                  <div>
-                    <p className="text-lg font-bold text-foreground">Nenhuma notificação salva</p>
-                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                      Quando você enviar uma candidatura ou receber retorno da equipe, tudo vai aparecer aqui automaticamente.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </DialogContent>
-        </Dialog>
+        <DriverClaimWorkflow
+          isOpen={isNotificationsOpen}
+          onOpenChange={setIsNotificationsOpen}
+          notifications={notifications}
+          notificationCount={notificationCount}
+          onDismissNotification={handleDismissNotification}
+        />
 
         <Dialog open={isFaqOpen} onOpenChange={setIsFaqOpen}>
           {isFaqOpen ? (
@@ -1733,7 +993,10 @@ const DriverPortal = () => {
                 </Button>
                 <Button
                   type="button"
-                  onClick={applyMobileFilters}
+                  onClick={() => {
+                    applyMobileFilters();
+                    setIsMobileFilterDrawerOpen(false);
+                  }}
                   className="h-11 flex-1 rounded-2xl border-0 bg-[linear-gradient(135deg,hsl(226_56%_11%),hsl(223_95%_31%))] font-bold text-white hover:bg-[linear-gradient(135deg,hsl(226_56%_11%),hsl(223_95%_31%))]"
                 >
                   Aplicar filtros
@@ -1794,8 +1057,8 @@ const DriverPortal = () => {
                     <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-hover:text-primary/60" />
                   </button>
                 </PopoverTrigger>
-                <PopoverContent className="driver-theme w-[320px] rounded-[28px] border-border/45 bg-background/95 p-4 premium-shadow backdrop-blur-xl" align="start" side="bottom">
-                  <p className="text-sm font-semibold text-foreground">Local de coleta</p>
+                <PopoverContent className="driver-theme w-[300px] rounded-[28px] border-border/45 bg-background/95 p-4 premium-shadow backdrop-blur-xl" align="start" side="bottom">
+                  <p className="text-sm font-semibold text-foreground">Cidade de origem</p>
                   <select
                     value={origemFilter}
                     onChange={(event) => setOrigemFilter(event.target.value)}
@@ -1836,8 +1099,8 @@ const DriverPortal = () => {
                     <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-hover:text-primary/60" />
                   </button>
                 </PopoverTrigger>
-                <PopoverContent className="driver-theme w-[320px] rounded-[28px] border-border/45 bg-background/95 p-4 premium-shadow backdrop-blur-xl" align="start" side="bottom">
-                  <p className="text-sm font-semibold text-foreground">Local de entrega</p>
+                <PopoverContent className="driver-theme w-[300px] rounded-[28px] border-border/45 bg-background/95 p-4 premium-shadow backdrop-blur-xl" align="start" side="bottom">
+                  <p className="text-sm font-semibold text-foreground">Cidade de destino</p>
                   <select
                     value={destinoFilter}
                     onChange={(event) => setDestinoFilter(event.target.value)}
@@ -1961,7 +1224,13 @@ const DriverPortal = () => {
             </div>
           </div>
 
-          {resultsContent}
+          <DriverLoadsList
+            cargas={cargas}
+            loading={loading}
+            hasActiveFilters={hasActiveFilters}
+            onClearFilters={clearAllFilters}
+            onInterestDialogOpenChange={setIsLoadInterestDialogOpen}
+          />
           {paginationControls}
         </div>
 
@@ -1976,7 +1245,13 @@ const DriverPortal = () => {
             <div className="h-px flex-1 bg-gradient-to-r from-border/60 to-transparent" />
           </div>
 
-          {resultsContent}
+          <DriverLoadsList
+            cargas={cargas}
+            loading={loading}
+            hasActiveFilters={hasActiveFilters}
+            onClearFilters={clearAllFilters}
+            onInterestDialogOpenChange={setIsLoadInterestDialogOpen}
+          />
           {paginationControls}
         </div>
       </div>
@@ -1991,7 +1266,7 @@ const DriverPortal = () => {
             <button
               type="button"
               onClick={handleDesktopStickyBarClick}
-              aria-label="Voltar para a ?rea de filtros e cargas"
+              aria-label="Voltar para a área de filtros e cargas"
               className="pointer-events-auto inline-flex items-center gap-4 rounded-full border border-white/70 bg-white/94 px-5 py-3 text-left shadow-[0_24px_46px_-24px_hsl(222_50%_12%/0.35)] backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_28px_54px_-24px_hsl(222_50%_12%/0.42)]"
             >
               <span className="flex min-w-[44px] items-center gap-3">
