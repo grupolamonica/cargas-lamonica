@@ -1523,10 +1523,67 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
       rows = fallbackResult.rows;
     }
 
+    // Include OPEN/RESERVED cargas that have no active leads — they should remain
+    // visible in the fila after their last lead is cancelled.
+    const activeLoadIds = new Set(rows.map(r => r.load_id));
+    const { rows: emptyLoadRows } = await client.query(
+      `
+        SELECT
+          cargas.id AS load_id,
+          cargas.status AS load_status,
+          cargas.origem AS load_origem,
+          cargas.destino AS load_destino,
+          cargas.perfil AS load_perfil,
+          cargas.data AS load_data,
+          cargas.horario AS load_horario,
+          cargas.reserved_public_lead_id AS load_reserved_public_lead_id,
+          cargas.sheet_lh AS load_sheet_lh,
+          cargas.sheet_data_carregamento AS load_sheet_data_carregamento,
+          cargas.sheet_data_descarga AS load_sheet_data_descarga,
+          cargas.sheet_motorista AS load_sheet_motorista,
+          cargas.sheet_cavalo AS load_sheet_cavalo,
+          cargas.sheet_carreta AS load_sheet_carreta,
+          cargas.sheet_status AS load_sheet_status
+        FROM public.cargas
+        WHERE cargas.status = ANY($1::text[])
+          AND NOT EXISTS (
+            SELECT 1 FROM public.load_public_leads leads
+            WHERE leads.load_id = cargas.id
+              AND leads.status = ANY($2::text[])
+          )
+      `,
+      [["OPEN", "RESERVED"], [PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED]],
+    );
+
+    const emptyGroups = emptyLoadRows
+      .filter(r => !activeLoadIds.has(r.load_id))
+      .map(r => ({
+        load: {
+          id: r.load_id,
+          status: r.load_status,
+          origem: r.load_origem,
+          destino: r.load_destino,
+          perfil: r.load_perfil,
+          data: r.load_data,
+          horario: r.load_horario,
+          reservedPublicLeadId: r.load_reserved_public_lead_id,
+          sheetLh: r.load_sheet_lh || null,
+          sheetDataCarregamento: r.load_sheet_data_carregamento || null,
+          sheetDataDescarga: r.load_sheet_data_descarga || null,
+          sheetMotorista: r.load_sheet_motorista || null,
+          sheetCavalo: r.load_sheet_cavalo || null,
+          sheetCarreta: r.load_sheet_carreta || null,
+          sheetStatus: r.load_sheet_status || null,
+        },
+        queueCount: 0,
+        totalLeads: 0,
+        leads: [],
+      }));
+
     return {
       statusCode: 200,
       payload: {
-        groups: groupLeadsForOperator(rows),
+        groups: [...groupLeadsForOperator(rows), ...emptyGroups],
         meta: {
           correlationId: resolvedCorrelationId,
         },

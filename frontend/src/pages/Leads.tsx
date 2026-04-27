@@ -243,7 +243,9 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
           return leadText.includes(deferredSearch);
         });
 
-        if (!leads.length) {
+        // Only hide the group when it had leads but none matched the active filter.
+        // Groups with no leads at all (e.g., after last lead was cancelled) stay visible.
+        if (group.leads.length > 0 && !leads.length) {
           return null;
         }
 

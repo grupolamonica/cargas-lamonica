@@ -8,7 +8,9 @@ function parseIsoDate(value, fallback) {
   if (!value) return fallback;
   const trimmed = String(value).trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return fallback;
-  const parsed = new Date(`${trimmed}T00:00:00.000Z`);
+  // Interpret date as BRT midnight (UTC-3 = 03:00 UTC). Input dates come from the
+  // frontend in local (Brazil) time, so "2026-04-27" means April 27 at 00:00 BRT.
+  const parsed = new Date(`${trimmed}T03:00:00.000Z`);
   if (Number.isNaN(parsed.getTime())) return fallback;
   return parsed;
 }
