@@ -19,6 +19,7 @@ import {
   resolveConfirmLoadClaimResponse,
   resolveCreateLoadClaimResponse,
   resolveCreatePublicLoadLeadPreRegistrationResponse,
+  resolveDirectAllocationResponse,
   resolveDriverProfileResponse,
   resolveGetLoadClaimStatusResponse,
   resolveOperatorPublicLoadLeadsResponse,
@@ -153,6 +154,7 @@ export function registerRoutes(app) {
   router.post("/api/loads/:loadId/leads/:leadId/approve", wrap(resolveApprovePublicLoadLeadResponse));
   router.post("/api/loads/:loadId/leads/:leadId/cancel", wrap(resolveCancelPublicLoadLeadResponse));
   router.post("/api/loads/:loadId/leads/:leadId/whatsapp", wrap(resolveQueuePublicLoadLeadViaWhatsAppResponse));
+  router.post("/api/operator/loads/:loadId/direct-allocation", wrap(resolveDirectAllocationResponse));
 
   // Operator dashboard & audit
   router.get("/api/operator/dashboard", wrap(resolveOperatorDashboardReadModelResponse));

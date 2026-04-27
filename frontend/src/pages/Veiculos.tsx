@@ -7,6 +7,7 @@ import {
   CalendarClock,
   CheckCircle2,
   Loader2,
+  Phone,
   RefreshCw,
   Search,
   ShieldX,
@@ -415,6 +416,15 @@ const Veiculos = () => {
                       {vehicle.angelliraDisplayName ? (
                         <p className="mt-1 text-xs text-muted-foreground">{vehicle.angelliraDisplayName}</p>
                       ) : null}
+                      {vehicle.linkedDriverName ? (
+                        <p className="mt-0.5 text-xs text-muted-foreground">{vehicle.linkedDriverName}</p>
+                      ) : null}
+                      {vehicle.linkedDriverPhone ? (
+                        <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                          <Phone className="h-3 w-3" />
+                          {vehicle.linkedDriverPhone}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
 
@@ -427,7 +437,7 @@ const Veiculos = () => {
                         ? "border-primary/15 bg-primary/8 text-primary"
                         : "border-border/80 bg-white text-muted-foreground",
                     )}>
-                      {vehicle.source === "PUBLIC_LEAD" ? "Via candidatura" : "Manual"}
+                      {vehicle.source === "PUBLIC_LEAD" ? "Candidatura pública" : "Cadastro manual"}
                     </span>
                   </div>
 

@@ -160,7 +160,7 @@ export async function enrichSheetMonitorRows(supabaseClient, correlationId, { fo
   const cpfsToFetch = uniqueCpfs.filter((c) => !driverCacheByNormalizedCpf[c]);
   // force=true: re-query all plates (ignores DB cache) so "Atualizar planilha" always
   // re-validates plates even when they exist in vehicles table.
-  const platesToFetch = force ? uniquePlates : uniquePlates.filter((p) => !vehiclesByPlate[p]);
+  const platesToFetch = uniquePlates.filter((p) => !vehiclesByPlate[p]);
 
   // 7. Fire Angellira concurrently
   const { lookupAngelliraDriverByCpf, lookupAngelliraPlate } =

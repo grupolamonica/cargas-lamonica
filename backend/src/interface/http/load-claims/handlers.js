@@ -20,6 +20,7 @@ import {
   approvePublicLoadLead,
   assertOperatorId,
   cancelPublicLoadLead,
+  createDirectLeadAllocation,
   createPublicLoadLeadPreRegistration,
   listOperatorPublicLoadLeads,
   queuePublicLoadLeadViaWhatsApp,
@@ -486,6 +487,33 @@ export async function resolveRevalidateQueuedPublicLeadsAspxResponse(request) {
     });
   } catch (error) {
     return toErrorResponse(error, correlationId);
+  }
+}
+
+export async function resolveDirectAllocationResponse(request) {
+  const correlationId = getCorrelationId(request);
+
+  try {
+    const { user } = await requireOperatorSession(getAuthorizationHeader(request));
+    assertOperatorPermission(
+      user,
+      "leads:write",
+      "Somente operadores com acesso intermediario ou avancado podem alocar motoristas.",
+    );
+    const loadId = getQueryParam(request, "loadId");
+    assertOperatorId(user.id);
+
+    const body = await parseJsonBody(request);
+    const { cpf, phone, horsePlate, vehicleType, trailerPlate, trailerPlate2 } = body || {};
+
+    return await createDirectLeadAllocation({
+      loadId,
+      payload: { cpf, phone, horsePlate, vehicleType, trailerPlate, trailerPlate2 },
+      operatorId: user.id,
+      correlationId,
+    });
+  } catch (error) {
+    return toErrorResponse(error, correlationId, "direct-allocation");
   }
 }
 

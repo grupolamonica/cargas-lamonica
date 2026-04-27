@@ -445,6 +445,41 @@ export async function revalidateQueuedOperatorLeadsAspx(scope: RevalidateScope =
   });
 }
 
+export interface DirectAllocationPayload {
+  cpf: string;
+  phone: string;
+  horsePlate: string;
+  vehicleType: string;
+  trailerPlate?: string;
+  trailerPlate2?: string;
+}
+
+export async function createDirectAllocation(loadId: string, payload: DirectAllocationPayload) {
+  const accessToken = await getOperatorAccessToken();
+
+  return requestJson<{
+    ok: boolean;
+    lead: PublicLoadLead;
+    load: {
+      id: string;
+      status: string;
+      origem: string;
+      destino: string;
+      perfil: string;
+      data: string;
+      horario: string;
+      reservedAt: string | null;
+      reservedUntil: string | null;
+      reservedPublicLeadId: string | null;
+    };
+    meta: { correlationId: string };
+  }>(`/api/operator/loads/${loadId}/direct-allocation`, {
+    method: "POST",
+    accessToken,
+    body: payload,
+  });
+}
+
 export async function cancelOperatorLoadLead(loadId: string, leadId: string) {
   const accessToken = await getOperatorAccessToken();
 

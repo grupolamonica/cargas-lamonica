@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User } from "lucide-react";
+import { Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User, UserPlus } from "lucide-react";
 import { differenceInDays } from "date-fns";
 import { toast } from "sonner";
 
@@ -10,7 +10,9 @@ import { cn } from "@/lib/utils";
 import { buildDisplayDateTime, formatFullDateTime, formatShortDateTime } from "@/lib/dateDisplay";
 import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
-import { approveOperatorLoadLead, cancelOperatorLoadLead, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type OperatorLeadGroup, type PublicLeadValidationSummary } from "@/services/loadClaims";
+import { approveOperatorLoadLead, cancelOperatorLoadLead, createDirectAllocation, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type DirectAllocationPayload, type OperatorLeadGroup, type PublicLeadValidationSummary } from "@/services/loadClaims";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { VEHICLE_PROFILE_OPTIONS } from "@/lib/vehicleProfiles";
 import { fetchSheetMonitor, type SheetMonitorRow } from "@/services/readModels";
 
 interface SheetAllocation {
@@ -116,6 +118,11 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   const [loadStatusFilter, setLoadStatusFilter] = useState("todos");
   const [leadStatusFilter, setLeadStatusFilter] = useState("todos");
   const [collapsedLoadIds, setCollapsedLoadIds] = useState<string[]>([]);
+  const [directAllocLoadId, setDirectAllocLoadId] = useState<string | null>(null);
+  const [directAllocLoading, setDirectAllocLoading] = useState(false);
+  const [directAllocForm, setDirectAllocForm] = useState<DirectAllocationPayload & { trailerPlate: string }>({
+    cpf: "", phone: "", horsePlate: "", vehicleType: "CARRETA", trailerPlate: "",
+  });
   const knownLoadIdsRef = useRef<string[]>([]);
   const autoRevalidateFiredRef = useRef<number>(0);
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
@@ -337,7 +344,21 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     );
   }, [filteredGroups]);
 
-  const handleApprove = async (loadId: string, leadId: string) => {
+  const handleApprove = async (loadId: string, leadId: string, validation?: PublicLeadValidationSummary | null) => {
+    const ovs = validation?.overallStatus;
+    const FAIL_STATUSES = ["INVALID", "NOT_FOUND", "PLATE_MISMATCH", "INCOMPLETE"];
+
+    if (ovs && FAIL_STATUSES.includes(ovs)) {
+      toast.error("Este motorista tem pendências bloqueantes. A reserva não pode ser realizada.");
+      return;
+    }
+
+    if (ovs === "UNAVAILABLE") {
+      if (!window.confirm("Validação ainda não foi concluída para este motorista. Prosseguir mesmo assim?")) return;
+    } else if (ovs === "EXPIRING" || ovs === "PARTIAL") {
+      if (!window.confirm("Este motorista tem alertas de vigência próximos de vencer. Confirma a reserva?")) return;
+    }
+
     try {
       setApprovingLeadId(leadId);
       await approveOperatorLoadLead(loadId, leadId);
@@ -349,6 +370,28 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
       toast.error(error instanceof Error ? error.message : "Não foi possível reservar a carga agora.");
     } finally {
       setApprovingLeadId(null);
+    }
+  };
+
+  const handleDirectAlloc = async () => {
+    if (!directAllocLoadId) return;
+    try {
+      setDirectAllocLoading(true);
+      await createDirectAllocation(directAllocLoadId, {
+        cpf: directAllocForm.cpf,
+        phone: directAllocForm.phone,
+        horsePlate: directAllocForm.horsePlate,
+        vehicleType: directAllocForm.vehicleType,
+        trailerPlate: directAllocForm.trailerPlate || undefined,
+      });
+      toast.success("Motorista alocado diretamente. Carga reservada.");
+      setDirectAllocLoadId(null);
+      setDirectAllocForm({ cpf: "", phone: "", horsePlate: "", vehicleType: "CARRETA", trailerPlate: "" });
+      await queryClient.invalidateQueries({ queryKey: LEADS_QUERY_KEY });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível realizar a alocação.");
+    } finally {
+      setDirectAllocLoading(false);
     }
   };
 
@@ -775,6 +818,19 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                             {group.load.sheetStatus}
                           </span>
                         ) : null}
+                        {group.load.status === "OPEN" && !historicoMode ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDirectAllocLoadId(group.load.id);
+                              setDirectAllocForm({ cpf: "", phone: "", horsePlate: "", vehicleType: "CARRETA", trailerPlate: "" });
+                            }}
+                            className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100 dark:border-blue-400/40 dark:bg-blue-500/15 dark:text-blue-200 dark:hover:bg-blue-500/25"
+                          >
+                            <UserPlus className="h-3.5 w-3.5" />
+                            Alocar motorista
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -850,12 +906,12 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
 
                                     <button
                                       type="button"
-                                      onClick={() => void handleApprove(group.load.id, lead.id)}
+                                      onClick={() => void handleApprove(group.load.id, lead.id, lead.validation)}
                                       disabled={!canApprove || approvingLeadId === lead.id}
                                       className="inline-flex items-center gap-2 rounded-full border border-border/80 px-4 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
                                     >
                                       {approvingLeadId === lead.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                                      {isApprovedLead ? "Ja reservado" : "Reservar para este motorista"}
+                                      {isApprovedLead ? "Já reservado" : "Reservar para este motorista"}
                                     </button>
 
                                     <button
@@ -879,7 +935,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                   ) : (
                     <div id={`lead-group-${group.load.id}`} className="grid gap-3 px-5 py-4 text-sm lg:grid-cols-3 lg:px-6">
                       <div className="admin-soft-panel px-4 py-3">
-                        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Leads nesta disputa</p>
+                        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Candidatos nesta carga</p>
                         <p className="mt-2 text-lg font-semibold text-foreground">{group.totalLeads}</p>
                       </div>
                       <div className="admin-soft-panel px-4 py-3">
@@ -907,6 +963,82 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
         onOpenChange={(open) => { if (!open) setSelectedDriver(null); }}
         data={selectedDriver}
       />
+
+      <Dialog open={directAllocLoadId !== null} onOpenChange={(open) => { if (!open) setDirectAllocLoadId(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Alocar motorista diretamente</DialogTitle>
+          </DialogHeader>
+          <div className="mt-2 space-y-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-muted-foreground">CPF *</label>
+              <Input
+                placeholder="00000000000"
+                value={directAllocForm.cpf}
+                onChange={(e) => setDirectAllocForm((f) => ({ ...f, cpf: e.target.value }))}
+                maxLength={14}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-muted-foreground">Telefone *</label>
+              <Input
+                placeholder="11999999999"
+                value={directAllocForm.phone}
+                onChange={(e) => setDirectAllocForm((f) => ({ ...f, phone: e.target.value }))}
+                maxLength={15}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-muted-foreground">Placa cavalo *</label>
+              <Input
+                placeholder="ABC1234"
+                value={directAllocForm.horsePlate}
+                onChange={(e) => setDirectAllocForm((f) => ({ ...f, horsePlate: e.target.value.toUpperCase() }))}
+                maxLength={8}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-muted-foreground">Tipo de veículo *</label>
+              <select
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={directAllocForm.vehicleType}
+                onChange={(e) => setDirectAllocForm((f) => ({ ...f, vehicleType: e.target.value }))}
+              >
+                {VEHICLE_PROFILE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-muted-foreground">Placa carreta (opcional)</label>
+              <Input
+                placeholder="DEF5678"
+                value={directAllocForm.trailerPlate}
+                onChange={(e) => setDirectAllocForm((f) => ({ ...f, trailerPlate: e.target.value.toUpperCase() }))}
+                maxLength={8}
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDirectAllocLoadId(null)}
+                className="inline-flex items-center rounded-full border border-border/80 px-4 py-2 text-xs font-semibold text-foreground hover:bg-muted"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDirectAlloc()}
+                disabled={directAllocLoading}
+                className="inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+              >
+                {directAllocLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                Confirmar alocação
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

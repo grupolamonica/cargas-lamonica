@@ -1592,6 +1592,117 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
   });
 }
 
+export async function createDirectLeadAllocation({ loadId, payload, operatorId, correlationId }) {
+  const resolvedCorrelationId = correlationId || createCorrelationId();
+
+  const cpf = normalizeCpf(payload.cpf);
+  const phone = normalizePhone(payload.phone);
+  const horsePlate = normalizePlate(payload.horsePlate);
+  const vehicleType = normalizeVehicleType(payload.vehicleType);
+  const trailerPlate = payload.trailerPlate ? normalizePlate(payload.trailerPlate) : null;
+  const trailerPlate2 = payload.trailerPlate2 ? normalizePlate(payload.trailerPlate2) : null;
+
+  if (!cpf || cpf.length !== 11) {
+    throw new ValidationError("CPF invalido (deve ter 11 digitos).");
+  }
+  if (!phone || phone.length < 10 || phone.length > 13) {
+    throw new ValidationError("Telefone invalido (10-13 digitos com DDD).");
+  }
+  if (!horsePlate || horsePlate.length !== 7) {
+    throw new ValidationError("Placa do cavalo invalida (7 caracteres alfanumericos).");
+  }
+  if (!vehicleType || !CANONICAL_VEHICLE_PROFILES.includes(vehicleType)) {
+    throw new ValidationError("Tipo de veiculo invalido.");
+  }
+
+  return withPgTransaction(async (client) => {
+    const loadRow = await getLoadById(client, loadId, { lock: true });
+
+    if (!loadRow) {
+      throw new NotFoundError("Carga nao encontrada.");
+    }
+
+    if (loadRow.status !== LOAD_STATUS.OPEN) {
+      throw buildLoadUnavailableError(loadRow);
+    }
+
+    const { rows: existingApproved } = await client.query(
+      `SELECT id FROM public.load_public_leads WHERE load_id = $1 AND status = $2 LIMIT 1`,
+      [loadId, PUBLIC_LEAD_STATUS.APPROVED],
+    );
+
+    if (existingApproved.length > 0) {
+      throw new ConflictError("Esta carga ja tem um motorista aprovado.", {
+        code: "LEAD_ALREADY_APPROVED",
+      });
+    }
+
+    const { rows: leadRows } = await client.query(
+      `
+        INSERT INTO public.load_public_leads
+          (load_id, cpf, phone, horse_plate, trailer_plate, trailer_plate_2, vehicle_type, status, source,
+           pre_registered_at, queued_at, approved_at, approved_by, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'OPERATOR_DIRECT',
+                now(), now(), now(), $9, now(), now())
+        RETURNING *
+      `,
+      [loadId, cpf, phone, horsePlate, trailerPlate, trailerPlate2, vehicleType, PUBLIC_LEAD_STATUS.APPROVED, operatorId],
+    );
+    const leadRow = leadRows[0];
+
+    const { rows: reservedLoadRows } = await client.query(
+      `
+        UPDATE public.cargas
+        SET status = $2,
+            reserved_at = now(),
+            reserved_until = null,
+            reserved_driver_id = null,
+            reserved_claim_id = null,
+            reserved_public_lead_id = $3,
+            version = version + 1,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING
+          id, status, origem, destino, perfil, data, horario,
+          reserved_at, reserved_until, reserved_public_lead_id, version
+      `,
+      [loadId, LOAD_STATUS.RESERVED, leadRow.id],
+    );
+    const reservedLoad = reservedLoadRows[0] ?? null;
+
+    await insertPublicLeadEvent(client, {
+      loadId,
+      leadId: leadRow.id,
+      eventType: PUBLIC_LEAD_EVENT_TYPE.APPROVED,
+      payload: {
+        correlation_id: resolvedCorrelationId,
+        source: "OPERATOR_DIRECT",
+      },
+      actorType: "operator",
+      actorId: operatorId,
+    });
+
+    logLoadClaimEvent("info", "load-public-leads.direct-allocation.reserved", {
+      correlation_id: resolvedCorrelationId,
+      load_id: loadId,
+      lead_id: leadRow.id,
+      operator_id: operatorId,
+    });
+
+    return {
+      statusCode: 201,
+      payload: {
+        ok: true,
+        lead: serializePublicLead(leadRow),
+        load: serializeLoadSummary(reservedLoad),
+        meta: {
+          correlationId: resolvedCorrelationId,
+        },
+      },
+    };
+  });
+}
+
 export async function approvePublicLoadLead({ loadId, leadId, operatorId, correlationId }) {
   const resolvedCorrelationId = correlationId || createCorrelationId();
 

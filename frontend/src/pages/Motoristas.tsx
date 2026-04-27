@@ -174,7 +174,7 @@ function renderAngelliraVigencyBadge(driver: OperatorDriverListItem) {
     return (
       <div className="admin-tint-neutral inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
         <CalendarClock className="h-3.5 w-3.5" />
-        Angellira: Nao encontrado
+        Angellira: Não encontrado
       </div>
     );
   }
@@ -492,7 +492,7 @@ const Motoristas = () => {
           <section className="admin-panel flex min-h-[260px] flex-col items-center justify-center gap-4 p-10 text-center">
             <ShieldX className="h-14 w-14 text-rose-500/70" />
             <div className="space-y-1">
-              <p className="text-lg font-bold text-foreground">Nao foi possivel carregar os motoristas</p>
+              <p className="text-lg font-bold text-foreground">Não foi possível carregar os motoristas</p>
               <p className="text-sm text-muted-foreground">
                 {error instanceof Error ? error.message : "Verifique a sessao do operador e tente novamente."}
               </p>
@@ -511,7 +511,7 @@ const Motoristas = () => {
         ) : (
           <section className="space-y-4">
             <div className="text-sm text-muted-foreground">
-              Exibindo {items.length} motorista{items.length === 1 ? "" : "s"} nesta pagina, com {currentPageApplicationCount} candidatura{currentPageApplicationCount === 1 ? "" : "s"} visiveis.
+              Exibindo {items.length} motorista{items.length === 1 ? "" : "s"} nesta página, com {currentPageApplicationCount} candidatura{currentPageApplicationCount === 1 ? "" : "s"} visíveis.
             </div>
 
             <div className="grid gap-4 xl:grid-cols-2">
@@ -569,12 +569,12 @@ const Motoristas = () => {
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-foreground">
                     <span className="inline-flex items-center gap-1.5">
                       <Phone className="h-3.5 w-3.5 text-primary" />
-                      {driver.contact.phone || "Telefone indisponivel"}
+                      {driver.contact.phone || "Telefone indisponível"}
                     </span>
                     <span className="hidden text-border sm:inline">|</span>
                     <span className="inline-flex items-center gap-1.5">
                       <FileBadge2 className="h-3.5 w-3.5 text-primary" />
-                      {driver.contact.document || "Documento indisponivel"}
+                      {driver.contact.document || "Documento indisponível"}
                     </span>
                     <span className="hidden text-border sm:inline">|</span>
                     <span className="inline-flex items-center gap-1.5">
@@ -602,40 +602,32 @@ const Motoristas = () => {
                   {/* ── ALWAYS VISIBLE: Angellira vigency badge ── */}
                   {renderAngelliraVigencyBadge(driver)}
 
-                  {/* ── COLLAPSIBLE: Sinais do perfil ── */}
+                  {/* ── Sinais do perfil (sempre visíveis) ── */}
                   {(driver.registrationStatus === "REGISTERED" || driver.externalValidation) ? (
-                    <Collapsible
-                      open={isSectionOpen(driver.id, "sinais")}
-                      onOpenChange={() => toggleSection(driver.id, "sinais")}
-                    >
-                      <SectionTrigger label="Sinais do perfil" isOpen={isSectionOpen(driver.id, "sinais")} />
-                      <CollapsibleContent>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {driver.registrationStatus === "REGISTERED" ? (
-                            <>
-                              {renderProfileSignal("Cadastro", driver.profile.active, "Ativo", "Inativo")}
-                              {renderProfileSignal("Documentos", driver.profile.documentsValid)}
-                              {renderProfileSignal("ANTT", driver.profile.anttValid)}
-                              {renderProfileSignal("Rastreamento", driver.profile.trackingEnabled, "Ativo", "Desligado")}
-                              {renderProfileSignal("Seguro", driver.profile.insuranceValid, "Ok", "Nao informado")}
-                              {renderProfileSignal("Monitoramento", driver.profile.monitoringCapable, "Ok", "Nao")}
-                              {renderProfileSignal("Operacao", driver.profile.operationalBlocked === null ? null : !driver.profile.operationalBlocked, "Liberado", "Bloqueado")}
-                            </>
-                          ) : driver.externalValidation ? (
-                            <>
-                              <span className="inline-flex items-center gap-2 rounded-full border border-primary/15 bg-primary/8 px-3 py-1.5 text-xs font-semibold text-primary">
-                                <BadgeCheck className="h-3.5 w-3.5" />
-                                Angellira: {driver.externalValidation.hasAngelira ? "encontrado" : "nao encontrado"}
-                              </span>
-                              <span className="inline-flex items-center gap-2 rounded-full border border-primary/15 bg-primary/8 px-3 py-1.5 text-xs font-semibold text-primary">
-                                <BadgeCheck className="h-3.5 w-3.5" />
-                                ASPx: {driver.externalValidation.hasAspx ? "encontrado" : "nao encontrado"}
-                              </span>
-                            </>
-                          ) : null}
-                        </div>
-                      </CollapsibleContent>
-                    </Collapsible>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {driver.registrationStatus === "REGISTERED" ? (
+                        <>
+                          {renderProfileSignal("Cadastro", driver.profile.active, "Ativo", "Inativo")}
+                          {renderProfileSignal("Documentos", driver.profile.documentsValid)}
+                          {renderProfileSignal("ANTT", driver.profile.anttValid)}
+                          {renderProfileSignal("Rastreamento", driver.profile.trackingEnabled, "Ativo", "Desligado")}
+                          {renderProfileSignal("Seguro", driver.profile.insuranceValid, "Ok", "Não informado")}
+                          {renderProfileSignal("Monitoramento", driver.profile.monitoringCapable, "Ok", "Não")}
+                          {renderProfileSignal("Operação", driver.profile.operationalBlocked === null ? null : !driver.profile.operationalBlocked, "Liberado", "Bloqueado")}
+                        </>
+                      ) : driver.externalValidation ? (
+                        <>
+                          <span className="inline-flex items-center gap-2 rounded-full border border-primary/15 bg-primary/8 px-3 py-1.5 text-xs font-semibold text-primary">
+                            <BadgeCheck className="h-3.5 w-3.5" />
+                            Angellira: {driver.externalValidation.hasAngelira ? "✓ Verificado" : "Não encontrado"}
+                          </span>
+                          <span className="inline-flex items-center gap-2 rounded-full border border-primary/15 bg-primary/8 px-3 py-1.5 text-xs font-semibold text-primary">
+                            <BadgeCheck className="h-3.5 w-3.5" />
+                            ASPX: {driver.externalValidation.hasAspx ? "✓ Cadastrado" : "Não cadastrado"}
+                          </span>
+                        </>
+                      ) : null}
+                    </div>
                   ) : null}
 
                   {/* Dados Angellira agora s\u00f3 via DriverDetailModal (clique no avatar/nome). */}
@@ -651,11 +643,11 @@ const Motoristas = () => {
                     />
                     <CollapsibleContent>
                       <div className="mt-2 space-y-3">
-                        <p className="text-xs text-muted-foreground">Mostrando as {driver.applications.length} mais recentes desta pagina de resultados.</p>
+                        <p className="text-xs text-muted-foreground">Mostrando as {driver.applications.length} mais recentes desta página de resultados.</p>
 
                         {driver.applications.length === 0 ? (
                           <div className="admin-card-surface rounded-[24px] border border-dashed px-4 py-5 text-sm text-muted-foreground">
-                            Nenhuma candidatura disponivel para este motorista no filtro atual.
+                            Nenhuma candidatura disponível para este motorista no filtro atual.
                           </div>
                         ) : (
                           <div className="grid gap-3">
@@ -702,10 +694,10 @@ const Motoristas = () => {
                                 {application.plates ? (
                                   <div className="mt-4 flex flex-wrap gap-2">
                                     <span className="inline-flex rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold text-foreground dark:bg-muted/40">
-                                      Cavalo: {application.plates.horsePlate || "indisponivel"}
+                                      Cavalo: {application.plates.horsePlate || "indisponível"}
                                     </span>
                                     <span className="inline-flex rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold text-foreground dark:bg-muted/40">
-                                      Carreta 1: {application.plates.trailerPlate || "indisponivel"}
+                                      Carreta 1: {application.plates.trailerPlate || "indisponível"}
                                     </span>
                                     {application.plates.trailerPlate2 ? (
                                       <span className="inline-flex rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold text-foreground dark:bg-muted/40">
@@ -724,7 +716,7 @@ const Motoristas = () => {
                                           ? "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-500/40 dark:bg-slate-500/15 dark:text-slate-200"
                                           : "border-red-200 bg-red-50 text-red-700 dark:border-red-400/40 dark:bg-red-500/15 dark:text-red-200"
                                     }`}>
-                                      {application.validation.driver.angelira.status === "FOUND" ? "Angellira" : application.validation.driver.angelira.status === "UNAVAILABLE" ? "Angellira indisponivel" : "Fora do Angellira"}
+                                      {application.validation.driver.angelira.status === "FOUND" ? "Angellira" : application.validation.driver.angelira.status === "UNAVAILABLE" ? "Angellira indisponível" : "Fora do Angellira"}
                                     </span>
                                     <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
                                       application.validation.driver.aspx.status === "FOUND"
@@ -733,7 +725,7 @@ const Motoristas = () => {
                                           ? "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-500/40 dark:bg-slate-500/15 dark:text-slate-200"
                                           : "border-red-200 bg-red-50 text-red-700 dark:border-red-400/40 dark:bg-red-500/15 dark:text-red-200"
                                     }`}>
-                                      {application.validation.driver.aspx.status === "FOUND" ? "ASPx" : application.validation.driver.aspx.status === "UNAVAILABLE" ? "ASPx indisponivel" : "Fora do ASPx"}
+                                      {application.validation.driver.aspx.status === "FOUND" ? "ASPX" : application.validation.driver.aspx.status === "UNAVAILABLE" ? "ASPX indisponível" : "Fora do ASPX"}
                                     </span>
                                   </div>
                                 ) : null}
