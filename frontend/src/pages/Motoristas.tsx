@@ -13,7 +13,6 @@ import {
   BellRing,
   CalendarClock,
   CheckCircle2,
-  ChevronDown,
   FileBadge2,
   Pencil,
   Phone,
@@ -32,7 +31,6 @@ import AdminPagination from "@/components/AdminPagination";
 import { AspxSyncCard } from "@/components/AspxSyncCard";
 import DashboardHeader from "@/components/DashboardHeader";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { buildDisplayDateTime, formatShortDateTime, parseDateStringAsLocal } from "@/lib/dateDisplay";
 import { cn } from "@/lib/utils";
@@ -199,26 +197,6 @@ async function updateDriverProfile(driverId: string, payload: Record<string, unk
   return response.json();
 }
 
-function SectionTrigger({ label, isOpen }: { label: string; isOpen: boolean }) {
-  return (
-    <CollapsibleTrigger asChild>
-      <button
-        type="button"
-        className="group flex w-full items-center gap-2 rounded-xl px-1 py-1.5 text-left transition-colors hover:bg-muted/40"
-      >
-        <ChevronDown
-          className={cn(
-            "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200",
-            isOpen && "rotate-180",
-          )}
-        />
-        <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-          {label}
-        </span>
-      </button>
-    </CollapsibleTrigger>
-  );
-}
 
 const Motoristas = () => {
   const queryClient = useQueryClient();
@@ -249,16 +227,7 @@ const Motoristas = () => {
     operational_blocked: false,
   });
 
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
-
-  const toggleSection = (driverId: string, section: string) => {
-    const key = `${driverId}::${section}`;
-    setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  const isSectionOpen = (driverId: string, section: string) => {
-    return openSections[`${driverId}::${section}`] ?? false;
-  };
+  const [candidaturasDriver, setCandidaturasDriver] = useState<OperatorDriverListItem | null>(null);
 
   const updateMutation = useMutation({
     mutationFn: (args: { driverId: string; payload: Record<string, unknown> }) =>
@@ -632,110 +601,14 @@ const Motoristas = () => {
 
                   {/* Dados Angellira agora s\u00f3 via DriverDetailModal (clique no avatar/nome). */}
 
-                  {/* ── COLLAPSIBLE: Candidaturas ── */}
-                  <Collapsible
-                    open={isSectionOpen(driver.id, "candidaturas")}
-                    onOpenChange={() => toggleSection(driver.id, "candidaturas")}
+                  {/* ── CHIP: Candidaturas → abre modal ── */}
+                  <button
+                    type="button"
+                    onClick={() => setCandidaturasDriver(driver)}
+                    className="inline-flex items-center rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-widest text-muted-foreground transition-colors hover:bg-muted/40 dark:bg-muted/40"
                   >
-                    <SectionTrigger
-                      label={`Candidaturas (${driver.applications.length})`}
-                      isOpen={isSectionOpen(driver.id, "candidaturas")}
-                    />
-                    <CollapsibleContent>
-                      <div className="mt-2 space-y-3">
-                        <p className="text-xs text-muted-foreground">Mostrando as {driver.applications.length} mais recentes desta página de resultados.</p>
-
-                        {driver.applications.length === 0 ? (
-                          <div className="admin-card-surface rounded-[24px] border border-dashed px-4 py-5 text-sm text-muted-foreground">
-                            Nenhuma candidatura disponível para este motorista no filtro atual.
-                          </div>
-                        ) : (
-                          <div className="grid gap-3">
-                            {driver.applications.map((application) => (
-                              <div
-                                key={application.id}
-                                className="admin-card-surface rounded-[24px] border p-4"
-                              >
-                                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                                  <div className="min-w-0">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <span className="text-sm font-semibold text-foreground">
-                                        {application.load.origem} {"->"} {application.load.destino}
-                                      </span>
-                                      <span
-                                        className={cn(
-                                          "inline-flex rounded-full border px-3 py-1 text-xs font-semibold",
-                                          getApplicationTone(application),
-                                        )}
-                                      >
-                                        {formatApplicationStatus(application)}
-                                      </span>
-                                      <span className="inline-flex rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold text-muted-foreground dark:bg-muted/40">
-                                        {application.source === "CLAIM" ? "Conta no app" : "Pre-cadastro"}
-                                      </span>
-                                    </div>
-
-                                    <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-                                      <span>
-                                        Carga {application.load.id} • {application.load.perfil}
-                                      </span>
-                                      <span>
-                                        {formatShortDateTime(buildDisplayDateTime(application.load.data, application.load.horario), "A confirmar")}
-                                      </span>
-                                      <span>{application.load.status}</span>
-                                    </div>
-                                  </div>
-
-                                  <div className="text-sm text-muted-foreground">
-                                    {formatShortDateTime(application.submittedAt)}
-                                  </div>
-                                </div>
-
-                                {application.plates ? (
-                                  <div className="mt-4 flex flex-wrap gap-2">
-                                    <span className="inline-flex rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold text-foreground dark:bg-muted/40">
-                                      Cavalo: {application.plates.horsePlate || "indisponível"}
-                                    </span>
-                                    <span className="inline-flex rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold text-foreground dark:bg-muted/40">
-                                      Carreta 1: {application.plates.trailerPlate || "indisponível"}
-                                    </span>
-                                    {application.plates.trailerPlate2 ? (
-                                      <span className="inline-flex rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold text-foreground dark:bg-muted/40">
-                                        Carreta 2: {application.plates.trailerPlate2}
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                ) : null}
-
-                                {application.validation ? (
-                                  <div className="mt-4 flex flex-wrap gap-1.5">
-                                    <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
-                                      application.validation.driver.angelira.status === "FOUND"
-                                        ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/40 dark:bg-emerald-500/15 dark:text-emerald-200"
-                                        : application.validation.driver.angelira.status === "UNAVAILABLE"
-                                          ? "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-500/40 dark:bg-slate-500/15 dark:text-slate-200"
-                                          : "border-red-200 bg-red-50 text-red-700 dark:border-red-400/40 dark:bg-red-500/15 dark:text-red-200"
-                                    }`}>
-                                      {application.validation.driver.angelira.status === "FOUND" ? "Angellira" : application.validation.driver.angelira.status === "UNAVAILABLE" ? "Angellira indisponível" : "Fora do Angellira"}
-                                    </span>
-                                    <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
-                                      application.validation.driver.aspx.status === "FOUND"
-                                        ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/40 dark:bg-emerald-500/15 dark:text-emerald-200"
-                                        : application.validation.driver.aspx.status === "UNAVAILABLE"
-                                          ? "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-500/40 dark:bg-slate-500/15 dark:text-slate-200"
-                                          : "border-red-200 bg-red-50 text-red-700 dark:border-red-400/40 dark:bg-red-500/15 dark:text-red-200"
-                                    }`}>
-                                      {application.validation.driver.aspx.status === "FOUND" ? "ASPX" : application.validation.driver.aspx.status === "UNAVAILABLE" ? "ASPX indisponível" : "Fora do ASPX"}
-                                    </span>
-                                  </div>
-                                ) : null}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </CollapsibleContent>
-                  </Collapsible>
+                    Candidaturas ({driver.applications.length})
+                  </button>
                 </article>
               ))}
             </div>
@@ -825,6 +698,113 @@ const Motoristas = () => {
               {updateMutation.isPending ? "Salvando..." : "Salvar alteracoes"}
             </button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Modal de Candidaturas ── */}
+      <Dialog open={candidaturasDriver !== null} onOpenChange={(open) => { if (!open) setCandidaturasDriver(null); }}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              Candidaturas — {candidaturasDriver?.displayName || "Motorista"}
+            </DialogTitle>
+            {candidaturasDriver ? (
+              <p className="mt-1 text-sm text-muted-foreground">
+                {candidaturasDriver.applications.length} candidatura{candidaturasDriver.applications.length !== 1 ? "s" : ""} mais recentes nesta página de resultados.
+              </p>
+            ) : null}
+          </DialogHeader>
+
+          <div className="mt-2 space-y-3">
+            {candidaturasDriver?.applications.length === 0 ? (
+              <div className="admin-card-surface rounded-[24px] border border-dashed px-4 py-5 text-sm text-muted-foreground">
+                Nenhuma candidatura disponível para este motorista no filtro atual.
+              </div>
+            ) : (
+              <div className="grid gap-3">
+                {candidaturasDriver?.applications.map((application) => (
+                  <div
+                    key={application.id}
+                    className="admin-card-surface rounded-[24px] border p-4"
+                  >
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold text-foreground">
+                            {application.load.origem} {"->"} {application.load.destino}
+                          </span>
+                          <span
+                            className={cn(
+                              "inline-flex rounded-full border px-3 py-1 text-xs font-semibold",
+                              getApplicationTone(application),
+                            )}
+                          >
+                            {formatApplicationStatus(application)}
+                          </span>
+                          <span className="inline-flex rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold text-muted-foreground dark:bg-muted/40">
+                            {application.source === "CLAIM" ? "Conta no app" : "Pre-cadastro"}
+                          </span>
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+                          <span>
+                            Carga {application.load.id} • {application.load.perfil}
+                          </span>
+                          <span>
+                            {formatShortDateTime(buildDisplayDateTime(application.load.data, application.load.horario), "A confirmar")}
+                          </span>
+                          <span>{application.load.status}</span>
+                        </div>
+                      </div>
+
+                      <div className="text-sm text-muted-foreground">
+                        {formatShortDateTime(application.submittedAt)}
+                      </div>
+                    </div>
+
+                    {application.plates ? (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <span className="inline-flex rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold text-foreground dark:bg-muted/40">
+                          Cavalo: {application.plates.horsePlate || "indisponível"}
+                        </span>
+                        <span className="inline-flex rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold text-foreground dark:bg-muted/40">
+                          Carreta 1: {application.plates.trailerPlate || "indisponível"}
+                        </span>
+                        {application.plates.trailerPlate2 ? (
+                          <span className="inline-flex rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold text-foreground dark:bg-muted/40">
+                            Carreta 2: {application.plates.trailerPlate2}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {application.validation ? (
+                      <div className="mt-4 flex flex-wrap gap-1.5">
+                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+                          application.validation.driver.angelira.status === "FOUND"
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/40 dark:bg-emerald-500/15 dark:text-emerald-200"
+                            : application.validation.driver.angelira.status === "UNAVAILABLE"
+                              ? "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-500/40 dark:bg-slate-500/15 dark:text-slate-200"
+                              : "border-red-200 bg-red-50 text-red-700 dark:border-red-400/40 dark:bg-red-500/15 dark:text-red-200"
+                        }`}>
+                          {application.validation.driver.angelira.status === "FOUND" ? "Angellira" : application.validation.driver.angelira.status === "UNAVAILABLE" ? "Angellira indisponível" : "Fora do Angellira"}
+                        </span>
+                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+                          application.validation.driver.aspx.status === "FOUND"
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/40 dark:bg-emerald-500/15 dark:text-emerald-200"
+                            : application.validation.driver.aspx.status === "UNAVAILABLE"
+                              ? "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-500/40 dark:bg-slate-500/15 dark:text-slate-200"
+                              : "border-red-200 bg-red-50 text-red-700 dark:border-red-400/40 dark:bg-red-500/15 dark:text-red-200"
+                        }`}>
+                          {application.validation.driver.aspx.status === "FOUND" ? "ASPX" : application.validation.driver.aspx.status === "UNAVAILABLE" ? "ASPX indisponível" : "Fora do ASPX"}
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
 
