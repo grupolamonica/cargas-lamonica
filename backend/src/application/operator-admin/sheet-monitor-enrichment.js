@@ -51,7 +51,7 @@ function matchAspxDriver(name, aspxList) {
  * Processes up to BATCH_SIZE rows per call; returns { enriched, remaining }.
  * Only re-processes rows older than STALE_HOURS (unless force=true).
  */
-export async function enrichSheetMonitorRows(supabaseClient, correlationId, { force = false } = {}) {
+export async function enrichSheetMonitorRows(supabaseClient, correlationId, { force = false, forceSessionStart = null } = {}) {
   // 1. Read snapshot
   const { data: snapshot, error: snapError } = await supabaseClient
     .from("sheet_monitor_snapshot")
@@ -70,7 +70,17 @@ export async function enrichSheetMonitorRows(supabaseClient, correlationId, { fo
 
   // 2. Find stale / unenriched rows
   let rowsToProcess = allRows;
-  if (!force) {
+  if (force && forceSessionStart) {
+    // force=true with session tracking: skip rows already enriched since this session started
+    // prevents infinite loop where the same first BATCH_SIZE rows are reprocessed endlessly
+    const { data: alreadyDone } = await supabaseClient
+      .from("sheet_monitor_enriched")
+      .select("lh")
+      .gte("enriched_at", forceSessionStart)
+      .limit(50000);
+    const doneSet = new Set((alreadyDone || []).map((r) => r.lh));
+    rowsToProcess = allRows.filter((r) => !doneSet.has(r.lh));
+  } else if (!force) {
     const staleTs = new Date(Date.now() - STALE_HOURS * 3_600_000).toISOString();
     const { data: fresh } = await supabaseClient
       .from("sheet_monitor_enriched")

@@ -518,13 +518,17 @@ export async function fetchSheetMonitor({ refresh = false }: { refresh?: boolean
   }>(url, { accessToken });
 }
 
-export async function enrichSheetMonitor({ force = false }: { force?: boolean } = {}): Promise<{
+export async function enrichSheetMonitor({ force = false, forceSessionStart }: { force?: boolean; forceSessionStart?: string } = {}): Promise<{
   enriched: number;
   remaining: number;
 }> {
   const accessToken = await getOperatorAccessToken();
+  const params = new URLSearchParams();
+  if (force) params.set("force", "true");
+  if (forceSessionStart) params.set("forceSessionStart", forceSessionStart);
+  const qs = params.toString();
   return requestJson<{ enriched: number; remaining: number }>(
-    `/api/operator/sheet-monitor/enrich${force ? "?force=true" : ""}`,
+    `/api/operator/sheet-monitor/enrich${qs ? `?${qs}` : ""}`,
     { accessToken, method: "POST" },
   );
 }

@@ -675,9 +675,13 @@ export default function SheetMonitor() {
 
   // ── Enrich loop ──────────────────────────────────────────────────────────────
   const enrichForceRef = useRef(false);
+  const forceSessionStartRef = useRef<string | null>(null);
 
   const enrichMutation = useMutation({
-    mutationFn: () => enrichSheetMonitor({ force: enrichForceRef.current }),
+    mutationFn: () => enrichSheetMonitor({
+      force: enrichForceRef.current,
+      forceSessionStart: forceSessionStartRef.current ?? undefined,
+    }),
     onSuccess: (data) => {
       setEnrichProgress((p) => ({
         done: (p?.done ?? 0) + data.enriched,
@@ -698,6 +702,7 @@ export default function SheetMonitor() {
   const handleStartEnrich = (force = false) => {
     enrichingRef.current = true;
     enrichForceRef.current = force;
+    forceSessionStartRef.current = force ? new Date().toISOString() : null;
     setEnrichProgress(null);
     enrichMutation.mutate();
   };

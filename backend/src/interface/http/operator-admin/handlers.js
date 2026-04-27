@@ -840,9 +840,10 @@ export async function resolveSheetMonitorRowDetailResponse(request) {
 export async function resolveSheetMonitorEnrichResponse(request) {
   return withOperatorSession(request, "sheet-monitor-enrich", async ({ correlationId }) => {
     const force = getQueryParam(request, "force") === "true";
+    const forceSessionStart = getQueryParam(request, "forceSessionStart") || null;
     const supabaseClient = createSupabaseAdminClient();
     const { enrichSheetMonitorRows } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
-    const result = await enrichSheetMonitorRows(supabaseClient, correlationId, { force });
+    const result = await enrichSheetMonitorRows(supabaseClient, correlationId, { force, forceSessionStart });
     return { statusCode: 200, payload: result };
   });
 }
