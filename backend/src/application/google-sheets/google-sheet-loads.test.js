@@ -735,9 +735,9 @@ describe("google sheet loads sync", () => {
     expect(result.unlinkedLoadsCount).toBe(205);
 
     // Unlink now uses a single raw SQL UPDATE via withPgClient instead of supabase batches
-    const unlinkQueries = pgQueryCalls.filter((call) => call.sql.includes("sheet_lh = NULL"));
+    // staleTrulyGone query uses WHERE id = ANY($1::uuid[]) — staleInSheet uses UNNEST FROM clause
+    const unlinkQueries = pgQueryCalls.filter((call) => call.sql.includes("WHERE id = ANY($1::uuid[])"));
     expect(unlinkQueries).toHaveLength(1);
-    expect(unlinkQueries[0].sql).toContain("WHERE id = ANY($1::uuid[])");
     expect(unlinkQueries[0].params[0]).toHaveLength(205);
   });
 
