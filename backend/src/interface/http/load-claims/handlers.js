@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 
 import { z } from "zod";
 import { CANONICAL_VEHICLE_PROFILES, normalizeVehicleProfile } from "../../../domain/vehicle-profiles.js";
+import { zodErrorToHttpResponse } from "../schemas/common.js";
+import { loadIdParamsSchema, loadAndClaimParamsSchema, loadAndLeadParamsSchema } from "../schemas/load-claim-schemas.js";
 
 import { requireDriverSession, registerDriverUser, requireOperatorSession, getAdminClient } from "../../../application/load-claims/auth.js";
 import { getLoadClaimConfig } from "../../../domain/load-claims/config.js";
@@ -129,16 +131,7 @@ function getUnexpectedUserMessage(scope) {
 
 function toErrorResponse(error, correlationId, scope = "load-claims") {
   if (error instanceof z.ZodError) {
-    return {
-      statusCode: 400,
-      payload: {
-        error: "ValidationError",
-        code: "VALIDATION_ERROR",
-        message: "Os dados enviados nao sao validos.",
-        details: error.flatten(),
-        meta: { correlationId },
-      },
-    };
+    return zodErrorToHttpResponse(error, correlationId);
   }
 
   if (error instanceof LoadClaimServiceError) {
@@ -172,7 +165,7 @@ export async function resolveCreateLoadClaimResponse(request) {
 
   try {
     const { user } = await requireDriverSession(getAuthorizationHeader(request));
-    const loadId = getQueryParam(request, "loadId");
+    const { loadId } = loadIdParamsSchema.parse({ loadId: getQueryParam(request, "loadId") });
     const idempotencyKey = getHeaderValue(request, "Idempotency-Key");
 
     return await createLoadClaim({
@@ -192,8 +185,10 @@ export async function resolveConfirmLoadClaimResponse(request) {
 
   try {
     const { user } = await requireDriverSession(getAuthorizationHeader(request));
-    const loadId = getQueryParam(request, "loadId");
-    const claimId = getQueryParam(request, "claimId");
+    const { loadId, claimId } = loadAndClaimParamsSchema.parse({
+      loadId: getQueryParam(request, "loadId"),
+      claimId: getQueryParam(request, "claimId"),
+    });
     const idempotencyKey = getHeaderValue(request, "Idempotency-Key");
 
     return await confirmLoadClaim({
@@ -213,8 +208,10 @@ export async function resolveCancelLoadClaimResponse(request) {
 
   try {
     const { user } = await requireDriverSession(getAuthorizationHeader(request));
-    const loadId = getQueryParam(request, "loadId");
-    const claimId = getQueryParam(request, "claimId");
+    const { loadId, claimId } = loadAndClaimParamsSchema.parse({
+      loadId: getQueryParam(request, "loadId"),
+      claimId: getQueryParam(request, "claimId"),
+    });
     const idempotencyKey = getHeaderValue(request, "Idempotency-Key");
 
     return await cancelLoadClaim({
@@ -233,7 +230,7 @@ export async function resolveGetLoadClaimStatusResponse(request) {
   const correlationId = getCorrelationId(request);
 
   try {
-    const loadId = getQueryParam(request, "loadId");
+    const { loadId } = loadIdParamsSchema.parse({ loadId: getQueryParam(request, "loadId") });
     const leadId = getQueryParam(request, "leadId");
 
     // Session is optional — public drivers can check status via leadId alone.
@@ -395,7 +392,7 @@ export async function resolveCreatePublicLoadLeadPreRegistrationResponse(request
   const correlationId = getCorrelationId(request);
 
   try {
-    const loadId = getQueryParam(request, "loadId");
+    const { loadId } = loadIdParamsSchema.parse({ loadId: getQueryParam(request, "loadId") });
     const payload = publicLeadPreRegistrationSchema.parse(await parseJsonBody(request));
 
     return await createPublicLoadLeadPreRegistration({
@@ -415,8 +412,10 @@ export async function resolveQueuePublicLoadLeadViaWhatsAppResponse(request) {
   const correlationId = getCorrelationId(request);
 
   try {
-    const loadId = getQueryParam(request, "loadId");
-    const leadId = getQueryParam(request, "leadId");
+    const { loadId, leadId } = loadAndLeadParamsSchema.parse({
+      loadId: getQueryParam(request, "loadId"),
+      leadId: getQueryParam(request, "leadId"),
+    });
 
     return await queuePublicLoadLeadViaWhatsApp({
       loadId,
@@ -500,7 +499,7 @@ export async function resolveDirectAllocationResponse(request) {
       "leads:write",
       "Somente operadores com acesso intermediario ou avancado podem alocar motoristas.",
     );
-    const loadId = getQueryParam(request, "loadId");
+    const { loadId } = loadIdParamsSchema.parse({ loadId: getQueryParam(request, "loadId") });
     assertOperatorId(user.id);
 
     const body = await parseJsonBody(request);
@@ -527,8 +526,10 @@ export async function resolveApprovePublicLoadLeadResponse(request) {
       "leads:write",
       "Somente operadores com acesso intermediario ou avancado podem alterar leads.",
     );
-    const loadId = getQueryParam(request, "loadId");
-    const leadId = getQueryParam(request, "leadId");
+    const { loadId, leadId } = loadAndLeadParamsSchema.parse({
+      loadId: getQueryParam(request, "loadId"),
+      leadId: getQueryParam(request, "leadId"),
+    });
 
     assertOperatorId(user.id);
 
@@ -553,8 +554,10 @@ export async function resolveCancelPublicLoadLeadResponse(request) {
       "leads:write",
       "Somente operadores com acesso intermediario ou avancado podem alterar leads.",
     );
-    const loadId = getQueryParam(request, "loadId");
-    const leadId = getQueryParam(request, "leadId");
+    const { loadId, leadId } = loadAndLeadParamsSchema.parse({
+      loadId: getQueryParam(request, "loadId"),
+      leadId: getQueryParam(request, "leadId"),
+    });
 
     assertOperatorId(user.id);
 

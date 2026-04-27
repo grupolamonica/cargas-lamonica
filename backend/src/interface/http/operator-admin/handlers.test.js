@@ -80,7 +80,7 @@ describe("operator-admin handlers", () => {
       url: "/api/operator/cargas",
     });
 
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(422);
     expect(response.payload).toMatchObject({
       code: "VALIDATION_ERROR",
       message: "Payload invalido para a operacao solicitada.",
@@ -140,10 +140,9 @@ describe("operator-admin handlers", () => {
       url: "/api/operator/cargas/missing-id",
     });
 
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(422);
     expect(response.payload).toMatchObject({
       code: "VALIDATION_ERROR",
-      message: "Cargo ID is required.",
     });
   });
 
@@ -181,15 +180,15 @@ describe("operator-admin handlers", () => {
       },
       method: "PATCH",
       query: {
-        cargoId: "cargo-1",
+        cargoId: "11111111-1111-1111-1111-111111111111",
       },
-      url: "/api/operator/cargas/cargo-1",
+      url: "/api/operator/cargas/11111111-1111-1111-1111-111111111111",
     });
 
     expect(response.statusCode).toBe(200);
     expect(mockUpdateOperatorCargo).toHaveBeenCalledWith(
       expect.objectContaining({
-        cargoId: "cargo-1",
+        cargoId: "11111111-1111-1111-1111-111111111111",
         payload: expect.objectContaining({
           status: "RESERVED",
           driver_visibility: "PREMIUM",

@@ -19,6 +19,11 @@ import {
   driverProfileUpdateMutationSchema,
   routeMutationSchema,
 } from "../../../domain/operator-admin/schemas.js";
+import { zodErrorToHttpResponse } from "../schemas/common.js";
+import { cargoIdParamsSchema } from "../schemas/cargo-schemas.js";
+import { clienteIdParamsSchema } from "../schemas/cliente-schemas.js";
+import { routeIdParamsSchema } from "../schemas/route-schemas.js";
+import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
 import {
   createOperatorCargo,
   createOperatorCliente,
@@ -48,7 +53,6 @@ import {
   ForbiddenError,
   LoadClaimServiceError,
   UnauthorizedError,
-  ValidationError,
 } from "../../../domain/load-claims/errors.js";
 import { assertOperatorAccessLevel, assertOperatorPermission, hasOperatorPermission } from "../../../application/load-claims/operator-access.js";
 import { requireOperatorSession } from "../../../application/load-claims/auth.js";
@@ -77,19 +81,7 @@ function setIdempotencyCache(key, response) {
 
 function toErrorResponse(error, correlationId) {
   if (error instanceof ZodError) {
-    return {
-      statusCode: 400,
-      payload: {
-        error: "ValidationError",
-        code: "VALIDATION_ERROR",
-        message: "Payload invalido para a operacao solicitada.",
-        details: error.issues.map((issue) => ({
-          path: issue.path.join("."),
-          message: issue.message,
-        })),
-        meta: { correlationId },
-      },
-    };
+    return zodErrorToHttpResponse(error, correlationId);
   }
 
   if (error instanceof LoadClaimServiceError) {
@@ -228,11 +220,7 @@ export async function resolveUpdateOperatorCargoResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
     async ({ correlationId, requestIp, operatorId, user }) => {
-    const cargoId = getQueryParam(request, "cargoId");
-
-    if (!cargoId) {
-      throw new ValidationError("Cargo ID is required.");
-    }
+    const { cargoId } = cargoIdParamsSchema.parse({ cargoId: getQueryParam(request, "cargoId") });
 
     const payload = cargoUpdateMutationSchema.parse(await parseJsonBody(request));
 
@@ -262,11 +250,7 @@ export async function resolveDuplicateOperatorCargoResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-    const cargoId = getQueryParam(request, "cargoId");
-
-    if (!cargoId) {
-      throw new ValidationError("Cargo ID is required.");
-    }
+    const { cargoId } = cargoIdParamsSchema.parse({ cargoId: getQueryParam(request, "cargoId") });
 
     return duplicateOperatorCargo({
       cargoId,
@@ -287,11 +271,7 @@ export async function resolveToggleOperatorCargoStatusResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-    const cargoId = getQueryParam(request, "cargoId");
-
-    if (!cargoId) {
-      throw new ValidationError("Cargo ID is required.");
-    }
+    const { cargoId } = cargoIdParamsSchema.parse({ cargoId: getQueryParam(request, "cargoId") });
 
     return toggleOperatorCargoStatus({
       cargoId,
@@ -312,11 +292,7 @@ export async function resolveDeleteOperatorCargoResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
     async ({ correlationId, requestIp, operatorId, operatorAccessLevel }) => {
-    const cargoId = getQueryParam(request, "cargoId");
-
-    if (!cargoId) {
-      throw new ValidationError("Cargo ID is required.");
-    }
+    const { cargoId } = cargoIdParamsSchema.parse({ cargoId: getQueryParam(request, "cargoId") });
 
     return deleteOperatorCargo({
       cargoId,
@@ -358,11 +334,7 @@ export async function resolveUpdateOperatorClienteResponse(request) {
       forbiddenMessage: "Somente operadores com acesso avancado podem alterar embarcadores.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-    const clienteId = getQueryParam(request, "clienteId");
-
-    if (!clienteId) {
-      throw new ValidationError("Cliente ID is required.");
-    }
+    const { clienteId } = clienteIdParamsSchema.parse({ clienteId: getQueryParam(request, "clienteId") });
 
     const payload = clienteMutationSchema.parse(await parseJsonBody(request));
     return updateOperatorCliente({
@@ -385,11 +357,7 @@ export async function resolveDeleteOperatorClienteResponse(request) {
       forbiddenMessage: "Somente operadores com acesso avancado podem alterar embarcadores.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-    const clienteId = getQueryParam(request, "clienteId");
-
-    if (!clienteId) {
-      throw new ValidationError("Cliente ID is required.");
-    }
+    const { clienteId } = clienteIdParamsSchema.parse({ clienteId: getQueryParam(request, "clienteId") });
 
     return deleteOperatorCliente({
       clienteId,
@@ -430,11 +398,7 @@ export async function resolveUpdateOperatorRouteResponse(request) {
       forbiddenMessage: "Somente operadores com acesso avancado podem alterar rotas padrao.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-    const routeId = getQueryParam(request, "routeId");
-
-    if (!routeId) {
-      throw new ValidationError("Route ID is required.");
-    }
+    const { routeId } = routeIdParamsSchema.parse({ routeId: getQueryParam(request, "routeId") });
 
     const payload = routeMutationSchema.parse(await parseJsonBody(request));
     return updateOperatorRoute({
@@ -493,11 +457,7 @@ export async function resolveUpdateOperatorDriverProfileResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar perfis de motoristas.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-      const driverId = getQueryParam(request, "driverId");
-
-      if (!driverId) {
-        throw new ValidationError("Driver ID is required.");
-      }
+      const { driverId } = driverIdParamsSchema.parse({ driverId: getQueryParam(request, "driverId") });
 
       const payload = driverProfileUpdateMutationSchema.parse(await parseJsonBody(request));
       return updateOperatorDriverProfile({

@@ -121,7 +121,7 @@ describe("load-claims handlers", () => {
       }),
       headers: {},
       query: {
-        loadId: "load-1",
+        loadId: "11111111-1111-1111-1111-111111111111",
       },
     });
 
@@ -153,13 +153,13 @@ describe("load-claims handlers", () => {
         "x-forwarded-for": "198.51.100.25, 10.0.0.1",
       },
       query: {
-        loadId: "load-1",
+        loadId: "11111111-1111-1111-1111-111111111111",
       },
     });
 
     expect(mockCreatePublicLoadLeadPreRegistration).toHaveBeenCalledWith(
       expect.objectContaining({
-        loadId: "load-1",
+        loadId: "11111111-1111-1111-1111-111111111111",
         requestContext: {
           clientIp: "198.51.100.25",
         },
@@ -180,15 +180,15 @@ describe("load-claims handlers", () => {
         "x-real-ip": "203.0.113.30",
       },
       query: {
-        loadId: "load-1",
-        leadId: "lead-1",
+        loadId: "11111111-1111-1111-1111-111111111111",
+        leadId: "22222222-2222-2222-2222-222222222222",
       },
     });
 
     expect(mockQueuePublicLoadLeadViaWhatsApp).toHaveBeenCalledWith(
       expect.objectContaining({
-        loadId: "load-1",
-        leadId: "lead-1",
+        loadId: "11111111-1111-1111-1111-111111111111",
+        leadId: "22222222-2222-2222-2222-222222222222",
         requestContext: {
           clientIp: "203.0.113.30",
         },
@@ -214,14 +214,14 @@ describe("load-claims handlers", () => {
         authorization: "Bearer mock-token",
       },
       query: {
-        loadId: "load-1",
+        loadId: "11111111-1111-1111-1111-111111111111",
         leadId: "lead-1",
       },
     });
 
     expect(mockGetLoadClaimStatus).toHaveBeenCalledWith(
       expect.objectContaining({
-        loadId: "load-1",
+        loadId: "11111111-1111-1111-1111-111111111111",
         driverId: "driver-1",
         publicLeadId: "lead-1",
       }),
