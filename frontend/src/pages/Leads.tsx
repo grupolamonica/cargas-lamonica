@@ -450,13 +450,13 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
       } else {
         const truncatedSuffix = response.truncated ? ` (limite de ${response.limit})` : "";
         toast.success(
-          `ASPx consultado para ${response.revalidated}/${response.total} candidaturas. ${response.foundInAspx} encontrados${truncatedSuffix}.` +
+          `ASPX consultado para ${response.revalidated}/${response.total} candidaturas. ${response.foundInAspx} encontrados${truncatedSuffix}.` +
             (response.failed > 0 ? ` ${response.failed} falharam.` : ""),
         );
       }
       await queryClient.invalidateQueries({ queryKey: LEADS_QUERY_KEY });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Não foi possível consultar o ASPx agora.");
+      toast.error(error instanceof Error ? error.message : "Não foi possível consultar o ASPX agora.");
     } finally {
       setRevalidatingAspx(false);
     }
@@ -611,10 +611,10 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
               onClick={() => void handleRevalidateQueuedAspx()}
               disabled={revalidatingAspx}
               className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl border border-sky-400/40 bg-sky-500/10 px-4 text-sm font-semibold text-sky-700 transition-colors duration-200 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-sky-500/15 dark:text-sky-200"
-              title="Consulta ASPx para todas as candidaturas em fila (mais rápido que Angellira)"
+              title="Consulta ASPX para todas as candidaturas em fila (mais rápido que Angellira)"
             >
               {revalidatingAspx ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-              <span className="whitespace-nowrap">Verificar no ASPx</span>
+              <span className="whitespace-nowrap">Verificar no ASPX</span>
             </button>
           </div>
 

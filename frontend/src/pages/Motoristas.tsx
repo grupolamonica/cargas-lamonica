@@ -137,7 +137,7 @@ function renderAngelliraVigencyBadge(driver: OperatorDriverListItem) {
     return (
       <div className="admin-tint-danger inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
         <XCircle className="h-3.5 w-3.5" />
-        Angellira: Vigencia vencida{validUntil ? ` (${parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""})` : ""}
+        Angellira: Vigência vencida{validUntil ? ` (${parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""})` : ""}
       </div>
     );
   }
@@ -783,18 +783,18 @@ const Motoristas = () => {
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              Telefone e documento sao gerenciados pelo proprio motorista e nao podem ser alterados pelo operador.
+              Telefone e documento são gerenciados pelo próprio motorista e não podem ser alterados pelo operador.
             </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             {[
-              { key: "documents_valid" as const, label: "Documentos validos" },
+              { key: "documents_valid" as const, label: "Documentos válidos" },
               { key: "antt_valid" as const, label: "ANTT valida" },
               { key: "tracking_enabled" as const, label: "Rastreamento" },
               { key: "insurance_valid" as const, label: "Seguro" },
               { key: "monitoring_capable" as const, label: "Monitoramento" },
-              { key: "operational_blocked" as const, label: "Operacao bloqueada" },
+              { key: "operational_blocked" as const, label: "Operação bloqueada" },
             ].map(({ key, label }) => (
               <label key={key} className="flex items-center gap-2.5 rounded-2xl border border-border/60 bg-white/80 px-3.5 py-3 text-sm cursor-pointer hover:bg-muted/30 transition-colors">
                 <input

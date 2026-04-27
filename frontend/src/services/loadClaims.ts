@@ -198,7 +198,7 @@ interface ApiRequestOptions {
 
 function getFallbackApiErrorMessage(url: string, response: Response, rawBody: string) {
   if (response.status === 404 && url.startsWith("/api/")) {
-    return `Endpoint ${url} nao encontrado. Se estiver em desenvolvimento, confirme se o servidor expoe as rotas /api.`;
+    return `Endpoint ${url} não encontrado. Se estiver em desenvolvimento, confirme se o servidor expõe as rotas /api.`;
   }
 
   if (!rawBody.trim()) {
@@ -206,7 +206,7 @@ function getFallbackApiErrorMessage(url: string, response: Response, rawBody: st
   }
 
   if (rawBody.trim().startsWith("<")) {
-    return `A API ${url} nao retornou JSON valido (${response.status}).`;
+    return `A API ${url} não retornou JSON válido (${response.status}).`;
   }
 
   return rawBody.trim();

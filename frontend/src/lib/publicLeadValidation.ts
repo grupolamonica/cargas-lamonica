@@ -62,15 +62,15 @@ export function getOverallValidationTone(status: PublicLeadValidationOverallStat
 export function getVigencyLabel(vigency: PublicLeadValidationSummary["vigency"]) {
   switch (vigency.status as PublicLeadValidationVigencyStatus) {
     case "VALID":
-      return `Vigencia valida ate ${vigency.validUntil || "data nao informada"}`;
+      return `Vigência válida até ${vigency.validUntil || "data não informada"}`;
     case "EXPIRING":
-      return `Vigencia vence em ${vigency.daysUntilExpiry ?? "?"} dia(s)`;
+      return `Vigência vence em ${vigency.daysUntilExpiry ?? "?"} dia(s)`;
     case "INVALID":
-      return "Vigencia vencida";
+      return "Vigência vencida";
     case "UNAVAILABLE":
-      return "Vigencia nao validada";
+      return "Vigência não validada";
     default:
-      return "Vigencia nao encontrada";
+      return "Vigência não encontrada";
   }
 }
 
@@ -94,8 +94,8 @@ function buildPlateBadge(plate: PublicLeadValidationPlate): ValidationBadgeModel
       plate.status === "FOUND"
         ? `${plate.label} validada`
         : plate.status === "UNAVAILABLE"
-          ? `${plate.label} nao validada`
-          : `${plate.label} nao encontrada`,
+          ? `${plate.label} não validada`
+          : `${plate.label} não encontrada`,
     tone: getLookupTone(plate.status),
   };
 }

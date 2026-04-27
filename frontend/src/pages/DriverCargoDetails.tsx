@@ -447,7 +447,7 @@ const DriverCargoDetails = () => {
         description={
           cargoQuery.data.publication.alertSummary
             ? `${cargoQuery.data.publication.alertSummary} Assim que a equipe concluir esses dados, a carga volta a aparecer para o motorista.`
-            : "Essa carga ainda nao foi liberada para o portal do motorista."
+            : "Essa carga ainda não foi liberada para o portal do motorista."
         }
       />
     );

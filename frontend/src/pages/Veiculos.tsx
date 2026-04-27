@@ -77,7 +77,7 @@ function renderVehicleVigencyBadge(vehicle: OperatorVehicleListItem) {
       return (
         <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50/80 px-3 py-1.5 text-xs font-semibold text-slate-600 dark:border-slate-500/40 dark:bg-slate-500/15 dark:text-slate-200">
           <CalendarClock className="h-3.5 w-3.5" />
-          Angellira: Nao encontrado
+          Angellira: Não encontrado
         </div>
       );
     }
@@ -100,7 +100,7 @@ function renderVehicleVigencyBadge(vehicle: OperatorVehicleListItem) {
     return (
       <div className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50/80 px-3 py-1.5 text-xs font-semibold text-red-700 dark:border-red-400/40 dark:bg-red-500/15 dark:text-red-200">
         <XCircle className="h-3.5 w-3.5" />
-        Vigencia vencida{validUntil ? ` (${parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""})` : ""}
+        Vigência vencida{validUntil ? ` (${parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""})` : ""}
       </div>
     );
   }
@@ -119,7 +119,7 @@ function renderVehicleVigencyBadge(vehicle: OperatorVehicleListItem) {
     return (
       <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50/80 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:border-emerald-400/40 dark:bg-emerald-500/15 dark:text-emerald-200">
         <CheckCircle2 className="h-3.5 w-3.5" />
-        {statusText || "Vigente"} ate {parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""}
+        {statusText || "Vigente"} até {parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""}
       </div>
     );
   }
@@ -137,7 +137,7 @@ function renderVehicleVigencyBadge(vehicle: OperatorVehicleListItem) {
     return (
       <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50/80 px-3 py-1.5 text-xs font-semibold text-slate-600 dark:border-slate-500/40 dark:bg-slate-500/15 dark:text-slate-200">
         <CalendarClock className="h-3.5 w-3.5" />
-        Nao encontrado
+        Não encontrado
       </div>
     );
   }
@@ -370,7 +370,7 @@ const Veiculos = () => {
           <section className="admin-panel flex min-h-[260px] flex-col items-center justify-center gap-4 p-10 text-center">
             <ShieldX className="h-14 w-14 text-rose-500/70" />
             <div className="space-y-1">
-              <p className="text-lg font-bold text-foreground">Nao foi possivel carregar os veiculos</p>
+              <p className="text-lg font-bold text-foreground">Não foi possível carregar os veículos</p>
               <p className="text-sm text-muted-foreground">
                 {error instanceof Error ? error.message : "Verifique a sessao do operador e tente novamente."}
               </p>

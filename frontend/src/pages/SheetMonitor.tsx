@@ -730,7 +730,7 @@ export default function SheetMonitor() {
           <div className="admin-panel flex items-center gap-3 border-amber-200 bg-amber-50 p-4">
             <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600" />
             <p className="text-sm text-amber-800">
-              Google Sheet ID nao configurado. Configure <code className="font-mono font-bold">GOOGLE_SHEET_ID</code>.
+              Google Sheet ID não configurado. Configure <code className="font-mono font-bold">GOOGLE_SHEET_ID</code>.
             </p>
           </div>
         )}
@@ -766,7 +766,7 @@ export default function SheetMonitor() {
         {refreshMutation.isError && (
           <div className="admin-panel flex items-center gap-3 border-red-200 bg-red-50 p-4">
             <AlertTriangle className="h-5 w-5 shrink-0 text-red-600" />
-            <p className="text-sm text-red-800">Nao foi possivel buscar os dados da planilha. Verifique a conexao e tente novamente.</p>
+            <p className="text-sm text-red-800">Não foi possível buscar os dados da planilha. Verifique a conexão e tente novamente.</p>
           </div>
         )}
 
@@ -774,7 +774,7 @@ export default function SheetMonitor() {
           <div className="admin-panel flex items-start gap-3 border-amber-200 bg-amber-50 p-4">
             <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600" />
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-amber-800">Planilha carregada, mas nao foi salva no banco</p>
+              <p className="text-sm font-semibold text-amber-800">Planilha carregada, mas não foi salva no banco</p>
               <p className="mt-0.5 text-xs text-amber-700">
                 {snapshotSaveError ? `Detalhe: ${snapshotSaveError}.` : ""}{" "}
                 Verifique a migration <code className="font-mono font-bold">sheet_monitor_snapshot</code>.

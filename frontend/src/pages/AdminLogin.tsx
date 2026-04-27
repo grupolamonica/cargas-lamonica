@@ -35,7 +35,7 @@ const AdminLogin = () => {
 
       if (role !== "operator") {
         await supabase.auth.signOut();
-        throw new Error("Esta conta nao tem perfil de operador para acessar o painel.");
+        throw new Error("Esta conta não tem perfil de operador para acessar o painel.");
       }
 
       window.location.assign("/operador");

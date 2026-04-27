@@ -40,11 +40,11 @@ function formatRelative(iso: string | null) {
     if (diffMs < 0) return null;
     const mins = Math.floor(diffMs / 60_000);
     if (mins < 1) return "agora";
-    if (mins < 60) return `${mins}min atras`;
+    if (mins < 60) return `${mins}min atrás`;
     const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h atras`;
+    if (hours < 24) return `${hours}h atrás`;
     const days = Math.floor(hours / 24);
-    return `${days}d atras`;
+    return `${days}d atrás`;
   } catch {
     return null;
   }
@@ -71,11 +71,11 @@ export function AspxSyncCard() {
   const triggerMutation = useMutation({
     mutationFn: triggerAspxSync,
     onSuccess: () => {
-      toast.success("Sync do ASPx disparado. Atualizando em alguns instantes...");
+      toast.success("Sync do ASPX disparado. Atualizando em alguns instantes...");
       setPollingAfterTrigger(true);
     },
     onError: (err: Error) => {
-      toast.error(err.message || "Nao foi possivel disparar o sync do ASPx.");
+      toast.error(err.message || "Não foi possível disparar o sync do ASPX.");
     },
   });
 
@@ -97,7 +97,7 @@ export function AspxSyncCard() {
     if (lastSyncAt && baselineSyncAt !== null && lastSyncAt !== baselineSyncAt) {
       setPollingAfterTrigger(false);
       setBaselineSyncAt(null);
-      toast.success(`ASPx atualizado: ${data?.drivers?.total ?? 0} motoristas no portal.`);
+      toast.success(`ASPX atualizado: ${data?.drivers?.total ?? 0} motoristas no portal.`);
       queryClient.invalidateQueries({ queryKey: ["operator", "motoristas-read-model"] });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -107,7 +107,7 @@ export function AspxSyncCard() {
     if (pollingAfterTrigger && pollAttempts >= POLL_MAX_ATTEMPTS) {
       setPollingAfterTrigger(false);
       setBaselineSyncAt(null);
-      toast.info("Sync ainda em execucao. Atualize manualmente em alguns minutos.");
+      toast.info("Sync ainda em execução. Atualize manualmente em alguns minutos.");
     }
   }, [pollingAfterTrigger, pollAttempts]);
 
@@ -134,10 +134,10 @@ export function AspxSyncCard() {
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">
-              Integracao ASPx
+              Integração ASPX
             </p>
             <h3 className="mt-1 text-lg font-semibold tracking-tight text-foreground">
-              Sincronizacao do portal Agency
+              Sincronização do portal Agency
             </h3>
             {error ? (
               <p className="mt-1 text-sm text-rose-700">
@@ -233,7 +233,7 @@ export function AspxSyncCard() {
             ) : (
               <ShieldCheck className="h-4 w-4" />
             )}
-            {pollingAfterTrigger ? "Aguardando conclusao..." : "Sincronizar ASPx agora"}
+            {pollingAfterTrigger ? "Aguardando conclusão..." : "Sincronizar ASPX agora"}
           </button>
         </div>
       </div>

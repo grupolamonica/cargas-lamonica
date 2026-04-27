@@ -210,7 +210,7 @@ const DriverFlowInsights = ({ className }: DriverFlowInsightsProps) => {
               Insights de acesso, funil e validação
             </h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Candidaturas, conversão, picos de acesso e qualidade das validações Angellira/ASPx.
+              Candidaturas, conversão, picos de acesso e qualidade das validações Angellira/ASPX.
             </p>
           </div>
         </div>
@@ -435,7 +435,7 @@ const DriverFlowInsights = ({ className }: DriverFlowInsightsProps) => {
                   </p>
                 </div>
                 <div className="rounded-2xl border border-sky-200/70 bg-sky-50/60 p-3 dark:border-sky-400/30 dark:bg-sky-500/10">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800 dark:text-sky-200">ASPx OK</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800 dark:text-sky-200">ASPX OK</p>
                   <p className="mt-1 text-xl font-black text-sky-700 dark:text-sky-100">
                     {formatPercent(data.validation.aspxFound, data.validation.total)}
                   </p>

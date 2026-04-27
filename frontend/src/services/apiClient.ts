@@ -21,7 +21,7 @@ function createCorrelationId() {
 
 function getFallbackApiErrorMessage(url: string, response: Response, rawBody: string) {
   if (response.status === 404 && url.startsWith("/api/")) {
-    return `Endpoint ${url} nao encontrado. Confirme se o ambiente expoe as rotas /api.`;
+    return `Endpoint ${url} não encontrado. Confirme se o ambiente expõe as rotas /api.`;
   }
 
   if (!rawBody.trim()) {
@@ -29,7 +29,7 @@ function getFallbackApiErrorMessage(url: string, response: Response, rawBody: st
   }
 
   if (rawBody.trim().startsWith("<")) {
-    return `A API ${url} nao retornou JSON valido (${response.status}).`;
+    return `A API ${url} não retornou JSON válido (${response.status}).`;
   }
 
   return rawBody.trim();

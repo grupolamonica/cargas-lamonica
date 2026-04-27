@@ -229,11 +229,11 @@ const Overview = () => {
           <section className="admin-panel flex min-h-[320px] flex-col items-center justify-center gap-4 p-10 text-center">
             <ShieldCheck className="h-14 w-14 text-amber-600/70" />
             <div className="space-y-2">
-              <p className="text-lg font-bold text-foreground">Nao foi possivel montar o dashboard real</p>
+              <p className="text-lg font-bold text-foreground">Não foi possível montar o dashboard</p>
               <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
                 {overviewQuery.error instanceof Error
                   ? overviewQuery.error.message
-                  : "Verifique a sessao do operador e as politicas das tabelas de cargas, leads e disputas."}
+                  : "Verifique a sessão do operador e as permissões das tabelas de cargas, leads e disputas."}
               </p>
             </div>
           </section>

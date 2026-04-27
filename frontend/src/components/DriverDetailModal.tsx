@@ -65,7 +65,7 @@ function renderPlateValidation(plate: PublicLeadValidationPlate) {
       key={plate.field}
       className={cn("inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold", getLookupBadgeClasses(plate.status))}
     >
-      {plate.label}: {plate.status === "FOUND" ? "Validada" : plate.status === "UNAVAILABLE" ? "Nao validada" : "Nao encontrada"}
+      {plate.label}: {plate.status === "FOUND" ? "Validada" : plate.status === "UNAVAILABLE" ? "Não validada" : "Não encontrada"}
       {plate.validUntil ? ` (ate ${parseDateStringAsLocal(plate.validUntil)?.toLocaleDateString("pt-BR") ?? ""})` : ""}
     </span>
   );
@@ -143,7 +143,7 @@ export default function DriverDetailModal({ open, onOpenChange, data, hideValida
                 </span>
                 <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold", getLookupBadgeClasses(data.validation.driver.aspx.status))}>
                   {data.validation.driver.aspx.status === "FOUND" ? <BadgeCheck className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
-                  {getLookupLabel("ASPx", data.validation.driver.aspx.status)}
+                  {getLookupLabel("ASPX", data.validation.driver.aspx.status)}
                 </span>
               </div>
             </section>
@@ -207,7 +207,7 @@ export default function DriverDetailModal({ open, onOpenChange, data, hideValida
           {/* Vigency info from validation */}
           {!hideValidation && data.validation?.vigency ? (
             <section>
-              <h4 className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground mb-3">Vigencia</h4>
+              <h4 className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground mb-3">Vigência</h4>
               <div className="flex flex-wrap gap-2 text-sm">
                 <span className={cn(
                   "inline-flex rounded-full border px-3 py-1.5 text-xs font-semibold",
@@ -220,12 +220,12 @@ export default function DriverDetailModal({ open, onOpenChange, data, hideValida
                         : "admin-tint-danger",
                 )}>
                   {data.validation.vigency.status === "VALID"
-                    ? `Vigencia valida${data.validation.vigency.validUntil ? ` ate ${parseDateStringAsLocal(data.validation.vigency.validUntil)?.toLocaleDateString("pt-BR") ?? ""}` : ""}`
+                    ? `Vigência válida${data.validation.vigency.validUntil ? ` até ${parseDateStringAsLocal(data.validation.vigency.validUntil)?.toLocaleDateString("pt-BR") ?? ""}` : ""}`
                     : data.validation.vigency.status === "EXPIRING"
                       ? `Vence em ${data.validation.vigency.daysUntilExpiry ?? "?"} dia(s)`
                       : data.validation.vigency.status === "UNAVAILABLE"
-                        ? "Vigencia nao validada"
-                        : "Vigencia vencida"}
+                        ? "Vigência não validada"
+                        : "Vigência vencida"}
                 </span>
               </div>
             </section>
