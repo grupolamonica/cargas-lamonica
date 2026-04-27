@@ -502,12 +502,11 @@ export async function resolveDirectAllocationResponse(request) {
     const { loadId } = loadIdParamsSchema.parse({ loadId: getQueryParam(request, "loadId") });
     assertOperatorId(user.id);
 
-    const body = await parseJsonBody(request);
-    const { cpf, phone, horsePlate, vehicleType, trailerPlate, trailerPlate2 } = body || {};
+    const payload = publicLeadPreRegistrationSchema.parse(await parseJsonBody(request));
 
     return await createDirectLeadAllocation({
       loadId,
-      payload: { cpf, phone, horsePlate, vehicleType, trailerPlate, trailerPlate2 },
+      payload,
       operatorId: user.id,
       correlationId,
     });
