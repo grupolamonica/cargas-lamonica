@@ -24,6 +24,7 @@ import { cargoIdParamsSchema } from "../schemas/cargo-schemas.js";
 import { clienteIdParamsSchema } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
+import { dashboardQuerySchema } from "../schemas/operator-schemas.js";
 import {
   createOperatorCargo,
   createOperatorCliente,
@@ -414,8 +415,9 @@ export async function resolveUpdateOperatorRouteResponse(request) {
 
 export async function resolveOperatorDashboardReadModelResponse(request) {
   return withOperatorSession(request, "read-operator-dashboard", async ({ correlationId }) => {
+    const query = dashboardQuerySchema.parse(request.query || {});
     return fetchOperatorDashboardReadModel({
-      query: request.query || {},
+      query,
       correlationId,
     });
   });
