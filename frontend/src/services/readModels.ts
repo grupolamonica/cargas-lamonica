@@ -393,6 +393,7 @@ export interface OperatorVehicleListItem {
   linkedDriverId: string | null;
   linkedDriverCpf: string | null;
   linkedDriverName: string | null;
+  linkedDriverPhone: string | null;
   source: "PUBLIC_LEAD" | "MANUAL";
   angelliraVigency: {
     status: string | null;

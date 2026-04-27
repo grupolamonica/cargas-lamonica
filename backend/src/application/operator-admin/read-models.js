@@ -1725,6 +1725,7 @@ function mapVehicleRowToItem(row) {
     linkedDriverId: row.linked_driver_id || null,
     linkedDriverCpf: row.linked_driver_cpf || null,
     linkedDriverName: row.linked_driver_name || null,
+    linkedDriverPhone: row.linked_driver_phone || null,
     source: row.source || null,
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
@@ -1798,7 +1799,8 @@ export async function fetchOperatorVehiclesListReadModel({ query, correlationId 
           v.created_at,
           v.updated_at,
           dp.user_id AS linked_driver_id,
-          dp.full_name AS linked_driver_name
+          dp.full_name AS linked_driver_name,
+          dp.phone AS linked_driver_phone
         FROM public.vehicles v
         LEFT JOIN public.driver_profiles dp
           ON REPLACE(REPLACE(dp.document_number, '.', ''), '-', '') = v.linked_driver_cpf

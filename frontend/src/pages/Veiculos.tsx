@@ -557,6 +557,11 @@ const Veiculos = () => {
                     {detailVehicle.linkedDriverName ? (
                       <span>{detailVehicle.linkedDriverName}</span>
                     ) : null}
+                    {detailVehicle.linkedDriverPhone ? (
+                      <span className="text-muted-foreground text-xs">
+                        {detailVehicle.linkedDriverPhone}
+                      </span>
+                    ) : null}
                     {detailVehicle.linkedDriverCpf ? (
                       <span className="text-muted-foreground text-xs font-mono">
                         CPF: {detailVehicle.linkedDriverCpf}

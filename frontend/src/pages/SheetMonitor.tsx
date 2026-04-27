@@ -61,6 +61,7 @@ function resolveSheetStatusStyle(status: string) {
 
   const exact: Record<string, { dot: string; bg: string; label: string }> = {
     "":            { dot: "bg-blue-500",    bg: "bg-blue-50 text-blue-800 dark:bg-blue-500/15 dark:text-blue-200",            label: "Disponivel" },
+    "Reservado":   { dot: "bg-violet-500", bg: "bg-violet-50 text-violet-800 dark:bg-violet-500/15 dark:text-violet-200",    label: "Reservado" },
     "Em aberto":   { dot: "bg-amber-500",   bg: "bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-200",        label: "Em aberto" },
     "Aprovado":    { dot: "bg-emerald-500", bg: "bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200", label: "Aprovado" },
     "Em transito": { dot: "bg-indigo-500",  bg: "bg-indigo-50 text-indigo-800 dark:bg-indigo-500/15 dark:text-indigo-200",    label: "Em transito" },
@@ -193,7 +194,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       )}
     >
       {/* Status */}
-      <td className="px-3 py-2"><StatusBadge status={row.status} /></td>
+      <td className="px-3 py-2"><StatusBadge status={!row.status && row.motoristas ? "Reservado" : row.status} /></td>
 
       {/* LH + Tipo */}
       <td className="px-3 py-2">

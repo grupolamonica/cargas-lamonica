@@ -1,4 +1,5 @@
 import { logStructuredEvent } from "../../infrastructure/security-log.js";
+import { getPostgresPool } from "../../infrastructure/pg/postgres.js";
 
 const STALE_HOURS = 6;
 const BATCH_SIZE = 60;
@@ -119,6 +120,34 @@ export async function enrichSheetMonitorRows(supabaseClient, correlationId, { fo
 
   // 6. Determine what needs Angellira calls
   const uniqueCpfs = [...new Set(Object.values(nameToCpf))];
+
+  // 6b. Bulk-fetch driver cache from driver_profiles — skip Angellira for CPFs already validated
+  const driverCacheByNormalizedCpf = {};
+  if (uniqueCpfs.length > 0) {
+    try {
+      const pool = getPostgresPool();
+      const { rows: cachedDriverRows } = await pool.query(
+        `SELECT REPLACE(REPLACE(document_number, '.', ''), '-', '') AS cpf_norm,
+                angellira_status, angellira_valid_until, angellira_status_text
+         FROM public.driver_profiles
+         WHERE angellira_checked_at IS NOT NULL
+           AND REPLACE(REPLACE(document_number, '.', ''), '-', '') = ANY($1)`,
+        [uniqueCpfs],
+      );
+      for (const r of cachedDriverRows) {
+        driverCacheByNormalizedCpf[r.cpf_norm] = {
+          found: r.angellira_status === "FOUND",
+          status: r.angellira_status ?? null,
+          validUntil: r.angellira_valid_until ?? null,
+          statusText: r.angellira_status_text ?? null,
+        };
+      }
+    } catch {
+      // cache miss — proceed with Angellira calls for all CPFs
+    }
+  }
+
+  const cpfsToFetch = uniqueCpfs.filter((c) => !driverCacheByNormalizedCpf[c]);
   // force=true: re-query all plates (ignores DB cache) so "Atualizar planilha" always
   // re-validates plates even when they exist in vehicles table.
   const platesToFetch = force ? uniquePlates : uniquePlates.filter((p) => !vehiclesByPlate[p]);
@@ -127,11 +156,11 @@ export async function enrichSheetMonitorRows(supabaseClient, correlationId, { fo
   const { lookupAngelliraDriverByCpf, lookupAngelliraPlate } =
     await import("../../infrastructure/angellira/angellira-client.js");
 
-  const angelliraDrivers = {};
+  const angelliraDrivers = { ...driverCacheByNormalizedCpf };
   const angelliraVehicles = {};
 
   const tasks = [
-    ...uniqueCpfs.map((cpf) => async () => {
+    ...cpfsToFetch.map((cpf) => async () => {
       try {
         angelliraDrivers[cpf] = await withTimeout(
           lookupAngelliraDriverByCpf(cpf, { correlationId }),
