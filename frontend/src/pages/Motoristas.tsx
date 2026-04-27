@@ -314,20 +314,7 @@ const Motoristas = () => {
     setPage(1);
   }, [deferredSearch, sourceFilter, applicationStatusFilter]);
 
-  useEffect(() => {
-    if (!items?.length) return;
-    const currentIds = new Set(items.map((item) => item.id));
-    setOpenSections((prev) => {
-      const pruned: Record<string, boolean> = {};
-      for (const key of Object.keys(prev)) {
-        const driverId = key.split("::")[0];
-        if (currentIds.has(driverId)) {
-          pruned[key] = prev[key];
-        }
-      }
-      return pruned;
-    });
-  }, [items]);
+
   const hasActiveFilters = deferredSearch.length > 0 || sourceFilter !== "todos" || applicationStatusFilter !== "todos";
 
   return (
