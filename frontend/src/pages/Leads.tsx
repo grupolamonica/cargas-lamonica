@@ -654,26 +654,30 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                         <h3 className="mt-2 text-xl font-semibold tracking-tight text-foreground">{routeLabel}</h3>
                         <p className="mt-1 text-sm text-muted-foreground">
                           Perfil {group.load.perfil} | Status{" "}
-                          {historicoMode && sheetAllocation?.status
-                            ? sheetAllocation.status
-                            : sheetAllocation
-                              ? "Reservado (planilha)"
-                              : group.load.status}{" "}
+                          {sheetAllocation?.status || group.load.sheetStatus || group.load.status}{" "}
                           | {group.queueCount} na fila
                         </p>
-                        {sheetAllocation ? (
+                        {(sheetAllocation || group.load.sheetStatus || group.load.sheetMotorista) ? (
                           <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-300/60 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-500/10 dark:text-emerald-200">
                             <Truck className="h-3.5 w-3.5" />
-                            {historicoMode ? (
-                              <>
-                                Planilha
-                                {sheetAllocation.driverName ? `: ${sheetAllocation.driverName}` : ""}
-                                {sheetAllocation.status ? ` · ${sheetAllocation.status}` : ""}
-                              </>
+                            {sheetAllocation ? (
+                              historicoMode ? (
+                                <>
+                                  Planilha
+                                  {sheetAllocation.driverName ? `: ${sheetAllocation.driverName}` : ""}
+                                  {sheetAllocation.status ? ` · ${sheetAllocation.status}` : ""}
+                                </>
+                              ) : (
+                                <>
+                                  Reservado externamente: {sheetAllocation.driverName}
+                                  {sheetAllocation.status ? ` · ${sheetAllocation.status}` : ""}
+                                </>
+                              )
                             ) : (
                               <>
-                                Reservado externamente: {sheetAllocation.driverName}
-                                {sheetAllocation.status ? ` · ${sheetAllocation.status}` : ""}
+                                Planilha
+                                {group.load.sheetMotorista ? `: ${group.load.sheetMotorista}` : ""}
+                                {group.load.sheetStatus ? ` · ${group.load.sheetStatus}` : ""}
                               </>
                             )}
                           </div>

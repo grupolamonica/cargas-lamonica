@@ -1192,14 +1192,12 @@ export async function syncGoogleSheetLoads({
         `
           UPDATE public.cargas
           SET
-            sheet_lh = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_lh END,
             sheet_tipo = NULL,
             sheet_data_carregamento = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_data_carregamento END,
             sheet_data_descarga    = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_data_descarga END,
             sheet_motorista        = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_motorista END,
             sheet_cavalo           = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_cavalo END,
             sheet_carreta          = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_carreta END,
-            sheet_status           = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_status END,
             sheet_synced_at = NULL,
             status = CASE
               WHEN status = 'OPEN' THEN 'EXPIRED'
