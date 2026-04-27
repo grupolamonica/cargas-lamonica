@@ -267,29 +267,38 @@ async function createClaimRow(client, { loadId, driverId, idempotencyKey, reques
   return rows[0];
 }
 
-const ALLOWED_CLAIM_UPDATE_COLUMNS = new Set([
-  "status",
-  "queue_position",
-  "rejected_reason",
-  "promoted_at",
-  "confirmed_at",
-  "expired_at",
-  "cancelled_at",
-  "reservation_expires_at",
-  "reserved_until",
-  "booked_at",
-  "metadata",
-]);
+// Static map from allowed logical keys to hard-coded SQL column name fragments.
+// Column names MUST come from this map only — never from caller-supplied strings.
+// This prevents SQL injection even if the allowlist check is bypassed (e.g., prototype pollution).
+const COLUMN_SQL_FRAGMENTS = {
+  status:                 "status",
+  queue_position:         "queue_position",
+  rejected_reason:        "rejected_reason",
+  promoted_at:            "promoted_at",
+  confirmed_at:           "confirmed_at",
+  expired_at:             "expired_at",
+  cancelled_at:           "cancelled_at",
+  reservation_expires_at: "reservation_expires_at",
+  reserved_until:         "reserved_until",
+  booked_at:              "booked_at",
+  metadata:               "metadata",
+};
 
 async function updateClaimRow(client, claimId, updates) {
+  if (Object.keys(updates).length === 0) {
+    throw new Error("[updateClaimRow] updates object must contain at least one field.");
+  }
+
   const fields = [];
   const values = [];
 
   Object.entries(updates).forEach(([key, value], index) => {
-    if (!ALLOWED_CLAIM_UPDATE_COLUMNS.has(key)) {
-      throw new Error(`[updateClaimRow] Illegal column name: "${key}". Add to ALLOWED_CLAIM_UPDATE_COLUMNS if intentional.`);
+    const fragment = COLUMN_SQL_FRAGMENTS[key];
+    if (!fragment) {
+      throw new Error(`[updateClaimRow] Illegal column: "${key}"`);
     }
-    fields.push(`${key} = $${index + 2}`);
+    // Use the pre-approved fragment (hard-coded string), never the caller-supplied key.
+    fields.push(`${fragment} = $${index + 2}`);
     values.push(value);
   });
 
