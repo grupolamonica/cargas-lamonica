@@ -1183,13 +1183,18 @@ export async function confirmLoadClaim({ loadId, claimId, driverId, idempotencyK
       throw new NotFoundError("Load not found.");
     }
 
-    loadRow = await expireCurrentReservationIfNeeded(client, {
+    await expireCurrentReservationIfNeeded(client, {
       loadRow,
       correlationId: resolvedCorrelationId,
       actorType: "system",
       actorId: "confirm-claim",
       config,
     });
+
+    // Re-fetch the locked row so subsequent stale-checks use committed DB state,
+    // not the in-memory object from before the expiry/promotion path ran.
+    loadRow = await lockLoadRow(client, loadId);
+    if (!loadRow) throw new NotFoundError("Load not found.");
 
     const claimRow = await getClaimById(client, claimId, { lock: true });
 
