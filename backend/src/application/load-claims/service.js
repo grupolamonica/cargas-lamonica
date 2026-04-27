@@ -13,6 +13,7 @@ import {
   WAITLIST_CLAIM_STATUSES,
 } from "../../domain/load-claims/constants.js";
 import { evaluateDriverEligibility } from "../../domain/load-claims/eligibility.js";
+import { transition } from "../../domain/load-claims/state-machine.js";
 import { ConflictError, FeatureDisabledError, ForbiddenError, NotFoundError, ValidationError } from "../../domain/load-claims/errors.js";
 import {
   buildClaimResponse,
@@ -426,6 +427,11 @@ async function rejectRemainingWaitlistClaims(client, { loadId, correlationId, ac
     return;
   }
 
+  // FSM pre-validation: all waitlist claims must be in a state that allows 'reject'
+  for (const c of waitlistClaims) {
+    transition(c.status, "reject");
+  }
+
   const claimIds = waitlistClaims.map((c) => c.id);
   const idPlaceholders = claimIds.map((_, i) => `$${i + 3}`).join(", ");
 
@@ -499,7 +505,7 @@ async function promoteNextEligibleClaim(client, { loadRow, correlationId, actorT
 
     if (!eligibility.eligible) {
       const rejectedClaim = await updateClaimRow(client, claim.id, {
-        status: CLAIM_STATUS.REJECTED,
+        status: transition(claim.status, "reject"),
         queue_position: null,
         rejected_reason: eligibility.rejectedReason,
       });
@@ -521,7 +527,7 @@ async function promoteNextEligibleClaim(client, { loadRow, correlationId, actorT
     }
 
     const promotedClaim = await updateClaimRow(client, claim.id, {
-      status: CLAIM_STATUS.PROMOTED,
+      status: transition(claim.status, "promote"),
       queue_position: null,
       promoted_at: new Date().toISOString(),
       rejected_reason: null,
@@ -603,7 +609,7 @@ async function expireCurrentReservationIfNeeded(client, { loadRow, correlationId
 
   if (currentReservedClaim && RESERVATION_CLAIM_STATUSES.includes(currentReservedClaim.status)) {
     await updateClaimRow(client, currentReservedClaim.id, {
-      status: CLAIM_STATUS.EXPIRED,
+      status: transition(currentReservedClaim.status, "expire"),
       expired_at: new Date().toISOString(),
       queue_position: null,
     });
@@ -915,7 +921,7 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
 
     if (!eligibility.eligible) {
       const rejectedClaim = await updateClaimRow(client, claimRow.id, {
-        status: CLAIM_STATUS.REJECTED,
+        status: transition(claimRow.status, "reject"),
         rejected_reason: eligibility.rejectedReason,
       });
 
@@ -957,7 +963,7 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
             idempotency_key: normalizedIdempotencyKey,
             request_hash: requestHash,
             previous_status: CLAIM_STATUS.PENDING,
-            next_status: CLAIM_STATUS.REJECTED,
+            next_status: rejectedClaim.status,
             result: response.outcome,
           },
         },
@@ -966,7 +972,7 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
 
     if (loadRow.status === LOAD_STATUS.OPEN) {
       const reservedClaim = await updateClaimRow(client, claimRow.id, {
-        status: CLAIM_STATUS.WON_RESERVATION,
+        status: transition(claimRow.status, "win_reservation"),
       });
       const reservedLoad = await updateLoadReservation(client, {
         loadId,
@@ -1015,7 +1021,7 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
             idempotency_key: normalizedIdempotencyKey,
             request_hash: requestHash,
             previous_status: CLAIM_STATUS.PENDING,
-            next_status: CLAIM_STATUS.WON_RESERVATION,
+            next_status: reservedClaim.status,
             result: response.outcome,
           },
         },
@@ -1025,7 +1031,7 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
     if (loadRow.status === LOAD_STATUS.RESERVED && config.waitlist_enabled) {
       const waitlistSize = await resequenceWaitlist(client, loadId);
       const waitlistedClaim = await updateClaimRow(client, claimRow.id, {
-        status: CLAIM_STATUS.WAITLISTED,
+        status: transition(claimRow.status, "waitlist"),
         queue_position: waitlistSize + 1,
       });
 
@@ -1068,7 +1074,7 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
             idempotency_key: normalizedIdempotencyKey,
             request_hash: requestHash,
             previous_status: CLAIM_STATUS.PENDING,
-            next_status: CLAIM_STATUS.WAITLISTED,
+            next_status: waitlistedClaim.status,
             result: response.outcome,
           },
         },
@@ -1076,7 +1082,7 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
     }
 
     const unavailableClaim = await updateClaimRow(client, claimRow.id, {
-      status: CLAIM_STATUS.REJECTED,
+      status: transition(claimRow.status, "reject"),
       rejected_reason: "LOAD_UNAVAILABLE",
     });
 
@@ -1118,7 +1124,7 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
           idempotency_key: normalizedIdempotencyKey,
           request_hash: requestHash,
           previous_status: CLAIM_STATUS.PENDING,
-          next_status: CLAIM_STATUS.REJECTED,
+          next_status: unavailableClaim.status,
           result: response.outcome,
         },
       },
@@ -1232,7 +1238,7 @@ export async function confirmLoadClaim({ loadId, claimId, driverId, idempotencyK
     }
 
     const confirmedClaim = await updateClaimRow(client, claimId, {
-      status: CLAIM_STATUS.CONFIRMED,
+      status: transition(claimRow.status, "confirm"),
       confirmed_at: new Date().toISOString(),
       queue_position: null,
     });
@@ -1286,7 +1292,7 @@ export async function confirmLoadClaim({ loadId, claimId, driverId, idempotencyK
           idempotency_key: normalizedIdempotencyKey,
           request_hash: requestHash,
           previous_status: claimRow.status,
-          next_status: CLAIM_STATUS.CONFIRMED,
+          next_status: confirmedClaim.status,
           result: response.outcome,
         },
       },
@@ -1380,7 +1386,7 @@ export async function cancelLoadClaim({ loadId, claimId, driverId, idempotencyKe
     }
 
     const cancelledClaim = await updateClaimRow(client, claimId, {
-      status: CLAIM_STATUS.CANCELLED,
+      status: transition(claimRow.status, "cancel"),
       queue_position: null,
     });
 
@@ -1440,7 +1446,7 @@ export async function cancelLoadClaim({ loadId, claimId, driverId, idempotencyKe
           idempotency_key: normalizedIdempotencyKey,
           request_hash: requestHash,
           previous_status: claimRow.status,
-          next_status: CLAIM_STATUS.CANCELLED,
+          next_status: cancelledClaim.status,
           result: response.outcome,
         },
       },

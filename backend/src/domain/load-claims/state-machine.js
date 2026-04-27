@@ -38,6 +38,7 @@ export const TERMINAL_CLAIM_STATES = new Set([
  *   WON_RESERVATION --[cancel]-------> CANCELLED         (cancelClaim)
  *   WAITLISTED  --[promote]----------> PROMOTED          (promoteNextEligibleClaim)
  *   WAITLISTED  --[reject]-----------> REJECTED          (load booked by another or ineligible)
+ *   WAITLISTED  --[cancel]----------> CANCELLED         (driver cancels own waitlist spot)
  *   WAITLISTED  --[expire]-----------> EXPIRED           (expireCurrentReservationIfNeeded cascade)
  *   PROMOTED    --[confirm]----------> CONFIRMED         (confirmClaim after promotion)
  *   PROMOTED    --[cancel]-----------  CANCELLED         (cancelClaim after promotion)
@@ -58,6 +59,7 @@ export const TRANSITIONS = Object.freeze({
     promote: "PROMOTED",
     reject: "REJECTED",
     expire: "EXPIRED",
+    cancel: "CANCELLED",
   }),
   PROMOTED: Object.freeze({
     confirm: "CONFIRMED",

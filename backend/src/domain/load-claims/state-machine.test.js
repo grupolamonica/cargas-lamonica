@@ -84,8 +84,11 @@ describe("state-machine: invalid events on non-terminal states", () => {
 
   it("WAITLISTED rejects unknown events", () => {
     expect(() => transition("WAITLISTED", "confirm")).toThrow(InvalidTransitionError);
-    expect(() => transition("WAITLISTED", "cancel")).toThrow(InvalidTransitionError);
     expect(() => transition("WAITLISTED", "win_reservation")).toThrow(InvalidTransitionError);
+  });
+
+  it("WAITLISTED --[cancel]--> CANCELLED", () => {
+    expect(transition("WAITLISTED", "cancel")).toBe("CANCELLED");
   });
 
   it("PROMOTED rejects unknown events", () => {
@@ -160,7 +163,7 @@ describe("state-machine: canTransition", () => {
 
   it("returns false for invalid transitions on non-terminal states", () => {
     expect(canTransition("PENDING", "confirm")).toBe(false);
-    expect(canTransition("WAITLISTED", "cancel")).toBe(false);
+    expect(canTransition("PENDING", "cancel")).toBe(false);
   });
 
   it("returns false for any event on terminal states", () => {
