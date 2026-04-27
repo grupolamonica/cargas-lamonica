@@ -70,6 +70,7 @@ const schemaSql = `
     sheet_motorista text,
     sheet_cavalo text,
     sheet_carreta text,
+    sheet_status text,
     version integer NOT NULL DEFAULT 0,
     published_at timestamptz,
     reserved_driver_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,

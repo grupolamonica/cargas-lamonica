@@ -16,6 +16,17 @@ vi.mock("../../infrastructure/aspx/aspx-directory.js", () => ({
   lookupAspxDriverByCpf: mockLookupAspxDriverByCpf,
 }));
 
+// Mock Angellira DB-cache lookups so tests are isolated from the real database.
+// Without this mock, lookupCachedAngelliraValidation connects to the real Supabase
+// and may return stale cached entries with expired validUntil, overriding the
+// Angellira API mock and producing spurious INVALID overallStatus results.
+vi.mock("../operator-admin/use-cases/angellira-cache.js", () => ({
+  lookupCachedAngelliraValidation: vi.fn().mockResolvedValue({ found: false, reason: "NO_MATCH" }),
+  lookupCachedAngelliraPlate: vi.fn().mockResolvedValue({ found: false, reason: "NO_MATCH" }),
+  syncDriverAngelliraValidation: vi.fn().mockResolvedValue(undefined),
+  syncVehicleAngelliraLookup: vi.fn().mockResolvedValue(undefined),
+}));
+
 const buildPayload = (overrides = {}) => ({
   cpf: "12345678901",
   phone: "71999999999",

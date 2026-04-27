@@ -1529,28 +1529,27 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
     const { rows: emptyLoadRows } = await client.query(
       `
         SELECT
-          cargas.id AS load_id,
-          cargas.status AS load_status,
-          cargas.origem AS load_origem,
-          cargas.destino AS load_destino,
-          cargas.perfil AS load_perfil,
-          cargas.data AS load_data,
-          cargas.horario AS load_horario,
-          cargas.reserved_public_lead_id AS load_reserved_public_lead_id,
-          cargas.sheet_lh AS load_sheet_lh,
-          cargas.sheet_data_carregamento AS load_sheet_data_carregamento,
-          cargas.sheet_data_descarga AS load_sheet_data_descarga,
-          cargas.sheet_motorista AS load_sheet_motorista,
-          cargas.sheet_cavalo AS load_sheet_cavalo,
-          cargas.sheet_carreta AS load_sheet_carreta,
-          cargas.sheet_status AS load_sheet_status
-        FROM public.cargas
-        WHERE cargas.status = ANY($1::text[])
-          AND NOT EXISTS (
-            SELECT 1 FROM public.load_public_leads leads
-            WHERE leads.load_id = cargas.id
-              AND leads.status = ANY($2::text[])
-          )
+          c.id AS load_id,
+          c.status AS load_status,
+          c.origem AS load_origem,
+          c.destino AS load_destino,
+          c.perfil AS load_perfil,
+          c.data AS load_data,
+          c.horario AS load_horario,
+          c.reserved_public_lead_id AS load_reserved_public_lead_id,
+          c.sheet_lh AS load_sheet_lh,
+          c.sheet_data_carregamento AS load_sheet_data_carregamento,
+          c.sheet_data_descarga AS load_sheet_data_descarga,
+          c.sheet_motorista AS load_sheet_motorista,
+          c.sheet_cavalo AS load_sheet_cavalo,
+          c.sheet_carreta AS load_sheet_carreta,
+          c.sheet_status AS load_sheet_status
+        FROM public.cargas AS c
+        LEFT JOIN public.load_public_leads AS active_leads
+          ON active_leads.load_id = c.id
+          AND active_leads.status = ANY($2::text[])
+        WHERE c.status = ANY($1::text[])
+          AND active_leads.id IS NULL
       `,
       [["OPEN", "RESERVED"], [PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED]],
     );
