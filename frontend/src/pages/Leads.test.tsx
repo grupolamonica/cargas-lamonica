@@ -60,6 +60,7 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 describe("Leads", () => {
   beforeEach(() => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     mockUseQuery.mockReset();
     mockUseQueryClient.mockReset();
     mockApproveOperatorLoadLead.mockReset();
@@ -285,7 +286,7 @@ describe("Leads", () => {
     render(<Leads />);
 
     expect(screen.queryByRole("button", { name: "Reservar para este motorista" })).not.toBeInTheDocument();
-    expect(screen.getAllByText("Leads nesta disputa").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Candidatos nesta carga").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getAllByRole("button", { name: "Expandir disputa" })[0]);
 
