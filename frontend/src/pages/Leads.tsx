@@ -657,7 +657,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                           {sheetAllocation?.status || group.load.sheetStatus || group.load.status}{" "}
                           | {group.queueCount} na fila
                         </p>
-                        {(sheetAllocation || group.load.sheetStatus || group.load.sheetMotorista) ? (
+                        {(sheetAllocation || group.load.sheetStatus) ? (
                           <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-300/60 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-500/10 dark:text-emerald-200">
                             <Truck className="h-3.5 w-3.5" />
                             {sheetAllocation ? (
@@ -674,11 +674,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                                 </>
                               )
                             ) : (
-                              <>
-                                Planilha
-                                {group.load.sheetMotorista ? `: ${group.load.sheetMotorista}` : ""}
-                                {group.load.sheetStatus ? ` · ${group.load.sheetStatus}` : ""}
-                              </>
+                              <>Planilha{group.load.sheetStatus ? ` · ${group.load.sheetStatus}` : ""}</>
                             )}
                           </div>
                         ) : null}
