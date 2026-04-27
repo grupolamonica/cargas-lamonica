@@ -697,7 +697,8 @@ export async function resolveSheetMonitorResponse(request) {
       try {
         const { data: enrichedRows } = await supabaseClient
           .from("sheet_monitor_enriched")
-          .select("*");
+          .select("*")
+          .limit(50000);
         if (enrichedRows) {
           for (const r of enrichedRows) enrichedByLh[r.lh] = r;
         }
