@@ -79,9 +79,14 @@ export function useLeadNotifications() {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchInterval: (query) => {
+      // Derive hasQueued from live query data instead of the closed-over memo value.
+      // The refetchInterval callback is cached by TanStack Query at registration time;
+      // using the closed-over boolean would leave a stale interval if lead stages change
+      // before the queryKey-based recreation fires.
       const currentEntries = query.state.data as DriverLeadNotificationStatusEntry[] | undefined;
-      if (!hasQueuedTrackedLeadStates) return false;
-      if (!currentEntries?.length) return 30_000;
+      if (!currentEntries?.length) return false;
+      const hasQueued = currentEntries.some((e) => e.state.stage === "QUEUED");
+      if (!hasQueued) return false;
       return currentEntries.some(shouldContinuePollingDriverLeadStatus) ? 30_000 : false;
     },
   });
