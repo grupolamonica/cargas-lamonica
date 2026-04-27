@@ -458,10 +458,20 @@ export async function resolveUpdateOperatorDriverProfileResponse(request) {
       requiredPermission: "cargos:write",
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar perfis de motoristas.",
     },
-    async ({ correlationId, requestIp, operatorId }) => {
+    async ({ correlationId, requestIp, operatorId, user }) => {
       const { driverId } = driverIdParamsSchema.parse({ driverId: getQueryParam(request, "driverId") });
 
       const payload = driverProfileUpdateMutationSchema.parse(await parseJsonBody(request));
+
+      // operational_blocked is a sensitive field — setting it requires advanced access level.
+      if (payload.operational_blocked !== undefined) {
+        assertOperatorAccessLevel(
+          user,
+          "advanced",
+          "Somente operadores avancados podem bloquear motoristas operacionalmente.",
+        );
+      }
+
       return updateOperatorDriverProfile({
         driverId,
         operatorId,
