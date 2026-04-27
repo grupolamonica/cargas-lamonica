@@ -18,6 +18,45 @@ interface SheetAllocation {
   status: string;
 }
 
+const STATUS_LABELS: Record<string, string> = {
+  OPEN: "Em aberto", RESERVED: "Reservado", BOOKED: "Concluída",
+  EXPIRED: "Expirado", CANCELLED: "Cancelado", COMPLETED: "Concluída",
+  DESCARREGADO: "Descarregado", CANCELADO: "Cancelado",
+  "CTE ENVIADO": "CTE Enviado", DESCARREGANDO: "Descarregando",
+  "AGUARDANDO CARREGAMENTO": "Aguard. Carregamento",
+  "AGUARDANDO CHEGAR NO CLIENTE": "Aguard. Chegada",
+  "AGUARDANDO DESCARGA": "Aguard. Descarga",
+  "NO SHOW": "No Show",
+};
+
+function resolveStatusStyle(status: string) {
+  const n = (status || "").toLowerCase().trim();
+  const label = STATUS_LABELS[status] ?? STATUS_LABELS[(status || "").toUpperCase()] ?? status ?? "—";
+  if (!n || n === "open")                    return { dot: "bg-blue-500",    bg: "bg-blue-50 text-blue-800 dark:bg-blue-500/15 dark:text-blue-200",       ring: "outline-blue-500 dark:outline-blue-400",     shadow: "shadow-[0_0_0_6px_rgba(59,130,246,0.15)]",    badge: "bg-blue-500 text-white",    label };
+  if (/^reserved$|^reservado$/.test(n))      return { dot: "bg-violet-500",  bg: "bg-violet-50 text-violet-800 dark:bg-violet-500/15 dark:text-violet-200", ring: "outline-violet-500 dark:outline-violet-400", shadow: "shadow-[0_0_0_6px_rgba(139,92,246,0.18)]",   badge: "bg-violet-500 text-white",  label };
+  if (/descarregad|conclu|finaliz|entregue|booked/.test(n)) return { dot: "bg-teal-500", bg: "bg-teal-50 text-teal-800 dark:bg-teal-500/15 dark:text-teal-200", ring: "outline-teal-500 dark:outline-teal-400",     shadow: "shadow-[0_0_0_6px_rgba(20,184,166,0.15)]",  badge: "bg-teal-500 text-white",    label };
+  if (/descarregando/.test(n))               return { dot: "bg-cyan-500",    bg: "bg-cyan-50 text-cyan-800 dark:bg-cyan-500/15 dark:text-cyan-200",         ring: "outline-cyan-500 dark:outline-cyan-400",     shadow: "shadow-[0_0_0_6px_rgba(6,182,212,0.15)]",    badge: "bg-cyan-500 text-white",    label };
+  if (/cte/.test(n))                         return { dot: "bg-sky-500",     bg: "bg-sky-50 text-sky-800 dark:bg-sky-500/15 dark:text-sky-200",             ring: "outline-sky-500 dark:outline-sky-400",       shadow: "shadow-[0_0_0_6px_rgba(14,165,233,0.15)]",   badge: "bg-sky-500 text-white",     label };
+  if (/cancel/.test(n))                      return { dot: "bg-red-400",     bg: "bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-200",             ring: "outline-red-400 dark:outline-red-400",       shadow: "shadow-[0_0_0_6px_rgba(248,113,113,0.15)]",  badge: "bg-red-400 text-white",     label };
+  if (/no[\s_]?show/.test(n))                return { dot: "bg-rose-500",    bg: "bg-rose-50 text-rose-800 dark:bg-rose-500/15 dark:text-rose-200",         ring: "outline-rose-500 dark:outline-rose-400",     shadow: "shadow-[0_0_0_6px_rgba(244,63,94,0.15)]",    badge: "bg-rose-500 text-white",    label };
+  if (/aguardando.{0,6}chegar/.test(n))      return { dot: "bg-amber-500",   bg: "bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-200",     ring: "outline-amber-500 dark:outline-amber-400",   shadow: "shadow-[0_0_0_6px_rgba(245,158,11,0.15)]",   badge: "bg-amber-500 text-white",   label };
+  if (/aguardando.{0,6}carr/.test(n))        return { dot: "bg-orange-500",  bg: "bg-orange-50 text-orange-800 dark:bg-orange-500/15 dark:text-orange-200", ring: "outline-orange-500 dark:outline-orange-400", shadow: "shadow-[0_0_0_6px_rgba(249,115,22,0.15)]",   badge: "bg-orange-500 text-white",  label };
+  if (/aguardando/.test(n))                  return { dot: "bg-amber-400",   bg: "bg-amber-50 text-amber-700 dark:bg-amber-400/15 dark:text-amber-200",     ring: "outline-amber-400 dark:outline-amber-300",   shadow: "shadow-[0_0_0_6px_rgba(251,191,36,0.15)]",   badge: "bg-amber-400 text-white",   label };
+  if (/carregando|em.tr[aâ]/.test(n))        return { dot: "bg-indigo-500",  bg: "bg-indigo-50 text-indigo-800 dark:bg-indigo-500/15 dark:text-indigo-200", ring: "outline-indigo-500 dark:outline-indigo-400", shadow: "shadow-[0_0_0_6px_rgba(99,102,241,0.15)]",   badge: "bg-indigo-500 text-white",  label };
+  if (/expired/.test(n))                     return { dot: "bg-slate-400",   bg: "bg-slate-100 text-slate-600 dark:bg-slate-500/20 dark:text-slate-300",    ring: "outline-slate-400 dark:outline-slate-400",   shadow: "shadow-[0_0_0_6px_rgba(148,163,184,0.12)]",  badge: "bg-slate-400 text-white",   label };
+  return                                            { dot: "bg-emerald-500",  bg: "bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200", ring: "outline-emerald-500 dark:outline-emerald-400", shadow: "shadow-[0_0_0_6px_rgba(16,185,129,0.18)]", badge: "bg-emerald-500 text-white",  label };
+}
+
+function LoadStatusBadge({ status }: { status: string }) {
+  const s = resolveStatusStyle(status);
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.68rem] font-semibold", s.bg)}>
+      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", s.dot)} />
+      {s.label}
+    </span>
+  );
+}
+
 interface LeadsProps {
   historicoMode?: boolean;
 }
@@ -154,7 +193,9 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
           return null;
         }
 
-        const matchesLoadStatus = loadStatusFilter === "todos" || group.load.status === loadStatusFilter;
+        const sheetAllocForFilter = group.load.sheetLh ? sheetAllocationByLh.get(group.load.sheetLh) : undefined;
+        const effectiveStatusForFilter = sheetAllocForFilter?.status || group.load.sheetStatus || group.load.status;
+        const matchesLoadStatus = loadStatusFilter === "todos" || effectiveStatusForFilter === loadStatusFilter;
 
         if (!matchesLoadStatus) {
           return null;
@@ -214,7 +255,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
         };
       })
       .filter((group): group is OperatorLeadGroup => Boolean(group));
-  }, [groups, deferredSearch, loadStatusFilter, leadStatusFilter, historicoMode]);
+  }, [groups, deferredSearch, loadStatusFilter, leadStatusFilter, historicoMode, sheetAllocationByLh]);
   const hasActiveFilters =
     deferredSearch.length > 0 || loadStatusFilter !== "todos" || leadStatusFilter !== "todos";
   const visibleLoadIds = useMemo(() => filteredGroups.map((group) => group.load.id), [filteredGroups]);
@@ -463,9 +504,27 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
               className="h-12 rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
             >
               <option value="todos">Todas as cargas</option>
-              <option value="OPEN">Cargas abertas</option>
-              <option value="RESERVED">Cargas reservadas</option>
-              <option value="BOOKED">Cargas fechadas</option>
+              {historicoMode ? (
+                <>
+                  <option value="DESCARREGADO">Descarregado</option>
+                  <option value="CTE ENVIADO">CTE Enviado</option>
+                  <option value="DESCARREGANDO">Descarregando</option>
+                  <option value="AGUARDANDO DESCARGA">Aguard. Descarga</option>
+                  <option value="AGUARDANDO CHEGAR NO CLIENTE">Aguard. Chegada</option>
+                  <option value="AGUARDANDO CARREGAMENTO">Aguard. Carregamento</option>
+                  <option value="CANCELADO">Cancelado</option>
+                  <option value="NO SHOW">No Show</option>
+                  <option value="EXPIRED">Expirado (sem status)</option>
+                </>
+              ) : (
+                <>
+                  <option value="OPEN">Em aberto</option>
+                  <option value="RESERVED">Reservado</option>
+                  <option value="AGUARDANDO CARREGAMENTO">Aguard. Carregamento</option>
+                  <option value="AGUARDANDO CHEGAR NO CLIENTE">Aguard. Chegada</option>
+                  <option value="DESCARREGANDO">Descarregando</option>
+                </>
+              )}
             </select>
 
             <select
@@ -576,9 +635,9 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
               const routeLabel = buildRouteLabel(group);
               const isCollapsed = collapsedLoadIds.includes(group.load.id);
               const sheetAllocation = group.load.sheetLh ? sheetAllocationByLh.get(group.load.sheetLh) : undefined;
+              const effectiveStatus = sheetAllocation?.status || group.load.sheetStatus || group.load.status;
+              const statusStyle = resolveStatusStyle(effectiveStatus);
 
-              // Reservada: status RESERVED/BOOKED no banco, motorista na planilha ao vivo,
-              // OU sheet_motorista persistido (sheet_lh pode ter sido removido após a viagem).
               const isReserved =
                 group.load.status === "RESERVED" ||
                 group.load.status === "BOOKED" ||
@@ -607,39 +666,25 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                   key={group.load.id}
                   className={cn(
                     "admin-panel overflow-hidden relative transition-all",
-                    // Usamos `outline` em vez de `ring`: o .admin-panel j\u00e1 tem
-                    // box-shadow pr\u00f3prio e o ring do Tailwind colidia (via
-                    // --tw-shadow), ficando invis\u00edvel. `outline` n\u00e3o conflita
-                    // com box-shadow, n\u00e3o afeta layout e \u00e9 bem mais vis\u00edvel.
-                    isReserved &&
-                      "outline outline-[3px] -outline-offset-1 outline-emerald-500 shadow-[0_0_0_6px_rgba(16,185,129,0.18)] dark:outline-emerald-400",
-                    isNearDeadline &&
-                      "outline outline-[3px] -outline-offset-1 outline-amber-500 shadow-[0_0_0_6px_rgba(245,158,11,0.22)] dark:outline-amber-400",
+                    isNearDeadline
+                      ? "outline outline-[3px] -outline-offset-1 outline-amber-500 shadow-[0_0_0_6px_rgba(245,158,11,0.22)] dark:outline-amber-400"
+                      : `outline outline-[3px] -outline-offset-1 ${statusStyle.ring} ${statusStyle.shadow}`,
                   )}
                 >
-                  {(isReserved || isNearDeadline) && (
-                    <span
-                      className={cn(
-                        "absolute right-4 top-4 z-10 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[0.65rem] font-bold uppercase tracking-[0.16em] shadow-sm",
-                        isReserved
-                          ? "bg-emerald-500 text-white dark:bg-emerald-400 dark:text-emerald-950"
-                          : "bg-amber-500 text-white dark:bg-amber-400 dark:text-amber-950 animate-pulse",
-                      )}
-                    >
-                      {isReserved ? (
-                        <>
-                          <ShieldCheck className="h-3 w-3" />
-                          {TERMINAL_LOAD_STATUSES.includes(group.load.status) && Boolean(group.load.sheetMotorista)
-                            ? "Realizada"
-                            : "Reservada"}
-                        </>
-                      ) : (
-                        <>
-                          <Loader2 className="h-3 w-3" /> Carregamento em breve
-                        </>
-                      )}
-                    </span>
-                  )}
+                  <span
+                    className={cn(
+                      "absolute right-4 top-4 z-10 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[0.65rem] font-bold uppercase tracking-[0.16em] shadow-sm",
+                      isNearDeadline
+                        ? "bg-amber-500 text-white dark:bg-amber-400 dark:text-amber-950 animate-pulse"
+                        : statusStyle.badge,
+                    )}
+                  >
+                    {isNearDeadline ? (
+                      <><Loader2 className="h-3 w-3" /> Carregamento em breve</>
+                    ) : (
+                      <><ShieldCheck className="h-3 w-3" />{statusStyle.label}</>
+                    )}
+                  </span>
                   <div className="border-b border-border/70 px-5 py-5 lg:px-6">
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                       <div>
@@ -652,32 +697,15 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                           ) : null}
                         </div>
                         <h3 className="mt-2 text-xl font-semibold tracking-tight text-foreground">{routeLabel}</h3>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          Perfil {group.load.perfil} | Status{" "}
-                          {sheetAllocation?.status || group.load.sheetStatus || group.load.status}{" "}
-                          | {group.queueCount} na fila
-                        </p>
-                        {(sheetAllocation || group.load.sheetStatus) ? (
-                          <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-300/60 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-500/10 dark:text-emerald-200">
-                            <Truck className="h-3.5 w-3.5" />
-                            {sheetAllocation ? (
-                              historicoMode ? (
-                                <>
-                                  Planilha
-                                  {sheetAllocation.driverName ? `: ${sheetAllocation.driverName}` : ""}
-                                  {sheetAllocation.status ? ` · ${sheetAllocation.status}` : ""}
-                                </>
-                              ) : (
-                                <>
-                                  Reservado externamente: {sheetAllocation.driverName}
-                                  {sheetAllocation.status ? ` · ${sheetAllocation.status}` : ""}
-                                </>
-                              )
-                            ) : (
-                              <>Planilha{group.load.sheetStatus ? ` · ${group.load.sheetStatus}` : ""}</>
-                            )}
-                          </div>
-                        ) : null}
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <LoadStatusBadge status={effectiveStatus} />
+                          <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2.5 py-0.5 text-[0.68rem] font-semibold text-muted-foreground">
+                            Perfil {group.load.perfil}
+                          </span>
+                          <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2.5 py-0.5 text-[0.68rem] font-semibold text-muted-foreground">
+                            {group.queueCount} na fila
+                          </span>
+                        </div>
                       </div>
 
                       <div className="flex flex-wrap gap-2">
