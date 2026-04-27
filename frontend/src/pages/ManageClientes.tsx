@@ -347,11 +347,11 @@ const ManageClientes = () => {
                       Padrao de pagamento
                     </div>
                     <p className="mt-3 text-sm leading-6 text-foreground">
-                      {cliente.forma_pagamento || "Forma de pagamento nao informada"}
+                      {cliente.forma_pagamento || "Forma de pagamento não informada"}
                     </p>
                     <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-primary/[0.06] px-3 py-1.5 text-xs font-semibold text-primary">
                       <Clock3 className="h-3.5 w-3.5" />
-                      {cliente.prazo_pagamento || "Prazo nao informado"}
+                      {cliente.prazo_pagamento || "Prazo não informado"}
                     </div>
                   </div>
 

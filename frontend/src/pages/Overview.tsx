@@ -290,7 +290,7 @@ const Overview = () => {
             <KpiCard
               label="Cargas ativas"
               value={formatNumber(snapshot.hero.activeLoads)}
-              note="Apenas cargas abertas (OPEN) disponíveis para motoristas."
+              note="Cargas abertas disponíveis para candidatura de motoristas."
               icon={Layers3}
               tone="primary"
             />
@@ -311,7 +311,7 @@ const Overview = () => {
             <KpiCard
               label="Disputas ativas"
               value={formatNumber(snapshot.hero.activeClaims)}
-              note="Motoristas disputando nas telas de fila (QUEUED + APPROVED em cargas não terminais)."
+              note="Candidatos ativos aguardando aprovação ou já reservados em cargas abertas."
               icon={Swords}
               tone="slate"
             />
@@ -322,13 +322,13 @@ const Overview = () => {
             <SignalCard
               label="Rascunhos pendentes"
               value={formatNumber(snapshot.hero.draftCount)}
-              note="Cargas em DRAFT que ainda nao foram publicadas na malha."
+              note="Cargas criadas mas ainda não publicadas para os motoristas."
               icon={ClipboardList}
             />
             <SignalCard
               label="Cargas fechadas"
               value={formatNumber(snapshot.hero.bookedCount)}
-              note="Cargas com status BOOKED ou COMPLETED neste momento."
+              note="Cargas encerradas com motorista confirmado."
               icon={CheckCircle2}
             />
             <SignalCard
@@ -340,13 +340,13 @@ const Overview = () => {
             <SignalCard
               label="Cargas em atraso"
               value={formatNumber(snapshot.hero.overdueLoads)}
-              note="Cargas OPEN cujo hor\u00e1rio de carregamento j\u00e1 passou."
+              note="Cargas abertas cujo hor\u00e1rio de coleta j\u00e1 passou."
               icon={AlertTriangle}
             />
             <SignalCard
               label="Reservadas (candidatura)"
               value={formatNumber(snapshot.hero.reservedCount)}
-              note="Cargas com motorista reservado via candidatura aguardando confirmacao."
+              note="Cargas com motorista reservado aguardando confirmação de carregamento."
               icon={Truck}
             />
           </section>

@@ -266,7 +266,7 @@ const OperatorDashboard = () => {
                 </h2>
               </div>
               <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-                As cargas agora são consultadas por uma camada autoritativa, com busca e paginação no backend para reduzir overfetching e scraping por volume.
+                Envie o link de uma carga específica diretamente para o motorista. Ao acessar, ele verá os detalhes e poderá se candidatar.
               </p>
             </div>
 

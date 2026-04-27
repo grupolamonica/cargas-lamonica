@@ -55,8 +55,8 @@ function getLookupBadgeClasses(status: string) {
 
 function getLookupLabel(source: string, status: string) {
   if (status === "FOUND") return `${source}: Encontrado`;
-  if (status === "UNAVAILABLE") return `${source}: Indisponivel`;
-  return `${source}: Nao encontrado`;
+  if (status === "UNAVAILABLE") return `${source}: Indisponível`;
+  return `${source}: Não encontrado`;
 }
 
 function renderPlateValidation(plate: PublicLeadValidationPlate) {

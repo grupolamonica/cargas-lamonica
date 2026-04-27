@@ -64,7 +64,7 @@ export async function getOperatorAccessToken() {
   } = await supabase.auth.getSession();
 
   if (!session?.access_token) {
-    throw new Error("Sessao do operador indisponivel.");
+    throw new Error("Sessão do operador indisponível.");
   }
 
   return session.access_token;

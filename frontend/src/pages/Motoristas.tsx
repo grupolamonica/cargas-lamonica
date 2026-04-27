@@ -579,7 +579,7 @@ const Motoristas = () => {
                     <span className="hidden text-border sm:inline">|</span>
                     <span className="inline-flex items-center gap-1.5">
                       <Truck className="h-3.5 w-3.5 text-primary" />
-                      {driver.profile.vehicleProfile || "Perfil nao informado"}
+                      {driver.profile.vehicleProfile || "Tipo não informado"}
                     </span>
                   </div>
 

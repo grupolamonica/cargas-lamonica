@@ -34,15 +34,15 @@ export function getOverallValidationLabel(status: PublicLeadValidationOverallSta
     case "INVALID":
       return "Cadastro vencido";
     case "NOT_FOUND":
-      return "Motorista nao localizado";
+      return "Motorista não localizado";
     case "PLATE_MISMATCH":
-      return "Placas nao validadas";
+      return "Placas não validadas";
     case "UNAVAILABLE":
-      return "Validacao indisponivel";
+      return "Validação indisponível";
     case "INCOMPLETE":
       return "Cadastro incompleto";
     default:
-      return "Validacao parcial";
+      return "Validação parcial";
   }
 }
 
@@ -111,20 +111,20 @@ export function buildPublicLeadValidationBadges(summary: PublicLeadValidationSum
       key: "driver-angelira",
       label:
         summary.driver.angelira.status === "FOUND"
-          ? "Motorista no Angelira"
+          ? "Motorista no Angellira"
           : summary.driver.angelira.status === "UNAVAILABLE"
-            ? "Angelira indisponivel"
-            : "Motorista fora do Angelira",
+            ? "Angellira indisponível"
+            : "Motorista fora do Angellira",
       tone: getLookupTone(summary.driver.angelira.status),
     },
     {
       key: "driver-aspx",
       label:
         summary.driver.aspx.status === "FOUND"
-          ? "Motorista no ASPx"
+          ? "Motorista no ASPX"
           : summary.driver.aspx.status === "UNAVAILABLE"
-            ? "ASPx indisponivel"
-            : "Motorista fora do ASPx",
+            ? "ASPX indisponível"
+            : "Motorista fora do ASPX",
       tone: getLookupTone(summary.driver.aspx.status),
     },
     {
