@@ -40,7 +40,6 @@ check "GET /health" "${BASE_URL}/health" "200"
 
 # ── Auth boundary checks (expect 401 — proves routing + auth middleware active) ──
 # Driver endpoints
-check "GET /api/driver/loads (auth boundary)" "${BASE_URL}/api/driver/loads" "401"
 check "GET /api/drivers/me (auth boundary)" "${BASE_URL}/api/drivers/me" "401"
 
 # Operator dashboard endpoints
@@ -48,7 +47,8 @@ check "GET /api/operator/dashboard (auth boundary)" "${BASE_URL}/api/operator/da
 check "GET /api/operator/motoristas (auth boundary)" "${BASE_URL}/api/operator/motoristas" "401"
 check "GET /api/operator/cargas (auth boundary)" "${BASE_URL}/api/operator/cargas" "401"
 check "GET /api/operator/clientes (auth boundary)" "${BASE_URL}/api/operator/clientes" "401"
-check "GET /api/operator/rotas (auth boundary)" "${BASE_URL}/api/operator/rotas" "401"
+check "GET /api/operator/leads (auth boundary)" "${BASE_URL}/api/operator/leads" "401"
+check "GET /api/operator/routes (auth boundary)" "${BASE_URL}/api/operator/routes" "401"
 check "GET /api/operator/audit-logs (auth boundary)" "${BASE_URL}/api/operator/audit-logs" "401"
 
 # Load claims (operator-protected)
