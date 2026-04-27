@@ -873,20 +873,6 @@ export default function SheetMonitor() {
                 </button>
               )}
 
-              {/* Enrich button */}
-              {!isEnriching && pendingEnrich > 0 && (
-                <button type="button" onClick={handleStartEnrich}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-xs font-semibold text-sky-700 transition-colors hover:bg-sky-100 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300">
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Consultar Angellira/ASPX ({pendingEnrich})
-                </button>
-              )}
-              {!isEnriching && pendingEnrich === 0 && items.length > 0 && (
-                <button type="button" onClick={handleStartEnrich}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-border/80 bg-white px-3 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-muted/40">
-                  <Sparkles className="h-3.5 w-3.5" />Reconsutar
-                </button>
-              )}
 
               <button type="button" onClick={() => refreshMutation.mutate()} disabled={isRefreshing}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2.5 text-xs font-semibold text-primary hover:bg-primary/10 disabled:opacity-50">
