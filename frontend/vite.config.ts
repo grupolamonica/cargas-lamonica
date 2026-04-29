@@ -8,6 +8,11 @@ export default defineConfig({
   server: {
     port: 8080,
     proxy: {
+      "/ocr-api": {
+        target: "http://localhost:8765",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/ocr-api/, ""),
+      },
       "/api": "http://localhost:3001",
     },
   },

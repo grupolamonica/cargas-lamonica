@@ -27,6 +27,7 @@ const Veiculos = lazy(() => import("./pages/Veiculos"));
 const SheetMonitor = lazy(() => import("./pages/SheetMonitor"));
 const OperatorAuditLogs = lazy(() => import("./pages/OperatorAuditLogs"));
 const NotFound = lazy(() => import("./pages/NotFound"));
+const CadastroDocumentos = lazy(() => import("./pages/CadastroDocumentos"));
 
 const RouteFallback = () => (
   <div className="driver-theme flex min-h-screen items-center justify-center bg-background px-6 text-center">
@@ -72,6 +73,8 @@ const App = () => {
           <BrowserRouter>
             <Suspense fallback={<RouteFallback />}>
               <Routes>
+                {/* Cadastro publico de motorista PJ */}
+                <Route path="/cadastro" element={<CadastroDocumentos />} />
                 {/* Driver (mobile-first) */}
                 <Route path="/motorista" element={<DriverPortal />} />
                 <Route path="/motorista/cargas/:cargoId" element={<DriverCargoDetails />} />

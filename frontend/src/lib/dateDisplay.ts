@@ -76,6 +76,29 @@ export function formatDateOnly(value: DateDisplayInput, fallback = "A confirmar"
   return parsedDate ? format(parsedDate, "dd/MM/yyyy") : fallback;
 }
 
+export function normalizeDateInputValue(value: string | null | undefined) {
+  if (!value) {
+    return "";
+  }
+
+  const trimmedValue = value.trim();
+  if (!trimmedValue || PLACEHOLDER_VALUES.has(trimmedValue.toLowerCase())) {
+    return "";
+  }
+
+  const isoMatch = trimmedValue.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  }
+
+  const brMatch = trimmedValue.match(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})\b/);
+  if (brMatch) {
+    return `${brMatch[3]}-${brMatch[2].padStart(2, "0")}-${brMatch[1].padStart(2, "0")}`;
+  }
+
+  return "";
+}
+
 /**
  * Parse a date-only string (e.g. "2025-12-31") as local time noon,
  * preventing UTC-negative timezone display as the previous day.
