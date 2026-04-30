@@ -38,7 +38,7 @@ const AdminLogin = () => {
         throw new Error("Esta conta não tem perfil de operador para acessar o painel.");
       }
 
-      window.location.assign("/operador");
+      window.location.assign("/painel");
     } catch (error) {
       toast({
         title: "Erro",
