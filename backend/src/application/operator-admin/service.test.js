@@ -144,7 +144,7 @@ describe("operator-admin service", () => {
     await seedCargo({
       cliente_id: cliente.id,
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
@@ -154,7 +154,7 @@ describe("operator-admin service", () => {
     await seedCargo({
       cliente_id: cliente.id,
       origem: "Feira de Santana / BA",
-      destino: "Recife / PE",
+      destino: "Simoes Filho / BA",
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
@@ -174,7 +174,7 @@ describe("operator-admin service", () => {
     expect(response.payload.items).toHaveLength(1);
     expect(response.payload.items[0]).toMatchObject({
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
     });
   });
 
@@ -394,7 +394,7 @@ describe("operator-admin service", () => {
     await seedCargo({
       cliente_id: cliente.id,
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
@@ -402,8 +402,8 @@ describe("operator-admin service", () => {
     });
     await seedCargo({
       cliente_id: cliente.id,
-      origem: "Recife / PE",
-      destino: "Campinas / SP",
+      origem: "Jaboatao dos Guararapes / PE",
+      destino: "Simoes Filho / BA",
       perfil: "TRUCK",
       status: "OPEN",
       is_template: false,
@@ -412,7 +412,7 @@ describe("operator-admin service", () => {
     await seedCargo({
       cliente_id: cliente.id,
       origem: "Salvador / BA",
-      destino: "Goiania / GO",
+      destino: "Simoes Filho / BA",
       perfil: "CARRETA",
       status: "DRAFT",
       is_template: false,
@@ -449,7 +449,7 @@ describe("operator-admin service", () => {
     await seedCargo({
       cliente_id: cliente.id,
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
@@ -459,9 +459,9 @@ describe("operator-admin service", () => {
 
     await seedRoute({
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
-      origin_key: "salvador / ba",
-      destination_key: "campinas / sp",
+      destino: "Simoes Filho / BA",
+      origin_key: "salvador",
+      destination_key: "simoes filho",
       duracao_horas: 22,
       tempo_estimado_horas: 26,
     });
@@ -478,7 +478,7 @@ describe("operator-admin service", () => {
     expect(response.payload.items).toHaveLength(1);
     expect(response.payload.items[0]).toMatchObject({
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
       distancia_km: 1500,
       tempo_estimado_horas: 26,
       duracao_horas: 22,
@@ -491,7 +491,7 @@ describe("operator-admin service", () => {
     const cargo = await seedCargo({
       cliente_id: cliente.id,
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
@@ -503,9 +503,9 @@ describe("operator-admin service", () => {
 
     await seedRoute({
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
-      origin_key: "salvador / ba",
-      destination_key: "campinas / sp",
+      destino: "Simoes Filho / BA",
+      origin_key: "salvador",
+      destination_key: "simoes filho",
       distancia_km: 1510,
       duracao_horas: 22,
       tempo_estimado_horas: 26,
@@ -523,7 +523,7 @@ describe("operator-admin service", () => {
     expect(response.payload.items).toHaveLength(1);
     expect(response.payload.items[0]).toMatchObject({
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
       distancia_km: 1510,
       tempo_estimado_horas: 26,
     });
@@ -535,7 +535,7 @@ describe("operator-admin service", () => {
     const cargo = await seedCargo({
       cliente_id: cliente.id,
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
@@ -561,9 +561,9 @@ describe("operator-admin service", () => {
 
     await seedRoute({
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
-      origin_key: "salvador / ba",
-      destination_key: "campinas / sp",
+      destino: "Simoes Filho / BA",
+      origin_key: "salvador",
+      destination_key: "simoes filho",
       distancia_km: 1510,
       duracao_horas: 22,
       tempo_estimado_horas: 26,
@@ -584,7 +584,7 @@ describe("operator-admin service", () => {
     expect(response.payload.items).toHaveLength(1);
     expect(response.payload.items[0]).toMatchObject({
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
       perfil: "TRUCK",
       valor: 8450,
       bonus: 350,
@@ -600,7 +600,7 @@ describe("operator-admin service", () => {
     await seedCargo({
       cliente_id: cliente.id,
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
@@ -645,7 +645,7 @@ describe("operator-admin service", () => {
     expect(response.payload.items).toHaveLength(1);
     expect(response.payload.items[0]).toMatchObject({
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
     });
     expect(response.payload.summary.totalCount).toBe(1);
     expect(response.payload.meta.totalCount).toBe(1);
@@ -655,7 +655,8 @@ describe("operator-admin service", () => {
     });
 
     expect(facetsResponse.statusCode).toBe(200);
-    expect(facetsResponse.payload.origemOptions).toContain("Salvador / BA");
+    // origemOptions/destinoOptions now derived from routeLabel split by " X ", not raw cargas values
+    expect(facetsResponse.payload.origemOptions).toContain("SALVADOR");
     expect(facetsResponse.payload.origemOptions).not.toContain("Recife / PE");
     expect(facetsResponse.payload.destinoOptions).not.toContain("Fortaleza / CE");
   });
@@ -666,17 +667,18 @@ describe("operator-admin service", () => {
     await seedCargo({
       cliente_id: cliente.id,
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
       data: "2026-04-08",
     });
 
+    // In-memory filter post D-02: filters match against routeLabel city names (not raw cargas.origem/destino)
     const response = await service.fetchDriverLoadsReadModel({
       query: {
-        origem: "Salvador/BA",
-        destino: "Campinas/SP",
+        origem: "Salvador",
+        destino: "Simoes",
         page: "1",
         pageSize: "10",
       },
@@ -687,7 +689,7 @@ describe("operator-admin service", () => {
     expect(response.payload.items).toHaveLength(1);
     expect(response.payload.items[0]).toMatchObject({
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
       clienteNome: "Cliente Portal",
     });
     expect(response.payload.summary.totalCount).toBe(1);
@@ -735,7 +737,7 @@ describe("operator-admin service", () => {
     await seedCargo({
       cliente_id: cliente.id,
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
@@ -759,7 +761,7 @@ describe("operator-admin service", () => {
     expect(response.payload.items).toHaveLength(1);
     expect(response.payload.items[0]).toMatchObject({
       origem: "Salvador / BA",
-      destino: "Campinas / SP",
+      destino: "Simoes Filho / BA",
       distancia_km: null,
       duracao_horas: null,
       carregamentoLabel: null,

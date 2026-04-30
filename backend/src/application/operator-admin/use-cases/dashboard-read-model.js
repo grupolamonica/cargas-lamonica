@@ -6,6 +6,7 @@ import {
   buildDriverLoadFilters,
   queryDriverLoadCandidateRows,
   fetchRouteCatalogMetricsByLoadId,
+  buildRouteLabelMap,
   buildDriverLoadPublicationState,
   mapDriverLoadReadModelItem,
   normalizeOptionalText,
@@ -189,16 +190,33 @@ export async function fetchDriverLoadsReadModel({ query, correlationId }) {
     }
 
     const routeCatalogMetricsByLoadId = await fetchRouteCatalogMetricsByLoadId(client, itemRows);
+    const routeLabelByLoadId = buildRouteLabelMap(itemRows);
     const publishableRows = itemRows
-      .map((row) => buildDriverLoadPublicationState(row, routeCatalogMetricsByLoadId.get(row.id)))
+      .map((row) => buildDriverLoadPublicationState(row, routeCatalogMetricsByLoadId.get(row.id), routeLabelByLoadId.get(row.id)))
       .filter((entry) => entry.isReady)
       .map((entry) => entry.row);
-    const paginatedRows = publishableRows.slice(parsedQuery.offset, parsedQuery.offset + parsedQuery.pageSize);
+
+    // In-memory location filter (SQL ILIKE removed per D-02 — filter on resolved route labels)
+    const { origem: origemFilter, destino: destinoFilter } = parsedQuery;
+    const filteredRows = publishableRows.filter((row) => {
+      if (origemFilter) {
+        const [routeOrigin] = (row.routeLabel ?? "").split(" X ");
+        if (!routeOrigin?.trim().toUpperCase().includes(origemFilter.trim().toUpperCase())) return false;
+      }
+      if (destinoFilter) {
+        const parts = (row.routeLabel ?? "").split(" X ");
+        const routeDestino = parts[1];
+        if (!routeDestino?.trim().toUpperCase().includes(destinoFilter.trim().toUpperCase())) return false;
+      }
+      return true;
+    });
+
+    const paginatedRows = filteredRows.slice(parsedQuery.offset, parsedQuery.offset + parsedQuery.pageSize);
 
     const stateSet = new Set();
     const profileSet = new Set();
 
-    publishableRows.forEach((row) => {
+    filteredRows.forEach((row) => {
       const originMatch = String(row.origem || "").trim().match(/([A-Za-z]{2})\s*$/);
       const destinationMatch = String(row.destino || "").trim().match(/([A-Za-z]{2})\s*$/);
       if (originMatch?.[1]) stateSet.add(originMatch[1].toUpperCase());
@@ -211,12 +229,12 @@ export async function fetchDriverLoadsReadModel({ query, correlationId }) {
       payload: {
         items: paginatedRows.map(mapDriverLoadReadModelItem),
         summary: {
-          totalCount: publishableRows.length,
+          totalCount: filteredRows.length,
           uniqueStateCount: stateSet.size,
           uniqueProfileCount: profileSet.size,
         },
         meta: buildPaginationMeta(
-          parsedQuery.page, parsedQuery.pageSize, publishableRows.length, parsedQuery.maxPageSize, correlationId,
+          parsedQuery.page, parsedQuery.pageSize, filteredRows.length, parsedQuery.maxPageSize, correlationId,
         ),
       },
     };
@@ -234,8 +252,9 @@ export async function fetchDriverLoadFacets({ correlationId }) {
       const whereSql = buildFacetWhereSql(includeDriverVisibilityFilter);
       const rows = await queryDriverLoadCandidateRows(client, { whereSql, values: [] });
       const routeCatalogMetricsByLoadId = await fetchRouteCatalogMetricsByLoadId(client, rows);
+      const routeLabelByLoadId = buildRouteLabelMap(rows);
       return rows
-        .map((row) => buildDriverLoadPublicationState(row, routeCatalogMetricsByLoadId.get(row.id)))
+        .map((row) => buildDriverLoadPublicationState(row, routeCatalogMetricsByLoadId.get(row.id), routeLabelByLoadId.get(row.id)))
         .filter((entry) => entry.isReady)
         .map((entry) => entry.row);
     };
@@ -253,8 +272,11 @@ export async function fetchDriverLoadFacets({ correlationId }) {
     const perfilSet = new Set();
 
     publishableRows.forEach((row) => {
-      if (row.origem) origemSet.add(row.origem);
-      if (row.destino) destinoSet.add(row.destino);
+      if (row.routeLabel) {
+        const [origem, destino] = row.routeLabel.split(" X ");
+        if (origem?.trim()) origemSet.add(origem.trim());
+        if (destino?.trim()) destinoSet.add(destino.trim());
+      }
       if (normalizeOptionalText(row.perfil)) perfilSet.add(row.perfil);
     });
 
