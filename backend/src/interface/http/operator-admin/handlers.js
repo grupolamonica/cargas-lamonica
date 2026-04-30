@@ -271,12 +271,13 @@ export async function resolveToggleOperatorCargoStatusResponse(request) {
       requiredPermission: "cargos:write",
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
-    async ({ correlationId, requestIp, operatorId }) => {
+    async ({ correlationId, requestIp, operatorId, operatorAccessLevel }) => {
     const { cargoId } = cargoIdParamsSchema.parse({ cargoId: getQueryParam(request, "cargoId") });
 
     return toggleOperatorCargoStatus({
       cargoId,
       operatorId,
+      operatorAccessLevel,
       requestIp,
       correlationId,
     });
