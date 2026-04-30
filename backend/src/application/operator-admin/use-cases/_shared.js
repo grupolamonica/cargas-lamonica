@@ -11,6 +11,7 @@ import {
   parseNullableNumber,
   createRouteLookupKeys,
 } from "../../../domain/operator-admin/route-utils.js";
+import { baseRouteValues } from "../../../domain/operator-admin/base-route-values.js";
 import { parseDriverLoadsQuery } from "../../../domain/operator-admin/schemas.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -172,6 +173,28 @@ export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
   }
 }
 
+export function buildRouteLabelMap(loadRows) {
+  if (!Array.isArray(loadRows) || loadRows.length === 0) {
+    return new Map();
+  }
+
+  // Build a flat lookup: "originVariant|destinationVariant" -> canonical route label
+  const labelByKey = new Map();
+  baseRouteValues.forEach((entry) => {
+    createRouteLookupKeys(entry.origin, entry.destination).forEach((key) => {
+      if (!labelByKey.has(key)) labelByKey.set(key, entry.route);
+    });
+  });
+
+  return new Map(
+    loadRows.map((row) => {
+      const matchedKey = createRouteLookupKeys(row.origem, row.destino)
+        .find((key) => labelByKey.has(key));
+      return [row.id, matchedKey ? labelByKey.get(matchedKey) : null];
+    }),
+  );
+}
+
 export function mapDriverLoadReadModelItem(row) {
   return {
     id: row.id,
@@ -190,6 +213,7 @@ export function mapDriverLoadReadModelItem(row) {
     clienteDescricao: row.clienteDescricao ?? null,
     carregamentoLabel: row.carregamentoLabel ?? null,
     descargaLabel: row.descargaLabel ?? null,
+    routeLabel: row.routeLabel ?? null,
   };
 }
 
@@ -199,7 +223,7 @@ export function normalizeOptionalText(value) {
   return trimmedValue !== "" ? trimmedValue : null;
 }
 
-export function buildDriverLoadPublicationState(row, routeCatalogMetrics) {
+export function buildDriverLoadPublicationState(row, routeCatalogMetrics, routeLabel = null) {
   const perfil = normalizeOptionalText(row.perfil) ?? routeCatalogMetrics?.perfil_padrao ?? null;
   const valor = parseNullableNumber(row.valor) ?? routeCatalogMetrics?.valor_padrao ?? null;
   const bonus = parseNullableNumber(row.bonus) ?? routeCatalogMetrics?.bonus_padrao ?? null;
@@ -216,6 +240,7 @@ export function buildDriverLoadPublicationState(row, routeCatalogMetrics) {
   if (valor === null) missingFields.push("payment");
   if (routeMetricsRequired && distanciaKm === null) missingFields.push("distance");
   if (routeMetricsRequired && tempoEstimadoHoras === null) missingFields.push("estimatedTime");
+  if (routeLabel === null) missingFields.push("routeLabel");
 
   return {
     isReady: missingFields.length === 0,
@@ -228,6 +253,7 @@ export function buildDriverLoadPublicationState(row, routeCatalogMetrics) {
       distancia_km: distanciaKm,
       duracao_horas: duracaoHoras,
       tempo_estimado_horas: tempoEstimadoHoras,
+      routeLabel,
     },
   };
 }
@@ -521,9 +547,6 @@ export function buildDriverLoadFilters(query, { includeDriverVisibilityFilter = 
     });
     clauses.push(`(${locationClauses.join(" OR ")})`);
   };
-
-  appendDriverLocationClause("cargas.origem", parsedQuery.origem);
-  appendDriverLocationClause("cargas.destino", parsedQuery.destino);
 
   if (parsedQuery.perfil) {
     clauses.push(`cargas.perfil = $${index}`);
