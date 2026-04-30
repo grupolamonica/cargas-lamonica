@@ -25,6 +25,7 @@ export interface Cargo {
   clienteDescricao?: string | null;
   carregamentoLabel?: string | null;
   descargaLabel?: string | null;
+  routeLabel?: string | null;
 }
 
 export interface FilterOption {
@@ -58,22 +59,37 @@ export const buildPeriodLabel = (dateFrom?: Date, dateTo?: Date) => {
   return "Qualquer data";
 };
 
+export const toTitleCase = (str: string) =>
+  str.toLowerCase().replace(/(?:^|[\s-])(\S)/g, (m) => m.toUpperCase());
+
 export const formatLocationLabel = (location: string) => {
   const { city, uf } = splitLocation(location);
-  return uf ? `${city}/${uf}` : city;
+  const displayCity = toTitleCase(city);
+  return uf ? `${displayCity}/${uf}` : displayCity;
 };
 
 export const buildCompactLocationLabel = (location?: string) => {
   if (!location) return "";
   const { city, uf } = splitLocation(location);
-  return uf || city;
+  return uf || toTitleCase(city);
 };
 
 export const buildLocationOptions = (locations: string[]) => {
   const optionsMap = new Map<string, FilterOption>();
-  locations.forEach((location) => {
-    const label = formatLocationLabel(location);
-    const key = normalizeText(label);
+  // Process entries with UF first so "City/SP" takes precedence over bare "City"
+  const sorted = [...locations].sort((a, b) => {
+    const aUF = splitLocation(a).uf;
+    const bUF = splitLocation(b).uf;
+    if (aUF && !bUF) return -1;
+    if (!aUF && bUF) return 1;
+    return 0;
+  });
+  sorted.forEach((location) => {
+    const { city, uf } = splitLocation(location);
+    const displayCity = toTitleCase(city);
+    const label = uf ? `${displayCity}/${uf}` : displayCity;
+    // Deduplicate by city name only — so "City/SP" and "City" collapse to one entry
+    const key = normalizeText(city);
     if (label && !optionsMap.has(key)) {
       optionsMap.set(key, { value: label, label });
     }
