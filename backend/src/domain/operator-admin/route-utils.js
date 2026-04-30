@@ -75,7 +75,7 @@ export function canonicalizeRouteLookupLocation(value) {
     return "simoes filho";
   }
 
-  if (/\bjaboatao dos guararapes\b/.test(normalizedValue)) {
+  if (/\bjaboatao dos guararapes\b/.test(normalizedValue) || /\bjaboatao\b/.test(normalizedValue)) {
     return "jaboatao dos guararapes";
   }
 
