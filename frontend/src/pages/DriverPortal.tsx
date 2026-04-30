@@ -1,17 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { parseISO } from "date-fns";
 import {
-  Activity,
   BellRing,
   CalendarIcon,
   ChevronDown,
   Compass,
+  Loader2,
   MapPin,
-  Package,
+  Navigation,
   SlidersHorizontal,
   Truck,
   X,
 } from "lucide-react";
+import DriverPortalNavbar from "@/components/driver/DriverPortalNavbar";
+import { useDriverLocation } from "@/hooks/useDriverLocation";
 
 import FilterChip from "@/components/FilterChip";
 import { Button } from "@/components/ui/button";
@@ -44,7 +46,8 @@ import {
   toFilterDateLabel,
 } from "@/hooks/useDriverLoads";
 import { useLeadNotifications } from "@/hooks/useLeadNotifications";
-import lamonicaLogo from "@/assets/lamonica-logo.png";
+import lamonicaLogo from "@/assets/lamonica-logo-white.png";
+import { SponsoredCarousel } from "@/components/SponsoredCarousel";
 
 const DRIVER_SUPPORT_WHATSAPP_NUMBER = "557199050085";
 const DRIVER_CADASTRO_MESSAGE =
@@ -173,6 +176,7 @@ const DriverPortal = () => {
   const [isFaqOpen, setIsFaqOpen] = useState(false);
   const [isLoadInterestDialogOpen, setIsLoadInterestDialogOpen] = useState(false);
   const [showStickyBar, setShowStickyBar] = useState(false);
+  const [activePortalTab, setActivePortalTab] = useState<"inicio" | "cargas">("cargas");
   const showStickyBarRef = useRef(false);
   const scrollFrameRef = useRef<number | null>(null);
   const desktopFiltersRef = useRef<HTMLDivElement | null>(null);
@@ -180,6 +184,37 @@ const DriverPortal = () => {
   const resultsSectionRef = useRef<HTMLDivElement | null>(null);
 
   const cadastroHref = buildDriverSupportWhatsAppUrl(DRIVER_CADASTRO_MESSAGE);
+  const supportHref = buildDriverSupportWhatsAppUrl(DRIVER_SAC_MESSAGE);
+
+  const handleNavbarTabChange = (tab: "inicio" | "cargas") => {
+    setActivePortalTab(tab);
+    if (tab === "cargas") {
+      resultsSectionRef.current?.scrollIntoView({ behavior: "smooth" });
+    } else {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  const { location: driverLocation, loading: locationLoading } = useDriverLocation();
+
+  const nearbyCargas = useMemo(() => {
+    if (!driverLocation || cargas.length === 0) return [];
+    const score = (origem: string) => {
+      const normalized = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+      const parts = origem.trim().match(/^(.*?)(?:\s*\/\s*|\s*,\s*|\s+-\s+)([A-Za-z]{2})$/);
+      if (!parts) return 0;
+      const [, city, uf] = parts;
+      if (normalized(city) === normalized(driverLocation.city) && uf.toUpperCase() === driverLocation.uf) return 2;
+      if (uf.toUpperCase() === driverLocation.uf) return 1;
+      return 0;
+    };
+    return [...cargas]
+      .map((c) => ({ cargo: c, score: score(c.origem) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3)
+      .map((x) => x.cargo);
+  }, [cargas, driverLocation]);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -270,6 +305,15 @@ const DriverPortal = () => {
 
   return (
     <div className="driver-theme relative min-h-screen bg-background">
+      <DriverPortalNavbar
+        notificationCount={notificationCount}
+        onNotificationsOpen={() => setIsNotificationsOpen(true)}
+        activeTab={activePortalTab}
+        onTabChange={handleNavbarTabChange}
+        cadastroHref={cadastroHref}
+        onFaqOpen={() => setIsFaqOpen(true)}
+        supportHref={supportHref}
+      />
       <div className="relative overflow-hidden">
         <div className="absolute inset-0 bg-[linear-gradient(135deg,hsl(227_60%_11%),hsl(220_52%_16%)_46%,hsl(223_92%_31%))]" />
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,hsl(var(--accent)/0.18),transparent_35%)]" />
@@ -289,78 +333,18 @@ const DriverPortal = () => {
         <div className="relative mx-auto max-w-7xl px-4 pb-5 pt-5 sm:pb-7 sm:pt-8 lg:px-6 lg:pb-10 lg:pt-9">
           <div className="lg:hidden">
             <div className="mb-4 flex items-center justify-between sm:mb-6">
-              <div className="flex items-center gap-3">
-                <div className="relative">
-                  <img
-                    src={lamonicaLogo}
-                    alt="Lamonica Logistica"
-                    className="h-10 w-10 rounded-2xl object-cover ring-2 ring-white/25 shadow-lg sm:h-11 sm:w-11"
-                  />
-                  <div className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-primary bg-accent shadow-[0_0_8px_hsl(var(--accent)/0.6)]" />
-                </div>
-                <div>
-                  <h1 className="text-base font-extrabold leading-none tracking-tight text-white [text-shadow:0_6px_18px_rgba(3,14,42,0.3)] sm:text-lg">
-                    Lamonica
-                  </h1>
-                  <span className="text-[11px] font-semibold tracking-[0.18em] text-white [text-shadow:0_6px_18px_rgba(3,14,42,0.3)]">
-                    LOGISTICA
-                  </span>
-                </div>
+              <div className="flex items-center">
+                <img
+                  src={lamonicaLogo}
+                  alt="Lamonica Logistica"
+                  className="h-12 w-auto object-contain sm:h-14"
+                />
               </div>
 
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1.5 rounded-full border border-white/[0.28] bg-white/[0.2] px-2.5 py-1 shadow-[0_12px_24px_-18px_rgba(3,14,42,0.7)] backdrop-blur-md sm:px-3 sm:py-1.5">
-                  <div className="relative flex items-center justify-center">
-                    <Activity className="h-3 w-3 text-accent" />
-                    <div className="absolute inset-0 animate-ping">
-                      <Activity className="h-3 w-3 text-accent/50" />
-                    </div>
-                  </div>
-                  <span className="text-[10px] font-bold text-white sm:text-[11px]">Ao vivo</span>
-                </div>
-              </div>
             </div>
 
-            <div className="mb-3 grid grid-cols-3 gap-2 sm:mb-5 sm:gap-2.5">
-              <div className="rounded-[24px] border border-white/[0.16] bg-white/[0.1] px-3 py-3 text-left backdrop-blur-xl sm:px-3 sm:py-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-white/25 bg-primary/18 shadow-[0_10px_24px_hsl(224_94%_37%/0.24)] sm:h-10 sm:w-10">
-                  <Package className="h-4 w-4 text-white sm:h-5 sm:w-5" />
-                </div>
-                <div className="mt-4">
-                  <span className="block text-xl font-extrabold leading-none text-white sm:text-2xl">
-                    {totalMatchingLoads}
-                  </span>
-                  <span className="mt-2 block text-[10px] font-semibold uppercase tracking-[0.16em] text-white [text-shadow:0_6px_18px_rgba(3,14,42,0.22)] sm:text-[11px]">
-                    Cargas
-                  </span>
-                </div>
-              </div>
-              <div className="rounded-[24px] border border-white/[0.16] bg-white/[0.1] px-3 py-3 text-left backdrop-blur-xl sm:px-3 sm:py-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-white/20 bg-accent/18 shadow-[0_10px_24px_hsl(var(--accent)/0.2)] sm:h-10 sm:w-10">
-                  <Truck className="h-4 w-4 text-white sm:h-5 sm:w-5" />
-                </div>
-                <div className="mt-4">
-                  <span className="block text-xl font-extrabold leading-none text-white sm:text-2xl">
-                    {uniqueProfilesCount}
-                  </span>
-                  <span className="mt-2 block text-[10px] font-semibold uppercase tracking-[0.16em] text-white [text-shadow:0_6px_18px_rgba(3,14,42,0.22)] sm:text-[11px]">
-                    Veículos
-                  </span>
-                </div>
-              </div>
-              <div className="rounded-[24px] border border-white/[0.16] bg-white/[0.1] px-3 py-3 text-left backdrop-blur-xl sm:px-3 sm:py-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-white/20 bg-white/12 shadow-[0_10px_24px_rgba(255,255,255,0.16)] sm:h-10 sm:w-10">
-                  <MapPin className="h-4 w-4 text-white sm:h-5 sm:w-5" />
-                </div>
-                <div className="mt-4">
-                  <span className="block text-xl font-extrabold leading-none text-white sm:text-2xl">
-                    {uniqueStates}
-                  </span>
-                  <span className="mt-2 block text-[10px] font-semibold uppercase tracking-[0.16em] text-white [text-shadow:0_6px_18px_rgba(3,14,42,0.22)] sm:text-[11px]">
-                    Estados
-                  </span>
-                </div>
-              </div>
+            <div className="mb-3 sm:mb-5">
+              <SponsoredCarousel inline />
             </div>
 
             <div className="grid grid-cols-3 gap-2">
@@ -389,133 +373,57 @@ const DriverPortal = () => {
           </div>
 
           <div className="hidden lg:block">
-            <div className="flex items-start justify-between gap-6">
-              <div className="flex items-center gap-4">
-                <div className="relative flex h-16 w-16 items-center justify-center rounded-[22px] border border-white/16 bg-white/[0.12] backdrop-blur-sm shadow-[0_18px_35px_-24px_rgba(0,0,0,0.75)]">
-                  <img
-                    src={lamonicaLogo}
-                    alt="Lamonica Logistica"
-                    className="h-12 w-12 rounded-2xl object-cover"
-                  />
-                  <div className="absolute -bottom-1 -right-1 h-4 w-4 rounded-full border-[3px] border-[hsl(225_52%_10%)] bg-accent shadow-[0_0_14px_hsl(var(--accent)/0.75)]" />
-                </div>
-
-                <div>
-                  <h1 className="text-[1.65rem] font-bold leading-none tracking-tight text-white">
-                    LAMONICA <span className="font-normal text-white">LOGISTICA</span>
-                  </h1>
-                  <span className="mt-1 block text-[11px] font-medium uppercase tracking-[0.22em] text-white [text-shadow:0_4px_12px_rgba(3,14,42,0.24)]">
-                    Portal do motorista
-                  </span>
-                </div>
+            <div className="mt-0 flex gap-5 xl:gap-6">
+              {/* carousel — left */}
+              <div className="min-w-0 flex-1">
+                <SponsoredCarousel inline />
               </div>
 
-              <div className="flex items-center gap-3">
-                <NotificationTriggerButton
-                  count={notificationCount}
-                  onClick={() => setIsNotificationsOpen(true)}
-                  invertTone
-                />
-
-                <div className="flex items-center gap-2 rounded-full border border-white/[0.22] bg-white/[0.16] px-5 py-3 shadow-[0_18px_34px_-24px_rgba(3,14,42,0.72)] backdrop-blur-md">
-                  <div className="relative flex items-center justify-center">
-                    <Activity className="h-4.5 w-4.5 text-accent" />
-                    <div className="absolute inset-0 animate-ping">
-                      <Activity className="h-4.5 w-4.5 text-accent/50" />
+              {/* quick panel — right */}
+              <div className="w-[272px] shrink-0 xl:w-[300px]">
+                <div className="overflow-hidden rounded-2xl border border-white/12 bg-white/[0.07] backdrop-blur-sm">
+                  {/* cargas próximas */}
+                  <div className="px-4 pb-4 pt-3">
+                    <div className="flex items-center gap-2">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/60">
+                        Cargas próximas de você
+                      </p>
+                      {locationLoading && <Loader2 className="h-3 w-3 animate-spin text-white/40" />}
                     </div>
-                  </div>
-                  <span className="text-base font-bold text-white">Ao vivo</span>
-                </div>
-              </div>
-            </div>
 
-            <div className="mt-8 grid grid-cols-[minmax(0,1.08fr)_430px] items-end gap-10 xl:gap-14">
-              <div className="max-w-[640px]">
-                <div className="relative overflow-hidden rounded-[32px] border border-white/12 bg-[linear-gradient(145deg,hsl(220_34%_23%/0.92),hsl(223_48%_29%/0.88))] px-6 py-7 shadow-[0_28px_58px_-34px_rgba(3,14,42,0.78)]">
-                  <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(145deg,hsl(0_0%_100%/0.08),transparent_30%,transparent_70%,hsl(var(--primary)/0.06))]" />
-                  <div className="pointer-events-none absolute -right-10 top-6 h-24 w-24 transform-gpu rounded-full bg-primary/14 blur-3xl will-change-transform animate-float-soft" />
-                  <div className="pointer-events-none absolute -left-6 bottom-4 h-20 w-20 transform-gpu rounded-full bg-accent/12 blur-3xl will-change-transform animate-float-soft-delay" />
-                  <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/45 to-transparent" />
-                  <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/[0.12] px-3 py-1.5 shadow-[0_12px_24px_-18px_rgba(3,14,42,0.72)]">
-                    <span className="h-2 w-2 rounded-full bg-accent shadow-[0_0_10px_hsl(var(--accent)/0.9)]" />
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white">
-                      Rotas ativas Lamonica
-                    </span>
-                  </div>
-                  <h2 className="relative max-w-[620px] text-[3.4rem] font-bold leading-[0.95] tracking-tight text-white [text-shadow:0_8px_22px_rgba(3,14,42,0.2)] xl:text-[3.6rem]">
-                    Cargas para
-                    <span className="block font-bold text-[hsl(var(--accent))]">motoristas</span>
-                  </h2>
-                  <p className="relative mt-5 max-w-[560px] text-[1.05rem] font-normal leading-8 text-white [text-shadow:0_5px_14px_rgba(3,14,42,0.16)]">
-                    Veja as cargas disponíveis, filtre por origem, destino e veículo e candidate-se pelo sistema em
-                    poucos passos.
-                  </p>
-                  <div className="relative mt-6 flex flex-wrap gap-3">
-                    <a
-                      href={cadastroHref}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center justify-center rounded-full border border-white/18 bg-white px-5 py-3 text-sm font-semibold text-primary shadow-[0_18px_34px_-24px_rgba(3,14,42,0.62)] transition-colors hover:bg-white/95"
-                    >
-                      Cadastro
-                    </a>
-                    <button
-                      type="button"
-                      className="inline-flex items-center justify-center rounded-full border border-white/18 bg-white/[0.12] px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_34px_-24px_rgba(3,14,42,0.62)] backdrop-blur-md transition-colors hover:bg-white/[0.18]"
-                    >
-                      Suporte
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsFaqOpen(true)}
-                      className="inline-flex items-center justify-center rounded-full border border-white/18 bg-white/[0.12] px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_34px_-24px_rgba(3,14,42,0.62)] backdrop-blur-md transition-colors hover:bg-white/[0.18]"
-                    >
-                      Dúvidas
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid w-full grid-cols-3 gap-4">
-                <div className="group transform-gpu rounded-[30px] border border-white/12 bg-[linear-gradient(180deg,hsl(220_38%_24%/0.92),hsl(222_34%_18%/0.96))] p-5 shadow-[0_24px_48px_-28px_rgba(0,0,0,0.7)] transition-all duration-300 hover:-translate-y-1 hover:border-white/20 hover:shadow-[0_28px_56px_-26px_rgba(0,0,0,0.78)]">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/18 text-white shadow-[0_14px_26px_-18px_hsl(224_94%_37%/0.8)]">
-                    <Package className="h-5 w-5" />
-                  </div>
-                  <div className="mt-9">
-                    <span className="block text-[2.15rem] font-bold leading-none text-white">
-                      {totalMatchingLoads}
-                    </span>
-                    <span className="mt-3 block text-[11px] font-medium uppercase tracking-[0.18em] text-white">
-                      Cargas
-                    </span>
-                  </div>
-                </div>
-
-                <div className="group transform-gpu rounded-[30px] border border-white/12 bg-[linear-gradient(180deg,hsl(220_38%_24%/0.92),hsl(222_34%_18%/0.96))] p-5 shadow-[0_24px_48px_-28px_rgba(0,0,0,0.7)] transition-all duration-300 hover:-translate-y-1 hover:border-white/20 hover:shadow-[0_28px_56px_-26px_rgba(0,0,0,0.78)]">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent/18 text-white shadow-[0_14px_26px_-18px_hsl(var(--accent)/0.82)]">
-                    <Truck className="h-5 w-5" />
-                  </div>
-                  <div className="mt-9">
-                    <span className="block text-[2.15rem] font-bold leading-none text-white">
-                      {uniqueProfilesCount}
-                    </span>
-                    <span className="mt-3 block text-[11px] font-medium uppercase tracking-[0.18em] text-white">
-                      Veículos
-                    </span>
-                  </div>
-                </div>
-
-                <div className="group transform-gpu rounded-[30px] border border-white/12 bg-[linear-gradient(180deg,hsl(220_38%_24%/0.92),hsl(222_34%_18%/0.96))] p-5 shadow-[0_24px_48px_-28px_rgba(0,0,0,0.7)] transition-all duration-300 hover:-translate-y-1 hover:border-white/20 hover:shadow-[0_28px_56px_-26px_rgba(0,0,0,0.78)]">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/12 text-white shadow-[0_14px_26px_-18px_rgba(255,255,255,0.26)]">
-                    <MapPin className="h-5 w-5" />
-                  </div>
-                  <div className="mt-9">
-                    <span className="block text-[2.15rem] font-bold leading-none text-white">
-                      {uniqueStates}
-                    </span>
-                    <span className="mt-3 block text-[11px] font-medium uppercase tracking-[0.18em] text-white">
-                      Estados
-                    </span>
+                    {!driverLocation && !locationLoading ? (
+                      <p className="mt-2 text-[11px] leading-4 text-white/45">
+                        Permita o acesso à localização para ver cargas próximas.
+                      </p>
+                    ) : nearbyCargas.length === 0 && driverLocation ? (
+                      <p className="mt-2 text-[11px] leading-4 text-white/45">
+                        Nenhuma carga aberta próxima de {driverLocation.city || driverLocation.uf} agora.
+                      </p>
+                    ) : (
+                      <div className="mt-2 space-y-1.5">
+                        {nearbyCargas.map((cargo) => {
+                          const originParts = cargo.origem.trim().match(/^(.*?)(?:\s*\/\s*|\s*,\s*|\s+-\s+)([A-Za-z]{2})$/);
+                          const destParts = cargo.destino.trim().match(/^(.*?)(?:\s*\/\s*|\s*,\s*|\s+-\s+)([A-Za-z]{2})$/);
+                          const origCity = originParts ? originParts[1].trim() : cargo.origem;
+                          const destCity = destParts ? destParts[1].trim() : cargo.destino;
+                          return (
+                            <a
+                              key={cargo.id}
+                              href={`/motorista/cargas/${cargo.id}`}
+                              className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 transition-colors hover:bg-white/[0.12]"
+                            >
+                              <Navigation className="h-3.5 w-3.5 shrink-0 text-accent/80" />
+                              <div className="min-w-0">
+                                <p className="truncate text-[11px] font-semibold text-white">
+                                  {origCity} → {destCity}
+                                </p>
+                                <p className="text-[10px] text-white/50">{cargo.perfil}</p>
+                              </div>
+                            </a>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -578,17 +486,6 @@ const DriverPortal = () => {
               />
             </div>
 
-            <div className="mt-2 rounded-[18px] border border-border/50 bg-white/72 px-3 py-2.5 shadow-[0_12px_28px_-26px_hsl(223_56%_12%/0.25)]">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-primary/60">
-                {mobileFilterGuide.eyebrow}
-              </p>
-              <p className="mt-1 text-[13px] font-semibold leading-5 text-foreground">
-                {mobileFilterGuide.title}
-              </p>
-              <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
-                {mobileFilterGuide.description}
-              </p>
-            </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -636,7 +533,7 @@ const DriverPortal = () => {
             <Popover>
               <PopoverTrigger asChild>
                 <FilterChip
-                  label="Origem"
+                  label="Coleta"
                   value={getFilterLabel(origemFilter, origemOptions, "Todas")}
                   active={Boolean(origemFilter)}
                   icon={<MapPin className="h-3.5 w-3.5" />}
@@ -644,7 +541,7 @@ const DriverPortal = () => {
               </PopoverTrigger>
               <PopoverContent className="driver-theme w-80 rounded-2xl border-border/40 premium-shadow" align="start" side="bottom">
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Filtrar origem
+                  Local de coleta
                 </p>
                 <select
                   value={origemFilter}
@@ -671,7 +568,7 @@ const DriverPortal = () => {
             <Popover>
               <PopoverTrigger asChild>
                 <FilterChip
-                  label="Destino"
+                  label="Entrega"
                   value={getFilterLabel(destinoFilter, destinoOptions, "Todos")}
                   active={Boolean(destinoFilter)}
                   icon={<Compass className="h-3.5 w-3.5" />}
@@ -679,7 +576,7 @@ const DriverPortal = () => {
               </PopoverTrigger>
               <PopoverContent className="driver-theme w-80 rounded-2xl border-border/40 premium-shadow" align="start" side="bottom">
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Filtrar destino
+                  Local de entrega
                 </p>
                 <select
                   value={destinoFilter}
@@ -871,7 +768,7 @@ const DriverPortal = () => {
               <div className="space-y-4">
                 <label className="block">
                   <span className="mb-2 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                    Origem
+                    Coleta
                   </span>
                   <select
                     value={mobileOrigemDraft}
@@ -889,7 +786,7 @@ const DriverPortal = () => {
 
                 <label className="block">
                   <span className="mb-2 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                    Destino
+                    Entrega
                   </span>
                   <select
                     value={mobileDestinoDraft}
@@ -1049,7 +946,7 @@ const DriverPortal = () => {
                       <MapPin className="h-4 w-4" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground/80">Origem</span>
+                      <span className="block text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground/80">Coleta</span>
                       <span className="mt-0.5 block truncate text-[15px] font-bold text-foreground">
                         {getFilterLabel(origemFilter, origemOptions, "Todas as origens")}
                       </span>
@@ -1058,7 +955,7 @@ const DriverPortal = () => {
                   </button>
                 </PopoverTrigger>
                 <PopoverContent className="driver-theme w-[300px] rounded-[28px] border-border/45 bg-background/95 p-4 premium-shadow backdrop-blur-xl" align="start" side="bottom">
-                  <p className="text-sm font-semibold text-foreground">Cidade de origem</p>
+                  <p className="text-sm font-semibold text-foreground">Local de coleta</p>
                   <select
                     value={origemFilter}
                     onChange={(event) => setOrigemFilter(event.target.value)}
@@ -1091,7 +988,7 @@ const DriverPortal = () => {
                       <Compass className="h-4 w-4" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground/80">Destino</span>
+                      <span className="block text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground/80">Entrega</span>
                       <span className="mt-0.5 block truncate text-[15px] font-bold text-foreground">
                         {getFilterLabel(destinoFilter, destinoOptions, "Todos os destinos")}
                       </span>
@@ -1100,7 +997,7 @@ const DriverPortal = () => {
                   </button>
                 </PopoverTrigger>
                 <PopoverContent className="driver-theme w-[300px] rounded-[28px] border-border/45 bg-background/95 p-4 premium-shadow backdrop-blur-xl" align="start" side="bottom">
-                  <p className="text-sm font-semibold text-foreground">Cidade de destino</p>
+                  <p className="text-sm font-semibold text-foreground">Local de entrega</p>
                   <select
                     value={destinoFilter}
                     onChange={(event) => setDestinoFilter(event.target.value)}
