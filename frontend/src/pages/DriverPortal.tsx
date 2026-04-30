@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from "react";
-import { parseISO } from "date-fns";
+import { format, parseISO } from "date-fns";
 import {
   BellRing,
   CalendarIcon,
@@ -44,6 +44,9 @@ import {
   toDateInputValue,
   toMobileDateLabel,
   toFilterDateLabel,
+  splitLocation,
+  toTitleCase,
+  normalizeDisplayCity,
 } from "@/hooks/useDriverLoads";
 import { useLeadNotifications } from "@/hooks/useLeadNotifications";
 import lamonicaLogo from "@/assets/lamonica-logo-white.png";
@@ -176,7 +179,7 @@ const DriverPortal = () => {
   const [isFaqOpen, setIsFaqOpen] = useState(false);
   const [isLoadInterestDialogOpen, setIsLoadInterestDialogOpen] = useState(false);
   const [showStickyBar, setShowStickyBar] = useState(false);
-  const [activePortalTab, setActivePortalTab] = useState<"inicio" | "cargas">("cargas");
+
   const showStickyBarRef = useRef(false);
   const scrollFrameRef = useRef<number | null>(null);
   const desktopFiltersRef = useRef<HTMLDivElement | null>(null);
@@ -186,14 +189,7 @@ const DriverPortal = () => {
   const cadastroHref = buildDriverSupportWhatsAppUrl(DRIVER_CADASTRO_MESSAGE);
   const supportHref = buildDriverSupportWhatsAppUrl(DRIVER_SAC_MESSAGE);
 
-  const handleNavbarTabChange = (tab: "inicio" | "cargas") => {
-    setActivePortalTab(tab);
-    if (tab === "cargas") {
-      resultsSectionRef.current?.scrollIntoView({ behavior: "smooth" });
-    } else {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
-  };
+
 
   const { location: driverLocation, loading: locationLoading } = useDriverLocation();
 
@@ -304,31 +300,31 @@ const DriverPortal = () => {
     ) : null;
 
   return (
-    <div className="driver-theme relative min-h-screen bg-background">
+    <div className="driver-theme relative min-h-screen bg-background lg:bg-cover lg:bg-center lg:bg-fixed lg:[background-image:url('/bg-driver-portal.png')]">
       <DriverPortalNavbar
         notificationCount={notificationCount}
         onNotificationsOpen={() => setIsNotificationsOpen(true)}
-        activeTab={activePortalTab}
-        onTabChange={handleNavbarTabChange}
         cadastroHref={cadastroHref}
         onFaqOpen={() => setIsFaqOpen(true)}
         supportHref={supportHref}
       />
       <div className="relative overflow-hidden">
-        <div className="absolute inset-0 bg-[linear-gradient(135deg,hsl(227_60%_11%),hsl(220_52%_16%)_46%,hsl(223_92%_31%))]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,hsl(var(--accent)/0.18),transparent_35%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_right_top,hsl(var(--primary)/0.32),transparent_42%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_center,hsl(220_100%_60%/0.16),transparent_48%)]" />
-        <div
-          className="absolute inset-0 opacity-[0.05]"
-          style={{
-            backgroundImage:
-              "url(\"data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E\")",
-          }}
-        />
-        <div className="absolute right-16 top-10 h-52 w-52 rounded-full bg-primary/24 blur-3xl" />
-        <div className="absolute left-1/3 top-14 h-28 w-28 rounded-full bg-white/8 blur-3xl" />
-        <div className="absolute bottom-6 left-8 h-36 w-36 rounded-full bg-accent/16 blur-3xl" />
+        <div className="absolute inset-0 lg:hidden">
+          <div className="absolute inset-0 bg-[linear-gradient(135deg,hsl(227_60%_11%),hsl(220_52%_16%)_46%,hsl(223_92%_31%))]" />
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,hsl(var(--accent)/0.18),transparent_35%)]" />
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_right_top,hsl(var(--primary)/0.32),transparent_42%)]" />
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_center,hsl(220_100%_60%/0.16),transparent_48%)]" />
+          <div
+            className="absolute inset-0 opacity-[0.05]"
+            style={{
+              backgroundImage:
+                "url(\"data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E\")",
+            }}
+          />
+          <div className="absolute right-16 top-10 h-52 w-52 rounded-full bg-primary/24 blur-3xl" />
+          <div className="absolute left-1/3 top-14 h-28 w-28 rounded-full bg-white/8 blur-3xl" />
+          <div className="absolute bottom-6 left-8 h-36 w-36 rounded-full bg-accent/16 blur-3xl" />
+        </div>
 
         <div className="relative mx-auto max-w-7xl px-4 pb-5 pt-5 sm:pb-7 sm:pt-8 lg:px-6 lg:pb-10 lg:pt-9">
           <div className="lg:hidden">
@@ -356,12 +352,14 @@ const DriverPortal = () => {
               >
                 Cadastro
               </a>
-              <button
-                type="button"
+              <a
+                href={supportHref}
+                target="_blank"
+                rel="noreferrer"
                 className="inline-flex items-center justify-center rounded-[18px] border border-white/18 bg-white/[0.12] px-3 py-3 text-center text-[11px] font-semibold uppercase tracking-[0.14em] text-white shadow-[0_18px_34px_-24px_rgba(3,14,42,0.62)] backdrop-blur-md transition-all duration-200 hover:bg-white/[0.18]"
               >
                 Suporte
-              </button>
+              </a>
               <button
                 type="button"
                 onClick={() => setIsFaqOpen(true)}
@@ -381,45 +379,85 @@ const DriverPortal = () => {
 
               {/* quick panel — right */}
               <div className="w-[272px] shrink-0 xl:w-[300px]">
-                <div className="overflow-hidden rounded-2xl border border-white/12 bg-white/[0.07] backdrop-blur-sm">
-                  {/* cargas próximas */}
-                  <div className="px-4 pb-4 pt-3">
-                    <div className="flex items-center gap-2">
-                      <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/60">
-                        Cargas próximas de você
-                      </p>
-                      {locationLoading && <Loader2 className="h-3 w-3 animate-spin text-white/40" />}
-                    </div>
+                <div className="overflow-hidden rounded-2xl bg-white shadow-[0_8px_32px_-8px_rgba(0,20,60,0.22)]">
+                  {/* header */}
+                  <div className="flex items-center gap-1.5 px-4 pb-2 pt-3">
+                    <p className="text-[13px] font-bold text-[hsl(222,50%,10%)]">Cargas próximas a você</p>
+                    {locationLoading && <Loader2 className="h-3 w-3 animate-spin text-[hsl(222,50%,50%)]" />}
+                  </div>
 
+                  <div className="px-3 pb-3">
                     {!driverLocation && !locationLoading ? (
-                      <p className="mt-2 text-[11px] leading-4 text-white/45">
+                      <p className="px-1 py-2 text-[11px] leading-4 text-[hsl(222,20%,45%)]">
                         Permita o acesso à localização para ver cargas próximas.
                       </p>
                     ) : nearbyCargas.length === 0 && driverLocation ? (
-                      <p className="mt-2 text-[11px] leading-4 text-white/45">
-                        Nenhuma carga aberta próxima de {driverLocation.city || driverLocation.uf} agora.
+                      <p className="px-1 py-2 text-[11px] leading-4 text-[hsl(222,20%,45%)]">
+                        Nenhuma carga próxima de {driverLocation.city || driverLocation.uf} agora.
                       </p>
                     ) : (
-                      <div className="mt-2 space-y-1.5">
+                      <div className="space-y-2">
                         {nearbyCargas.map((cargo) => {
-                          const originParts = cargo.origem.trim().match(/^(.*?)(?:\s*\/\s*|\s*,\s*|\s+-\s+)([A-Za-z]{2})$/);
-                          const destParts = cargo.destino.trim().match(/^(.*?)(?:\s*\/\s*|\s*,\s*|\s+-\s+)([A-Za-z]{2})$/);
-                          const origCity = originParts ? originParts[1].trim() : cargo.origem;
-                          const destCity = destParts ? destParts[1].trim() : cargo.destino;
+                          const [routeOrigin, routeDestination] = cargo.routeLabel
+                            ? cargo.routeLabel.split(" X ").map((s) => s.trim())
+                            : [null, null];
+                          const originRaw = routeOrigin ? null : splitLocation(cargo.origem);
+                          const destinationRaw = routeDestination ? null : splitLocation(cargo.destino);
+                          const origCity = routeOrigin ? toTitleCase(routeOrigin) : toTitleCase(normalizeDisplayCity(originRaw!.city));
+                          const origUF = routeOrigin ? "" : (originRaw?.uf ?? "");
+                          const destCity = routeDestination ? toTitleCase(routeDestination) : toTitleCase(normalizeDisplayCity(destinationRaw!.city));
+                          const destUF = routeDestination ? "" : (destinationRaw?.uf ?? "");
+                          const originLabel = origUF ? `${origCity}, ${origUF}` : origCity;
+                          const destinationLabel = destUF ? `${destCity}, ${destUF}` : destCity;
+                          const dateLabel = (() => {
+                            try {
+                              return `${format(parseISO(cargo.data), "dd/MM")} às ${cargo.horario}`;
+                            } catch {
+                              return cargo.horario || "";
+                            }
+                          })();
+                          const clientLogoUrl =
+                            cargo.clienteNome?.toLowerCase() === "shopee" ? "/brand-logos/shopee-icon.png" : null;
+                          const distanceLabel =
+                            typeof cargo.distancia_km === "number" && Number.isFinite(cargo.distancia_km)
+                              ? `${Math.round(cargo.distancia_km).toLocaleString("pt-BR")} km`
+                              : null;
                           return (
-                            <a
+                            <div
                               key={cargo.id}
-                              href={`/motorista/cargas/${cargo.id}`}
-                              className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 transition-colors hover:bg-white/[0.12]"
+                              className="relative rounded-xl border border-[hsl(222,25%,90%)] bg-white p-3"
                             >
-                              <Navigation className="h-3.5 w-3.5 shrink-0 text-accent/80" />
-                              <div className="min-w-0">
-                                <p className="truncate text-[11px] font-semibold text-white">
-                                  {origCity} → {destCity}
-                                </p>
-                                <p className="text-[10px] text-white/50">{cargo.perfil}</p>
+                              {clientLogoUrl && (
+                                <img
+                                  src={clientLogoUrl}
+                                  alt={cargo.clienteNome ?? ""}
+                                  className="absolute -right-3 top-1 h-9 w-auto object-contain"
+                                />
+                              )}
+                              <div className="flex items-center gap-1.5">
+                                <CalendarIcon className="h-3 w-3 shrink-0 text-[hsl(222,50%,55%)]" />
+                                <span className="text-[11px] text-[hsl(222,15%,50%)]">{dateLabel}</span>
                               </div>
-                            </a>
+                              <p className="mt-1.5 text-[13px] font-bold leading-snug text-[hsl(222,50%,10%)]">
+                                {originLabel} → {destinationLabel}
+                              </p>
+                              <div className="mt-2 flex items-center gap-1.5">
+                                <span className="inline-flex rounded-full border border-[hsl(222,25%,88%)] bg-[hsl(222,50%,97%)] px-2 py-0.5 text-[10px] font-semibold text-[hsl(222,25%,40%)]">
+                                  {cargo.perfil}
+                                </span>
+                                {distanceLabel && (
+                                  <span className="inline-flex rounded-full border border-[hsl(222,25%,88%)] bg-[hsl(222,50%,97%)] px-2 py-0.5 text-[10px] font-semibold text-[hsl(222,25%,40%)]">
+                                    {distanceLabel}
+                                  </span>
+                                )}
+                                <a
+                                  href={`/motorista/cargas/${cargo.id}`}
+                                  className="ml-auto shrink-0 rounded-full bg-[hsl(224,94%,37%)] px-3 py-1 text-[11px] font-bold text-white transition-colors hover:bg-[hsl(224,94%,33%)]"
+                                >
+                                  Ver detalhes
+                                </a>
+                              </div>
+                            </div>
                           );
                         })}
                       </div>
@@ -431,12 +469,12 @@ const DriverPortal = () => {
           </div>
         </div>
 
-        <div className="absolute bottom-0 left-0 right-0">
+        <div className="absolute bottom-0 left-0 right-0 lg:hidden">
           <svg
             viewBox="0 0 1440 40"
             fill="none"
             xmlns="http://www.w3.org/2000/svg"
-            className="h-4 w-full sm:h-5 lg:h-7"
+            className="h-4 w-full sm:h-5"
             preserveAspectRatio="none"
           >
             <path d="M0 40V20C360 0 1080 0 1440 20V40H0Z" fill="hsl(var(--background))" />
@@ -1164,7 +1202,7 @@ const DriverPortal = () => {
               type="button"
               onClick={handleDesktopStickyBarClick}
               aria-label="Voltar para a área de filtros e cargas"
-              className="pointer-events-auto inline-flex items-center gap-4 rounded-full border border-white/70 bg-white/94 px-5 py-3 text-left shadow-[0_24px_46px_-24px_hsl(222_50%_12%/0.35)] backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_28px_54px_-24px_hsl(222_50%_12%/0.42)]"
+              className={cn("inline-flex items-center gap-4 rounded-full border border-white/70 bg-white/94 px-5 py-3 text-left shadow-[0_24px_46px_-24px_hsl(222_50%_12%/0.35)] backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_28px_54px_-24px_hsl(222_50%_12%/0.42)]", showStickyBar ? "pointer-events-auto" : "pointer-events-none")}
             >
               <span className="flex min-w-[44px] items-center gap-3">
                 <span className="relative flex h-3 w-3 shrink-0 items-center justify-center">

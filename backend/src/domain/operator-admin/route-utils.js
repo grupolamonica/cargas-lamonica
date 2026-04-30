@@ -59,7 +59,11 @@ export function canonicalizeRouteLookupLocation(value) {
     return "sao jose do rio preto";
   }
 
-  if (/\bpedreira\b/.test(normalizedValue) || /\bsao paulo\b/.test(normalizedValue)) {
+  if (/\bpedreira\b/.test(normalizedValue)) {
+    return "jaguariuna";
+  }
+
+  if (/\bsao paulo\b/.test(normalizedValue)) {
     return "sao paulo";
   }
 

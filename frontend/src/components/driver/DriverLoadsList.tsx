@@ -7,7 +7,7 @@ import { buildOperationalDateLabel, buildRouteEstimatedDurationLabel } from "@/l
 import { buildLoadingDateTime } from "@/lib/estimatedTime";
 import { isToday, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { type Cargo, splitLocation, toTitleCase } from "@/hooks/useDriverLoads";
+import { type Cargo, splitLocation, toTitleCase, normalizeDisplayCity } from "@/hooks/useDriverLoads";
 
 const formatRouteMetric = (value: number) =>
   value.toLocaleString("pt-BR", {
@@ -62,10 +62,10 @@ export function DriverLoadsList({
       const destinationRaw = routeDestination ? null : splitLocation(cargo.destino);
       const origin = routeOrigin
         ? { city: toTitleCase(routeOrigin), uf: "" }
-        : { city: toTitleCase(originRaw!.city), uf: originRaw!.uf };
+        : { city: toTitleCase(normalizeDisplayCity(originRaw!.city)), uf: originRaw!.uf };
       const destination = routeDestination
         ? { city: toTitleCase(routeDestination), uf: "" }
-        : { city: toTitleCase(destinationRaw!.city), uf: destinationRaw!.uf };
+        : { city: toTitleCase(normalizeDisplayCity(destinationRaw!.city)), uf: destinationRaw!.uf };
       const loadingScheduleLabel = buildOperationalDateLabel(cargo.carregamentoLabel, cargo.data, cargo.horario);
       const descargaScheduleLabel = cargo.descargaLabel ? buildOperationalDateLabel(cargo.descargaLabel) : null;
       const totalPaymentValue = buildTotalPayment(cargo.valor, cargo.bonus);
