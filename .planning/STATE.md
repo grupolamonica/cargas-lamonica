@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 07-01-PLAN.md
-last_updated: "2026-04-30T13:38:55.311Z"
+stopped_at: "Completed 07-03-PLAN.md: in-memory route label resolution for driver portal"
+last_updated: "2026-04-30T13:50:09Z"
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 0
-  completed_plans: 3
-  percent: 35
+  completed_plans: 5
+  percent: 0
 ---
 
 # Project State — Lamonica Cargas
@@ -35,7 +35,7 @@ progress:
 **Phase:** 6 — In progress
 **Plan:** 2/4 executed
 **Status:** Phase 6 executing — 06-01 (GitHub Actions secrets), 06-02 (backup-lamonica.sh + README backup), 06-03 tasks 1+2 done. 06-03 Task 3 (checkpoint:human-verify Prometheus target) pendente. 06-04 (enable-ssl.sh) pending.
-**Progress:** [███░░░░░░░] 35% complete
+**Progress:** [░░░░░░░░░░] 0%
 
 ```
 Phase 1: Structural Split + Clean Architecture   [x] COMPLETE (Plans 1+2+3+4 done)
@@ -70,6 +70,8 @@ Phase 6: VPS Server Hardening and CI/CD Config   [ ] IN PROGRESS (2/4 done)
 | 06-vps-server-hardening | 06-02 | ~5min | 2/2 | 2 created/modified | 2026-04-25 |
 | 06-vps-server-hardening | 06-03 | ~8min | 2/3 (checkpoint) | 1 created, 1 modified | 2026-04-25 |
 | Phase 07-driver-portal-improvements P01 | 5min | 2 tasks | 2 files |
+| Phase 07-driver-portal-improvements P02 | 85 | 2 tasks | 2 files |
+| Phase 07-driver-portal-improvements P03 | 7min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -110,6 +112,8 @@ Phase 6: VPS Server Hardening and CI/CD Config   [ ] IN PROGRESS (2/4 done)
 | smoke-test.sh BASE_URL as $1 | Same script usable in CI (secrets.VPS_HOST) and locally against dev VPS | Approved (Phase 5 Plan 2) |
 | api.insecure=false no Traefik | Dashboard protegido via router Docker label + BasicAuth middleware; não exposto em 8080 sem auth | Approved (Phase 6 Plan 3) |
 | metrics.prometheus sem entrypoint separado | Endpoint em traefik:8080/metrics (porta internal traefik) — Prometheus scrape é interno, não exposto | Approved (Phase 6 Plan 3) |
+| routeLabel via in-memory baseRouteValues lookup | base_route_label não existe no DB — calculado via createRouteLookupKeys matching contra array estático; SQL ILIKE removido para location filter | Approved (Phase 7 Plan 3) |
+| Cargas sem catalog match ocultadas do portal do motorista | routeLabel === null → isReady=false gate em buildDriverLoadPublicationState | Approved (Phase 7 Plan 3) |
 
 ### Decisions Pending
 
@@ -155,7 +159,7 @@ Validated capabilities from PROJECT.md — todas devem continuar funcionando ao 
 
 ## Session Continuity
 
-**Stopped at:** Completed 07-01-PLAN.md
+**Stopped at:** Completed 07-02-PLAN.md: fix cross-operator toggle-status permission
 
 **Next action:** Após verificação no VPS, continuar 06-03 Task 3 e depois executar 06-04-PLAN.md (enable-ssl.sh).
 
