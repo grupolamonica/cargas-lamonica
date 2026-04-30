@@ -3,7 +3,7 @@ import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit
 import { ConflictError, NotFoundError } from "../../../domain/load-claims/errors.js";
 import { MANUAL_CARGO_STATUSES, assertCargoOwnership, findCargoById } from "./_shared.js";
 
-export async function toggleOperatorCargoStatus({ cargoId, operatorId, requestIp, correlationId }) {
+export async function toggleOperatorCargoStatus({ cargoId, operatorId, operatorAccessLevel, requestIp, correlationId }) {
   return withPgTransaction(async (client) => {
     const cargo = await findCargoById(client, cargoId, { lock: true });
 
@@ -11,7 +11,7 @@ export async function toggleOperatorCargoStatus({ cargoId, operatorId, requestIp
       throw new NotFoundError("Carga nao encontrada.");
     }
 
-    assertCargoOwnership(cargo, operatorId);
+    assertCargoOwnership(cargo, operatorId, { accessLevel: operatorAccessLevel });
 
     if (!MANUAL_CARGO_STATUSES.has(cargo.status)) {
       throw new ConflictError("Somente cargas abertas ou em rascunho podem ser alteradas manualmente.", {
