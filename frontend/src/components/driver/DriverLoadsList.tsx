@@ -7,7 +7,7 @@ import { buildOperationalDateLabel, buildRouteEstimatedDurationLabel } from "@/l
 import { buildLoadingDateTime } from "@/lib/estimatedTime";
 import { isToday, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { type Cargo, splitLocation } from "@/hooks/useDriverLoads";
+import { type Cargo, splitLocation, toTitleCase } from "@/hooks/useDriverLoads";
 
 const formatRouteMetric = (value: number) =>
   value.toLocaleString("pt-BR", {
@@ -55,9 +55,19 @@ export function DriverLoadsList({
 
   const cargoCards = useMemo(() => {
     return deferredCargas.map((cargo, index) => {
-      const origin = splitLocation(cargo.origem);
-      const destination = splitLocation(cargo.destino);
+      const [routeOrigin, routeDestination] = cargo.routeLabel
+        ? cargo.routeLabel.split(" X ").map((s) => s.trim())
+        : [null, null];
+      const originRaw = routeOrigin ? null : splitLocation(cargo.origem);
+      const destinationRaw = routeDestination ? null : splitLocation(cargo.destino);
+      const origin = routeOrigin
+        ? { city: toTitleCase(routeOrigin), uf: "" }
+        : { city: toTitleCase(originRaw!.city), uf: originRaw!.uf };
+      const destination = routeDestination
+        ? { city: toTitleCase(routeDestination), uf: "" }
+        : { city: toTitleCase(destinationRaw!.city), uf: destinationRaw!.uf };
       const loadingScheduleLabel = buildOperationalDateLabel(cargo.carregamentoLabel, cargo.data, cargo.horario);
+      const descargaScheduleLabel = cargo.descargaLabel ? buildOperationalDateLabel(cargo.descargaLabel) : null;
       const totalPaymentValue = buildTotalPayment(cargo.valor, cargo.bonus);
       const paymentLabel = totalPaymentValue !== null ? formatCurrency(totalPaymentValue) : "A combinar";
       const paymentDetailsLabel = buildDriverPaymentDetailsLabel(cargo.valor, cargo.bonus);
@@ -80,7 +90,7 @@ export function DriverLoadsList({
           clienteNome={cargo.clienteNome}
           clienteDescricao={cargo.clienteDescricao}
           carregamentoLabel={loadingScheduleLabel}
-          descargaLabel={cargo.descargaLabel}
+          descargaLabel={descargaScheduleLabel}
           origemCidade={origin.city}
           origemEstado={origin.uf}
           destinoCidade={destination.city}
