@@ -77,6 +77,8 @@ export interface OverviewHeroMetrics {
   overdueLoads: number;
   // Cargas RESERVED via candidatura (motorista aprovado aguardando confirma\u00e7\u00e3o).
   reservedCount: number;
+  // Total de leads individuais com status QUEUED aguardando revis\u00e3o do operador.
+  pendingApprovals: number;
 }
 
 export interface OverviewAttentionLoad {
@@ -360,6 +362,7 @@ export function buildOverviewSnapshot(
       approvedToday,
       overdueLoads,
       reservedCount: reservedLoads.length,
+      pendingApprovals: queueActiveLeads.filter((lead) => lead.status === "QUEUED").length,
     },
     attentionLoads: buildAttentionLoads(cargos, loadInterestById, now),
     recentActivity: buildActivityFeed(cargos, leads, claims, now),

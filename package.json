@@ -3,11 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue,green \"npm --prefix backend run start\" \"npm --prefix frontend run dev\"",
     "dev:frontend": "npm --prefix frontend run dev",
-    "dev:backend": "npm --prefix backend run dev",
+    "dev:backend": "npm --prefix backend run start",
     "test:frontend": "npm --prefix frontend run test",
     "test:backend": "npm --prefix backend run test",
     "test": "npm run test:frontend && npm run test:backend",
     "install:all": "npm --prefix frontend install && npm --prefix backend install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
   }
 }

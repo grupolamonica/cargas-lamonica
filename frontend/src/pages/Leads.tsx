@@ -123,6 +123,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   const [directAllocForm, setDirectAllocForm] = useState<DirectAllocationPayload & { trailerPlate: string }>({
     cpf: "", phone: "", horsePlate: "", vehicleType: "CARRETA", trailerPlate: "",
   });
+  const [page, setPage] = useState(1);
   const knownLoadIdsRef = useRef<string[]>([]);
   const autoRevalidateFiredRef = useRef<number>(0);
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
@@ -250,9 +251,13 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
           return leadText.includes(deferredSearch);
         });
 
-        // Only hide the group when it had leads but none matched the active filter.
-        // Groups with no leads at all (e.g., after last lead was cancelled) stay visible.
-        if (group.leads.length > 0 && !leads.length) {
+        // Hide groups with no drivers at all.
+        if (group.leads.length === 0) {
+          return null;
+        }
+
+        // Hide when all leads were filtered out by active search/status filter.
+        if (!leads.length) {
           return null;
         }
 
@@ -265,17 +270,22 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
       })
       .filter((group): group is OperatorLeadGroup => Boolean(group));
   }, [groups, deferredSearch, loadStatusFilter, leadStatusFilter, historicoMode, sheetAllocationByLh]);
+
+  const PAGE_SIZE = 10;
+  const totalPages = Math.ceil(filteredGroups.length / PAGE_SIZE);
+  const paginatedGroups = filteredGroups.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
   const hasActiveFilters =
     deferredSearch.length > 0 || loadStatusFilter !== "todos" || leadStatusFilter !== "todos";
   const visibleLoadIds = useMemo(() => filteredGroups.map((group) => group.load.id), [filteredGroups]);
   const allVisibleGroupsCollapsed =
     visibleLoadIds.length > 0 && visibleLoadIds.every((loadId) => collapsedLoadIds.includes(loadId));
 
-  // Reset known IDs when search/filter changes so stale IDs from previous result sets
-  // don't accumulate forever as the user navigates different filters.
+  // Reset known IDs and page when search/filter changes.
   useEffect(() => {
     knownLoadIdsRef.current = [];
-  }, [historicoMode, loadStatusFilter, deferredSearch]);
+    setPage(1);
+  }, [historicoMode, loadStatusFilter, leadStatusFilter, deferredSearch]);
 
   useEffect(() => {
     const unseenLoadIds = groups
@@ -676,7 +686,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
               </div>
             ) : null}
           <section className="space-y-4">
-            {filteredGroups.map((group) => {
+            {paginatedGroups.map((group) => {
               const routeLabel = buildRouteLabel(group);
               const isCollapsed = collapsedLoadIds.includes(group.load.id);
               const sheetAllocation = group.load.sheetLh ? sheetAllocationByLh.get(group.load.sheetLh) : undefined;
@@ -954,6 +964,33 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
               );
             })}
           </section>
+
+          {totalPages > 1 && (
+            <div className="mt-4 flex items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-border/80 bg-white/92 text-sm font-semibold text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40 dark:bg-muted/40"
+              >
+                <ChevronDown className="h-4 w-4 -rotate-90" />
+              </button>
+              <span className="text-sm font-semibold text-muted-foreground">
+                {page} / {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-border/80 bg-white/92 text-sm font-semibold text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40 dark:bg-muted/40"
+              >
+                <ChevronDown className="h-4 w-4 rotate-90" />
+              </button>
+              <span className="ml-2 text-xs text-muted-foreground">
+                {filteredGroups.length} cargas no total
+              </span>
+            </div>
+          )}
           </>
         )}
       </main>

@@ -36,6 +36,9 @@ export interface FilterOption {
 export const normalizeText = (value: string) =>
   value.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
 
+export const normalizeDisplayCity = (city: string): string =>
+  city.normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+
 export const splitLocation = (location: string) => {
   const trimmedLocation = location.trim();
   const matchedLocation = trimmedLocation.match(/^(.*?)(?:\s*\/\s*|\s*,\s*|\s+-\s+)([A-Za-z]{2})$/);

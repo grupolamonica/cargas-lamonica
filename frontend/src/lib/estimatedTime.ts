@@ -61,7 +61,9 @@ export function buildLoadingDateTime(
   }
 
   const normalizedDate = normalizeDateOnlyValue(date);
-  const normalizedTime = time.slice(0, 5);
+  // Handle ISO timestamps in the time field (e.g. "2026-05-02T02:00") — extract HH:mm
+  const rawTime = time.includes("T") ? (time.split("T")[1] ?? time) : time;
+  const normalizedTime = rawTime.slice(0, 5);
   const parsedFallback = parseDateInput(`${normalizedDate}T${normalizedTime}`);
   return parsedFallback;
 }

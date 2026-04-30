@@ -397,7 +397,7 @@ const DriverClientDetails = () => {
               <div className="justify-self-end self-start -mt-12 sm:-mt-14 lg:-mt-16">
                 <ClientLogo
                   name={client.nome}
-                  logoUrl={client.logo_url}
+                  logoUrl={client.nome?.toLowerCase() === "shopee" ? "/brand-logos/shopee.png" : client.logo_url}
                   className="h-[74px] w-[74px] border-white/15 bg-white/95 sm:h-[148px] sm:w-[148px] lg:h-[168px] lg:w-[168px]"
                   imageClassName="p-1.5 sm:p-4 scale-[1.02]"
                   fallbackClassName="text-white"

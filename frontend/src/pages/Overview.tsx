@@ -338,11 +338,12 @@ const Overview = () => {
               icon={CheckCircle2}
             />
             <SignalCard
-              label="Cargas em atraso"
-              value={formatNumber(snapshot.hero.overdueLoads)}
-              note="Cargas abertas cujo hor\u00e1rio de coleta j\u00e1 passou."
-              icon={AlertTriangle}
+              label="Aguardando revisão"
+              value={formatNumber(snapshot.hero.pendingApprovals)}
+              note="Candidaturas na fila aguardando aprovação ou rejeição pelo operador."
+              icon={ClipboardList}
             />
+
             <SignalCard
               label="Reservadas (candidatura)"
               value={formatNumber(snapshot.hero.reservedCount)}

@@ -10,6 +10,8 @@ import { getRouteInfo } from "../../../infrastructure/geoapify/index.js";
 import {
   parseNullableNumber,
   createRouteLookupKeys,
+  canonicalizeRouteLookupLocation,
+  normalizeRouteLocation,
 } from "../../../domain/operator-admin/route-utils.js";
 import { baseRouteValues } from "../../../domain/operator-admin/base-route-values.js";
 import { parseDriverLoadsQuery } from "../../../domain/operator-admin/schemas.js";
@@ -173,12 +175,24 @@ export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
   }
 }
 
+function _approximateCity(normalizedValue, knownCities) {
+  let best = null;
+  for (const city of knownCities) {
+    if (!city) continue;
+    const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`\\b${escaped}\\b`).test(normalizedValue)) {
+      if (!best || city.length > best.length) best = city;
+    }
+  }
+  return best;
+}
+
 export function buildRouteLabelMap(loadRows) {
   if (!Array.isArray(loadRows) || loadRows.length === 0) {
     return new Map();
   }
 
-  // Build a flat lookup: "originVariant|destinationVariant" -> canonical route label
+  // Exact lookup: "originVariant|destinationVariant" -> canonical route label
   const labelByKey = new Map();
   baseRouteValues.forEach((entry) => {
     createRouteLookupKeys(entry.origin, entry.destination).forEach((key) => {
@@ -186,13 +200,49 @@ export function buildRouteLabelMap(loadRows) {
     });
   });
 
-  return new Map(
+  // Approximate lookup: "canonicalOrigin|canonicalDest" -> route label
+  const labelByCanonical = new Map();
+  const knownCities = new Set();
+  baseRouteValues.forEach((entry) => {
+    const co = canonicalizeRouteLookupLocation(entry.origin);
+    const cd = canonicalizeRouteLookupLocation(entry.destination);
+    if (!labelByCanonical.has(`${co}|${cd}`)) labelByCanonical.set(`${co}|${cd}`, entry.route);
+    if (co) knownCities.add(co);
+    if (cd) knownCities.add(cd);
+  });
+
+  const unmatched = [];
+
+  const result = new Map(
     loadRows.map((row) => {
-      const matchedKey = createRouteLookupKeys(row.origem, row.destino)
+      // 1. Exact match
+      const exactKey = createRouteLookupKeys(row.origem, row.destino)
         .find((key) => labelByKey.has(key));
-      return [row.id, matchedKey ? labelByKey.get(matchedKey) : null];
+      if (exactKey) return [row.id, labelByKey.get(exactKey)];
+
+      // 2. Approximate match — find longest known city name inside normalized string
+      const normOrigin = normalizeRouteLocation(row.origem ?? "");
+      const normDest = normalizeRouteLocation(row.destino ?? "");
+      const approxOrigin = _approximateCity(normOrigin, knownCities);
+      const approxDest = _approximateCity(normDest, knownCities);
+      if (approxOrigin && approxDest) {
+        const approxLabel = labelByCanonical.get(`${approxOrigin}|${approxDest}`);
+        if (approxLabel) return [row.id, approxLabel];
+      }
+
+      unmatched.push({ id: row.id, origem: row.origem, destino: row.destino });
+      return [row.id, null];
     }),
   );
+
+  if (unmatched.length > 0) {
+    console.warn(
+      `[buildRouteLabelMap] ${unmatched.length} carga(s) sem rota correspondente:\n` +
+        unmatched.map((u) => `  id=${u.id}  origem="${u.origem}"  destino="${u.destino}"`).join("\n"),
+    );
+  }
+
+  return result;
 }
 
 export function mapDriverLoadReadModelItem(row) {

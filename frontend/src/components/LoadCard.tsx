@@ -36,6 +36,10 @@ interface LoadCardProps {
   onInterestDialogOpenChange?: (isOpen: boolean) => void;
 }
 
+const CLIENT_LOGOS: Record<string, string> = {
+  shopee: "/brand-logos/shopee-nearby.png",
+};
+
 const LoadCard = memo(({
   loadId,
   dateTime,
@@ -68,6 +72,7 @@ const LoadCard = memo(({
   const kmLabel = routeDistanceLabel || "A confirmar";
   const routeDurationValue = routeDurationLabel?.replace(/^Tempo estimado:\s*/i, "").trim() || null;
   const clientHref = clienteId ? `/motorista/cliente/${clienteId}` : null;
+  const clientLogoUrl = CLIENT_LOGOS[topRightLabel.trim().toLowerCase()] ?? null;
   const [isInterestDialogOpen, setIsInterestDialogOpen] = useState(false);
   const hasInterestDialog = Boolean(loadId);
   const hasDetailsAction = Boolean(detailsHref);
@@ -113,12 +118,20 @@ const LoadCard = memo(({
       <div className="pointer-events-none absolute inset-x-8 top-0 hidden h-px bg-gradient-to-r from-transparent via-primary/25 to-transparent lg:block" />
       <div className="pointer-events-none absolute -right-8 top-8 hidden h-28 w-28 rounded-full bg-primary/8 blur-3xl lg:block" />
 
-      <div className="relative mb-3 flex items-center justify-between sm:mb-5 lg:hidden">
+      <div className="relative mb-3 flex items-center sm:mb-5 lg:hidden">
         <span className="inline-flex items-center gap-1.5 rounded-lg bg-badge px-2.5 py-1 text-[11px] font-bold tracking-wide text-badge-text sm:gap-2 sm:rounded-xl sm:px-3.5 sm:py-1.5 sm:text-xs">
           <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse-glow" />
           {dateTime}
         </span>
-        {clientHref ? (
+        {clientLogoUrl ? (
+          clientHref ? (
+            <Link to={clientHref} aria-label={`Ver dados de ${topRightLabel}`} className="absolute -right-9 top-[60%] -translate-y-1/2">
+              <img src={clientLogoUrl} alt={topRightLabel} className="h-20 w-auto max-w-[200px] object-contain" />
+            </Link>
+          ) : (
+            <img src={clientLogoUrl} alt={topRightLabel} className="absolute -right-9 top-[60%] -translate-y-1/2 h-20 w-auto max-w-[200px] object-contain" />
+          )
+        ) : clientHref ? (
           <Link
             to={clientHref}
             title={`Ver dados de ${topRightLabel}`}
@@ -172,7 +185,7 @@ const LoadCard = memo(({
         <div className="flex-1 space-y-3 sm:space-y-4">
           <div className="space-y-0.5">
             <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground">
-              Origem
+              Coleta
             </p>
             <p className="text-sm font-extrabold tracking-tight text-card-foreground sm:text-base">
               {origemCidade}
@@ -186,7 +199,7 @@ const LoadCard = memo(({
           </div>
           <div className="space-y-0.5">
             <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground">
-              Destino
+              Entrega
             </p>
             <p className="text-sm font-extrabold tracking-tight text-card-foreground sm:text-base">
               {destinoCidade}
@@ -282,13 +295,20 @@ const LoadCard = memo(({
       </div>
 
       <div className="hidden lg:block">
-        <div className="flex items-start justify-between gap-4">
+        <div className="relative flex items-center gap-4">
           <span className="inline-flex items-center gap-1.5 rounded-lg bg-badge px-3 py-1.5 text-[11px] font-semibold tracking-wide text-badge-text">
             <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse-glow" />
             {dateTime}
           </span>
-
-          {clientHref ? (
+          {clientLogoUrl ? (
+            clientHref ? (
+              <Link to={clientHref} aria-label={`Ver dados de ${topRightLabel}`} className="absolute -right-9 top-[60%] -translate-y-1/2">
+                <img src={clientLogoUrl} alt={topRightLabel} className="h-24 w-auto max-w-[240px] object-contain" />
+              </Link>
+            ) : (
+              <img src={clientLogoUrl} alt={topRightLabel} className="absolute -right-9 top-[60%] -translate-y-1/2 h-24 w-auto max-w-[240px] object-contain" />
+            )
+          ) : clientHref ? (
             <Link
               to={clientHref}
               title={`Ver dados de ${topRightLabel}`}

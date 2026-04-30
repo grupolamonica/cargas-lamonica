@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 165" fill="none">
+  <!-- Outer circle -->
+  <circle cx="180" cy="56" r="48" stroke="white" stroke-width="2.2" fill="none" opacity="0.82"/>
+  <!-- Eye / lens shape -->
+  <path d="M136 56 C152 34 166 28 180 28 C194 28 208 34 224 56 C208 78 194 84 180 84 C166 84 152 78 136 56Z" stroke="white" stroke-width="1.6" fill="none" opacity="0.58"/>
+  <!-- Lens subtle fill -->
+  <path d="M142 56 C157 38 169 33 180 33 C191 33 203 38 218 56 C203 74 191 79 180 79 C169 79 157 74 142 56Z" fill="white" opacity="0.07"/>
+  <!-- Pupil -->
+  <circle cx="180" cy="56" r="11" fill="white" opacity="0.88"/>
+  <circle cx="180" cy="56" r="5.5" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="2"/>
+
+  <!-- LAMONICA wordmark -->
+  <text x="180" y="124" font-family="'Arial','Helvetica Neue',Helvetica,sans-serif" font-size="42" font-weight="700" fill="white" text-anchor="middle" letter-spacing="4" opacity="0.95">LAMONICA</text>
+
+  <!-- logística caption -->
+  <text x="180" y="148" font-family="'Arial','Helvetica Neue',Helvetica,sans-serif" font-size="12.5" font-weight="400" fill="white" text-anchor="middle" letter-spacing="7" opacity="0.65">logística</text>
+</svg>

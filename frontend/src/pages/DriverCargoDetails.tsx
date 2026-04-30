@@ -76,6 +76,7 @@ const CARGO_DETAILS_SELECT =
 const LEGACY_CARGO_DETAILS_SELECT =
   "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, tipo_veiculo, peso, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido)";
 
+
 const reputationLabels = [
   { label: "Boa comunicação", activeKey: "reputacao_boa_comunicacao" },
   { label: "Bom pagador", activeKey: "reputacao_bom_pagador" },
@@ -528,7 +529,7 @@ const DriverCargoDetails = () => {
                   {buildDriverPaymentDetails(cargo.valor, cargo.bonus)}
                 </p>
                 <div className="mt-5 space-y-2 text-sm text-white/82">
-                  <p className="hidden sm:block">Cliente: {formatMaybeText(cliente?.nome, "Cliente não informado")}</p>
+                  <p className="hidden sm:block">Cliente: {formatMaybeText(cliente?.nome?.trim(), "Cliente não informado")}</p>
                   <p>Janela estimada: {estimatedTime}</p>
                 </div>
               </div>
@@ -603,7 +604,7 @@ const DriverCargoDetails = () => {
                 Cliente da carga
               </CardDescription>
               <CardTitle className="text-2xl tracking-tight text-foreground">
-                {formatMaybeText(cliente?.nome, "Cliente não informado")}
+                {formatMaybeText(cliente?.nome?.trim(), "Cliente não informado")}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
