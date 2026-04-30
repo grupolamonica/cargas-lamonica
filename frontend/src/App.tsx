@@ -4,7 +4,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import DashboardLayout from "./components/DashboardLayout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -79,9 +79,11 @@ const App = () => {
                 <Route path="/cargas/:cargoId" element={<DriverCargoDetails />} />
                 {/* Admin Login */}
                 <Route path="/painel-x7k9m2" element={<AdminLogin />} />
+                {/* Default: / always redirects to /motorista */}
+                <Route path="/" element={<Navigate to="/motorista" replace />} />
                 {/* Admin Dashboard (protected) */}
                 <Route element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
-                  <Route path="/" element={<Overview />} />
+                  <Route path="/painel" element={<Overview />} />
                   <Route path="/clientes" element={<ManageClientes />} />
                   <Route path="/cargas" element={<ManageCargas />} />
                   <Route path="/rotas" element={<ManageRoutes />} />
