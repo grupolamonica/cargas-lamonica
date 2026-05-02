@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { fetchSponsorClicks } from "@/services/readModels";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -191,6 +192,13 @@ const Overview = () => {
   });
 
   const snapshot = overviewQuery.data;
+
+  const sponsorClicksQuery = useQuery({
+    queryKey: ["operator", "sponsor-clicks"] as const,
+    queryFn: fetchSponsorClicks,
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+  });
 
   const invalidateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -441,6 +449,47 @@ const Overview = () => {
                   </div>
                 )}
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Sponsor Clicks Analytics */}
+          <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
+            <CardHeader className="space-y-3">
+              <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
+                Parceiros
+              </CardDescription>
+              <CardTitle className="text-2xl tracking-tight text-foreground">
+                Cliques em parceiros
+              </CardTitle>
+              <CardDescription className="max-w-2xl text-sm leading-relaxed">
+                Total de cliques em anuncios do carrossel nos ultimos 30 dias.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {sponsorClicksQuery.isLoading ? (
+                <div className="space-y-2">
+                  <Skeleton className="h-10 w-full rounded-2xl" />
+                  <Skeleton className="h-10 w-full rounded-2xl" />
+                </div>
+              ) : sponsorClicksQuery.data?.items && sponsorClicksQuery.data.items.length > 0 ? (
+                <div className="space-y-3">
+                  {sponsorClicksQuery.data.items.map((row) => (
+                    <div
+                      key={row.brand}
+                      className="admin-card-surface-strong flex items-center justify-between rounded-[24px] border px-4 py-3 shadow-[0_18px_38px_-32px_rgba(15,23,42,0.18)]"
+                    >
+                      <p className="text-sm font-semibold text-foreground">{row.brand}</p>
+                      <Badge variant="outline" className="tabular-nums">
+                        {row.clicks.toLocaleString("pt-BR")} clique{row.clicks !== 1 ? "s" : ""}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
+                  Nenhum clique registrado nos ultimos 30 dias.
+                </div>
+              )}
             </CardContent>
           </Card>
 

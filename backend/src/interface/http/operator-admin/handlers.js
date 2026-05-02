@@ -58,6 +58,7 @@ import {
 import { assertOperatorAccessLevel, assertOperatorPermission, hasOperatorPermission } from "../../../application/load-claims/operator-access.js";
 import { requireOperatorSession } from "../../../application/load-claims/auth.js";
 import { createSupabaseAdminClient, syncGoogleSheetLoads } from "../../../application/google-sheets/google-sheet-loads.js";
+import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 
 const IDEMPOTENCY_TTL_MS = 5 * 60_000;
 const MAX_IDEMPOTENCY_CACHE_SIZE = 5_000;
@@ -855,4 +856,38 @@ export async function resolveRedactPublicLeadPiiResponse(request) {
       };
     },
   );
+}
+
+export async function resolveDriverSponsorClicksResponse(request) {
+  const correlationId = getCorrelationId(request);
+
+  try {
+    await requireOperatorSession(request);
+
+    const rows = await withPgClient(async (client) => {
+      const result = await client.query(`
+        SELECT data->>'brand' AS brand, COUNT(*)::int AS clicks
+        FROM public.analytics_events
+        WHERE event_type = 'SPONSOR_CLICK'
+          AND created_at >= now() - interval '30 days'
+        GROUP BY data->>'brand'
+        ORDER BY clicks DESC
+        LIMIT 20
+      `);
+      return result.rows;
+    });
+
+    return {
+      statusCode: 200,
+      payload: {
+        items: rows,
+        meta: { correlationId },
+      },
+    };
+  } catch (error) {
+    if (error instanceof UnauthorizedError) {
+      return { statusCode: 401, payload: { error: "UNAUTHORIZED", meta: { correlationId } } };
+    }
+    return { statusCode: 500, payload: { error: "INTERNAL_ERROR", meta: { correlationId } } };
+  }
 }

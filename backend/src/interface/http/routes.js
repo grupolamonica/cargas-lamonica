@@ -55,12 +55,15 @@ import {
   resolveUpdateOperatorClienteResponse,
   resolveUpdateOperatorDriverProfileResponse,
   resolveUpdateOperatorRouteResponse,
+  resolveDriverSponsorClicksResponse,
+  resolveDriverRegionsResponse,
 } from "./operator-admin/handlers.js";
 
 import {
   resolveDriverLoadFacetsResponse,
   resolveDriverLoadsReadModelResponse,
   resolveDriverPortalVisitResponse,
+  resolveDriverSponsorClickResponse,
 } from "./public-loads/handlers.js";
 
 import { resolveRouteInfoResponse } from "./route-info.handler.js";
@@ -131,6 +134,7 @@ export function registerRoutes(app) {
   router.get("/api/driver/loads", wrap(resolveDriverLoadsReadModelResponse));
   router.get("/api/driver/loads/facets", wrap(resolveDriverLoadFacetsResponse));
   router.post("/api/driver/portal-view", wrap(resolveDriverPortalVisitResponse));
+  router.post("/api/driver/sponsor-click", wrap(resolveDriverSponsorClickResponse));
 
   // Driver registration & profile
   // resolveDriverProfileResponse despacha GET vs PUT via request.method internamente
@@ -160,6 +164,8 @@ export function registerRoutes(app) {
   router.get("/api/operator/dashboard", wrap(resolveOperatorDashboardReadModelResponse));
   router.get("/api/operator/audit-logs", wrap(resolveOperatorAuditLogsResponse));
   router.get("/api/operator/driver-flow-metrics", wrap(resolveOperatorDriverFlowMetricsResponse));
+  router.get("/api/operator/sponsor-clicks", wrap(resolveDriverSponsorClicksResponse));
+  router.get("/api/operator/driver-regions", wrap(resolveDriverRegionsResponse));
 
   // Operator leads
   router.get("/api/operator/leads", wrap(resolveOperatorPublicLoadLeadsResponse));

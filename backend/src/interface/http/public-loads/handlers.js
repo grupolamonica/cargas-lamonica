@@ -12,6 +12,7 @@ import {
   getHealthSnapshot,
 } from "../../../application/operator-admin/service.js";
 import { recordDriverPortalVisit } from "../../../domain/operator-admin/driver-flow-metrics.js";
+import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 
 const PORTAL_VISIT_RATE_LIMIT_MS = 30_000;
 const portalVisitRateLimitByIp = new Map();
@@ -240,5 +241,27 @@ export async function resolveHealthResponse(request) {
         },
       },
     };
+  }
+}
+
+export async function resolveDriverSponsorClickResponse(request) {
+  const correlationId = getCorrelationId(request);
+  const brand = request.body?.brand;
+
+  if (!brand || typeof brand !== "string") {
+    return { statusCode: 400, payload: { error: "MISSING_BRAND", meta: { correlationId } } };
+  }
+
+  try {
+    await withPgClient(async (client) => {
+      await client.query(
+        "INSERT INTO public.analytics_events (event_type, data) VALUES ($1, $2)",
+        ["SPONSOR_CLICK", JSON.stringify({ brand: brand.slice(0, 120) })],
+      );
+    });
+    return { statusCode: 200, payload: { ok: true, meta: { correlationId } } };
+  } catch {
+    // fire-and-forget: don't fail the request if analytics write fails
+    return { statusCode: 200, payload: { ok: false, meta: { correlationId } } };
   }
 }

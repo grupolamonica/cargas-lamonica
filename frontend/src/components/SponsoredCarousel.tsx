@@ -95,6 +95,13 @@ export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
                     rel="noreferrer"
                     className="relative block overflow-hidden"
                     style={{ aspectRatio: "16/7" }}
+                    onClick={() => {
+                      void fetch("/api/driver/sponsor-click", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ brand: slide.brand }),
+                      }).catch(() => {});
+                    }}
                   >
                     {/* background image */}
                     <img

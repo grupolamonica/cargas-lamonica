@@ -703,3 +703,29 @@ export async function fetchDriverFlowMetrics(query: { dateFrom?: string; dateTo?
 
   return requestJson<DriverFlowMetricsResponse>(url, { accessToken });
 }
+
+export interface SponsorClickRow {
+  brand: string;
+  clicks: number;
+}
+
+export async function fetchSponsorClicks() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ items: SponsorClickRow[]; meta: { correlationId: string } }>(
+    "/api/operator/sponsor-clicks",
+    { accessToken },
+  );
+}
+
+export interface DriverRegionRow {
+  state: string;
+  count: number;
+}
+
+export async function fetchDriverRegions() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ items: DriverRegionRow[]; meta: { correlationId: string } }>(
+    "/api/operator/driver-regions",
+    { accessToken },
+  );
+}
