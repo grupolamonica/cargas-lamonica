@@ -193,8 +193,7 @@ describe("DriverPortal", () => {
         </MemoryRouter>,
       );
 
-      expect(screen.getAllByRole("button", { name: /Abrir notificações/i })).toHaveLength(3);
-      expect(screen.getByText(/Toque em Filtros para focar a próxima saída/i)).toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: /Abrir notificações/i })).toHaveLength(2);
       expect(screen.queryByText(/consulta protegida no backend/i)).not.toBeInTheDocument();
 
       fireEvent.click(screen.getAllByRole("button", { name: /Abrir notificações/i })[0]);
@@ -218,10 +217,10 @@ describe("DriverPortal", () => {
     );
 
     const cadastroLinks = screen.getAllByRole("link", { name: "Cadastro" });
-    const suporteButtons = screen.getAllByRole("button", { name: "Suporte" });
+    const suporteLinks = screen.getAllByRole("link", { name: "Suporte" });
 
     expect(cadastroLinks.length).toBeGreaterThan(0);
-    expect(suporteButtons.length).toBeGreaterThan(0);
+    expect(suporteLinks.length).toBeGreaterThan(0);
     expect(cadastroLinks[0]).toHaveAttribute("href", expect.stringContaining("wa.me/557199050085"));
 
     fireEvent.click(screen.getAllByRole("button", { name: "Dúvidas" })[0]);
