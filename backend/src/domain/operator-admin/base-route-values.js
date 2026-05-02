@@ -135,7 +135,7 @@ export const baseRouteValues = [
     distanceKm: 1855,
   },
   {
-    // TODO: confirmar valor e distância com operador (estimativa proporcional a FRANCO DA ROCHA X JABOATAO)
+    // Valor: confirmar com operador — carga anterior na rota registrada por R$ 18.700
     route: "SAO JOSE DO RIO PRETO X JABOATAO DOS GUARARAPES",
     origin: "SAO JOSE DO RIO PRETO",
     destination: "JABOATAO DOS GUARARAPES",
