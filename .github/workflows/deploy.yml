@@ -188,7 +188,7 @@ jobs:
             EOF
 
             # Domain for HTTPS Traefik routers
-            export DOMAIN="lamonica.grupolamonica.com.br"
+            export DOMAIN="cargas.grupolamonica.com"
 
             # Build only aspx-renewal locally (frontend/backend come from GHCR above)
             docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.domain.yml -f docker-compose.deploy.yml build aspx-renewal
