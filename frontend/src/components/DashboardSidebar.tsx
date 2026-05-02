@@ -50,7 +50,7 @@ interface NavigationItem {
 /* ─────────────────────────── Data ──────────────────────────── */
 
 const navigationItems: NavigationItem[] = [
-  { icon: LayoutDashboard, label: "Painel", path: "/" },
+  { icon: LayoutDashboard, label: "Painel", path: "/painel" },
   { icon: Building2, label: "Clientes", path: "/clientes" },
   { icon: Package, label: "Cargas", path: "/cargas" },
   { icon: Route, label: "Rotas", path: "/rotas" },
