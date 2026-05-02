@@ -5,11 +5,9 @@ import {
   CheckCircle2,
   ClipboardList,
   Layers3,
-  MapPinned,
   MessagesSquare,
   ShieldCheck,
   Swords,
-  TimerReset,
   Truck,
   UserX,
 } from "lucide-react";
@@ -405,7 +403,7 @@ const Overview = () => {
               </CardDescription>
             </CardHeader>
             <CardContent className="pt-0">
-              <div className="space-y-3">
+              <div className="max-h-[368px] overflow-y-auto space-y-3 pr-1">
                 {snapshot.attentionLoads.length > 0 ? (
                   snapshot.attentionLoads.map((load) => (
                     <div
@@ -446,63 +444,6 @@ const Overview = () => {
             </CardContent>
           </Card>
 
-          {/* Recent Activity (kept as-is) */}
-          <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
-            <CardHeader className="space-y-3">
-              <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
-                Pulso operacional
-              </CardDescription>
-              <CardTitle className="text-2xl tracking-tight text-foreground">
-                Atividade recente da malha, da fila publica e das disputas
-              </CardTitle>
-              <CardDescription className="max-w-2xl text-sm leading-relaxed">
-                Tudo vindo de movimentos reais das tabelas de cargas, leads publicos e claims digitais.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <div className="space-y-3">
-                {snapshot.recentActivity.length > 0 ? (
-                  snapshot.recentActivity.map((activity) => (
-                    <div
-                      key={activity.id}
-                      className="admin-card-surface-strong flex flex-col gap-3 rounded-[24px] border px-4 py-4 shadow-[0_18px_38px_-32px_rgba(15,23,42,0.18)] sm:flex-row sm:items-center sm:justify-between"
-                    >
-                      <div className="flex items-start gap-3">
-                        <div
-                          className={`mt-0.5 flex h-10 w-10 items-center justify-center rounded-2xl ${
-                            activity.type === "lead"
-                              ? "bg-accent/12 text-accent"
-                              : activity.type === "claim"
-                                ? "bg-emerald-500/12 text-emerald-700"
-                                : "bg-primary/10 text-primary"
-                          }`}
-                        >
-                          {activity.type === "lead" ? (
-                            <MessagesSquare className="h-4 w-4" />
-                          ) : activity.type === "claim" ? (
-                            <TimerReset className="h-4 w-4" />
-                          ) : (
-                            <MapPinned className="h-4 w-4" />
-                          )}
-                        </div>
-                        <div>
-                          <p className="text-sm font-semibold text-foreground">{activity.title}</p>
-                          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{activity.description}</p>
-                        </div>
-                      </div>
-                      <div className="pl-[52px] text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground sm:pl-0">
-                        {activity.relativeTime}
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
-                    Nenhuma atividade recente encontrada nas tabelas monitoradas.
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
         </main>
       )}
     </div>
