@@ -17,7 +17,8 @@ TOTAL=0
 
 # Resolve backend container's internal IP in the Docker network
 BACKEND_IP=$(docker inspect "${BACKEND_CONTAINER}" \
-  --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null | head -1)
+  --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{"\n"}}{{end}}' 2>/dev/null \
+  | grep -v '^$' | head -1)
 
 if [ -z "${BACKEND_IP}" ]; then
   echo "ERROR: Could not resolve IP for container ${BACKEND_CONTAINER}"
