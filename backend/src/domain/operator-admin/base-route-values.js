@@ -135,6 +135,14 @@ export const baseRouteValues = [
     distanceKm: 1855,
   },
   {
+    // TODO: confirmar valor e distância com operador (estimativa proporcional a FRANCO DA ROCHA X JABOATAO)
+    route: "SAO JOSE DO RIO PRETO X JABOATAO DOS GUARARAPES",
+    origin: "SAO JOSE DO RIO PRETO",
+    destination: "JABOATAO DOS GUARARAPES",
+    value: 20000,
+    distanceKm: 2850,
+  },
+  {
     route: "SAO PAULO X SIMOES FILHO",
     origin: "SAO PAULO",
     destination: "SIMOES FILHO",
