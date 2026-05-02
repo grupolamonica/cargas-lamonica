@@ -65,6 +65,25 @@ export const buildPeriodLabel = (dateFrom?: Date, dateTo?: Date) => {
 export const toTitleCase = (str: string) =>
   str.toLowerCase().replace(/(?:^|[\s-])(\S)/g, (m) => m.toUpperCase());
 
+/** Maps ASCII canonical city names (as stored in routeLabel) to their accented display forms. */
+const CITY_ACCENT_MAP: Record<string, string> = {
+  "CAMACARI": "Camaçari",
+  "JABOATAO DOS GUARARAPES": "Jaboatão dos Guararapes",
+  "JAGUARIUNA": "Jaguariúna",
+  "MACAE": "Macaé",
+  "MACEIO": "Maceió",
+  "SANTANA DE PARNAIBA": "Santana de Parnaíba",
+  "SAO JOAO DE MERITI": "São João de Meriti",
+  "SAO JOAO DO MERITI": "São João do Meriti",
+  "SAO JOSE DO RIO PRETO": "São José do Rio Preto",
+  "SAO PAULO": "São Paulo",
+  "SIMOES FILHO": "Simões Filho",
+};
+
+/** Returns accented city name from routeLabel canonical form, falls back to toTitleCase. */
+export const toDisplayCityName = (name: string): string =>
+  CITY_ACCENT_MAP[name.trim().toUpperCase()] ?? toTitleCase(name);
+
 export const formatLocationLabel = (location: string) => {
   const { city, uf } = splitLocation(location);
   const displayCity = toTitleCase(city);
