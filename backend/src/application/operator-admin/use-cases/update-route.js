@@ -6,6 +6,7 @@ import {
   isMissingRouteCatalogColumnsError,
   resolveRouteMetricsIfNeeded,
 } from "./_shared.js";
+import { createRouteLookupKeys } from "../../../domain/operator-admin/route-utils.js";
 
 export async function updateOperatorRoute({ routeId, operatorId, payload, requestIp, correlationId }) {
   return withPgTransaction(async (client) => {
@@ -65,24 +66,38 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
     let cascadedCargaCount = 0;
 
     try {
-      const cascadeResult = await client.query(
-        `
-          UPDATE public.cargas
-          SET
-            valor = COALESCE($1, valor), bonus = COALESCE($2, bonus),
-            perfil = COALESCE($3, perfil), distancia_km = COALESCE($4, distancia_km),
-            duracao_horas = COALESCE($5, duracao_horas)
-          WHERE status IN ('OPEN', 'DRAFT')
-            AND LOWER(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(origem, '[̀-ͯ]', '', 'g'), '\\s+', ' ', 'g'))) = $6
-            AND LOWER(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(destino, '[̀-ͯ]', '', 'g'), '\\s+', ' ', 'g'))) = $7
-        `,
-        [
-          payload.valor_padrao, payload.bonus_padrao, payload.perfil_padrao,
-          resolvedMetrics.distancia_km, resolvedMetrics.duracao_horas,
-          originKey, destinationKey,
-        ],
+      // Fetch all OPEN/DRAFT cargas and match via JS canonicalization.
+      // SQL-level normalization cannot resolve Shopee abbreviations like
+      // "SJ Rio Preto-03 / SP" → "sao jose do rio preto", so we use
+      // createRouteLookupKeys (which calls canonicalizeRouteLookupLocation)
+      // to identify matching cargas by ID, then update by UUID array.
+      const { rows: openCargas } = await client.query(
+        `SELECT id, origem, destino FROM public.cargas WHERE status IN ('OPEN', 'DRAFT')`,
       );
-      cascadedCargaCount = cascadeResult.rowCount || 0;
+
+      const routeKey = `${originKey}|${destinationKey}`;
+      const matchingIds = openCargas
+        .filter((row) => createRouteLookupKeys(row.origem, row.destino).includes(routeKey))
+        .map((row) => row.id);
+
+      if (matchingIds.length > 0) {
+        const cascadeResult = await client.query(
+          `
+            UPDATE public.cargas
+            SET
+              valor = COALESCE($1, valor), bonus = COALESCE($2, bonus),
+              perfil = COALESCE($3, perfil), distancia_km = COALESCE($4, distancia_km),
+              duracao_horas = COALESCE($5, duracao_horas)
+            WHERE id = ANY($6::uuid[])
+          `,
+          [
+            payload.valor_padrao, payload.bonus_padrao, payload.perfil_padrao,
+            resolvedMetrics.distancia_km, resolvedMetrics.duracao_horas,
+            matchingIds,
+          ],
+        );
+        cascadedCargaCount = cascadeResult.rowCount || 0;
+      }
     } catch (cascadeError) {
       warnings.push("A rota foi salva, mas nao foi possivel atualizar as cargas abertas automaticamente.");
     }
