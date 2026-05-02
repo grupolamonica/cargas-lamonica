@@ -20,7 +20,7 @@ check() {
   TOTAL=$((TOTAL + 1))
 
   local actual_status
-  actual_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${url}" 2>/dev/null) || actual_status="000"
+  actual_status=$(curl -sL -o /dev/null -w "%{http_code}" --max-time 10 "${url}" 2>/dev/null) || actual_status="000"
 
   if [ "${actual_status}" = "${expected_status}" ]; then
     echo "  PASS  [${actual_status}] ${label}"
