@@ -129,6 +129,27 @@ async function bootstrap() {
     );
   }
 
+  // 2b. Garantir tabela analytics_events (idempotente — cria se não existir)
+  //     Isso evita dependência de migração manual no Supabase para analytics.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS public.analytics_events (
+        id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+        event_type text NOT NULL,
+        data jsonb DEFAULT '{}',
+        created_at timestamptz DEFAULT now() NOT NULL
+      )
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_analytics_events_type_created
+        ON public.analytics_events(event_type, created_at DESC)
+    `);
+    console.info("[lamonica-backend] analytics_events: OK");
+  } catch (err) {
+    // Não bloqueia o startup — tabela pode já existir com permissões diferentes
+    console.warn("[lamonica-backend] analytics_events setup warning:", err?.message);
+  }
+
   // 3. Registrar rotas de negócio (43 endpoints)
   registerRoutes(app);
 

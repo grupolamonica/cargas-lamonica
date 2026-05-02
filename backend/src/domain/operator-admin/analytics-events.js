@@ -4,6 +4,7 @@
  */
 import { withPgClient } from "../../infrastructure/pg/postgres.js";
 import { getGeoapifyJson } from "../../infrastructure/geoapify/geoapify-client.js";
+import { getIpRegion } from "../../infrastructure/ipgeo/ipgeo-client.js";
 
 /**
  * Reverse-geocodes { lat, lon } via Geoapify and stores the Brazilian state
@@ -38,6 +39,24 @@ export async function recordDriverRegion({ lat, lon }) {
     await client.query(
       "INSERT INTO public.analytics_events (event_type, data) VALUES ($1, $2)",
       ["DRIVER_REGION_VIEW", JSON.stringify({ state, city })],
+    );
+  });
+}
+
+/**
+ * Automatically looks up the driver's region via IP address (no browser permission needed).
+ * Uses ip-api.com free tier — fire-and-forget, caller must .catch(() => {}).
+ *
+ * @param {{ ip: string }} params
+ */
+export async function recordDriverRegionFromIp({ ip }) {
+  const geo = await getIpRegion(ip, { timeoutMs: 3000 });
+  if (!geo?.state) return;
+
+  await withPgClient(async (client) => {
+    await client.query(
+      "INSERT INTO public.analytics_events (event_type, data) VALUES ($1, $2)",
+      ["DRIVER_REGION_VIEW", JSON.stringify({ state: geo.state, city: geo.city })],
     );
   });
 }
