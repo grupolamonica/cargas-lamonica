@@ -52,7 +52,7 @@ import { useLeadNotifications } from "@/hooks/useLeadNotifications";
 import lamonicaLogo from "@/assets/lamonica-logo-white.png";
 import { SponsoredCarousel } from "@/components/SponsoredCarousel";
 
-const DRIVER_SUPPORT_WHATSAPP_NUMBER = "557199050085";
+const DRIVER_SUPPORT_WHATSAPP_NUMBER = "5571939950665";
 const DRIVER_CADASTRO_MESSAGE =
   "Olá, quero fazer meu cadastro para receber cargas da Lamonica.";
 const DRIVER_SAC_MESSAGE =

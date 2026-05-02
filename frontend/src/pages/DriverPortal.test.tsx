@@ -221,7 +221,7 @@ describe("DriverPortal", () => {
 
     expect(cadastroLinks.length).toBeGreaterThan(0);
     expect(suporteLinks.length).toBeGreaterThan(0);
-    expect(cadastroLinks[0]).toHaveAttribute("href", expect.stringContaining("wa.me/557199050085"));
+    expect(cadastroLinks[0]).toHaveAttribute("href", expect.stringContaining("wa.me/5571939950665"));
 
     fireEvent.click(screen.getAllByRole("button", { name: "Dúvidas" })[0]);
 
