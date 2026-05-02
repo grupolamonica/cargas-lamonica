@@ -204,4 +204,4 @@ jobs:
           script: |
             set -euo pipefail
             cd /opt/apps/lamonica
-            bash scripts/smoke-test.sh http://${{ secrets.VPS_HOST }}
+            bash scripts/smoke-test.sh
