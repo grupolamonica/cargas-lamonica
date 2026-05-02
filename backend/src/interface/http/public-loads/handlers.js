@@ -12,6 +12,7 @@ import {
   getHealthSnapshot,
 } from "../../../application/operator-admin/service.js";
 import { recordDriverPortalVisit } from "../../../domain/operator-admin/driver-flow-metrics.js";
+import { recordDriverRegion } from "../../../domain/operator-admin/analytics-events.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 
 const PORTAL_VISIT_RATE_LIMIT_MS = 30_000;
@@ -207,6 +208,15 @@ export async function resolveDriverPortalVisitResponse(request) {
 
   try {
     await recordDriverPortalVisit({ requestIp, correlationId });
+
+    // Optional geolocation: accept { lat, lon } from frontend navigator.geolocation
+    const body = request.body;
+    const lat = typeof body?.lat === "number" ? body.lat : null;
+    const lon = typeof body?.lon === "number" ? body.lon : null;
+    if (lat !== null && lon !== null) {
+      recordDriverRegion({ lat, lon }).catch(() => {});
+    }
+
     return {
       statusCode: 200,
       payload: { ok: true, meta: { correlationId } },

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchSponsorClicks } from "@/services/readModels";
+import { fetchSponsorClicks, fetchDriverRegions } from "@/services/readModels";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -198,6 +198,13 @@ const Overview = () => {
     queryFn: fetchSponsorClicks,
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
+  });
+
+  const driverRegionsQuery = useQuery({
+    queryKey: ["operator", "driver-regions"] as const,
+    queryFn: fetchDriverRegions,
+    staleTime: 10 * 60_000,
+    refetchInterval: 10 * 60_000,
   });
 
   const invalidateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -449,6 +456,47 @@ const Overview = () => {
                   </div>
                 )}
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Driver Regions Analytics */}
+          <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
+            <CardHeader className="space-y-3">
+              <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
+                Localizacao
+              </CardDescription>
+              <CardTitle className="text-2xl tracking-tight text-foreground">
+                Regioes dos motoristas
+              </CardTitle>
+              <CardDescription className="max-w-2xl text-sm leading-relaxed">
+                Estados de onde os motoristas acessaram o portal nos ultimos 30 dias (requer permissao de localizacao no dispositivo).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {driverRegionsQuery.isLoading ? (
+                <div className="space-y-2">
+                  <Skeleton className="h-10 w-full rounded-2xl" />
+                  <Skeleton className="h-10 w-full rounded-2xl" />
+                </div>
+              ) : driverRegionsQuery.data?.items && driverRegionsQuery.data.items.length > 0 ? (
+                <div className="space-y-3">
+                  {driverRegionsQuery.data.items.map((row) => (
+                    <div
+                      key={row.state}
+                      className="admin-card-surface-strong flex items-center justify-between rounded-[24px] border px-4 py-3 shadow-[0_18px_38px_-32px_rgba(15,23,42,0.18)]"
+                    >
+                      <p className="text-sm font-semibold text-foreground">{row.state}</p>
+                      <Badge variant="outline" className="tabular-nums">
+                        {row.count.toLocaleString("pt-BR")} acesso{row.count !== 1 ? "s" : ""}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
+                  Nenhuma localizacao registrada. Motoristas precisam permitir acesso a localizacao no browser.
+                </div>
+              )}
             </CardContent>
           </Card>
 

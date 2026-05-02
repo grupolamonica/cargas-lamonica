@@ -154,7 +154,25 @@ export function useDriverLoads() {
       const STORAGE_KEY = "lamonica-driver-portal-visit-recorded";
       if (typeof window !== "undefined" && !sessionStorage.getItem(STORAGE_KEY)) {
         sessionStorage.setItem(STORAGE_KEY, "1");
-        void fetch("/api/driver/portal-view", { method: "POST" }).catch(() => {});
+
+        const postVisit = (body?: { lat: number; lon: number }) => {
+          const init: RequestInit = body
+            ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+            : { method: "POST" };
+          void fetch("/api/driver/portal-view", init).catch(() => {});
+        };
+
+        // Try to include geolocation (non-blocking, no UI impact).
+        // If denied or unavailable, still records the visit without location.
+        if (typeof navigator !== "undefined" && "geolocation" in navigator) {
+          navigator.geolocation.getCurrentPosition(
+            ({ coords }) => postVisit({ lat: coords.latitude, lon: coords.longitude }),
+            () => postVisit(),
+            { timeout: 5000, maximumAge: 10 * 60_000 },
+          );
+        } else {
+          postVisit();
+        }
       }
     } catch {
       // sessionStorage unavailable (private mode): ignore

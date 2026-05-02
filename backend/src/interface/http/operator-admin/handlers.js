@@ -858,6 +858,41 @@ export async function resolveRedactPublicLeadPiiResponse(request) {
   );
 }
 
+export async function resolveDriverRegionsResponse(request) {
+  const correlationId = getCorrelationId(request);
+
+  try {
+    await requireOperatorSession(request);
+
+    const rows = await withPgClient(async (client) => {
+      const result = await client.query(`
+        SELECT data->>'state' AS state, COUNT(*)::int AS count
+        FROM public.analytics_events
+        WHERE event_type = 'DRIVER_REGION_VIEW'
+          AND created_at >= now() - interval '30 days'
+          AND data->>'state' IS NOT NULL
+        GROUP BY data->>'state'
+        ORDER BY count DESC
+        LIMIT 10
+      `);
+      return result.rows;
+    });
+
+    return {
+      statusCode: 200,
+      payload: {
+        items: rows,
+        meta: { correlationId },
+      },
+    };
+  } catch (error) {
+    if (error instanceof UnauthorizedError) {
+      return { statusCode: 401, payload: { error: "UNAUTHORIZED", meta: { correlationId } } };
+    }
+    return { statusCode: 500, payload: { error: "INTERNAL_ERROR", meta: { correlationId } } };
+  }
+}
+
 export async function resolveDriverSponsorClicksResponse(request) {
   const correlationId = getCorrelationId(request);
 
