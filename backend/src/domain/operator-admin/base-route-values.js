@@ -135,12 +135,13 @@ export const baseRouteValues = [
     distanceKm: 1855,
   },
   {
-    // TODO: confirmar valor e distância com operador (estimativa proporcional a FRANCO DA ROCHA X JABOATAO)
+    // Distância verificada via Geoapify routing (2026-05-02): 2546 km
+    // Valor: confirmar com operador — carga anterior na rota registrada por R$ 18.700
     route: "SAO JOSE DO RIO PRETO X JABOATAO DOS GUARARAPES",
     origin: "SAO JOSE DO RIO PRETO",
     destination: "JABOATAO DOS GUARARAPES",
     value: 20000,
-    distanceKm: 2850,
+    distanceKm: 2546,
   },
   {
     route: "SAO PAULO X SIMOES FILHO",
