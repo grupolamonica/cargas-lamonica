@@ -187,6 +187,14 @@ jobs:
                 image: ${BACKEND_TAG}
             EOF
 
+            # Inject ASPX GitHub token into backend.env (required for ASPX sync button)
+            # Secret: ASPX_GITHUB_TOKEN (PAT with actions:write / workflow scope on lamonica-cargas-platform)
+            if [ -n "${{ secrets.ASPX_GITHUB_TOKEN }}" ]; then
+              grep -v "^GITHUB_TOKEN=" backend.env > backend.env.tmp 2>/dev/null || true
+              echo "GITHUB_TOKEN=${{ secrets.ASPX_GITHUB_TOKEN }}" >> backend.env.tmp
+              mv backend.env.tmp backend.env
+            fi
+
             # Domain for HTTPS Traefik routers
             export DOMAIN="cargas.grupolamonica.com"
 
