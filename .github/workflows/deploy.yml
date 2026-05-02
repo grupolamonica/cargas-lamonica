@@ -152,12 +152,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy via SSH
+      - name: Deploy + Smoke Tests via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 15m
           script: |
             set -euo pipefail
             cd /opt/apps/lamonica
@@ -195,13 +196,5 @@ jobs:
             # Clean up old images (keep last 3)
             docker image prune -f --filter "until=72h" || true
 
-      - name: Run smoke tests
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
-            set -euo pipefail
-            cd /opt/apps/lamonica
+            # Run smoke tests in same SSH session (avoids IP rotation / re-auth issues)
             bash scripts/smoke-test.sh
