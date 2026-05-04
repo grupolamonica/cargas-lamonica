@@ -12,10 +12,6 @@ import {
   getHealthSnapshot,
 } from "../../../application/operator-admin/service.js";
 import { recordDriverPortalVisit } from "../../../domain/operator-admin/driver-flow-metrics.js";
-import {
-  recordDriverRegion,
-  recordDriverRegionFromIp,
-} from "../../../domain/operator-admin/analytics-events.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 
 const PORTAL_VISIT_RATE_LIMIT_MS = 30_000;
@@ -211,17 +207,6 @@ export async function resolveDriverPortalVisitResponse(request) {
 
   try {
     await recordDriverPortalVisit({ requestIp, correlationId });
-
-    // Region tracking: use precise lat/lon when provided, otherwise fall back to IP geolocation.
-    // IP geo is automatic — no browser permission required, fires for every portal visit.
-    const body = request.body;
-    const lat = typeof body?.lat === "number" ? body.lat : null;
-    const lon = typeof body?.lon === "number" ? body.lon : null;
-    if (lat !== null && lon !== null) {
-      recordDriverRegion({ lat, lon }).catch(() => {});
-    } else {
-      recordDriverRegionFromIp({ ip: requestIp }).catch(() => {});
-    }
 
     return {
       statusCode: 200,

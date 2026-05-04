@@ -56,7 +56,6 @@ import {
   resolveUpdateOperatorDriverProfileResponse,
   resolveUpdateOperatorRouteResponse,
   resolveDriverSponsorClicksResponse,
-  resolveDriverRegionsResponse,
 } from "./operator-admin/handlers.js";
 
 import {
@@ -165,7 +164,6 @@ export function registerRoutes(app) {
   router.get("/api/operator/audit-logs", wrap(resolveOperatorAuditLogsResponse));
   router.get("/api/operator/driver-flow-metrics", wrap(resolveOperatorDriverFlowMetricsResponse));
   router.get("/api/operator/sponsor-clicks", wrap(resolveDriverSponsorClicksResponse));
-  router.get("/api/operator/driver-regions", wrap(resolveDriverRegionsResponse));
 
   // Operator leads
   router.get("/api/operator/leads", wrap(resolveOperatorPublicLoadLeadsResponse));

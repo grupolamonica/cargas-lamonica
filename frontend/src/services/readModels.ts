@@ -716,16 +716,3 @@ export async function fetchSponsorClicks() {
     { accessToken },
   );
 }
-
-export interface DriverRegionRow {
-  state: string;
-  count: number;
-}
-
-export async function fetchDriverRegions() {
-  const accessToken = await getOperatorAccessToken();
-  return requestJson<{ items: DriverRegionRow[]; meta: { correlationId: string } }>(
-    "/api/operator/driver-regions",
-    { accessToken },
-  );
-}

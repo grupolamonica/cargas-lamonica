@@ -155,7 +155,6 @@ export function useDriverLoads() {
       if (typeof window !== "undefined" && !sessionStorage.getItem(STORAGE_KEY)) {
         sessionStorage.setItem(STORAGE_KEY, "1");
 
-        // Fire-and-forget portal visit — region is tracked automatically via IP on backend.
         void fetch("/api/driver/portal-view", { method: "POST" }).catch(() => {});
       }
     } catch {
