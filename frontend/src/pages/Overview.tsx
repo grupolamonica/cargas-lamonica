@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchSponsorClicks } from "@/services/readModels";
+import { fetchSponsorClicks, fetchOperatorOverviewDigest } from "@/services/readModels";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -161,9 +161,13 @@ const OVERVIEW_QUERY_KEY = ["operator", "overview-dashboard"] as const;
 const Overview = () => {
   const queryClient = useQueryClient();
   const channelRef = useRef(`operator-overview-${Math.random().toString(36).slice(2, 8)}`);
+  // Realtime is the primary trigger; digest poll (below) is a 5min safety
+  // net for missed events. No refetchInterval here — drops a 30s baseline
+  // poll that previously fired 3x select(500) every cycle.
   const overviewQuery = useQuery({
     queryKey: OVERVIEW_QUERY_KEY,
-    refetchInterval: 30_000,
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
     queryFn: async () => {
       const [cargosResult, leadsResult, claimsResult] = await Promise.all([
         supabase.from("cargas").select(OVERVIEW_CARGO_SELECT).order("created_at", { ascending: false }).limit(500),
@@ -193,11 +197,35 @@ const Overview = () => {
 
   const snapshot = overviewQuery.data;
 
+  // 5min digest poll — backend returns hash of MAX(updated_at)+counts across
+  // cargas/leads/claims. Cheap (3 aggregate scalar queries). When digest
+  // changes, invalidates the expensive snapshot query. Pauses when the tab
+  // is in background. Replaces the previous 30s polling baseline.
+  const lastDigestRef = useRef<string | null>(null);
+  const overviewDigestQuery = useQuery({
+    queryKey: ["operator", "overview-digest"] as const,
+    queryFn: fetchOperatorOverviewDigest,
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+  });
+
+  useEffect(() => {
+    const currentDigest = overviewDigestQuery.data?.digest;
+    if (!currentDigest) return;
+    if (lastDigestRef.current !== null && lastDigestRef.current !== currentDigest) {
+      void queryClient.invalidateQueries({ queryKey: OVERVIEW_QUERY_KEY });
+    }
+    lastDigestRef.current = currentDigest;
+  }, [overviewDigestQuery.data?.digest, queryClient]);
+
   const sponsorClicksQuery = useQuery({
     queryKey: ["operator", "sponsor-clicks"] as const,
     queryFn: fetchSponsorClicks,
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
+    refetchIntervalInBackground: false,
   });
 
   const invalidateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);

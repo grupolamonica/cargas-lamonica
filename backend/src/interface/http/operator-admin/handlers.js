@@ -892,3 +892,40 @@ export async function resolveDriverSponsorClicksResponse(request) {
     return { statusCode: 500, payload: { error: "INTERNAL_ERROR", meta: { correlationId } } };
   }
 }
+
+// Cheap "did anything change?" probe for the operator Overview dashboard.
+// Returns a digest derived from MAX(updated_at) + counts across cargas, leads, claims.
+// Frontend polls this every 5 min — when digest changes, invalidate the
+// expensive 3x select(500) overview query. Realtime is the primary trigger;
+// this digest is the safety net for missed events (network drops, etc.).
+export async function resolveOperatorOverviewDigestResponse(request) {
+  const correlationId = getCorrelationId(request);
+
+  try {
+    await requireOperatorSession(getAuthorizationHeader(request));
+
+    const digest = await withPgClient(async (client) => {
+      const { rows } = await client.query(`
+        SELECT
+          (SELECT COALESCE(EXTRACT(EPOCH FROM MAX(updated_at))::bigint, 0) FROM public.cargas)            AS cargas_ts,
+          (SELECT COUNT(*)::bigint FROM public.cargas)                                                    AS cargas_count,
+          (SELECT COALESCE(EXTRACT(EPOCH FROM MAX(created_at))::bigint, 0) FROM public.load_public_leads) AS leads_ts,
+          (SELECT COUNT(*)::bigint FROM public.load_public_leads)                                         AS leads_count,
+          (SELECT COALESCE(EXTRACT(EPOCH FROM MAX(created_at))::bigint, 0) FROM public.load_claims)       AS claims_ts,
+          (SELECT COUNT(*)::bigint FROM public.load_claims)                                               AS claims_count
+      `);
+      const r = rows[0] || {};
+      return `${r.cargas_ts}:${r.cargas_count}:${r.leads_ts}:${r.leads_count}:${r.claims_ts}:${r.claims_count}`;
+    });
+
+    return {
+      statusCode: 200,
+      payload: { digest, meta: { correlationId } },
+    };
+  } catch (error) {
+    if (error instanceof UnauthorizedError) {
+      return { statusCode: 401, payload: { error: "UNAUTHORIZED", meta: { correlationId } } };
+    }
+    return { statusCode: 500, payload: { error: "INTERNAL_ERROR", meta: { correlationId } } };
+  }
+}

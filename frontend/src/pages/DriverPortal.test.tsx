@@ -8,8 +8,9 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 import DriverPortal from "@/pages/DriverPortal";
 
-const { mockUseQuery } = vi.hoisted(() => ({
+const { mockUseQuery, mockInvalidateQueries } = vi.hoisted(() => ({
   mockUseQuery: vi.fn(),
+  mockInvalidateQueries: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-query", async () => {
@@ -18,6 +19,9 @@ vi.mock("@tanstack/react-query", async () => {
   return {
     ...actual,
     useQuery: mockUseQuery,
+    useQueryClient: () => ({
+      invalidateQueries: mockInvalidateQueries,
+    }),
   };
 });
 
@@ -282,7 +286,7 @@ describe("DriverPortal", () => {
     expect(screen.getAllByText(/Página 2 de 3/i).length).toBeGreaterThan(0);
   });
 
-  it("revalida as cargas do motorista ao voltar para a tela ou reconectar", () => {
+  it("revalida as cargas do motorista ao voltar para a tela e via digest poll de 5min", () => {
     render(
       <MemoryRouter>
         <DriverPortal />
@@ -295,17 +299,25 @@ describe("DriverPortal", () => {
     const facetsQueryOptions = mockUseQuery.mock.calls
       .map(([options]) => options)
       .find((options) => options?.queryKey?.[1] === "loads-facets");
+    const digestQueryOptions = mockUseQuery.mock.calls
+      .map(([options]) => options)
+      .find((options) => options?.queryKey?.[1] === "loads-digest");
 
     expect(loadsQueryOptions).toMatchObject({
-      staleTime: 30_000,
+      staleTime: 60_000,
       refetchOnWindowFocus: true,
       refetchOnReconnect: true,
-      refetchInterval: 45_000,
     });
+    expect(loadsQueryOptions?.refetchInterval).toBeUndefined();
     expect(facetsQueryOptions).toMatchObject({
-      staleTime: 30_000,
-      refetchOnWindowFocus: true,
+      staleTime: 5 * 60_000,
+      refetchOnWindowFocus: false,
       refetchOnReconnect: true,
+    });
+    expect(digestQueryOptions).toMatchObject({
+      refetchInterval: 5 * 60_000,
+      refetchIntervalInBackground: false,
+      refetchOnWindowFocus: true,
     });
   });
 });

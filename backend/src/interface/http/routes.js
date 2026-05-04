@@ -56,10 +56,12 @@ import {
   resolveUpdateOperatorDriverProfileResponse,
   resolveUpdateOperatorRouteResponse,
   resolveDriverSponsorClicksResponse,
+  resolveOperatorOverviewDigestResponse,
 } from "./operator-admin/handlers.js";
 
 import {
   resolveDriverLoadFacetsResponse,
+  resolveDriverLoadsDigestResponse,
   resolveDriverLoadsReadModelResponse,
   resolveDriverPortalVisitResponse,
   resolveDriverSponsorClickResponse,
@@ -132,6 +134,7 @@ export function registerRoutes(app) {
   // Driver / public loads
   router.get("/api/driver/loads", wrap(resolveDriverLoadsReadModelResponse));
   router.get("/api/driver/loads/facets", wrap(resolveDriverLoadFacetsResponse));
+  router.get("/api/driver/loads/digest", wrap(resolveDriverLoadsDigestResponse));
   router.post("/api/driver/portal-view", wrap(resolveDriverPortalVisitResponse));
   router.post("/api/driver/sponsor-click", wrap(resolveDriverSponsorClickResponse));
 
@@ -161,6 +164,7 @@ export function registerRoutes(app) {
 
   // Operator dashboard & audit
   router.get("/api/operator/dashboard", wrap(resolveOperatorDashboardReadModelResponse));
+  router.get("/api/operator/overview/digest", wrap(resolveOperatorOverviewDigestResponse));
   router.get("/api/operator/audit-logs", wrap(resolveOperatorAuditLogsResponse));
   router.get("/api/operator/driver-flow-metrics", wrap(resolveOperatorDriverFlowMetricsResponse));
   router.get("/api/operator/sponsor-clicks", wrap(resolveDriverSponsorClicksResponse));

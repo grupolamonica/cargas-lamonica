@@ -716,3 +716,17 @@ export async function fetchSponsorClicks() {
     { accessToken },
   );
 }
+
+export async function fetchOperatorOverviewDigest() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ digest: string; meta: { correlationId: string } }>(
+    "/api/operator/overview/digest",
+    { accessToken },
+  );
+}
+
+export async function fetchDriverLoadsDigest() {
+  return requestJson<{ digest: string; meta: { correlationId: string } }>(
+    "/api/driver/loads/digest",
+  );
+}

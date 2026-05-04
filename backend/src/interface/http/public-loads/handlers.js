@@ -266,3 +266,37 @@ export async function resolveDriverSponsorClickResponse(request) {
     return { statusCode: 200, payload: { ok: false, meta: { correlationId } } };
   }
 }
+
+// Cheap "did anything change?" probe for the public driver portal.
+// Returns a digest based on MAX(updated_at) + count of OPEN PUBLIC cargas.
+// Frontend polls every 5 min — when digest changes, invalidates the
+// /api/driver/loads-read-model query. No auth: matches /api/driver/loads.
+export async function resolveDriverLoadsDigestResponse(request) {
+  const correlationId = getCorrelationId(request);
+
+  try {
+    const digest = await withPgClient(async (client) => {
+      const { rows } = await client.query(`
+        SELECT
+          COALESCE(EXTRACT(EPOCH FROM MAX(updated_at))::bigint, 0) AS ts,
+          COUNT(*)::bigint                                          AS cnt
+        FROM public.cargas
+        WHERE status = 'OPEN'
+          AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'
+          AND COALESCE(is_template, false) = false
+      `);
+      const r = rows[0] || {};
+      return `${r.ts}:${r.cnt}`;
+    });
+
+    return {
+      statusCode: 200,
+      payload: { digest, meta: { correlationId } },
+    };
+  } catch {
+    return {
+      statusCode: 200,
+      payload: { digest: "0:0", meta: { correlationId } },
+    };
+  }
+}
