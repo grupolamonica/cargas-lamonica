@@ -1,5 +1,5 @@
 import { BellRing } from "lucide-react";
-import lamonicaLogo from "@/assets/lamonica-logo-navbar.png";
+import lamonicaLogo from "@/assets/lamonica-logo-blue.png";
 
 interface DriverPortalNavbarProps {
   notificationCount: number;
@@ -17,32 +17,28 @@ export default function DriverPortalNavbar({
   supportHref,
 }: DriverPortalNavbarProps) {
   return (
-    <div className="relative z-10 hidden lg:block px-4 lg:px-6 pt-4">
-      <nav className="mx-auto max-w-7xl flex items-center justify-between px-6 py-3.5 relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#1128b8] via-[#1635cc] to-[#1e42d4] shadow-[0_12px_48px_rgba(3,3,181,0.5),0_2px_10px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.14)] ring-1 ring-white/[0.1]">
-
-        {/* top edge highlight */}
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/50 to-transparent" />
-
-        {/* bottom edge shadow line */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-black/20" />
-
-        {/* Left: logo + separator */}
-        <div className="flex items-center gap-6">
+    <div className="hidden lg:block px-4 lg:px-6 pt-4 pb-2">
+      <header className="mx-auto max-w-7xl grid grid-cols-3 items-center gap-3 rounded-2xl bg-white px-6 py-3.5 shadow-md">
+        {/* Left: logo + separator + subtitle */}
+        <div className="-ml-1 flex items-center gap-3 justify-self-start">
           <img
             src={lamonicaLogo}
             alt="Lamonica Logistica"
-            className="h-10 w-auto object-contain drop-shadow-[0_1px_4px_rgba(0,0,0,0.25)]"
+            className="h-10 w-auto object-contain sm:h-12"
           />
-          <div className="h-6 w-px bg-white/[0.15]" />
+          <span aria-hidden className="h-6 w-px bg-gray-200" />
+          <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-gray-500">
+            Portal do motorista
+          </p>
         </div>
 
-        {/* Center: nav links inside frosted pill */}
-        <div className="flex items-center gap-0.5 rounded-full bg-white/[0.07] px-1 py-1 ring-1 ring-white/[0.08]">
+        {/* Center: nav links */}
+        <nav className="flex justify-center gap-8 font-medium text-gray-600">
           <a
             href={cadastroHref}
             target="_blank"
             rel="noreferrer"
-            className="px-4 py-1.5 rounded-full text-[13px] font-medium tracking-wide transition-all duration-150 text-white/70 hover:text-white hover:bg-white/[0.13]"
+            className="transition-colors hover:text-[hsl(224,94%,37%)]"
           >
             Cadastro
           </a>
@@ -50,39 +46,34 @@ export default function DriverPortalNavbar({
             href={supportHref}
             target="_blank"
             rel="noreferrer"
-            className="px-4 py-1.5 rounded-full text-[13px] font-medium tracking-wide transition-all duration-150 text-white/70 hover:text-white hover:bg-white/[0.13]"
+            className="transition-colors hover:text-[hsl(224,94%,37%)]"
           >
             Suporte
           </a>
           <button
             type="button"
             onClick={onFaqOpen}
-            className="px-4 py-1.5 rounded-full text-[13px] font-medium tracking-wide transition-all duration-150 text-white/70 hover:text-white hover:bg-white/[0.13]"
+            className="transition-colors hover:text-[hsl(224,94%,37%)]"
           >
             Dúvidas
           </button>
-        </div>
+        </nav>
 
-        {/* Right: notification button — distinct solid pill */}
+        {/* Right: notification bell */}
         <button
           type="button"
           onClick={onNotificationsOpen}
-          aria-label={
-            notificationCount > 0
-              ? `Notificações (${notificationCount})`
-              : "Notificações"
-          }
-          className="relative flex items-center gap-2 rounded-full bg-white/[0.12] pl-3.5 pr-5 py-2 text-[13px] font-semibold tracking-wide text-white ring-1 ring-white/[0.18] transition-all duration-150 hover:bg-white/[0.22] hover:ring-white/[0.28] hover:shadow-[0_0_16px_rgba(255,255,255,0.15)]"
+          className="relative inline-flex h-10 w-10 items-center justify-center justify-self-end rounded-full text-gray-600 transition-colors hover:bg-gray-100"
+          aria-label={notificationCount > 0 ? `Notificações (${notificationCount})` : "Notificações"}
         >
-          <BellRing className="h-4 w-4 shrink-0" />
-          <span>Notificações</span>
-          {notificationCount > 0 && (
-            <span className="absolute -right-1 -top-1 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white leading-none shadow-[0_0_8px_rgba(239,68,68,0.6)]">
+          <BellRing className="h-5 w-5" />
+          {notificationCount > 0 ? (
+            <span className="absolute -right-0.5 -top-0.5 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-bold text-white">
               {notificationCount > 9 ? "9+" : notificationCount}
             </span>
-          )}
+          ) : null}
         </button>
-      </nav>
+      </header>
     </div>
   );
 }

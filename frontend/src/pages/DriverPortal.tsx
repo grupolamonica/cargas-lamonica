@@ -5,15 +5,15 @@ import {
   CalendarIcon,
   ChevronDown,
   Compass,
-  Loader2,
   MapPin,
   Navigation,
   SlidersHorizontal,
   Truck,
   X,
 } from "lucide-react";
+
 import DriverPortalNavbar from "@/components/driver/DriverPortalNavbar";
-import { useDriverLocation } from "@/hooks/useDriverLocation";
+import CargasProximasCard from "@/components/driver/CargasProximasCard";
 
 import FilterChip from "@/components/FilterChip";
 import { Button } from "@/components/ui/button";
@@ -191,26 +191,32 @@ const DriverPortal = () => {
 
 
 
-  const { location: driverLocation, loading: locationLoading } = useDriverLocation();
+  // Próximas 3 cargas por data (sempre populado, independente de localização)
+  const nearbyCargas = useMemo(() => cargas.slice(0, 3), [cargas]);
 
-  const nearbyCargas = useMemo(() => {
-    if (!driverLocation || cargas.length === 0) return [];
-    const score = (origem: string) => {
-      const normalized = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
-      const parts = origem.trim().match(/^(.*?)(?:\s*\/\s*|\s*,\s*|\s+-\s+)([A-Za-z]{2})$/);
-      if (!parts) return 0;
-      const [, city, uf] = parts;
-      if (normalized(city) === normalized(driverLocation.city) && uf.toUpperCase() === driverLocation.uf) return 2;
-      if (uf.toUpperCase() === driverLocation.uf) return 1;
-      return 0;
-    };
-    return [...cargas]
-      .map((c) => ({ cargo: c, score: score(c.origem) }))
-      .filter((x) => x.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 3)
-      .map((x) => x.cargo);
-  }, [cargas, driverLocation]);
+  const nearbyItems = useMemo(() => nearbyCargas.map((cargo) => {
+    const [routeOrigin, routeDestination] = cargo.routeLabel
+      ? cargo.routeLabel.split(" X ").map((s: string) => s.trim())
+      : [null, null];
+    const originRaw = routeOrigin ? null : splitLocation(cargo.origem);
+    const destinationRaw = routeDestination ? null : splitLocation(cargo.destino);
+    const origCity = routeOrigin
+      ? toTitleCase(routeOrigin)
+      : toTitleCase(normalizeDisplayCity(originRaw!.city));
+    const destCity = routeDestination
+      ? toTitleCase(routeDestination)
+      : toTitleCase(normalizeDisplayCity(destinationRaw!.city));
+    const dateLabel = (() => {
+      try { return `${format(parseISO(cargo.data), "dd/MM")} às ${cargo.horario}`; }
+      catch { return cargo.horario || ""; }
+    })();
+    const distLabel =
+      typeof cargo.distancia_km === "number" && Number.isFinite(cargo.distancia_km)
+        ? `${Math.round(cargo.distancia_km).toLocaleString("pt-BR")} km`
+        : "";
+    const logoUrl = cargo.clienteNome?.toLowerCase() === "shopee" ? "/brand-logos/shopee-icon.png" : undefined;
+    return { id: cargo.id, dateLabel, originCity: origCity, destCity: destCity, perfil: cargo.perfil || "", distLabel, logoUrl, logoAlt: cargo.clienteNome ?? undefined };
+  }), [nearbyCargas]);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -300,7 +306,7 @@ const DriverPortal = () => {
     ) : null;
 
   return (
-    <div className="driver-theme relative min-h-screen bg-background lg:bg-cover lg:bg-center lg:bg-fixed lg:[background-image:url('/bg-driver-portal.png')]">
+    <div className="driver-theme relative min-h-screen bg-background lg:bg-white">
       <DriverPortalNavbar
         notificationCount={notificationCount}
         onNotificationsOpen={() => setIsNotificationsOpen(true)}
@@ -377,93 +383,14 @@ const DriverPortal = () => {
                 <SponsoredCarousel inline />
               </div>
 
-              {/* quick panel — right */}
+              {/* cargas próximas — right */}
               <div className="w-[272px] shrink-0 xl:w-[300px]">
-                <div className="overflow-hidden rounded-2xl bg-white shadow-[0_8px_32px_-8px_rgba(0,20,60,0.22)]">
-                  {/* header */}
-                  <div className="flex items-center gap-1.5 px-4 pb-2 pt-3">
-                    <p className="text-[13px] font-bold text-[hsl(222,50%,10%)]">Cargas próximas a você</p>
-                    {locationLoading && <Loader2 className="h-3 w-3 animate-spin text-[hsl(222,50%,50%)]" />}
-                  </div>
-
-                  <div className="px-3 pb-3">
-                    {!driverLocation && !locationLoading ? (
-                      <p className="px-1 py-2 text-[11px] leading-4 text-[hsl(222,20%,45%)]">
-                        Permita o acesso à localização para ver cargas próximas.
-                      </p>
-                    ) : nearbyCargas.length === 0 && driverLocation ? (
-                      <p className="px-1 py-2 text-[11px] leading-4 text-[hsl(222,20%,45%)]">
-                        Nenhuma carga próxima de {driverLocation.city || driverLocation.uf} agora.
-                      </p>
-                    ) : (
-                      <div className="space-y-2">
-                        {nearbyCargas.map((cargo) => {
-                          const [routeOrigin, routeDestination] = cargo.routeLabel
-                            ? cargo.routeLabel.split(" X ").map((s) => s.trim())
-                            : [null, null];
-                          const originRaw = routeOrigin ? null : splitLocation(cargo.origem);
-                          const destinationRaw = routeDestination ? null : splitLocation(cargo.destino);
-                          const origCity = routeOrigin ? toTitleCase(routeOrigin) : toTitleCase(normalizeDisplayCity(originRaw!.city));
-                          const origUF = routeOrigin ? "" : (originRaw?.uf ?? "");
-                          const destCity = routeDestination ? toTitleCase(routeDestination) : toTitleCase(normalizeDisplayCity(destinationRaw!.city));
-                          const destUF = routeDestination ? "" : (destinationRaw?.uf ?? "");
-                          const originLabel = origUF ? `${origCity}, ${origUF}` : origCity;
-                          const destinationLabel = destUF ? `${destCity}, ${destUF}` : destCity;
-                          const dateLabel = (() => {
-                            try {
-                              return `${format(parseISO(cargo.data), "dd/MM")} às ${cargo.horario}`;
-                            } catch {
-                              return cargo.horario || "";
-                            }
-                          })();
-                          const clientLogoUrl =
-                            cargo.clienteNome?.toLowerCase() === "shopee" ? "/brand-logos/shopee-icon.png" : null;
-                          const distanceLabel =
-                            typeof cargo.distancia_km === "number" && Number.isFinite(cargo.distancia_km)
-                              ? `${Math.round(cargo.distancia_km).toLocaleString("pt-BR")} km`
-                              : null;
-                          return (
-                            <div
-                              key={cargo.id}
-                              className="relative rounded-xl border border-[hsl(222,25%,90%)] bg-white p-3"
-                            >
-                              {clientLogoUrl && (
-                                <img
-                                  src={clientLogoUrl}
-                                  alt={cargo.clienteNome ?? ""}
-                                  className="absolute -right-3 top-1 h-9 w-auto object-contain"
-                                />
-                              )}
-                              <div className="flex items-center gap-1.5">
-                                <CalendarIcon className="h-3 w-3 shrink-0 text-[hsl(222,50%,55%)]" />
-                                <span className="text-[11px] text-[hsl(222,15%,50%)]">{dateLabel}</span>
-                              </div>
-                              <p className="mt-1.5 text-[13px] font-bold leading-snug text-[hsl(222,50%,10%)]">
-                                {originLabel} → {destinationLabel}
-                              </p>
-                              <div className="mt-2 flex items-center gap-1.5">
-                                <span className="inline-flex rounded-full border border-[hsl(222,25%,88%)] bg-[hsl(222,50%,97%)] px-2 py-0.5 text-[10px] font-semibold text-[hsl(222,25%,40%)]">
-                                  {cargo.perfil}
-                                </span>
-                                {distanceLabel && (
-                                  <span className="inline-flex rounded-full border border-[hsl(222,25%,88%)] bg-[hsl(222,50%,97%)] px-2 py-0.5 text-[10px] font-semibold text-[hsl(222,25%,40%)]">
-                                    {distanceLabel}
-                                  </span>
-                                )}
-                                <a
-                                  href={`/motorista/cargas/${cargo.id}`}
-                                  className="ml-auto shrink-0 rounded-full bg-[hsl(224,94%,37%)] px-3 py-1 text-[11px] font-bold text-white transition-colors hover:bg-[hsl(224,94%,33%)]"
-                                >
-                                  Ver detalhes
-                                </a>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <CargasProximasCard
+                  items={nearbyItems}
+                  buildHref={(id) => `/motorista/cargas/${id}`}
+                  title="Cargas próximas a você"
+                  emptyLabel="Nenhuma carga disponível no momento."
+                />
               </div>
             </div>
           </div>
