@@ -76,7 +76,19 @@ function checkIdempotencyCache(key) {
 
 function setIdempotencyCache(key, response) {
   if (idempotencyCache.size >= MAX_IDEMPOTENCY_CACHE_SIZE) {
-    idempotencyCache.delete(idempotencyCache.keys().next().value);
+    // MD-01: varre expirados antes de deletar arbitrariamente (FIFO não é LRU)
+    const now = Date.now();
+    let deleted = false;
+    for (const [k, v] of idempotencyCache) {
+      if (v.expiresAt <= now) {
+        idempotencyCache.delete(k);
+        deleted = true;
+        break;
+      }
+    }
+    if (!deleted) {
+      idempotencyCache.delete(idempotencyCache.keys().next().value);
+    }
   }
   idempotencyCache.set(key, { response, expiresAt: Date.now() + IDEMPOTENCY_TTL_MS });
 }
@@ -676,7 +688,12 @@ export async function resolveSheetMonitorResponse(request) {
         if (enrichedRows) {
           for (const r of enrichedRows) enrichedByLh[r.lh] = r;
         }
-      } catch {}
+      } catch (enrichErr) {
+        logStructuredEvent("warn", "sheet-monitor.enrich-read-failed", {
+          correlationId,
+          message: enrichErr instanceof Error ? enrichErr.message : String(enrichErr),
+        });
+      }
 
       return {
         statusCode: 200,
@@ -863,7 +880,7 @@ export async function resolveDriverSponsorClicksResponse(request) {
   const correlationId = getCorrelationId(request);
 
   try {
-    await requireOperatorSession(request);
+    await requireOperatorSession(getAuthorizationHeader(request));
 
     const rows = await withPgClient(async (client) => {
       const result = await client.query(`

@@ -10,6 +10,9 @@ import { createRouteLookupKeys } from "../../../domain/operator-admin/route-util
 
 export async function updateOperatorRoute({ routeId, operatorId, payload, requestIp, correlationId }) {
   return withPgTransaction(async (client) => {
+    // AL-04: statement_timeout evita que FOR UPDATE bloqueie o pool inteiro
+    // se outra transaction segurar o lock indefinidamente.
+    await client.query("SET LOCAL statement_timeout = '5000'");
     const { rows } = await client.query(
       `SELECT id FROM public.route_metrics_cache WHERE id = $1 FOR UPDATE`,
       [routeId],
@@ -71,8 +74,10 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
       // "SJ Rio Preto-03 / SP" → "sao jose do rio preto", so we use
       // createRouteLookupKeys (which calls canonicalizeRouteLookupLocation)
       // to identify matching cargas by ID, then update by UUID array.
+      // AL-05: LIMIT defensivo — sem ele, todas as cargas abertas carregam em memória
+      // dentro de uma transaction com FOR UPDATE, ampliando o tempo de lock.
       const { rows: openCargas } = await client.query(
-        `SELECT id, origem, destino FROM public.cargas WHERE status IN ('OPEN', 'DRAFT')`,
+        `SELECT id, origem, destino FROM public.cargas WHERE status IN ('OPEN', 'DRAFT') LIMIT 500`,
       );
 
       const routeKey = `${originKey}|${destinationKey}`;

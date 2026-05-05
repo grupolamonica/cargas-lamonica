@@ -17,6 +17,14 @@ import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 const PORTAL_VISIT_RATE_LIMIT_MS = 30_000;
 const portalVisitRateLimitByIp = new Map();
 
+// MD-02: cleanup periódico para evitar crescimento ilimitado com IPs dinâmicos (CGNAT/mobile)
+setInterval(() => {
+  const cutoff = Date.now() - PORTAL_VISIT_RATE_LIMIT_MS;
+  for (const [key, value] of portalVisitRateLimitByIp) {
+    if (value < cutoff) portalVisitRateLimitByIp.delete(key);
+  }
+}, 60_000).unref();
+
 function isPortalVisitRateLimited(ip) {
   if (!ip) return false;
   const now = Date.now();
@@ -133,7 +141,9 @@ async function ensureDriverLoadsSheetFresh({
       return false;
     }
 
-    driverLoadsSheetRefreshPromise = Promise.resolve(
+    // CR-01: captura a promise em variável local antes do .finally zerá-la,
+    // evitando race condition onde uma request subsequente vê null e dispara sync duplo.
+    const syncPromise = Promise.resolve(
       syncLoads({
         supabaseClient,
       }),
@@ -150,7 +160,8 @@ async function ensureDriverLoadsSheetFresh({
         lastDriverLoadsSheetRefreshCheckAt = Date.now();
       });
 
-    await driverLoadsSheetRefreshPromise;
+    driverLoadsSheetRefreshPromise = syncPromise;
+    await syncPromise;
     return true;
   } catch (error) {
     console.error("[driver-loads-sheet-sync-check]", {
@@ -212,7 +223,8 @@ export async function resolveDriverPortalVisitResponse(request) {
       statusCode: 200,
       payload: { ok: true, meta: { correlationId } },
     };
-  } catch {
+  } catch (err) {
+    console.error("[portal-visit] falha ao registrar visita:", err?.message);
     return {
       statusCode: 200,
       payload: { ok: false, meta: { correlationId } },
@@ -293,10 +305,11 @@ export async function resolveDriverLoadsDigestResponse(request) {
       statusCode: 200,
       payload: { digest, meta: { correlationId } },
     };
-  } catch {
+  } catch (err) {
+    console.error("[driver-loads-digest] erro ao calcular digest:", err?.message);
     return {
-      statusCode: 200,
-      payload: { digest: "0:0", meta: { correlationId } },
+      statusCode: 503,
+      payload: { error: "SERVICE_UNAVAILABLE", meta: { correlationId } },
     };
   }
 }

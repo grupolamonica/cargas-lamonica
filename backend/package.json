@@ -18,7 +18,12 @@
     "release:check": "node src/scripts/release-readiness-check.mjs",
     "supabase:setup": "node src/scripts/configure-supabase-project.mjs",
     "supabase:create-operator": "node src/scripts/create-initial-operator.mjs",
-    "supabase:verify-login": "node src/scripts/verify-auth-login.mjs"
+    "supabase:verify-login": "node src/scripts/verify-auth-login.mjs",
+    "bench": "vitest bench --config benchmarks/vitest.bench.config.ts",
+    "bench:db": "vitest bench --config benchmarks/vitest.bench.config.ts benchmarks/db/",
+    "bench:app": "vitest bench --config benchmarks/vitest.bench.config.ts benchmarks/app/",
+    "bench:perf": "vitest run --config benchmarks/vitest.bench.config.ts benchmarks/db/pool-contention.bench.js benchmarks/app/queue-rebalance.bench.js benchmarks/app/route-cascade.bench.js",
+    "bench:http": "node benchmarks/http/load-endpoints.bench.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.97.0",
@@ -29,7 +34,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.16.5",
+    "autocannon": "^8.0.0",
     "pg-mem": "^3.0.14",
+    "tinybench": "^6.0.1",
     "vitest": "^3.2.4"
   }
 }
