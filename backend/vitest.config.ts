@@ -5,6 +5,7 @@ export default defineConfig({
     environment: "node",
     globals: true,
     include: ["src/**/*.{test,spec}.{js,mjs,ts}"],
+    exclude: ["benchmarks/**", "node_modules/**"],
   },
   resolve: {
     alias: {},

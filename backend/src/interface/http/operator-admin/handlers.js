@@ -76,7 +76,19 @@ function checkIdempotencyCache(key) {
 
 function setIdempotencyCache(key, response) {
   if (idempotencyCache.size >= MAX_IDEMPOTENCY_CACHE_SIZE) {
-    idempotencyCache.delete(idempotencyCache.keys().next().value);
+    // MD-01: varre expirados antes de deletar arbitrariamente (FIFO não é LRU)
+    const now = Date.now();
+    let deleted = false;
+    for (const [k, v] of idempotencyCache) {
+      if (v.expiresAt <= now) {
+        idempotencyCache.delete(k);
+        deleted = true;
+        break;
+      }
+    }
+    if (!deleted) {
+      idempotencyCache.delete(idempotencyCache.keys().next().value);
+    }
   }
   idempotencyCache.set(key, { response, expiresAt: Date.now() + IDEMPOTENCY_TTL_MS });
 }
@@ -676,7 +688,12 @@ export async function resolveSheetMonitorResponse(request) {
         if (enrichedRows) {
           for (const r of enrichedRows) enrichedByLh[r.lh] = r;
         }
-      } catch {}
+      } catch (enrichErr) {
+        logStructuredEvent("warn", "sheet-monitor.enrich-read-failed", {
+          correlationId,
+          message: enrichErr instanceof Error ? enrichErr.message : String(enrichErr),
+        });
+      }
 
       return {
         statusCode: 200,
@@ -858,46 +875,12 @@ export async function resolveRedactPublicLeadPiiResponse(request) {
   );
 }
 
-export async function resolveDriverRegionsResponse(request) {
-  const correlationId = getCorrelationId(request);
-
-  try {
-    await requireOperatorSession(request);
-
-    const rows = await withPgClient(async (client) => {
-      const result = await client.query(`
-        SELECT data->>'state' AS state, COUNT(*)::int AS count
-        FROM public.analytics_events
-        WHERE event_type = 'DRIVER_REGION_VIEW'
-          AND created_at >= now() - interval '30 days'
-          AND data->>'state' IS NOT NULL
-        GROUP BY data->>'state'
-        ORDER BY count DESC
-        LIMIT 10
-      `);
-      return result.rows;
-    });
-
-    return {
-      statusCode: 200,
-      payload: {
-        items: rows,
-        meta: { correlationId },
-      },
-    };
-  } catch (error) {
-    if (error instanceof UnauthorizedError) {
-      return { statusCode: 401, payload: { error: "UNAUTHORIZED", meta: { correlationId } } };
-    }
-    return { statusCode: 500, payload: { error: "INTERNAL_ERROR", meta: { correlationId } } };
-  }
-}
 
 export async function resolveDriverSponsorClicksResponse(request) {
   const correlationId = getCorrelationId(request);
 
   try {
-    await requireOperatorSession(request);
+    await requireOperatorSession(getAuthorizationHeader(request));
 
     const rows = await withPgClient(async (client) => {
       const result = await client.query(`
@@ -918,6 +901,43 @@ export async function resolveDriverSponsorClicksResponse(request) {
         items: rows,
         meta: { correlationId },
       },
+    };
+  } catch (error) {
+    if (error instanceof UnauthorizedError) {
+      return { statusCode: 401, payload: { error: "UNAUTHORIZED", meta: { correlationId } } };
+    }
+    return { statusCode: 500, payload: { error: "INTERNAL_ERROR", meta: { correlationId } } };
+  }
+}
+
+// Cheap "did anything change?" probe for the operator Overview dashboard.
+// Returns a digest derived from MAX(updated_at) + counts across cargas, leads, claims.
+// Frontend polls this every 5 min — when digest changes, invalidate the
+// expensive 3x select(500) overview query. Realtime is the primary trigger;
+// this digest is the safety net for missed events (network drops, etc.).
+export async function resolveOperatorOverviewDigestResponse(request) {
+  const correlationId = getCorrelationId(request);
+
+  try {
+    await requireOperatorSession(getAuthorizationHeader(request));
+
+    const digest = await withPgClient(async (client) => {
+      const { rows } = await client.query(`
+        SELECT
+          (SELECT COALESCE(EXTRACT(EPOCH FROM MAX(updated_at))::bigint, 0) FROM public.cargas)            AS cargas_ts,
+          (SELECT COUNT(*)::bigint FROM public.cargas)                                                    AS cargas_count,
+          (SELECT COALESCE(EXTRACT(EPOCH FROM MAX(created_at))::bigint, 0) FROM public.load_public_leads) AS leads_ts,
+          (SELECT COUNT(*)::bigint FROM public.load_public_leads)                                         AS leads_count,
+          (SELECT COALESCE(EXTRACT(EPOCH FROM MAX(created_at))::bigint, 0) FROM public.load_claims)       AS claims_ts,
+          (SELECT COUNT(*)::bigint FROM public.load_claims)                                               AS claims_count
+      `);
+      const r = rows[0] || {};
+      return `${r.cargas_ts}:${r.cargas_count}:${r.leads_ts}:${r.leads_count}:${r.claims_ts}:${r.claims_count}`;
+    });
+
+    return {
+      statusCode: 200,
+      payload: { digest, meta: { correlationId } },
     };
   } catch (error) {
     if (error instanceof UnauthorizedError) {

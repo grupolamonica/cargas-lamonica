@@ -717,15 +717,16 @@ export async function fetchSponsorClicks() {
   );
 }
 
-export interface DriverRegionRow {
-  state: string;
-  count: number;
+export async function fetchOperatorOverviewDigest() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ digest: string; meta: { correlationId: string } }>(
+    "/api/operator/overview/digest",
+    { accessToken },
+  );
 }
 
-export async function fetchDriverRegions() {
-  const accessToken = await getOperatorAccessToken();
-  return requestJson<{ items: DriverRegionRow[]; meta: { correlationId: string } }>(
-    "/api/operator/driver-regions",
-    { accessToken },
+export async function fetchDriverLoadsDigest() {
+  return requestJson<{ digest: string; meta: { correlationId: string } }>(
+    "/api/driver/loads/digest",
   );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchSponsorClicks, fetchDriverRegions } from "@/services/readModels";
+import { fetchSponsorClicks, fetchOperatorOverviewDigest } from "@/services/readModels";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -161,9 +161,13 @@ const OVERVIEW_QUERY_KEY = ["operator", "overview-dashboard"] as const;
 const Overview = () => {
   const queryClient = useQueryClient();
   const channelRef = useRef(`operator-overview-${Math.random().toString(36).slice(2, 8)}`);
+  // Realtime is the primary trigger; digest poll (below) is a 5min safety
+  // net for missed events. No refetchInterval here — drops a 30s baseline
+  // poll that previously fired 3x select(500) every cycle.
   const overviewQuery = useQuery({
     queryKey: OVERVIEW_QUERY_KEY,
-    refetchInterval: 30_000,
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
     queryFn: async () => {
       const [cargosResult, leadsResult, claimsResult] = await Promise.all([
         supabase.from("cargas").select(OVERVIEW_CARGO_SELECT).order("created_at", { ascending: false }).limit(500),
@@ -193,18 +197,35 @@ const Overview = () => {
 
   const snapshot = overviewQuery.data;
 
+  // 5min digest poll — backend returns hash of MAX(updated_at)+counts across
+  // cargas/leads/claims. Cheap (3 aggregate scalar queries). When digest
+  // changes, invalidates the expensive snapshot query. Pauses when the tab
+  // is in background. Replaces the previous 30s polling baseline.
+  const lastDigestRef = useRef<string | null>(null);
+  const overviewDigestQuery = useQuery({
+    queryKey: ["operator", "overview-digest"] as const,
+    queryFn: fetchOperatorOverviewDigest,
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+  });
+
+  useEffect(() => {
+    const currentDigest = overviewDigestQuery.data?.digest;
+    if (!currentDigest) return;
+    if (lastDigestRef.current !== null && lastDigestRef.current !== currentDigest) {
+      void queryClient.invalidateQueries({ queryKey: OVERVIEW_QUERY_KEY });
+    }
+    lastDigestRef.current = currentDigest;
+  }, [overviewDigestQuery.data?.digest, queryClient]);
+
   const sponsorClicksQuery = useQuery({
     queryKey: ["operator", "sponsor-clicks"] as const,
     queryFn: fetchSponsorClicks,
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
-  });
-
-  const driverRegionsQuery = useQuery({
-    queryKey: ["operator", "driver-regions"] as const,
-    queryFn: fetchDriverRegions,
-    staleTime: 10 * 60_000,
-    refetchInterval: 10 * 60_000,
+    refetchIntervalInBackground: false,
   });
 
   const invalidateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -456,47 +477,6 @@ const Overview = () => {
                   </div>
                 )}
               </div>
-            </CardContent>
-          </Card>
-
-          {/* Driver Regions Analytics */}
-          <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
-            <CardHeader className="space-y-3">
-              <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
-                Localizacao
-              </CardDescription>
-              <CardTitle className="text-2xl tracking-tight text-foreground">
-                Regioes dos motoristas
-              </CardTitle>
-              <CardDescription className="max-w-2xl text-sm leading-relaxed">
-                Estados de onde os motoristas acessaram o portal nos ultimos 30 dias (requer permissao de localizacao no dispositivo).
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="pt-0">
-              {driverRegionsQuery.isLoading ? (
-                <div className="space-y-2">
-                  <Skeleton className="h-10 w-full rounded-2xl" />
-                  <Skeleton className="h-10 w-full rounded-2xl" />
-                </div>
-              ) : driverRegionsQuery.data?.items && driverRegionsQuery.data.items.length > 0 ? (
-                <div className="space-y-3">
-                  {driverRegionsQuery.data.items.map((row) => (
-                    <div
-                      key={row.state}
-                      className="admin-card-surface-strong flex items-center justify-between rounded-[24px] border px-4 py-3 shadow-[0_18px_38px_-32px_rgba(15,23,42,0.18)]"
-                    >
-                      <p className="text-sm font-semibold text-foreground">{row.state}</p>
-                      <Badge variant="outline" className="tabular-nums">
-                        {row.count.toLocaleString("pt-BR")} acesso{row.count !== 1 ? "s" : ""}
-                      </Badge>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
-                  Nenhuma localizacao registrada. Motoristas precisam permitir acesso a localizacao no browser.
-                </div>
-              )}
             </CardContent>
           </Card>
 

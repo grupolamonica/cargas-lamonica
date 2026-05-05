@@ -1,10 +1,10 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { addDays, format, isSameDay, parseISO, startOfToday } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
-import { fetchDriverLoadFacets, fetchDriverLoads } from "@/services/readModels";
+import { fetchDriverLoadFacets, fetchDriverLoads, fetchDriverLoadsDigest } from "@/services/readModels";
 
 export const PAGE_SIZE = 12;
 
@@ -128,6 +128,7 @@ export const buildAvailableLoadsLabel = (count: number) =>
   count === 1 ? "1 carga disponível" : `${count} cargas disponíveis`;
 
 export function useDriverLoads() {
+  const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const [origemFilter, setOrigemFilter] = useState(searchParams.get("origem") || "");
   const [destinoFilter, setDestinoFilter] = useState(searchParams.get("destino") || "");
@@ -155,7 +156,6 @@ export function useDriverLoads() {
       if (typeof window !== "undefined" && !sessionStorage.getItem(STORAGE_KEY)) {
         sessionStorage.setItem(STORAGE_KEY, "1");
 
-        // Fire-and-forget portal visit — region is tracked automatically via IP on backend.
         void fetch("/api/driver/portal-view", { method: "POST" }).catch(() => {});
       }
     } catch {
@@ -163,6 +163,10 @@ export function useDriverLoads() {
     }
   }, []);
 
+  // Polling foi substituido por: window focus + reconnect + digest poll de 5min.
+  // O digest abaixo verifica MAX(updated_at)+count em cargas OPEN/PUBLIC; se mudou,
+  // invalida o read-model. Quando a aba esta em background, o poll do digest
+  // tambem pausa (refetchIntervalInBackground: false).
   const {
     data: loadsResponse,
     error: loadsError,
@@ -190,21 +194,40 @@ export function useDriverLoads() {
         pageSize: String(PAGE_SIZE),
       }),
     placeholderData: keepPreviousData,
-    staleTime: 30_000,
+    staleTime: 60_000,
     gcTime: 5 * 60_000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
-    refetchInterval: 45_000,
   });
 
   const { data: facetsResponse, error: facetsError } = useQuery({
     queryKey: ["driver", "loads-facets"],
     queryFn: fetchDriverLoadFacets,
-    staleTime: 30_000,
+    staleTime: 5 * 60_000,
     gcTime: 10 * 60_000,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: false,
     refetchOnReconnect: true,
   });
+
+  // 5min digest poll — pausa em background. Invalida o read-model quando muda.
+  const lastLoadsDigestRef = useRef<string | null>(null);
+  const loadsDigestQuery = useQuery({
+    queryKey: ["driver", "loads-digest"] as const,
+    queryFn: fetchDriverLoadsDigest,
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+  });
+
+  useEffect(() => {
+    const currentDigest = loadsDigestQuery.data?.digest;
+    if (!currentDigest) return;
+    if (lastLoadsDigestRef.current !== null && lastLoadsDigestRef.current !== currentDigest) {
+      void queryClient.invalidateQueries({ queryKey: ["driver", "loads-read-model"] });
+    }
+    lastLoadsDigestRef.current = currentDigest;
+  }, [loadsDigestQuery.data?.digest, queryClient]);
 
   useEffect(() => {
     if (loadsError) toast.error("Erro ao carregar cargas ativas");

@@ -19,8 +19,9 @@ export function getPostgresPool() {
   if (!pool) {
     pool = new Pool({
       connectionString: getConnectionString(),
-      max: Number(process.env.CLAIMS_DB_POOL_MAX || 3),
+      max: Number(process.env.CLAIMS_DB_POOL_MAX || 10),
       idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
       ssl: buildPostgresSslConfig(),
     });
   }

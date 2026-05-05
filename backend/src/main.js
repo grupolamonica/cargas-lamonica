@@ -204,7 +204,8 @@ async function bootstrap() {
   async function gracefulShutdown(signal) {
     console.log(`[lamonica-backend] ${signal} recebido — iniciando graceful shutdown`);
 
-    // Parar de aceitar novas conexões
+    // Parar de aceitar novas conexões (closeAllConnections fecha keep-alive pendentes)
+    server.closeAllConnections?.();
     server.close(async () => {
       console.log("[lamonica-backend] HTTP server fechado");
 

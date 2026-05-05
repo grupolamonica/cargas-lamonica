@@ -12,14 +12,18 @@ import {
   getHealthSnapshot,
 } from "../../../application/operator-admin/service.js";
 import { recordDriverPortalVisit } from "../../../domain/operator-admin/driver-flow-metrics.js";
-import {
-  recordDriverRegion,
-  recordDriverRegionFromIp,
-} from "../../../domain/operator-admin/analytics-events.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 
 const PORTAL_VISIT_RATE_LIMIT_MS = 30_000;
 const portalVisitRateLimitByIp = new Map();
+
+// MD-02: cleanup periódico para evitar crescimento ilimitado com IPs dinâmicos (CGNAT/mobile)
+setInterval(() => {
+  const cutoff = Date.now() - PORTAL_VISIT_RATE_LIMIT_MS;
+  for (const [key, value] of portalVisitRateLimitByIp) {
+    if (value < cutoff) portalVisitRateLimitByIp.delete(key);
+  }
+}, 60_000).unref();
 
 function isPortalVisitRateLimited(ip) {
   if (!ip) return false;
@@ -137,7 +141,9 @@ async function ensureDriverLoadsSheetFresh({
       return false;
     }
 
-    driverLoadsSheetRefreshPromise = Promise.resolve(
+    // CR-01: captura a promise em variável local antes do .finally zerá-la,
+    // evitando race condition onde uma request subsequente vê null e dispara sync duplo.
+    const syncPromise = Promise.resolve(
       syncLoads({
         supabaseClient,
       }),
@@ -154,7 +160,8 @@ async function ensureDriverLoadsSheetFresh({
         lastDriverLoadsSheetRefreshCheckAt = Date.now();
       });
 
-    await driverLoadsSheetRefreshPromise;
+    driverLoadsSheetRefreshPromise = syncPromise;
+    await syncPromise;
     return true;
   } catch (error) {
     console.error("[driver-loads-sheet-sync-check]", {
@@ -212,22 +219,12 @@ export async function resolveDriverPortalVisitResponse(request) {
   try {
     await recordDriverPortalVisit({ requestIp, correlationId });
 
-    // Region tracking: use precise lat/lon when provided, otherwise fall back to IP geolocation.
-    // IP geo is automatic — no browser permission required, fires for every portal visit.
-    const body = request.body;
-    const lat = typeof body?.lat === "number" ? body.lat : null;
-    const lon = typeof body?.lon === "number" ? body.lon : null;
-    if (lat !== null && lon !== null) {
-      recordDriverRegion({ lat, lon }).catch(() => {});
-    } else {
-      recordDriverRegionFromIp({ ip: requestIp }).catch(() => {});
-    }
-
     return {
       statusCode: 200,
       payload: { ok: true, meta: { correlationId } },
     };
-  } catch {
+  } catch (err) {
+    console.error("[portal-visit] falha ao registrar visita:", err?.message);
     return {
       statusCode: 200,
       payload: { ok: false, meta: { correlationId } },
@@ -279,5 +276,40 @@ export async function resolveDriverSponsorClickResponse(request) {
   } catch {
     // fire-and-forget: don't fail the request if analytics write fails
     return { statusCode: 200, payload: { ok: false, meta: { correlationId } } };
+  }
+}
+
+// Cheap "did anything change?" probe for the public driver portal.
+// Returns a digest based on MAX(updated_at) + count of OPEN PUBLIC cargas.
+// Frontend polls every 5 min — when digest changes, invalidates the
+// /api/driver/loads-read-model query. No auth: matches /api/driver/loads.
+export async function resolveDriverLoadsDigestResponse(request) {
+  const correlationId = getCorrelationId(request);
+
+  try {
+    const digest = await withPgClient(async (client) => {
+      const { rows } = await client.query(`
+        SELECT
+          COALESCE(EXTRACT(EPOCH FROM MAX(updated_at))::bigint, 0) AS ts,
+          COUNT(*)::bigint                                          AS cnt
+        FROM public.cargas
+        WHERE status = 'OPEN'
+          AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'
+          AND COALESCE(is_template, false) = false
+      `);
+      const r = rows[0] || {};
+      return `${r.ts}:${r.cnt}`;
+    });
+
+    return {
+      statusCode: 200,
+      payload: { digest, meta: { correlationId } },
+    };
+  } catch (err) {
+    console.error("[driver-loads-digest] erro ao calcular digest:", err?.message);
+    return {
+      statusCode: 503,
+      payload: { error: "SERVICE_UNAVAILABLE", meta: { correlationId } },
+    };
   }
 }
