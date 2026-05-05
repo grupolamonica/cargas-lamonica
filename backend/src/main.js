@@ -115,12 +115,32 @@ app.get("/health", async (req, res) => {
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
-// Bootstrap sequencial: pg Pool é inicializado antes de começar a escutar.
-// Falha ruidosamente se deps não inicializarem — sem fallback silencioso.
+// Retry pg connection with exponential backoff. Returns true if connected.
+// Never throws — on exhaustion the server starts degraded (routes fail with 500).
+async function waitForPg(pool, maxAttempts = 8) {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      await pool.query("SELECT 1");
+      return true;
+    } catch (err) {
+      const delayMs = Math.min(5_000 * 2 ** i, 60_000);
+      console.warn(
+        `[lamonica-backend] pg connection attempt ${i + 1}/${maxAttempts} failed (${err.message}) — retrying in ${delayMs / 1000}s`,
+      );
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  console.error(
+    "[lamonica-backend] Could not connect to pg after all attempts — starting in degraded mode",
+  );
+  return false;
+}
+
+// Bootstrap sequencial: valida env vars → aguarda pg (com retry) → registra rotas → listen.
 async function bootstrap() {
-  // 1. Verificar pg Pool
+  // 1. Verificar pg Pool (com retry — não mata o processo em falha transitória)
   const pool = getPostgresPool();
-  await pool.query("SELECT 1"); // falha aqui se DATABASE_URL inválida
+  await waitForPg(pool);
 
   // 2. Verificar Supabase (config mínima)
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
