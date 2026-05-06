@@ -67,6 +67,8 @@ import {
   resolveDriverSponsorClickResponse,
 } from "./public-loads/handlers.js";
 
+import { resolveFinalizarCadastroResponse } from "./cadastro/handlers.js";
+
 import { resolveRouteInfoResponse } from "./route-info.handler.js";
 import { resolveSheetSyncResponse } from "./sheet-sync.handler.js";
 
@@ -130,6 +132,9 @@ export function registerRoutes(app) {
       return res.status(500).end();
     }
   });
+
+  // Public cadastro (no auth)
+  router.post("/api/public/cadastro/finalizar", wrap(resolveFinalizarCadastroResponse));
 
   // Driver / public loads
   router.get("/api/driver/loads", wrap(resolveDriverLoadsReadModelResponse));
