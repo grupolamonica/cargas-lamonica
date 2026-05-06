@@ -1054,3 +1054,31 @@ export async function consultaCnpj(cnpj: string): Promise<CnpjConsultaResult> {
     ok,
   };
 }
+
+// ───────────────────── Finalizar cadastro (persistência no sistema) ─────────────────────
+
+/**
+ * Envia o cadastro completo para o backend Node.js (persistência em pending_driver_registrations).
+ * Sem auth — endpoint público /api/public/cadastro/finalizar.
+ */
+export async function finalizarCadastro(
+  idCadastro: string,
+  dados: Record<string, unknown>,
+): Promise<{ ok: boolean; id: string }> {
+  const res = await fetch("/api/public/cadastro/finalizar", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id_cadastro: idCadastro, dados }),
+  });
+  if (!res.ok) {
+    let msg = "Erro ao enviar cadastro";
+    try {
+      const json = (await res.json()) as { message?: string; error?: string };
+      msg = json.message || json.error || msg;
+    } catch {
+      // ignore parse error
+    }
+    throw new Error(msg);
+  }
+  return res.json() as Promise<{ ok: boolean; id: string }>;
+}

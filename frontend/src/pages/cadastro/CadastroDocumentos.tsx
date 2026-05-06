@@ -40,6 +40,7 @@ import {
   consultaCep,
   consultaCnpj,
   consultaVeiculoSituacao,
+  finalizarCadastro,
   ocrCartaoCnpj,
   ocrCnh,
   ocrComprovante,
@@ -2474,6 +2475,7 @@ const CadastroDocumentos = () => {
     carreta?: { placa: string; chassi: string; renavam: string };
   }>({});
   const [loading, setLoading] = useState(false);
+  const [enviado, setEnviado] = useState(false);
   const { toast } = useToast();
 
   const currentIndex = TABS.findIndex((t) => t.id === activeTab);
@@ -2741,17 +2743,30 @@ const CadastroDocumentos = () => {
     setLoading(true);
 
     try {
-      console.log("[CadastroDocumentos] Payload:", form);
-      console.log("[CadastroDocumentos] proprietario_tipo:", propTipo);
-      console.log("[CadastroDocumentos] proprietario_carreta_tipo:", propCarretaTipo);
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      toast({
-        title: "Cadastro enviado",
-        description: "Recebemos seus dados. Em breve nossa equipe entrara em contato.",
-      });
+      const dados: Record<string, unknown> = {
+        motorista: { ...form.motorista, ...form.endereco_motorista, cnh: form.cnh },
+        cavalo: form.cavalo,
+        carreta: form.tipo_composicao !== "sem_carreta" ? form.carreta : null,
+        carretas_extras: form.carretas_extras,
+        operacional: form.operacional,
+        proprietario: form.motorista.tambem_proprietario
+          ? null
+          : propTipo === "PJ"
+            ? { tipo: "PJ", ...form.proprietario_pj }
+            : { tipo: "PF", ...form.proprietario_pf, cnh: form.cnh_proprietario_pf },
+        proprietario_carreta: form.carreta_proprietario_diferente
+          ? propCarretaTipo === "PJ"
+            ? { tipo: "PJ", ...form.proprietario_pj_carreta }
+            : { tipo: "PF", ...form.proprietario_pf_carreta, cnh: form.cnh_proprietario_pf_carreta }
+          : null,
+        tipo_composicao: form.tipo_composicao,
+      };
+
+      await finalizarCadastro(form.id_cadastro, dados);
+      setEnviado(true);
     } catch (error) {
       toast({
-        title: "Erro ao enviar",
+        title: "Erro ao enviar cadastro",
         description: error instanceof Error ? error.message : "Tente novamente em instantes.",
         variant: "destructive",
       });
@@ -3348,6 +3363,42 @@ const CadastroDocumentos = () => {
       showError("Falha ao extrair CNH do proprietario", e);
     }
   };
+
+  if (enviado) {
+    return (
+      <div className="admin-theme admin-page-shell relative min-h-[100dvh] overflow-x-hidden overflow-y-auto bg-background">
+        <div className="relative mx-auto flex min-h-[100dvh] w-full max-w-[1180px] items-center justify-center px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
+          <section className="flex w-full justify-center">
+            <div className="admin-auth-panel relative w-full max-w-[560px] !rounded-xl p-8 sm:p-10 text-center">
+              <div className="flex flex-col items-center gap-5">
+                <div className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-green-500/30 bg-green-500/10">
+                  <CheckCircle2 className="h-8 w-8 text-green-600 dark:text-green-400" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-foreground">Cadastro enviado com sucesso!</h2>
+                  <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                    Nossa equipe analisara seus documentos em ate <strong>24 horas</strong>.
+                    Entraremos em contato pelo telefone informado.
+                  </p>
+                </div>
+                <div className="mt-2 w-full rounded-xl border border-border bg-muted/40 px-5 py-4 text-left">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Motorista</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">{form.motorista.nome || "—"}</p>
+                  {form.cavalo.placa && (
+                    <>
+                      <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Cavalo</p>
+                      <p className="mt-1 text-sm font-semibold text-foreground">{form.cavalo.placa}</p>
+                    </>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground/70">Protocolo: {form.id_cadastro}</p>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="admin-theme admin-page-shell relative min-h-[100dvh] overflow-x-hidden overflow-y-auto bg-background">
