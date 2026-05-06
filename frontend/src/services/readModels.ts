@@ -16,6 +16,9 @@ export interface DriverLoadReadModelItem {
   clienteId: string | null;
   clienteNome: string | null;
   clienteDescricao: string | null;
+  clienteLogoUrl: string | null;
+  clienteLogoUrlCard: string | null;
+  clienteLogoUrlProximas: string | null;
   carregamentoLabel: string | null;
   descargaLabel: string | null;
 }
@@ -98,6 +101,8 @@ export interface OperatorClienteListItem {
   nome: string;
   descricao: string | null;
   logo_url: string | null;
+  logo_url_card: string | null;
+  logo_url_proximas: string | null;
   forma_pagamento: string | null;
   prazo_pagamento: string | null;
   peso: string | null;
@@ -113,6 +118,8 @@ export interface OperatorClienteListItem {
   reputacao_carga_organizada: boolean;
   reputacao_boa_comunicacao: boolean;
   observacoes: string | null;
+  custom_reputacoes: import("@/services/operatorAdmin").CustomBadgeItem[];
+  custom_exigencias: import("@/services/operatorAdmin").CustomBadgeItem[];
   rastreamento: string | null;
   antt: string | null;
 }
@@ -729,4 +736,64 @@ export async function fetchDriverLoadsDigest() {
   return requestJson<{ digest: string; meta: { correlationId: string } }>(
     "/api/driver/loads/digest",
   );
+}
+
+// ─── Cadastros pendentes de motoristas ───────────────────────────────────────
+
+export interface PendingDriverRegistrationItem {
+  id: string;
+  id_cadastro: string;
+  created_at: string;
+  status: "pendente" | "em_revisao" | "aprovado" | "rejeitado";
+  observacoes: string | null;
+  reviewed_at: string | null;
+  reviewed_by_id: string | null;
+  nome_motorista: string | null;
+  cpf_motorista: string | null;
+  placa_cavalo: string | null;
+  dados: Record<string, unknown> | null;
+}
+
+export async function fetchCadastrosPendentes(params: {
+  status?: string;
+  page?: number;
+  pageSize?: number;
+}) {
+  const accessToken = await getOperatorAccessToken();
+  const query = new URLSearchParams(
+    Object.entries(params)
+      .filter(([, v]) => v !== undefined && v !== null && v !== "")
+      .map(([k, v]) => [k, String(v)]),
+  ).toString();
+  return requestJson<{ items: PendingDriverRegistrationItem[]; meta: PaginationMeta }>(
+    `/api/operator/cadastros-pendentes${query ? `?${query}` : ""}`,
+    { accessToken },
+  );
+}
+
+export async function aprovarCadastro(id: string) {
+  const accessToken = await getOperatorAccessToken();
+  const response = await fetch(`/api/operator/cadastros/${id}/aprovar`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error((body as { message?: string })?.message || "Erro ao aprovar cadastro.");
+  }
+  return response.json() as Promise<{ ok: boolean; driverId: string }>;
+}
+
+export async function rejeitarCadastro(id: string, observacoes?: string) {
+  const accessToken = await getOperatorAccessToken();
+  const response = await fetch(`/api/operator/cadastros/${id}/rejeitar`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ observacoes: observacoes ?? null }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error((body as { message?: string })?.message || "Erro ao rejeitar cadastro.");
+  }
+  return response.json() as Promise<{ ok: boolean }>;
 }
