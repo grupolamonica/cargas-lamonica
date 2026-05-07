@@ -213,6 +213,7 @@ const ManageCargas = () => {
   // por padr\u00e3o as cargas programadas para o dia corrente.
   const [dateFrom, setDateFrom] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [dateTo, setDateTo] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [clienteFilter, setClienteFilter] = useState<string>("");
   const [page, setPage] = useState(1);
   const deferredSearch = useDeferredValue(search);
   const deferredStatusFilter = useDeferredValue(statusFilter);
@@ -223,6 +224,7 @@ const ManageCargas = () => {
   const deferredPerfilFilter = useDeferredValue(perfilFilter);
   const deferredDateFrom = useDeferredValue(dateFrom);
   const deferredDateTo = useDeferredValue(dateTo);
+  const deferredClienteFilter = useDeferredValue(clienteFilter);
   const todayIsoDate = new Date().toISOString().slice(0, 10);
   const hasActiveFilters =
     deferredSearch.trim().length > 0 ||
@@ -233,7 +235,8 @@ const ManageCargas = () => {
     deferredDestinoFilter.trim().length > 0 ||
     deferredPerfilFilter !== "todos" ||
     deferredDateFrom.length > 0 ||
-    deferredDateTo.length > 0;
+    deferredDateTo.length > 0 ||
+    deferredClienteFilter.length > 0;
 
   useEffect(() => {
     setPage(1);
@@ -247,6 +250,7 @@ const ManageCargas = () => {
     deferredPerfilFilter,
     deferredDateFrom,
     deferredDateTo,
+    deferredClienteFilter,
   ]);
 
   const {
@@ -255,7 +259,7 @@ const ManageCargas = () => {
     isFetching: cargasFetching,
     isLoading: cargasLoading,
   } = useQuery({
-    queryKey: [...CARGAS_QUERY_KEY, deferredSearch.trim(), deferredStatusFilter, deferredVisibilityFilter, deferredSourceFilter, deferredDateFrom, deferredDateTo, page],
+    queryKey: [...CARGAS_QUERY_KEY, deferredSearch.trim(), deferredStatusFilter, deferredVisibilityFilter, deferredSourceFilter, deferredDateFrom, deferredDateTo, deferredClienteFilter, page],
     queryFn: () =>
       fetchOperatorCargas({
         page: String(page),
@@ -266,6 +270,7 @@ const ManageCargas = () => {
         source: deferredSourceFilter,
         dateFrom: deferredDateFrom,
         dateTo: deferredDateTo,
+        ...(deferredClienteFilter ? { clienteId: deferredClienteFilter } : {}),
       }),
     ...ADMIN_CARGAS_QUERY_OPTIONS,
   });
@@ -741,6 +746,17 @@ const ManageCargas = () => {
                 className="rounded-2xl border border-border/80 bg-white/92 px-4 py-3 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
               />
 
+              <select
+                value={clienteFilter}
+                onChange={(event) => setClienteFilter(event.target.value)}
+                className="rounded-2xl border border-border/80 bg-white/92 px-4 py-3 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10 cursor-pointer"
+              >
+                <option value="">Todos os clientes</option>
+                {clientes.map((c) => (
+                  <option key={c.id} value={c.id}>{c.nome}</option>
+                ))}
+              </select>
+
               <button
                 type="button"
                 onClick={() => {
@@ -753,6 +769,7 @@ const ManageCargas = () => {
                   setPerfilFilter("todos");
                   setDateFrom("");
                   setDateTo("");
+                  setClienteFilter("");
                 }}
                 disabled={!hasActiveFilters}
                 className="inline-flex items-center justify-center rounded-2xl border border-border/80 bg-white/92 px-4 py-3 text-sm font-semibold text-foreground transition-colors duration-200 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"

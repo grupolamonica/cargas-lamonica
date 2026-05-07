@@ -9,6 +9,8 @@ import {
   ShieldCheck,
   Truck,
 } from "lucide-react";
+import type { CustomBadgeItem } from "@/services/operatorAdmin";
+import { getBadgeIcon } from "@/lib/badgeIcons";
 import { Link, useParams } from "react-router-dom";
 
 import DriverClaimPanel from "@/components/driver/DriverClaimPanel";
@@ -50,6 +52,8 @@ interface CargoClientRow {
   reputacao_carga_organizada: boolean;
   reputacao_liberacao_rapida: boolean;
   reputacao_pagamento_rapido: boolean;
+  custom_reputacoes: unknown;
+  custom_exigencias: unknown;
 }
 
 interface CargoDetailsRow {
@@ -72,9 +76,9 @@ interface CargoDetailsRow {
 }
 
 const CARGO_DETAILS_SELECT =
-  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, bonus_exigencias, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, tipo_veiculo, peso, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido)";
+  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, bonus_exigencias, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, tipo_veiculo, peso, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
 const LEGACY_CARGO_DETAILS_SELECT =
-  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, tipo_veiculo, peso, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido)";
+  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, tipo_veiculo, peso, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
 
 
 const reputationLabels = [
@@ -472,7 +476,7 @@ const DriverCargoDetails = () => {
         <section className="relative overflow-hidden rounded-[32px] border border-white/70 bg-[linear-gradient(135deg,hsl(223_56%_12%),hsl(223_55%_22%))] p-5 text-white shadow-[0_30px_70px_-30px_hsl(215_25%_12%/0.55)] sm:p-8">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(225_100%_65%/0.18),transparent_36%),radial-gradient(circle_at_bottom_left,hsl(200_100%_55%/0.14),transparent_30%)]" />
           <div className="relative space-y-6">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center justify-between gap-3">
               <Button
                 asChild
                 variant="outline"
@@ -484,7 +488,7 @@ const DriverCargoDetails = () => {
                 </Link>
               </Button>
 
-              <div className="flex flex-wrap gap-2">
+              <div className="hidden sm:flex flex-wrap gap-2">
                 <Button
                   type="button"
                   onClick={() => setIsClaimDialogOpen(true)}
@@ -496,12 +500,6 @@ const DriverCargoDetails = () => {
                   Candidatar-se
                 </Button>
               </div>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Badge className="border-white/10 bg-white/12 text-white">{cargo.perfil}</Badge>
-              <Badge className="border-white/10 bg-white/12 text-white">{estimatedTime}</Badge>
-              <Badge className="border-white/10 bg-white/12 text-white">{formatCargoStatus(cargo.status)}</Badge>
             </div>
 
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_320px]">
@@ -589,7 +587,7 @@ const DriverCargoDetails = () => {
               </CardDescription>
               <CardTitle className="text-2xl tracking-tight text-foreground">Coleta, entrega e percurso</CardTitle>
             </CardHeader>
-            <CardContent className="grid gap-3 sm:grid-cols-2">
+            <CardContent className="grid grid-cols-2 gap-3">
               <DetailMetric icon={Clock3} label="Carregamento" value={loadingLabel} />
               <DetailMetric icon={Clock3} label="Descarga" value={unloadingLabel} />
               <DetailMetric icon={Package} label="Tempo estimado" value={estimatedTime} />
@@ -630,7 +628,7 @@ const DriverCargoDetails = () => {
         </section>
 
         <section className="grid gap-6 xl:grid-cols-2">
-          {visibleRequirementLabels.length > 0 ? (
+          {(visibleRequirementLabels.length > 0 || ((cliente?.custom_exigencias ?? []) as CustomBadgeItem[]).some((b) => b.active)) ? (
             <Card className="admin-panel overflow-hidden">
               <CardHeader>
                 <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
@@ -648,6 +646,17 @@ const DriverCargoDetails = () => {
                     {label}
                   </Badge>
                 ))}
+                {((cliente?.custom_exigencias ?? []) as CustomBadgeItem[])
+                  .filter((b) => b.active)
+                  .map((b) => {
+                    const Icon = getBadgeIcon(b.icon_name);
+                    return (
+                      <Badge key={b.id} className="gap-1 border-primary/20 bg-primary/10 px-3 py-1.5 text-primary">
+                        <Icon className="h-3.5 w-3.5" />
+                        {b.label}
+                      </Badge>
+                    );
+                  })}
               </CardContent>
             </Card>
           ) : null}
@@ -674,6 +683,17 @@ const DriverCargoDetails = () => {
                     </Badge>
                   ))
                 : <p className="text-sm text-muted-foreground">Sem reputacao cadastrada para este cliente.</p>}
+              {((cliente?.custom_reputacoes ?? []) as CustomBadgeItem[])
+                .filter((b) => b.active)
+                .map((b) => {
+                  const Icon = getBadgeIcon(b.icon_name);
+                  return (
+                    <Badge key={b.id} className="gap-1 border-accent/20 bg-accent/10 px-3 py-1.5 text-accent">
+                      <Icon className="h-3.5 w-3.5" />
+                      {b.label}
+                    </Badge>
+                  );
+                })}
             </CardContent>
           </Card>
         </section>

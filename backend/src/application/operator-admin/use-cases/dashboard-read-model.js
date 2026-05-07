@@ -14,7 +14,7 @@ import {
 } from "./_shared.js";
 
 export async function fetchOperatorDashboardReadModel({ query, correlationId }) {
-  const { page, pageSize, offset, maxPageSize, search, status, driverVisibility } = parseOperatorDashboardQuery(query);
+  const { page, pageSize, offset, maxPageSize, search, status, driverVisibility, clienteId } = parseOperatorDashboardQuery(query);
 
   const buildDashboardFilterContext = ({ supportsOptionalColumns }) => {
     const values = [];
@@ -50,6 +50,12 @@ export async function fetchOperatorDashboardReadModel({ query, correlationId }) 
       } else if (driverVisibility === "PREMIUM") {
         clauses.push("1 = 0");
       }
+    }
+
+    if (clienteId) {
+      values.push(clienteId);
+      clauses.push(`cargas.cliente_id = $${index}::uuid`);
+      index += 1;
     }
 
     return { values, whereSql: clauses.length ? clauses.join(" AND ") : "true", limitIndex: index, offsetIndex: index + 1 };

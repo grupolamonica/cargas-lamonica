@@ -1,8 +1,10 @@
-import { memo, useState } from "react";
+import { memo, useState, useCallback } from "react";
 import type { LucideIcon } from "lucide-react";
-import { ArrowRight, Navigation, ShieldCheck, Truck } from "lucide-react";
+import { ArrowRight, Navigation, Share2, ShieldCheck, Truck } from "lucide-react";
 import { Link } from "react-router-dom";
+import { toast } from "sonner";
 
+import ClientLogo from "@/components/ClientLogo";
 import DriverClaimPanel from "@/components/driver/DriverClaimPanel";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -24,6 +26,8 @@ interface LoadCardProps {
   pagamento: string;
   paymentDetails?: string | null;
   clienteId?: string | null;
+  valorCarga?: number | null;
+  bonusValor?: number | null;
   detailsHref?: string;
   interestHref?: string;
   carregamentoLabel?: string | null;
@@ -33,12 +37,9 @@ interface LoadCardProps {
   index?: number;
   secondaryLabel?: string;
   SecondaryIcon?: LucideIcon;
+  clienteLogoUrlCard?: string | null;
   onInterestDialogOpenChange?: (isOpen: boolean) => void;
 }
-
-const CLIENT_LOGOS: Record<string, string> = {
-  shopee: "/brand-logos/shopee-nearby.png",
-};
 
 const LoadCard = memo(({
   loadId,
@@ -54,6 +55,8 @@ const LoadCard = memo(({
   pagamento,
   paymentDetails,
   clienteId,
+  valorCarga,
+  bonusValor,
   detailsHref,
   carregamentoLabel,
   descargaLabel,
@@ -62,6 +65,7 @@ const LoadCard = memo(({
   index = 0,
   secondaryLabel = "Percurso recomendado",
   SecondaryIcon = Navigation,
+  clienteLogoUrlCard,
   onInterestDialogOpenChange,
 }: LoadCardProps) => {
   const originLabel = origemEstado ? `${origemCidade}, ${origemEstado}` : origemCidade;
@@ -72,8 +76,72 @@ const LoadCard = memo(({
   const kmLabel = routeDistanceLabel || "A confirmar";
   const routeDurationValue = routeDurationLabel?.replace(/^Tempo estimado:\s*/i, "").trim() || null;
   const clientHref = clienteId ? `/motorista/cliente/${clienteId}` : null;
-  const clientLogoUrl = CLIENT_LOGOS[topRightLabel.trim().toLowerCase()] ?? null;
+  const clientLogoUrl = clienteLogoUrlCard ?? null;
   const [isInterestDialogOpen, setIsInterestDialogOpen] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
+  const shareUrl = detailsHref ? `${window.location.origin}${detailsHref}` : null;
+
+  const handleShare = useCallback(async () => {
+    if (!shareUrl) return;
+
+    const fmtBRL = (v: number) =>
+      new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v);
+
+    const hasValor = typeof valorCarga === "number" && Number.isFinite(valorCarga);
+    const hasBonus = typeof bonusValor === "number" && Number.isFinite(bonusValor) && bonusValor > 0;
+    const hasBreakdown = hasValor || hasBonus;
+
+    const lines: string[] = ["🚚 *CARGA DISPONÍVEL*", ""];
+    lines.push(`🚛 Veículo: ${tipoVeiculo}`);
+    const nomeCliente = clienteNome?.trim();
+    if (nomeCliente) lines.push(`🏢 Cliente: ${nomeCliente}`);
+    lines.push("", `📍 Coleta: ${originLabel}`);
+    if (loadingLabel !== "A confirmar") lines.push(`📅 Carregamento: ${loadingLabel}`);
+    lines.push("", `🏁 Entrega: ${destinationLabel}`);
+    if (unloadingLabel !== "A confirmar") lines.push(`📅 Descarga: ${unloadingLabel}`);
+    const routeParts: string[] = [];
+    if (kmLabel !== "A confirmar") routeParts.push(kmLabel);
+    if (routeDurationValue) routeParts.push(routeDurationValue);
+    if (routeParts.length > 0) lines.push("", `🛣️ Percurso: ${routeParts.join(" | ")}`);
+    lines.push("");
+    if (hasBreakdown) {
+      lines.push("💰 Pagamento");
+      if (hasValor) lines.push(`• Frete: ${fmtBRL(valorCarga!)}`);
+      if (hasBonus) lines.push(`• Bônus: ${fmtBRL(bonusValor!)}`);
+      lines.push(`• Total: ${pagamento}`);
+    } else {
+      lines.push(`💰 Total: ${pagamento}`);
+    }
+    lines.push("", "🔗 Detalhes e candidatura:", shareUrl);
+    const shareText = lines.join("\n");
+
+    // ── Share ──
+    if (navigator.share) {
+      try { await navigator.share({ text: shareText }); } catch { /* user cancelled */ }
+    } else {
+      // No Web Share API — use WhatsApp URL scheme (works on mobile + desktop WhatsApp Web)
+      const waUrl = `https://wa.me/?text=${encodeURIComponent(shareText)}`;
+      // Best-effort clipboard copy
+      try { await navigator.clipboard.writeText(shareText); } catch { /* ignore */ }
+      const opened = window.open(waUrl, "_blank");
+      if (opened) {
+        setShareCopied(true);
+        toast.success("WhatsApp aberto! Escolha o contato e envie.");
+        setTimeout(() => setShareCopied(false), 3000);
+      } else {
+        // Popup blocked — last resort: clipboard-only
+        try {
+          await navigator.clipboard.writeText(shareText);
+          setShareCopied(true);
+          toast.success("Copiado! Cole no WhatsApp.");
+          setTimeout(() => setShareCopied(false), 2000);
+        } catch {
+          toast.error("Não foi possível abrir o WhatsApp. Tente no navegador Chrome.");
+        }
+      }
+    }
+  }, [shareUrl, originLabel, destinationLabel, tipoVeiculo, pagamento, clienteNome, valorCarga, bonusValor, loadingLabel, unloadingLabel, kmLabel, routeDurationValue, paymentDetails]);
+
   const hasInterestDialog = Boolean(loadId);
   const hasDetailsAction = Boolean(detailsHref);
   const actionCount = Number(hasInterestDialog) + Number(hasDetailsAction);
@@ -92,7 +160,7 @@ const LoadCard = memo(({
       <DialogTrigger asChild>
         <Button
           type="button"
-          variant="outline"
+          variant="cta"
           size="lg"
           className={buttonClassName}
         >
@@ -106,7 +174,7 @@ const LoadCard = memo(({
   return (
     <Dialog open={isInterestDialogOpen} onOpenChange={handleInterestDialogOpenChange}>
       <div
-        className="group relative transform-gpu will-change-transform rounded-2xl border border-border/50 bg-card p-4 opacity-0 transition-all duration-500 ease-out premium-shadow hover:-translate-y-1 hover:premium-shadow-hover sm:rounded-3xl sm:p-6 lg:rounded-[28px] lg:p-5 animate-fade-in-up"
+        className="group relative rounded-2xl border border-border/50 bg-card p-4 opacity-0 transition-shadow duration-300 ease-out premium-shadow hover:-translate-y-1 hover:transform-gpu hover:premium-shadow-hover sm:rounded-3xl sm:p-6 lg:rounded-[28px] lg:p-5 animate-fade-in-up"
         style={{
           animationDelay: `${index * 80}ms`,
           contentVisibility: "auto",
@@ -125,11 +193,11 @@ const LoadCard = memo(({
         </span>
         {clientLogoUrl ? (
           clientHref ? (
-            <Link to={clientHref} aria-label={`Ver dados de ${topRightLabel}`} className="absolute -right-9 top-[60%] -translate-y-1/2">
-              <img src={clientLogoUrl} alt={topRightLabel} className="h-20 w-auto max-w-[200px] object-contain" />
+            <Link to={clientHref} aria-label={`Ver dados de ${topRightLabel}`} className="absolute right-0 top-[45%] -translate-y-1/2">
+              <ClientLogo name={topRightLabel} logoUrl={clientLogoUrl} noBg className="h-12 w-[84px] rounded-none border-0 shadow-none" imageClassName="p-0" />
             </Link>
           ) : (
-            <img src={clientLogoUrl} alt={topRightLabel} className="absolute -right-9 top-[60%] -translate-y-1/2 h-20 w-auto max-w-[200px] object-contain" />
+            <ClientLogo name={topRightLabel} logoUrl={clientLogoUrl} className="absolute right-0 top-[45%] -translate-y-1/2 h-12 w-[84px] rounded-none border-0 shadow-none bg-transparent" imageClassName="p-0" />
           )
         ) : clientHref ? (
           <Link
@@ -302,11 +370,11 @@ const LoadCard = memo(({
           </span>
           {clientLogoUrl ? (
             clientHref ? (
-              <Link to={clientHref} aria-label={`Ver dados de ${topRightLabel}`} className="absolute -right-9 top-[60%] -translate-y-1/2">
-                <img src={clientLogoUrl} alt={topRightLabel} className="h-24 w-auto max-w-[240px] object-contain" />
+              <Link to={clientHref} aria-label={`Ver dados de ${topRightLabel}`} className="absolute right-0 top-[45%] -translate-y-1/2">
+                <ClientLogo name={topRightLabel} logoUrl={clientLogoUrl} noBg className="h-12 w-[84px] rounded-none border-0 shadow-none" imageClassName="p-0" />
               </Link>
             ) : (
-              <img src={clientLogoUrl} alt={topRightLabel} className="absolute -right-9 top-[60%] -translate-y-1/2 h-24 w-auto max-w-[240px] object-contain" />
+              <ClientLogo name={topRightLabel} logoUrl={clientLogoUrl} className="absolute right-0 top-[45%] -translate-y-1/2 h-12 w-[84px] rounded-none border-0 shadow-none bg-transparent" imageClassName="p-0" />
             )
           ) : clientHref ? (
             <Link
@@ -416,15 +484,13 @@ const LoadCard = memo(({
 
         <div className="mt-6">
           <div className={actionGridClassName}>
-            {renderInterestDialogTrigger(
-              "group/btn h-12 w-full rounded-full border-primary/18 bg-primary/[0.05] px-6 text-primary hover:bg-primary/[0.08]",
-            )}
+            {renderInterestDialogTrigger("group/btn h-12 w-full rounded-full px-6")}
             {detailsHref ? (
               <Button
                 asChild
-                variant="cta"
+                variant="outline"
                 size="lg"
-                className="group/btn h-12 w-full rounded-full px-6"
+                className="group/btn h-12 w-full rounded-full border-primary/30 px-6 text-primary hover:border-primary/50 hover:bg-primary/[0.06]"
               >
                 <Link to={detailsHref}>
                   <span>Detalhes</span>
@@ -433,21 +499,31 @@ const LoadCard = memo(({
               </Button>
             ) : null}
           </div>
+          {shareUrl ? (
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={handleShare}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground/60 transition-colors hover:text-muted-foreground"
+              >
+                <Share2 className="h-3.5 w-3.5" />
+                {shareCopied ? "Copiado!" : "Compartilhar carga"}
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
 
       <div className="relative flex flex-col gap-3 border-t border-border/40 pt-4 sm:flex-row sm:items-center sm:justify-between sm:gap-0 sm:pt-5 lg:hidden">
         <div className="sm:hidden">
           <div className={actionGridClassName}>
-            {renderInterestDialogTrigger(
-              "group/btn w-full rounded-xl border-primary/18 bg-primary/[0.05] px-5 text-primary hover:bg-primary/[0.08]",
-            )}
+            {renderInterestDialogTrigger("group/btn w-full rounded-xl px-5")}
             {detailsHref ? (
               <Button
                 asChild
-                variant="cta"
+                variant="outline"
                 size="lg"
-                className="group/btn w-full rounded-xl px-5"
+                className="group/btn w-full rounded-xl border-primary/30 px-5 text-primary hover:border-primary/50 hover:bg-primary/[0.06]"
               >
                 <Link to={detailsHref}>
                   <span>Detalhes</span>
@@ -456,6 +532,16 @@ const LoadCard = memo(({
               </Button>
             ) : null}
           </div>
+          {shareUrl ? (
+            <button
+              type="button"
+              onClick={handleShare}
+              className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-xl border border-border/60 bg-muted/30 py-2.5 text-sm font-semibold text-muted-foreground transition-colors hover:border-border hover:bg-muted/60 hover:text-foreground active:scale-[0.98]"
+            >
+              <Share2 className="h-4 w-4" />
+              {shareCopied ? "Link copiado!" : "Compartilhar carga"}
+            </button>
+          ) : null}
         </div>
 
         <div className="hidden sm:block lg:hidden">
@@ -472,21 +558,30 @@ const LoadCard = memo(({
           ) : null}
         </div>
         <div className="hidden items-center gap-2 sm:flex lg:hidden">
-          {renderInterestDialogTrigger(
-            "group/btn rounded-xl border-primary/18 bg-primary/[0.05] px-5 text-primary hover:bg-primary/[0.08] sm:w-auto sm:rounded-2xl sm:px-7",
-          )}
+          {renderInterestDialogTrigger("group/btn sm:w-auto sm:rounded-2xl sm:px-7")}
           {detailsHref ? (
             <Button
               asChild
-              variant="cta"
+              variant="outline"
               size="lg"
-              className="group/btn rounded-xl px-5 sm:w-auto sm:rounded-2xl sm:px-7"
+              className="group/btn border-primary/30 px-5 text-primary hover:border-primary/50 hover:bg-primary/[0.06] sm:w-auto sm:rounded-2xl sm:px-7"
             >
               <Link to={detailsHref}>
                 <span>Detalhes</span>
                 <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover/btn:translate-x-1" />
               </Link>
             </Button>
+          ) : null}
+          {shareUrl ? (
+            <button
+              type="button"
+              onClick={handleShare}
+              title={shareCopied ? "Copiado!" : "Compartilhar carga"}
+              aria-label="Compartilhar carga"
+              className="inline-flex items-center justify-center rounded-2xl border border-border/40 p-3 text-muted-foreground transition-colors hover:border-border/70 hover:text-foreground"
+            >
+              <Share2 className="h-4 w-4" />
+            </button>
           ) : null}
         </div>
       </div>

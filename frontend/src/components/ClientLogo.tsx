@@ -16,6 +16,7 @@ interface ClientLogoProps {
   className?: string;
   imageClassName?: string;
   fallbackClassName?: string;
+  noBg?: boolean;
 }
 
 function buildClientInitials(name: string) {
@@ -27,7 +28,7 @@ function buildClientInitials(name: string) {
     .join("");
 }
 
-const ClientLogo = ({ name, logoUrl, alt, className, imageClassName, fallbackClassName }: ClientLogoProps) => {
+const ClientLogo = ({ name, logoUrl, alt, className, imageClassName, fallbackClassName, noBg = false }: ClientLogoProps) => {
   const [hasImageError, setHasImageError] = useState(false);
   const [displayLogoUrl, setDisplayLogoUrl] = useState("");
   const [usesWhiteSurfaceTreatment, setUsesWhiteSurfaceTreatment] = useState(false);
@@ -38,7 +39,7 @@ const ClientLogo = ({ name, logoUrl, alt, className, imageClassName, fallbackCla
 
   useEffect(() => {
     setHasImageError(false);
-    setDisplayLogoUrl("");
+    setDisplayLogoUrl(noBg ? normalizedLogoUrl : "");
     setUsesWhiteSurfaceTreatment(false);
 
     if (!logoSourceCandidates.length) {
@@ -159,7 +160,7 @@ const ClientLogo = ({ name, logoUrl, alt, className, imageClassName, fallbackCla
     <div
       className={cn(
         "relative overflow-hidden rounded-[28px] border border-white/70 shadow-[0_24px_54px_-32px_hsl(215_25%_12%/0.28)]",
-        usesWhiteSurfaceTreatment ? "bg-white" : "admin-card-surface",
+        !noBg && (usesWhiteSurfaceTreatment ? "bg-white" : "admin-card-surface"),
         className,
       )}
     >

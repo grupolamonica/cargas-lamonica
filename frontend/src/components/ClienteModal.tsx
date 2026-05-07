@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Building2,
   Clock3,
@@ -7,8 +7,10 @@ import {
   IdCard,
   MessageSquare,
   Package,
+  Plus,
   Search,
   Shield,
+  Trash2,
   Truck,
   X,
   Zap,
@@ -21,7 +23,9 @@ import {
   createEmptyClienteForm,
   mapClienteToFormData,
 } from "@/lib/clientes";
+import type { CustomBadgeItem } from "@/services/operatorAdmin";
 import { shouldProxyClientLogoUrl } from "@/lib/clientLogo";
+import { BADGE_ICON_MAP, BADGE_ICON_NAMES, getBadgeIcon } from "@/lib/badgeIcons";
 import ClientLogo from "@/components/ClientLogo";
 
 interface ClienteModalProps {
@@ -49,9 +53,20 @@ const reputationOptions = [
 type RequirementKey = (typeof requirementOptions)[number]["key"];
 type ReputationKey = (typeof reputationOptions)[number]["key"];
 
+const DEFAULT_ICON = "Star";
+
 const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps) => {
   const [form, setForm] = useState<ClienteFormData>(createEmptyClienteForm);
   const shouldShowLogoCleanupWarning = shouldProxyClientLogoUrl(form.logo_url);
+
+  const [newRepLabel, setNewRepLabel] = useState("");
+  const [newRepIcon, setNewRepIcon] = useState(DEFAULT_ICON);
+  const [showRepIconPicker, setShowRepIconPicker] = useState(false);
+  const [newExigLabel, setNewExigLabel] = useState("");
+  const [newExigIcon, setNewExigIcon] = useState(DEFAULT_ICON);
+  const [showExigIconPicker, setShowExigIconPicker] = useState(false);
+  const repPickerRef = useRef<HTMLDivElement>(null);
+  const exigPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setForm(mapClienteToFormData(initialData));
@@ -71,6 +86,32 @@ const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps)
       ...current,
       [field]: value,
     }));
+  };
+
+  const addCustomBadge = (
+    field: "custom_reputacoes" | "custom_exigencias",
+    label: string,
+    icon_name: string,
+    resetLabel: () => void,
+    resetIcon: () => void,
+  ) => {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    const item: CustomBadgeItem = { id: crypto.randomUUID(), label: trimmed, icon_name, active: true };
+    setForm((f) => ({ ...f, [field]: [...f[field], item] }));
+    resetLabel();
+    resetIcon();
+  };
+
+  const toggleCustomBadge = (field: "custom_reputacoes" | "custom_exigencias", id: string) => {
+    setForm((f) => ({
+      ...f,
+      [field]: f[field].map((b) => (b.id === id ? { ...b, active: !b.active } : b)),
+    }));
+  };
+
+  const removeCustomBadge = (field: "custom_reputacoes" | "custom_exigencias", id: string) => {
+    setForm((f) => ({ ...f, [field]: f[field].filter((b) => b.id !== id) }));
   };
 
   const inputClass =
@@ -187,10 +228,74 @@ const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps)
           <section className="admin-soft-panel p-5 sm:p-6">
             <div className="flex items-center gap-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                <Building2 className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">2. Logos adicionais</p>
+                <h3 className="text-lg font-semibold text-foreground">Logos por contexto</h3>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-6">
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+                <div className="space-y-2">
+                  <label className="block text-sm font-semibold text-foreground">Logo — cargas disponíveis</label>
+                  <input
+                    type="url"
+                    placeholder="Ex: https://site.com/logo-card.png"
+                    value={form.logo_url_card || ""}
+                    onChange={(event) => setField("logo_url_card", event.target.value || null)}
+                    className={inputClass}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Aparece no card da lista de cargas disponíveis para o motorista.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <p className="text-sm font-semibold text-foreground">Preview</p>
+                  <ClientLogo
+                    name={form.nome || "Cliente"}
+                    logoUrl={form.logo_url_card}
+                    className="admin-card-surface-strong h-[182px] w-full border"
+                    imageClassName="p-4"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+                <div className="space-y-2">
+                  <label className="block text-sm font-semibold text-foreground">Logo — cargas próximas</label>
+                  <input
+                    type="url"
+                    placeholder="Ex: https://site.com/logo-proximas.png"
+                    value={form.logo_url_proximas || ""}
+                    onChange={(event) => setField("logo_url_proximas", event.target.value || null)}
+                    className={inputClass}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Aparece no card de cargas próximas a você na tela inicial do motorista.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <p className="text-sm font-semibold text-foreground">Preview</p>
+                  <ClientLogo
+                    name={form.nome || "Cliente"}
+                    logoUrl={form.logo_url_proximas}
+                    className="admin-card-surface-strong h-[182px] w-full border"
+                    imageClassName="p-4"
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="admin-soft-panel p-5 sm:p-6">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
                 <CreditCard className="h-5 w-5" />
               </div>
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">2. Padrão de pagamento</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">3. Padrão de pagamento</p>
                 <h3 className="text-lg font-semibold text-foreground">Como esse cliente paga</h3>
               </div>
             </div>
@@ -226,7 +331,7 @@ const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps)
                 <Shield className="h-5 w-5" />
               </div>
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">3. Exigências padrão</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">4. Exigências padrão</p>
                 <h3 className="text-lg font-semibold text-foreground">Mini cards interativos</h3>
               </div>
             </div>
@@ -278,7 +383,7 @@ const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps)
                 <FileText className="h-5 w-5" />
               </div>
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">4. Reputação</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">5. Reputação</p>
                 <h3 className="text-lg font-semibold text-foreground">Sinais positivos do embarcador</h3>
               </div>
             </div>
@@ -330,7 +435,203 @@ const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps)
                 <FileText className="h-5 w-5" />
               </div>
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">5. Observações</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">6. Reputações personalizadas</p>
+                <h3 className="text-lg font-semibold text-foreground">Badges de reputação extras</h3>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {form.custom_reputacoes.map((badge) => {
+                const Icon = getBadgeIcon(badge.icon_name);
+                return (
+                  <div
+                    key={badge.id}
+                    className={cn(
+                      "flex items-center gap-3 rounded-2xl border px-4 py-3 transition-all duration-200",
+                      badge.active
+                        ? "border-[hsl(224_94%_37%)] bg-[linear-gradient(135deg,#022483,#0b4de8)] text-white"
+                        : "admin-chip-inactive",
+                    )}
+                  >
+                    <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-xl", badge.active ? "bg-white/14" : "admin-chip-icon-neutral")}>
+                      <Icon className="h-4 w-4" />
+                    </div>
+                    <span className={cn("flex-1 text-sm font-semibold", badge.active ? "text-white" : "text-foreground")}>{badge.label}</span>
+                    <button
+                      type="button"
+                      onClick={() => toggleCustomBadge("custom_reputacoes", badge.id)}
+                      className={cn("text-xs font-semibold px-2 py-1 rounded-lg cursor-pointer transition-colors", badge.active ? "bg-white/15 text-white hover:bg-white/25" : "bg-muted hover:bg-muted/80 text-muted-foreground")}
+                    >
+                      {badge.active ? "Ativo" : "Inativo"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeCustomBadge("custom_reputacoes", badge.id)}
+                      className={cn("flex h-7 w-7 items-center justify-center rounded-lg cursor-pointer transition-colors", badge.active ? "hover:bg-white/20 text-white/70" : "hover:bg-destructive/10 text-muted-foreground hover:text-destructive")}
+                      aria-label="Remover badge"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+
+              <div className="flex items-start gap-2 rounded-2xl border border-dashed border-border/60 bg-muted/20 p-3">
+                <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+                  <input
+                    type="text"
+                    placeholder="Ex: Câmera embarcada"
+                    value={newRepLabel}
+                    onChange={(e) => setNewRepLabel(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomBadge("custom_reputacoes", newRepLabel, newRepIcon, () => setNewRepLabel(""), () => setNewRepIcon(DEFAULT_ICON)); } }}
+                    className="admin-input-surface h-10 flex-1 rounded-xl border px-3 text-sm font-medium outline-none transition-all placeholder:text-muted-foreground/70 focus:border-primary/35 focus:ring-4 focus:ring-primary/10"
+                  />
+                  <div className="relative shrink-0" ref={repPickerRef}>
+                    <button
+                      type="button"
+                      onClick={() => setShowRepIconPicker((v) => !v)}
+                      className="admin-soft-button flex h-10 w-10 items-center justify-center rounded-xl border cursor-pointer"
+                      aria-label="Escolher ícone"
+                    >
+                      {(() => { const Icon = getBadgeIcon(newRepIcon); return <Icon className="h-4 w-4" />; })()}
+                    </button>
+                    {showRepIconPicker && (
+                      <div className="absolute left-0 top-12 z-50 grid grid-cols-5 gap-1 rounded-2xl border bg-popover p-2 shadow-xl">
+                        {BADGE_ICON_NAMES.map((name) => {
+                          const Icon = BADGE_ICON_MAP[name];
+                          return (
+                            <button
+                              key={name}
+                              type="button"
+                              title={name}
+                              onClick={() => { setNewRepIcon(name); setShowRepIconPicker(false); }}
+                              className={cn("flex h-8 w-8 items-center justify-center rounded-lg transition-colors cursor-pointer hover:bg-primary/10", newRepIcon === name && "bg-primary/15 ring-1 ring-primary/40")}
+                            >
+                              <Icon className="h-4 w-4" />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => addCustomBadge("custom_reputacoes", newRepLabel, newRepIcon, () => setNewRepLabel(""), () => setNewRepIcon(DEFAULT_ICON))}
+                  className="admin-primary-button flex h-10 w-10 shrink-0 items-center justify-center rounded-xl cursor-pointer"
+                  aria-label="Adicionar reputação"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="admin-soft-panel p-5 sm:p-6">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                <Shield className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">7. Exigências personalizadas</p>
+                <h3 className="text-lg font-semibold text-foreground">Exigências extras</h3>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {form.custom_exigencias.map((badge) => {
+                const Icon = getBadgeIcon(badge.icon_name);
+                return (
+                  <div
+                    key={badge.id}
+                    className={cn(
+                      "flex items-center gap-3 rounded-2xl border px-4 py-3 transition-all duration-200",
+                      badge.active
+                        ? "border-[hsl(224_94%_37%)] bg-[linear-gradient(135deg,#022483,#0b4de8)] text-white"
+                        : "admin-chip-inactive",
+                    )}
+                  >
+                    <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-xl", badge.active ? "bg-white/14" : "admin-chip-icon-neutral")}>
+                      <Icon className="h-4 w-4" />
+                    </div>
+                    <span className={cn("flex-1 text-sm font-semibold", badge.active ? "text-white" : "text-foreground")}>{badge.label}</span>
+                    <button
+                      type="button"
+                      onClick={() => toggleCustomBadge("custom_exigencias", badge.id)}
+                      className={cn("text-xs font-semibold px-2 py-1 rounded-lg cursor-pointer transition-colors", badge.active ? "bg-white/15 text-white hover:bg-white/25" : "bg-muted hover:bg-muted/80 text-muted-foreground")}
+                    >
+                      {badge.active ? "Ativo" : "Inativo"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeCustomBadge("custom_exigencias", badge.id)}
+                      className={cn("flex h-7 w-7 items-center justify-center rounded-lg cursor-pointer transition-colors", badge.active ? "hover:bg-white/20 text-white/70" : "hover:bg-destructive/10 text-muted-foreground hover:text-destructive")}
+                      aria-label="Remover exigência"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+
+              <div className="flex items-start gap-2 rounded-2xl border border-dashed border-border/60 bg-muted/20 p-3">
+                <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+                  <input
+                    type="text"
+                    placeholder="Ex: Câmera obrigatória"
+                    value={newExigLabel}
+                    onChange={(e) => setNewExigLabel(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomBadge("custom_exigencias", newExigLabel, newExigIcon, () => setNewExigLabel(""), () => setNewExigIcon(DEFAULT_ICON)); } }}
+                    className="admin-input-surface h-10 flex-1 rounded-xl border px-3 text-sm font-medium outline-none transition-all placeholder:text-muted-foreground/70 focus:border-primary/35 focus:ring-4 focus:ring-primary/10"
+                  />
+                  <div className="relative shrink-0" ref={exigPickerRef}>
+                    <button
+                      type="button"
+                      onClick={() => setShowExigIconPicker((v) => !v)}
+                      className="admin-soft-button flex h-10 w-10 items-center justify-center rounded-xl border cursor-pointer"
+                      aria-label="Escolher ícone"
+                    >
+                      {(() => { const Icon = getBadgeIcon(newExigIcon); return <Icon className="h-4 w-4" />; })()}
+                    </button>
+                    {showExigIconPicker && (
+                      <div className="absolute left-0 top-12 z-50 grid grid-cols-5 gap-1 rounded-2xl border bg-popover p-2 shadow-xl">
+                        {BADGE_ICON_NAMES.map((name) => {
+                          const Icon = BADGE_ICON_MAP[name];
+                          return (
+                            <button
+                              key={name}
+                              type="button"
+                              title={name}
+                              onClick={() => { setNewExigIcon(name); setShowExigIconPicker(false); }}
+                              className={cn("flex h-8 w-8 items-center justify-center rounded-lg transition-colors cursor-pointer hover:bg-primary/10", newExigIcon === name && "bg-primary/15 ring-1 ring-primary/40")}
+                            >
+                              <Icon className="h-4 w-4" />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => addCustomBadge("custom_exigencias", newExigLabel, newExigIcon, () => setNewExigLabel(""), () => setNewExigIcon(DEFAULT_ICON))}
+                  className="admin-primary-button flex h-10 w-10 shrink-0 items-center justify-center rounded-xl cursor-pointer"
+                  aria-label="Adicionar exigência"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="admin-soft-panel p-5 sm:p-6">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                <FileText className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">8. Observações</p>
                 <h3 className="text-lg font-semibold text-foreground">Notas rápidas da operação</h3>
               </div>
             </div>

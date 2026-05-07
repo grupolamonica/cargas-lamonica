@@ -261,6 +261,9 @@ export function mapDriverLoadReadModelItem(row) {
     clienteId: row.clienteId ?? null,
     clienteNome: row.clienteNome ?? null,
     clienteDescricao: row.clienteDescricao ?? null,
+    clienteLogoUrl: row.clienteLogoUrl ?? null,
+    clienteLogoUrlCard: row.clienteLogoUrlCard ?? null,
+    clienteLogoUrlProximas: row.clienteLogoUrlProximas ?? null,
     carregamentoLabel: row.carregamentoLabel ?? null,
     descargaLabel: row.descargaLabel ?? null,
     routeLabel: row.routeLabel ?? null,
@@ -325,6 +328,9 @@ export async function queryDriverLoadCandidateRows(client, { whereSql, values })
           cargas.cliente_id AS "clienteId",
           clientes.nome AS "clienteNome",
           clientes.descricao AS "clienteDescricao",
+          clientes.logo_url AS "clienteLogoUrl",
+          clientes.logo_url_card AS "clienteLogoUrlCard",
+          clientes.logo_url_proximas AS "clienteLogoUrlProximas",
           ${withSheetScheduleColumns ? 'cargas.sheet_data_carregamento AS "carregamentoLabel"' : 'NULL::text AS "carregamentoLabel"'},
           ${withSheetScheduleColumns ? 'cargas.sheet_data_descarga AS "descargaLabel"' : 'NULL::text AS "descargaLabel"'}
         FROM public.cargas

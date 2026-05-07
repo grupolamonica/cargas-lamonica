@@ -151,6 +151,8 @@ export type Database = {
           forma_pagamento: string | null
           id: string
           logo_url: string | null
+          logo_url_card: string | null
+          logo_url_proximas: string | null
           nome: string
           observacoes: string | null
           peso: string | null
@@ -175,6 +177,8 @@ export type Database = {
           forma_pagamento?: string | null
           id?: string
           logo_url?: string | null
+          logo_url_card?: string | null
+          logo_url_proximas?: string | null
           nome: string
           observacoes?: string | null
           peso?: string | null
@@ -199,6 +203,8 @@ export type Database = {
           forma_pagamento?: string | null
           id?: string
           logo_url?: string | null
+          logo_url_card?: string | null
+          logo_url_proximas?: string | null
           nome?: string
           observacoes?: string | null
           peso?: string | null

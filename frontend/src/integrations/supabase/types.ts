@@ -151,6 +151,10 @@ export type Database = {
           forma_pagamento: string | null
           id: string
           logo_url: string | null
+          logo_url_card: string | null
+          logo_url_proximas: string | null
+          custom_reputacoes: Json
+          custom_exigencias: Json
           nome: string
           observacoes: string | null
           peso: string | null
@@ -175,6 +179,10 @@ export type Database = {
           forma_pagamento?: string | null
           id?: string
           logo_url?: string | null
+          logo_url_card?: string | null
+          logo_url_proximas?: string | null
+          custom_reputacoes?: Json | null
+          custom_exigencias?: Json | null
           nome: string
           observacoes?: string | null
           peso?: string | null
@@ -199,6 +207,10 @@ export type Database = {
           forma_pagamento?: string | null
           id?: string
           logo_url?: string | null
+          logo_url_card?: string | null
+          logo_url_proximas?: string | null
+          custom_reputacoes?: Json | null
+          custom_exigencias?: Json | null
           nome?: string
           observacoes?: string | null
           peso?: string | null

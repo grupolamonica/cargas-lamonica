@@ -1410,6 +1410,9 @@ function groupLeadsForOperator(rows) {
         sheetCavalo: row.load_sheet_cavalo || null,
         sheetCarreta: row.load_sheet_carreta || null,
         sheetStatus: row.load_sheet_status || null,
+        clienteId: row.load_cliente_id || null,
+        clienteNome: row.load_cliente_nome || null,
+        clienteLogoUrl: row.load_cliente_logo_url || null,
       },
       queueCount: 0,
       totalLeads: 0,
@@ -1477,10 +1480,15 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
               cargas.sheet_motorista AS load_sheet_motorista,
               cargas.sheet_cavalo AS load_sheet_cavalo,
               cargas.sheet_carreta AS load_sheet_carreta,
-              cargas.sheet_status AS load_sheet_status
+              cargas.sheet_status AS load_sheet_status,
+              cargas.cliente_id AS load_cliente_id,
+              clientes.nome AS load_cliente_nome,
+              clientes.logo_url AS load_cliente_logo_url
             FROM public.load_public_leads AS leads
             INNER JOIN public.cargas
               ON cargas.id = leads.load_id
+            LEFT JOIN public.clientes
+              ON clientes.id = cargas.cliente_id
             WHERE leads.status = ANY($1::text[])
               AND (leads.status = 'QUEUED' OR leads.pii_redacted_at IS NULL)
             ORDER BY COALESCE(leads.queued_at, leads.created_at) ASC, leads.created_at ASC, leads.id ASC
@@ -1511,10 +1519,15 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
             cargas.sheet_data_descarga AS load_sheet_data_descarga,
             cargas.sheet_motorista AS load_sheet_motorista,
             cargas.sheet_cavalo AS load_sheet_cavalo,
-            cargas.sheet_carreta AS load_sheet_carreta
+            cargas.sheet_carreta AS load_sheet_carreta,
+            cargas.cliente_id AS load_cliente_id,
+            clientes.nome AS load_cliente_nome,
+            clientes.logo_url AS load_cliente_logo_url
           FROM public.load_public_leads AS leads
           INNER JOIN public.cargas
             ON cargas.id = leads.load_id
+          LEFT JOIN public.clientes
+            ON clientes.id = cargas.cliente_id
           WHERE leads.status = ANY($1::text[])
           ORDER BY COALESCE(leads.queued_at, leads.created_at) ASC, leads.created_at ASC, leads.id ASC
         `,
@@ -1543,8 +1556,13 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
           c.sheet_motorista AS load_sheet_motorista,
           c.sheet_cavalo AS load_sheet_cavalo,
           c.sheet_carreta AS load_sheet_carreta,
-          c.sheet_status AS load_sheet_status
+          c.sheet_status AS load_sheet_status,
+          c.cliente_id AS load_cliente_id,
+          clientes.nome AS load_cliente_nome,
+          clientes.logo_url AS load_cliente_logo_url
         FROM public.cargas AS c
+        LEFT JOIN public.clientes
+          ON clientes.id = c.cliente_id
         LEFT JOIN public.load_public_leads AS active_leads
           ON active_leads.load_id = c.id
           AND active_leads.status = ANY($2::text[])
@@ -1573,6 +1591,9 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
           sheetCavalo: r.load_sheet_cavalo || null,
           sheetCarreta: r.load_sheet_carreta || null,
           sheetStatus: r.load_sheet_status || null,
+          clienteId: r.load_cliente_id || null,
+          clienteNome: r.load_cliente_nome || null,
+          clienteLogoUrl: r.load_cliente_logo_url || null,
         },
         queueCount: 0,
         totalLeads: 0,

@@ -29,10 +29,19 @@ export interface OperatorCargoPayload {
   sheet_data_descarga: string | null;
 }
 
+export interface CustomBadgeItem {
+  id: string;
+  label: string;
+  icon_name: string;
+  active: boolean;
+}
+
 export interface OperatorClientePayload {
   nome: string;
   descricao: string | null;
   logo_url: string | null;
+  logo_url_card: string | null;
+  logo_url_proximas: string | null;
   forma_pagamento: string | null;
   prazo_pagamento: string | null;
   exige_rastreamento: boolean;
@@ -45,6 +54,8 @@ export interface OperatorClientePayload {
   reputacao_carga_organizada: boolean;
   reputacao_boa_comunicacao: boolean;
   observacoes: string | null;
+  custom_reputacoes: CustomBadgeItem[];
+  custom_exigencias: CustomBadgeItem[];
 }
 
 export interface OperatorRoutePayload {
