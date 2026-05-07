@@ -904,7 +904,9 @@ function buildSheetLoadPayload({
         bonus: existingLoad.bonus,
         distancia_km: existingLoad.distancia_km,
         duracao_horas: existingLoad.duracao_horas,
-        status: existingLoad.status || DEFAULT_PUBLISHED_STATUS,
+        // Sheet cleared driver+status → BOOKED reverts to OPEN so the load re-enters the portal.
+        // RESERVED is kept: a portal driver claimed it before the sheet was updated.
+        status: existingLoad.status === "BOOKED" ? DEFAULT_PUBLISHED_STATUS : existingLoad.status || DEFAULT_PUBLISHED_STATUS,
         is_template: existingLoad.is_template ?? false,
         cliente_id: existingLoad.cliente_id || pickFirstNonEmptyString(fallbackSheetClientId),
         created_by: existingLoad.created_by ?? null,
@@ -1075,16 +1077,22 @@ export async function syncGoogleSheetLoads({
   );
   const routeCatalogDefaultsByKey = createRouteCatalogDefaultsMap(routeCatalogRows);
   const routeTemplateDefaultsByKey = createRouteTemplateDefaultsMap(routeTemplateRows);
-  const sheetLoadPayloads = availableLoads.map((load) =>
-    buildSheetLoadPayload({
+  let revertedToOpenCount = 0;
+  const sheetLoadPayloads = availableLoads.map((load) => {
+    const existingLoad = existingLoadsBySheetLh.get(load.lh);
+    const payload = buildSheetLoadPayload({
       load,
-      existingLoad: existingLoadsBySheetLh.get(load.lh),
+      existingLoad,
       routeCatalogDefaultsByKey,
       routeTemplateDefaultsByKey,
       fallbackSheetClientId,
       syncedAt,
-    }),
-  );
+    });
+    if (existingLoad?.status === "BOOKED" && payload.status === DEFAULT_PUBLISHED_STATUS) {
+      revertedToOpenCount += 1;
+    }
+    return payload;
+  });
 
   if (sheetLoadPayloads.length > 0) {
     const { error: upsertError } = await supabaseClient
@@ -1228,9 +1236,17 @@ export async function syncGoogleSheetLoads({
     });
   }
 
+  if (revertedToOpenCount > 0) {
+    console.info(
+      `[google-sheet-loads] ${revertedToOpenCount} cargas BOOKED revertidas para OPEN (motorista removido da planilha)`,
+      { count: revertedToOpenCount },
+    );
+  }
+
   return {
     availableLoadsCount: sheetLoadPayloads.length,
     unlinkedLoadsCount: staleInSheet.length + staleTrulyGone.length,
+    revertedToOpenCount,
     skippedInvalidLoadsCount: invalidRows.length,
     sheetUrl,
   };
