@@ -141,7 +141,6 @@ export type Database = {
       }
       clientes: {
         Row: {
-          antt: string | null
           created_at: string
           descricao: string | null
           exige_antt: boolean
@@ -157,19 +156,14 @@ export type Database = {
           custom_exigencias: Json
           nome: string
           observacoes: string | null
-          peso: string | null
           prazo_pagamento: string | null
-          rastreamento: string | null
           reputacao_boa_comunicacao: boolean
           reputacao_bom_pagador: boolean
           reputacao_carga_organizada: boolean
           reputacao_liberacao_rapida: boolean
           reputacao_pagamento_rapido: boolean
-          tipo_veiculo: string | null
-          valor_frete: string | null
         }
         Insert: {
-          antt?: string | null
           created_at?: string
           descricao?: string | null
           exige_antt?: boolean
@@ -185,19 +179,14 @@ export type Database = {
           custom_exigencias?: Json | null
           nome: string
           observacoes?: string | null
-          peso?: string | null
           prazo_pagamento?: string | null
-          rastreamento?: string | null
           reputacao_boa_comunicacao?: boolean
           reputacao_bom_pagador?: boolean
           reputacao_carga_organizada?: boolean
           reputacao_liberacao_rapida?: boolean
           reputacao_pagamento_rapido?: boolean
-          tipo_veiculo?: string | null
-          valor_frete?: string | null
         }
         Update: {
-          antt?: string | null
           created_at?: string
           descricao?: string | null
           exige_antt?: boolean
@@ -213,16 +202,12 @@ export type Database = {
           custom_exigencias?: Json | null
           nome?: string
           observacoes?: string | null
-          peso?: string | null
           prazo_pagamento?: string | null
-          rastreamento?: string | null
           reputacao_boa_comunicacao?: boolean
           reputacao_bom_pagador?: boolean
           reputacao_carga_organizada?: boolean
           reputacao_liberacao_rapida?: boolean
           reputacao_pagamento_rapido?: boolean
-          tipo_veiculo?: string | null
-          valor_frete?: string | null
         }
         Relationships: []
       }
