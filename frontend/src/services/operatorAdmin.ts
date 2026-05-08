@@ -182,6 +182,67 @@ export async function deleteOperatorCliente(clienteId: string) {
   });
 }
 
+// ── Cliente <-> Rota associations (N:M) ───────────────────────────
+
+export interface ClienteRotaTarifa {
+  tipo_veiculo: string;
+  valor_frete: number | null;
+  bonus: number | null;
+  bonus_exigencias: string | null;
+}
+
+export interface ClienteRotaItem {
+  rota_id: string;
+  origem: string;
+  destino: string;
+  distancia_km: number | null;
+  tarifas: ClienteRotaTarifa[];
+}
+
+export interface ClienteRotasResponse {
+  cliente_id: string;
+  cliente_nome: string;
+  rotas: ClienteRotaItem[];
+  meta: { correlationId: string };
+}
+
+export async function fetchClienteRotas(clienteId: string) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<ClienteRotasResponse>(
+    `/api/operator/clientes/${clienteId}/rotas`,
+    { accessToken },
+  );
+}
+
+export async function attachClienteRota(clienteId: string, rotaId: string) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{
+    cliente_id: string;
+    rota_id: string;
+    link_id: string | null;
+    created_at: string | null;
+    already_existed: boolean;
+    meta: { correlationId: string };
+  }>(`/api/operator/clientes/${clienteId}/rotas`, {
+    method: "POST",
+    accessToken,
+    body: { rotaId },
+  });
+}
+
+export async function detachClienteRota(clienteId: string, rotaId: string) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{
+    cliente_id: string;
+    rota_id: string;
+    removed: boolean;
+    meta: { correlationId: string };
+  }>(`/api/operator/clientes/${clienteId}/rotas/${rotaId}`, {
+    method: "DELETE",
+    accessToken,
+  });
+}
+
 export async function createOperatorRoute(payload: OperatorRoutePayload) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<MutationResponse>("/api/operator/routes", {
