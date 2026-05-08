@@ -5,6 +5,7 @@ import {
   syncGoogleSheetLoads,
 } from "../../../application/google-sheets/google-sheet-loads.js";
 import { ValidationError } from "../../../domain/load-claims/errors.js";
+import { buildInternalErrorResponse, buildValidationErrorResponse } from "../error-mapping.js";
 import { getCorrelationId, getQueryParam, getRequestIp } from "../http-utils.js";
 import {
   fetchDriverLoadFacets,
@@ -56,26 +57,12 @@ let lastDriverLoadsSheetRefreshCheckAt = 0;
 
 function toErrorResponse(error, correlationId) {
   if (error instanceof ValidationError) {
-    return {
-      statusCode: 400,
-      payload: {
-        error: error.name,
-        code: error.code,
-        message: error.message,
-        meta: { correlationId },
-      },
-    };
+    return buildValidationErrorResponse(error, correlationId);
   }
-
-  return {
-    statusCode: 500,
-    payload: {
-      error: "InternalServerError",
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Unexpected error while processing the public load request.",
-      meta: { correlationId },
-    },
-  };
+  return buildInternalErrorResponse(
+    correlationId,
+    "Unexpected error while processing the public load request.",
+  );
 }
 
 function hasAutomaticDriverLoadsSheetRefreshSupport() {

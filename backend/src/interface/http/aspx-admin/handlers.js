@@ -3,6 +3,7 @@ import { createCorrelationId } from "../../../application/load-claims/helpers.js
 import { ForbiddenError, UnauthorizedError } from "../../../domain/load-claims/errors.js";
 import { assertOperatorPermission } from "../../../application/load-claims/operator-access.js";
 import { getAspxSyncStatus, triggerAspxSync } from "../../../application/aspx/aspx-admin.js";
+import { buildHttpErrorResponse } from "../error-mapping.js";
 import { getAuthorizationHeader, getHeaderValue } from "../http-utils.js";
 
 function getCorrelationId(request) {
@@ -21,15 +22,15 @@ function toErrorResponse(error, correlationId) {
       ? 503
       : 500;
 
-  return {
-    statusCode: status,
-    payload: {
+  return buildHttpErrorResponse(
+    status,
+    {
       error: error?.name || "AspxAdminError",
       code: error?.code || "ASPX_ADMIN_ERROR",
       message: error instanceof Error ? error.message : String(error),
-      meta: { correlationId },
     },
-  };
+    correlationId,
+  );
 }
 
 export async function resolveAspxSyncStatusResponse(request) {

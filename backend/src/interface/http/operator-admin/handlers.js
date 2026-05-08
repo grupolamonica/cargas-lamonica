@@ -21,6 +21,10 @@ import {
   driverProfileUpdateMutationSchema,
   routeMutationSchema,
 } from "../../../domain/operator-admin/schemas.js";
+import {
+  buildInternalErrorResponse,
+  buildServiceErrorResponse,
+} from "../error-mapping.js";
 import { zodErrorToHttpResponse } from "../schemas/common.js";
 import { cargoIdParamsSchema } from "../schemas/cargo-schemas.js";
 import { clienteIdParamsSchema } from "../schemas/cliente-schemas.js";
@@ -100,29 +104,13 @@ function toErrorResponse(error, correlationId) {
   if (error instanceof ZodError) {
     return zodErrorToHttpResponse(error, correlationId);
   }
-
   if (error instanceof LoadClaimServiceError) {
-    return {
-      statusCode: error.statusCode,
-      payload: {
-        error: error.name,
-        code: error.code,
-        message: error.message,
-        details: error.details,
-        meta: { correlationId },
-      },
-    };
+    return buildServiceErrorResponse(error, correlationId, { includeDetails: true });
   }
-
-  return {
-    statusCode: 500,
-    payload: {
-      error: "InternalServerError",
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Unexpected error while processing the operator request.",
-      meta: { correlationId },
-    },
-  };
+  return buildInternalErrorResponse(
+    correlationId,
+    "Unexpected error while processing the operator request.",
+  );
 }
 
 async function withOperatorSession(request, action, optionsOrExecute, maybeExecute) {
