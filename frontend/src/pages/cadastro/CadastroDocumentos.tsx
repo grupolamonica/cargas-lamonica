@@ -2617,7 +2617,7 @@ const CadastroDocumentos = () => {
     if (isLast) return;
     if (!FREE_NAV && !currentTabComplete) {
       const missing = listMissingFieldsForTab(activeTab);
-      console.warn(`[goNext] Aba "${activeTab}" - faltam ${missing.length}:`, missing);
+      if (import.meta.env.DEV) console.warn(`[goNext] Aba "${activeTab}" - faltam ${missing.length}:`, missing);
       toast({
         title: `Faltam ${missing.length} item${missing.length === 1 ? "" : "s"} para avancar`,
         description:
@@ -2730,7 +2730,7 @@ const CadastroDocumentos = () => {
 
     const validationErrors = collectValidationErrors();
     if (validationErrors.length > 0) {
-      console.error("[CadastroDocumentos] Erros de validacao:", validationErrors);
+      if (import.meta.env.DEV) console.error("[CadastroDocumentos] Erros de validacao:", validationErrors);
       toast({
         title: `${validationErrors.length} campo${validationErrors.length === 1 ? "" : "s"} invalido${validationErrors.length === 1 ? "" : "s"}`,
         description: validationErrors.slice(0, 3).join(" • ") +
@@ -2810,8 +2810,7 @@ const CadastroDocumentos = () => {
     } else {
       description = "Tente novamente.";
     }
-    // Garante visibilidade — toasts curtos cortam mensagens longas no mobile.
-    console.error(`[CadastroDocumentos] ${title}:`, error);
+    if (import.meta.env.DEV) console.error(`[CadastroDocumentos] ${title}:`, error);
     toast({ title, description, variant: "destructive" });
   };
 
@@ -3102,7 +3101,7 @@ const CadastroDocumentos = () => {
     try {
       const idCrlv = target === "carreta" ? `${form.id_cadastro}:carreta` : form.id_cadastro;
       const { veiculo, proprietario } = await ocrCrlv(file, idCrlv);
-      console.debug(`[handleCrlvFile/${target}] proprietario:`, proprietario);
+      if (import.meta.env.DEV) console.debug(`[handleCrlvFile/${target}] proprietario:`, proprietario);
 
       // Guarda os valores originais do OCR para cross-check vs. o que o
       // operador digita depois (caso edite manualmente sem perceber).

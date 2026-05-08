@@ -445,7 +445,7 @@ export async function ocrCrlv(
   // Debug: imprime a resposta crua da API para inspecao quando algum campo nao
   // bater com a chave esperada (Infosimples ocasionalmente muda layout).
   if (typeof window !== "undefined") {
-    console.debug("[ocrCrlv] raw response:", data);
+    if (import.meta.env.DEV) console.debug("[ocrCrlv] raw response:", data);
   }
 
   const v = (...k: string[]) => ocrValor(data, ...k);
@@ -677,7 +677,7 @@ export async function consultaAnttVeiculo(opts: {
   const rawMessage = json.code_message ?? "";
 
   if (typeof window !== "undefined") {
-    console.debug(`[consultaAntt/${estrategia}] raw response:`, { code: rawCode, data: json.data });
+    if (import.meta.env.DEV) console.debug(`[consultaAntt/${estrategia}] raw response:`, { code: rawCode, data: json.data });
   }
 
   // Codigos Infosimples comuns:
@@ -789,7 +789,7 @@ export async function consultaVeiculoSituacao(opts: {
   const rawMessage = json.code_message ?? "";
 
   if (typeof window !== "undefined") {
-    console.debug("[consultaVeiculoSituacao] raw response:", json);
+    if (import.meta.env.DEV) console.debug("[consultaVeiculoSituacao] raw response:", json);
   }
 
   if (rawCode !== 200) {
@@ -965,7 +965,7 @@ export async function consultaCnpj(cnpj: string): Promise<CnpjConsultaResult> {
   }
 
   if (typeof window !== "undefined") {
-    console.debug("[consultaCnpj] raw response:", json.data);
+    if (import.meta.env.DEV) console.debug("[consultaCnpj] raw response:", json.data);
   }
 
   const situacao = consultaValor(
