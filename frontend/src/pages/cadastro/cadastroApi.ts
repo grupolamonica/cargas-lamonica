@@ -209,7 +209,7 @@ function extractPhones(data: ConsultaEnvelope["data"]): string[] {
   ];
 
   const normalized = rawValues
-    .flatMap((value) => value.split(/[\/;|,\n]+/))
+    .flatMap((value) => value.split(/[/;|,\n]+/))
     .map((value) => value.trim())
     .filter(Boolean)
     .filter((value) => {
