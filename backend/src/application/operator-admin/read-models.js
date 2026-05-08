@@ -704,42 +704,43 @@ export async function fetchOperatorClientesListReadModel({ query, correlationId 
       const result = await client.query(
         `
           SELECT
-            id,
-            created_at,
-            nome,
-            descricao,
-            logo_url,
-            logo_url_card,
-            logo_url_proximas,
-            forma_pagamento,
-            prazo_pagamento,
-            peso,
-            tipo_veiculo,
-            valor_frete,
-            exige_rastreamento,
-            exige_antt,
-            exige_seguro,
-            exige_carga_monitorada,
-            reputacao_pagamento_rapido,
-            reputacao_bom_pagador,
-            reputacao_liberacao_rapida,
-            reputacao_carga_organizada,
-            reputacao_boa_comunicacao,
-            observacoes,
-            custom_reputacoes,
-            custom_exigencias,
-            rastreamento,
-            antt
-          FROM public.clientes
+            c.id,
+            c.created_at,
+            c.nome,
+            c.descricao,
+            c.logo_url,
+            c.logo_url_card,
+            c.logo_url_proximas,
+            c.forma_pagamento,
+            c.prazo_pagamento,
+            c.exige_rastreamento,
+            c.exige_antt,
+            c.exige_seguro,
+            c.exige_carga_monitorada,
+            c.reputacao_pagamento_rapido,
+            c.reputacao_bom_pagador,
+            c.reputacao_liberacao_rapida,
+            c.reputacao_carga_organizada,
+            c.reputacao_boa_comunicacao,
+            c.observacoes,
+            c.custom_reputacoes,
+            c.custom_exigencias,
+            COALESCE(
+              (SELECT array_agg(cr.rota_id ORDER BY cr.created_at)
+               FROM public.cliente_rotas cr
+               WHERE cr.cliente_id = c.id),
+              ARRAY[]::uuid[]
+            ) AS rota_ids
+          FROM public.clientes c
           WHERE (
             $1::text IS NULL OR
-            nome ILIKE $1 OR
-            COALESCE(descricao, '') ILIKE $1 OR
-            COALESCE(forma_pagamento, '') ILIKE $1 OR
-            COALESCE(prazo_pagamento, '') ILIKE $1 OR
-            COALESCE(observacoes, '') ILIKE $1
+            c.nome ILIKE $1 OR
+            COALESCE(c.descricao, '') ILIKE $1 OR
+            COALESCE(c.forma_pagamento, '') ILIKE $1 OR
+            COALESCE(c.prazo_pagamento, '') ILIKE $1 OR
+            COALESCE(c.observacoes, '') ILIKE $1
           )
-          ORDER BY created_at DESC, id DESC
+          ORDER BY c.created_at DESC, c.id DESC
           LIMIT $2 OFFSET $3
         `,
         [searchPattern, pageSize, offset],
@@ -763,9 +764,6 @@ export async function fetchOperatorClientesListReadModel({ query, correlationId 
             NULL::text AS logo_url_proximas,
             forma_pagamento,
             prazo_pagamento,
-            NULL::text AS peso,
-            NULL::text AS tipo_veiculo,
-            NULL::text AS valor_frete,
             exige_rastreamento,
             exige_antt,
             exige_seguro,
@@ -778,8 +776,7 @@ export async function fetchOperatorClientesListReadModel({ query, correlationId 
             observacoes,
             '[]'::jsonb AS custom_reputacoes,
             '[]'::jsonb AS custom_exigencias,
-            rastreamento,
-            antt
+            ARRAY[]::uuid[] AS rota_ids
           FROM public.clientes
           WHERE (
             $1::text IS NULL OR

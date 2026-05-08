@@ -31,11 +31,14 @@ import {
 
 import {
   resolveCreateOperatorCargoResponse,
+  resolveAttachClienteRotaResponse,
   resolveCreateOperatorClienteResponse,
   resolveCreateOperatorRouteResponse,
   resolveDeleteOperatorCargoResponse,
   resolveDeleteOperatorClienteResponse,
+  resolveDetachClienteRotaResponse,
   resolveDuplicateOperatorCargoResponse,
+  resolveListClienteRotasResponse,
   resolveOperatorAuditLogsResponse,
   resolveOperatorCargoListReadModelResponse,
   resolveOperatorClientesListReadModelResponse,
@@ -223,6 +226,10 @@ export function registerRoutes(app) {
   router.post("/api/operator/clientes", wrap(resolveCreateOperatorClienteResponse));
   router.patch("/api/operator/clientes/:clienteId", wrap(resolveUpdateOperatorClienteResponse));
   router.delete("/api/operator/clientes/:clienteId", wrap(resolveDeleteOperatorClienteResponse));
+  // Cliente <-> rota associations (N:M via cliente_rotas table)
+  router.get("/api/operator/clientes/:clienteId/rotas", wrap(resolveListClienteRotasResponse));
+  router.post("/api/operator/clientes/:clienteId/rotas", wrap(resolveAttachClienteRotaResponse));
+  router.delete("/api/operator/clientes/:clienteId/rotas/:rotaId", wrap(resolveDetachClienteRotaResponse));
 
   // Routes catalog
   router.get("/api/operator/routes", wrap(resolveOperatorRoutesListReadModelResponse));

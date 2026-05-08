@@ -27,17 +27,24 @@ import {
 } from "../error-mapping.js";
 import { zodErrorToHttpResponse } from "../schemas/common.js";
 import { cargoIdParamsSchema } from "../schemas/cargo-schemas.js";
-import { clienteIdParamsSchema } from "../schemas/cliente-schemas.js";
+import {
+  attachClienteRotaBodySchema,
+  clienteIdParamsSchema,
+  clienteRotaParamsSchema,
+} from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
 import { dashboardQuerySchema } from "../schemas/operator-schemas.js";
 import {
+  attachClienteRota,
   createOperatorCargo,
   createOperatorCliente,
   createOperatorRoute,
   deleteOperatorCargo,
   deleteOperatorCliente,
+  detachClienteRota,
   fetchOperatorDashboardReadModel,
+  listClienteRotas,
   redactExpiredPublicLeadPii,
   revalidateAllVehiclesAngellira,
   updateOperatorCargo,
@@ -371,6 +378,71 @@ export async function resolveDeleteOperatorClienteResponse(request) {
       requestIp,
       correlationId,
     });
+    },
+  );
+}
+
+export async function resolveListClienteRotasResponse(request) {
+  return withOperatorSession(
+    request,
+    "list-cliente-rotas",
+    {
+      requiredPermission: "operator:read",
+      forbiddenMessage: "Sem permissao para visualizar embarcadores.",
+    },
+    async ({ correlationId }) => {
+      const { clienteId } = clienteIdParamsSchema.parse({
+        clienteId: getQueryParam(request, "clienteId"),
+      });
+      return listClienteRotas({ clienteId, correlationId });
+    },
+  );
+}
+
+export async function resolveAttachClienteRotaResponse(request) {
+  return withOperatorSession(
+    request,
+    "attach-cliente-rota",
+    {
+      requiredPermission: "clientes:write",
+      forbiddenMessage: "Somente operadores com acesso avancado podem atrelar rotas a embarcadores.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { clienteId } = clienteIdParamsSchema.parse({
+        clienteId: getQueryParam(request, "clienteId"),
+      });
+      const body = attachClienteRotaBodySchema.parse(await parseJsonBody(request));
+      return attachClienteRota({
+        clienteId,
+        rotaId: body.rotaId,
+        operatorId,
+        requestIp,
+        correlationId,
+      });
+    },
+  );
+}
+
+export async function resolveDetachClienteRotaResponse(request) {
+  return withOperatorSession(
+    request,
+    "detach-cliente-rota",
+    {
+      requiredPermission: "clientes:write",
+      forbiddenMessage: "Somente operadores com acesso avancado podem desatrelar rotas de embarcadores.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { clienteId, rotaId } = clienteRotaParamsSchema.parse({
+        clienteId: getQueryParam(request, "clienteId"),
+        rotaId: getQueryParam(request, "rotaId"),
+      });
+      return detachClienteRota({
+        clienteId,
+        rotaId,
+        operatorId,
+        requestIp,
+        correlationId,
+      });
     },
   );
 }
