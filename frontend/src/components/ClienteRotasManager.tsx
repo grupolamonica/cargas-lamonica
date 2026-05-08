@@ -61,9 +61,13 @@ export default function ClienteRotasManager({
   const attachMutation = useMutation({
     mutationFn: (rotaId: string) => attachClienteRota(clienteId, rotaId),
     onSuccess: (data) => {
-      toast.success(
-        data.already_existed ? "Rota ja estava atrelada." : "Rota atrelada com sucesso.",
-      );
+      if (data.already_attached) {
+        toast.info("Rota ja estava atrelada a este cliente.");
+      } else if (data.transferred) {
+        toast.warning("Rota transferida — estava atrelada a outro cliente.", { duration: 6000 });
+      } else {
+        toast.success("Rota atrelada com sucesso.");
+      }
       setSelectedRotaId("");
       qc.invalidateQueries({ queryKey: ["cliente-rotas", clienteId] });
       qc.invalidateQueries({ queryKey: ["operator-clientes"] });

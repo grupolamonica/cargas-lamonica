@@ -726,9 +726,9 @@ export async function fetchOperatorClientesListReadModel({ query, correlationId 
             c.custom_reputacoes,
             c.custom_exigencias,
             COALESCE(
-              (SELECT array_agg(cr.rota_id ORDER BY cr.created_at)
-               FROM public.cliente_rotas cr
-               WHERE cr.cliente_id = c.id),
+              (SELECT array_agg(r.id ORDER BY r.created_at)
+               FROM public.rotas r
+               WHERE r.cliente_id = c.id),
               ARRAY[]::uuid[]
             ) AS rota_ids
           FROM public.clientes c

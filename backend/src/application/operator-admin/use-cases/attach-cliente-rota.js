@@ -2,8 +2,10 @@ import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { LoadClaimServiceError, NotFoundError } from "../../../domain/load-claims/errors.js";
 
-// Atrela uma rota a um cliente. Idempotente — UNIQUE (cliente_id, rota_id)
-// no banco; ON CONFLICT DO NOTHING para que chamadas repetidas não falhem.
+// Atrela uma rota a um cliente. Modelo 1:N — uma rota pertence a no máximo
+// um cliente. Se a rota já tem outro cliente, transferimos o vínculo
+// (UPDATE) e retornamos transferred_from no payload para a UI poder
+// avisar o operador. Operação atômica via UPDATE com retorno do estado anterior.
 export async function attachClienteRota({
   clienteId,
   rotaId,
@@ -21,15 +23,16 @@ export async function attachClienteRota({
       throw new NotFoundError(`Cliente ${clienteId} nao encontrado.`, "CLIENTE_NOT_FOUND");
     }
 
-    // Valida rota
+    // Trava a rota e captura cliente atual antes do UPDATE.
     const rotaRow = await client.query(
-      `SELECT id, ativa FROM public.rotas WHERE id = $1 LIMIT 1`,
+      `SELECT id, ativa, cliente_id FROM public.rotas WHERE id = $1 FOR UPDATE`,
       [rotaId],
     );
     if (rotaRow.rowCount === 0) {
       throw new NotFoundError(`Rota ${rotaId} nao encontrada.`, "ROTA_NOT_FOUND");
     }
-    if (rotaRow.rows[0].ativa === false) {
+    const rotaAtual = rotaRow.rows[0];
+    if (rotaAtual.ativa === false) {
       throw new LoadClaimServiceError(
         "Rota inativa nao pode ser atrelada a cliente.",
         "ROTA_INATIVA",
@@ -37,38 +40,43 @@ export async function attachClienteRota({
       );
     }
 
-    const result = await client.query(
-      `INSERT INTO public.cliente_rotas (cliente_id, rota_id)
-       VALUES ($1, $2)
-       ON CONFLICT (cliente_id, rota_id) DO NOTHING
-       RETURNING id, created_at`,
-      [clienteId, rotaId],
-    );
+    const previousClienteId = rotaAtual.cliente_id ?? null;
+    const alreadyAttached = previousClienteId === clienteId;
+    const transferred = previousClienteId !== null && previousClienteId !== clienteId;
 
-    const created = result.rowCount > 0;
-    const link = created ? result.rows[0] : null;
+    if (!alreadyAttached) {
+      await client.query(
+        `UPDATE public.rotas SET cliente_id = $1, updated_at = now() WHERE id = $2`,
+        [clienteId, rotaId],
+      );
+    }
 
     await insertSecurityAuditEvent(client, {
-      eventType: "operator.cliente_rota.attached",
+      eventType: "operator.rota_cliente.attached",
       actorUserId: operatorId,
       actorRole: "operator",
-      resourceType: "cliente_rota",
-      resourceId: clienteId,
+      resourceType: "rota",
+      resourceId: rotaId,
       action: "attach",
       outcome: "success",
       requestIp,
       correlationId,
-      metadata: { rotaId, alreadyExisted: !created },
+      metadata: {
+        clienteId,
+        previousClienteId,
+        transferred,
+        alreadyAttached,
+      },
     });
 
     return {
-      statusCode: created ? 201 : 200,
+      statusCode: alreadyAttached ? 200 : 201,
       payload: {
         cliente_id: clienteId,
         rota_id: rotaId,
-        link_id: link?.id ?? null,
-        created_at: link?.created_at ?? null,
-        already_existed: !created,
+        previous_cliente_id: previousClienteId,
+        transferred,
+        already_attached: alreadyAttached,
         meta: { correlationId },
       },
     };

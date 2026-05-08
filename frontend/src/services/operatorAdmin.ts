@@ -214,20 +214,21 @@ export async function fetchClienteRotas(clienteId: string) {
   );
 }
 
+export interface AttachClienteRotaResponse {
+  cliente_id: string;
+  rota_id: string;
+  previous_cliente_id: string | null;
+  transferred: boolean;
+  already_attached: boolean;
+  meta: { correlationId: string };
+}
+
 export async function attachClienteRota(clienteId: string, rotaId: string) {
   const accessToken = await getOperatorAccessToken();
-  return requestJson<{
-    cliente_id: string;
-    rota_id: string;
-    link_id: string | null;
-    created_at: string | null;
-    already_existed: boolean;
-    meta: { correlationId: string };
-  }>(`/api/operator/clientes/${clienteId}/rotas`, {
-    method: "POST",
-    accessToken,
-    body: { rotaId },
-  });
+  return requestJson<AttachClienteRotaResponse>(
+    `/api/operator/clientes/${clienteId}/rotas`,
+    { method: "POST", accessToken, body: { rotaId } },
+  );
 }
 
 export async function detachClienteRota(clienteId: string, rotaId: string) {
