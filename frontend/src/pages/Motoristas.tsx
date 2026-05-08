@@ -916,7 +916,6 @@ const Motoristas = () => {
           onPrevious={() => setPage((currentPage) => Math.max(currentPage - 1, 1))}
           onNext={() => setPage((currentPage) => Math.min(currentPage + 1, meta.totalPages))}
         />
-      </main>
 
       <Dialog open={editingDriver !== null} onOpenChange={(open) => { if (!open) setEditingDriver(null); }}>
         <DialogContent className="max-w-lg">
