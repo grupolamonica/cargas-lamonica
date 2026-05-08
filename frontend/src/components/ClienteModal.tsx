@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Building2,
   Clock3,
@@ -27,6 +27,7 @@ import type { CustomBadgeItem } from "@/services/operatorAdmin";
 import { shouldProxyClientLogoUrl } from "@/lib/clientLogo";
 import { BADGE_ICON_MAP, BADGE_ICON_NAMES, getBadgeIcon } from "@/lib/badgeIcons";
 import ClientLogo from "@/components/ClientLogo";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 interface ClienteModalProps {
   open: boolean;
@@ -61,12 +62,8 @@ const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps)
 
   const [newRepLabel, setNewRepLabel] = useState("");
   const [newRepIcon, setNewRepIcon] = useState(DEFAULT_ICON);
-  const [showRepIconPicker, setShowRepIconPicker] = useState(false);
   const [newExigLabel, setNewExigLabel] = useState("");
   const [newExigIcon, setNewExigIcon] = useState(DEFAULT_ICON);
-  const [showExigIconPicker, setShowExigIconPicker] = useState(false);
-  const repPickerRef = useRef<HTMLDivElement>(null);
-  const exigPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setForm(mapClienteToFormData(initialData));
@@ -486,17 +483,18 @@ const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps)
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomBadge("custom_reputacoes", newRepLabel, newRepIcon, () => setNewRepLabel(""), () => setNewRepIcon(DEFAULT_ICON)); } }}
                     className="admin-input-surface h-10 flex-1 rounded-xl border px-3 text-sm font-medium outline-none transition-all placeholder:text-muted-foreground/70 focus:border-primary/35 focus:ring-4 focus:ring-primary/10"
                   />
-                  <div className="relative shrink-0" ref={repPickerRef}>
-                    <button
-                      type="button"
-                      onClick={() => setShowRepIconPicker((v) => !v)}
-                      className="admin-soft-button flex h-10 w-10 items-center justify-center rounded-xl border cursor-pointer"
-                      aria-label="Escolher ícone"
-                    >
-                      {(() => { const Icon = getBadgeIcon(newRepIcon); return <Icon className="h-4 w-4" />; })()}
-                    </button>
-                    {showRepIconPicker && (
-                      <div className="absolute left-0 top-12 z-50 grid grid-cols-5 gap-1 rounded-2xl border bg-popover p-2 shadow-xl">
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        className="admin-soft-button flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border cursor-pointer"
+                        aria-label="Escolher ícone"
+                      >
+                        {(() => { const Icon = getBadgeIcon(newRepIcon); return <Icon className="h-4 w-4" />; })()}
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-auto p-2">
+                      <div className="grid grid-cols-5 gap-1">
                         {BADGE_ICON_NAMES.map((name) => {
                           const Icon = BADGE_ICON_MAP[name];
                           return (
@@ -504,7 +502,7 @@ const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps)
                               key={name}
                               type="button"
                               title={name}
-                              onClick={() => { setNewRepIcon(name); setShowRepIconPicker(false); }}
+                              onClick={() => setNewRepIcon(name)}
                               className={cn("flex h-8 w-8 items-center justify-center rounded-lg transition-colors cursor-pointer hover:bg-primary/10", newRepIcon === name && "bg-primary/15 ring-1 ring-primary/40")}
                             >
                               <Icon className="h-4 w-4" />
@@ -512,8 +510,8 @@ const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps)
                           );
                         })}
                       </div>
-                    )}
-                  </div>
+                    </PopoverContent>
+                  </Popover>
                 </div>
                 <button
                   type="button"
@@ -584,17 +582,18 @@ const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps)
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomBadge("custom_exigencias", newExigLabel, newExigIcon, () => setNewExigLabel(""), () => setNewExigIcon(DEFAULT_ICON)); } }}
                     className="admin-input-surface h-10 flex-1 rounded-xl border px-3 text-sm font-medium outline-none transition-all placeholder:text-muted-foreground/70 focus:border-primary/35 focus:ring-4 focus:ring-primary/10"
                   />
-                  <div className="relative shrink-0" ref={exigPickerRef}>
-                    <button
-                      type="button"
-                      onClick={() => setShowExigIconPicker((v) => !v)}
-                      className="admin-soft-button flex h-10 w-10 items-center justify-center rounded-xl border cursor-pointer"
-                      aria-label="Escolher ícone"
-                    >
-                      {(() => { const Icon = getBadgeIcon(newExigIcon); return <Icon className="h-4 w-4" />; })()}
-                    </button>
-                    {showExigIconPicker && (
-                      <div className="absolute left-0 top-12 z-50 grid grid-cols-5 gap-1 rounded-2xl border bg-popover p-2 shadow-xl">
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        className="admin-soft-button flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border cursor-pointer"
+                        aria-label="Escolher ícone"
+                      >
+                        {(() => { const Icon = getBadgeIcon(newExigIcon); return <Icon className="h-4 w-4" />; })()}
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-auto p-2">
+                      <div className="grid grid-cols-5 gap-1">
                         {BADGE_ICON_NAMES.map((name) => {
                           const Icon = BADGE_ICON_MAP[name];
                           return (
@@ -602,7 +601,7 @@ const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps)
                               key={name}
                               type="button"
                               title={name}
-                              onClick={() => { setNewExigIcon(name); setShowExigIconPicker(false); }}
+                              onClick={() => setNewExigIcon(name)}
                               className={cn("flex h-8 w-8 items-center justify-center rounded-lg transition-colors cursor-pointer hover:bg-primary/10", newExigIcon === name && "bg-primary/15 ring-1 ring-primary/40")}
                             >
                               <Icon className="h-4 w-4" />
@@ -610,8 +609,8 @@ const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps)
                           );
                         })}
                       </div>
-                    )}
-                  </div>
+                    </PopoverContent>
+                  </Popover>
                 </div>
                 <button
                   type="button"

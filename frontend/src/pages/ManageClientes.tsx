@@ -24,6 +24,8 @@ import ClientLogo from "@/components/ClientLogo";
 import DashboardHeader from "@/components/DashboardHeader";
 import { useAuth } from "@/hooks/useAuth";
 import { type Cliente, type ClienteFormData, mapClienteFormToPayload } from "@/lib/clientes";
+import { getBadgeIcon } from "@/lib/badgeIcons";
+import type { CustomBadgeItem } from "@/services/operatorAdmin";
 import { canWriteOperatorClientes, getOperatorAccessLevel, getOperatorAccessLevelLabel } from "@/lib/operatorAccess";
 import {
   createOperatorCliente,
@@ -361,7 +363,7 @@ const ManageClientes = () => {
                       <div className="mt-3 grid grid-cols-2 gap-2">
                         {requirementOptions.map((option) => {
                           const Icon = option.icon;
-                          const active = cliente[option.key];
+                          const active = cliente[option.key as keyof Cliente] as boolean;
 
                           return (
                             <div
@@ -378,6 +380,23 @@ const ManageClientes = () => {
                             </div>
                           );
                         })}
+                        {(cliente.custom_exigencias as CustomBadgeItem[] | null ?? []).map((badge) => {
+                          const Icon = getBadgeIcon(badge.icon_name);
+                          return (
+                            <div
+                              key={badge.id}
+                              className={cn(
+                                "flex items-center gap-2 rounded-2xl border px-3 py-2.5 text-xs font-semibold transition-colors duration-200",
+                                badge.active
+                                  ? "border-[hsl(224_94%_37%)] bg-[linear-gradient(135deg,#022483,#0b4de8)] text-white shadow-[0_16px_24px_-18px_rgba(2,36,131,0.8)]"
+                                  : "admin-chip-inactive",
+                              )}
+                            >
+                              <Icon className="h-4 w-4 shrink-0" />
+                              <span className="truncate">{badge.label}</span>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
 
@@ -386,7 +405,7 @@ const ManageClientes = () => {
                       <div className="mt-3 grid grid-cols-2 gap-2">
                         {reputationOptions.map((option) => {
                           const Icon = option.icon;
-                          const active = cliente[option.key];
+                          const active = cliente[option.key as keyof Cliente] as boolean;
 
                           return (
                             <div
@@ -400,6 +419,23 @@ const ManageClientes = () => {
                             >
                               <Icon className="h-4 w-4 shrink-0" />
                               <span className="truncate">{option.label}</span>
+                            </div>
+                          );
+                        })}
+                        {(cliente.custom_reputacoes as CustomBadgeItem[] | null ?? []).map((badge) => {
+                          const Icon = getBadgeIcon(badge.icon_name);
+                          return (
+                            <div
+                              key={badge.id}
+                              className={cn(
+                                "flex items-center gap-2 rounded-2xl border px-3 py-2.5 text-xs font-semibold transition-colors duration-200",
+                                badge.active
+                                  ? "border-[hsl(224_94%_37%)] bg-[linear-gradient(135deg,#022483,#0b4de8)] text-white shadow-[0_16px_24px_-18px_rgba(2,36,131,0.8)]"
+                                  : "admin-chip-inactive",
+                              )}
+                            >
+                              <Icon className="h-4 w-4 shrink-0" />
+                              <span className="truncate">{badge.label}</span>
                             </div>
                           );
                         })}

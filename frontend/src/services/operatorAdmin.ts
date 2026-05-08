@@ -67,6 +67,7 @@ export interface OperatorRoutePayload {
   perfil_padrao: string | null;
   valor_padrao: number | null;
   bonus_padrao: number | null;
+  bonus_exigencias: string | null;
   ativa: boolean;
   observacoes: string | null;
 }

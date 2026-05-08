@@ -489,10 +489,11 @@ const DriverCargoDetails = () => {
               <div className="hidden sm:flex flex-wrap gap-2">
                 <Button
                   type="button"
+                  variant="cta"
                   onClick={() => setIsClaimDialogOpen(true)}
-                  className="group h-11 rounded-full border border-white/16 bg-white/[0.12] px-4 text-white shadow-[0_18px_34px_-24px_hsl(223_56%_6%/0.48)] backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:bg-white/[0.18]"
+                  className="group h-11 rounded-full px-4"
                 >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/14 transition-colors group-hover:bg-white/20">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/20 transition-colors group-hover:bg-white/28">
                     <ShieldCheck className="h-3.5 w-3.5" />
                   </span>
                   Candidatar-se
@@ -700,10 +701,11 @@ const DriverCargoDetails = () => {
       <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 sm:bottom-6 sm:justify-end sm:px-6 lg:px-8">
         <Button
           type="button"
+          variant="cta"
           onClick={() => setIsClaimDialogOpen(true)}
-          className="pointer-events-auto group h-14 w-full rounded-full border border-[hsl(224_72%_58%/0.22)] bg-[linear-gradient(135deg,hsl(223_73%_34%),hsl(222_88%_48%))] px-6 text-sm font-semibold text-white shadow-[0_26px_46px_-24px_hsl(223_68%_20%/0.55)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_32px_54px_-24px_hsl(223_68%_18%/0.58)] sm:min-w-[220px] sm:w-auto"
+          className="pointer-events-auto group h-14 w-full rounded-full px-6 text-sm sm:min-w-[220px] sm:w-auto"
         >
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/16 transition-colors group-hover:bg-white/22">
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/20 transition-colors group-hover:bg-white/28">
             <ShieldCheck className="h-4 w-4" />
           </span>
           Candidatar-se

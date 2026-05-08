@@ -11,6 +11,7 @@ export interface RouteFormData {
   perfil_padrao: string;
   valor_padrao: string;
   bonus_padrao: string;
+  bonus_exigencias: string;
   ativa: boolean;
   observacoes: string;
 }
@@ -33,6 +34,7 @@ const emptyForm: RouteFormData = {
   perfil_padrao: "CARRETA",
   valor_padrao: "",
   bonus_padrao: "",
+  bonus_exigencias: "",
   ativa: true,
   observacoes: "",
 };
@@ -260,6 +262,22 @@ const RouteModal = ({
               disabled={!supportsCatalogFields}
               placeholder="Ex: Janela de entrega apertada, pedagio alto, rota de retorno..."
               className="min-h-[110px] w-full rounded-lg border border-border bg-secondary px-3 py-3 text-sm text-foreground placeholder:text-muted-foreground transition-all duration-200 focus:bg-card focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+            />
+          </div>
+
+          <div className="admin-accent-tint rounded-2xl border px-4 py-4 shadow-[0_16px_28px_-24px_hsl(224_94%_37%/0.25)]">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary/70">Regras para liberar o bônus</p>
+            <h3 className="mt-2 text-sm font-semibold text-foreground">Explique o que o motorista precisa cumprir</h3>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              Escreva uma regra por linha. Esse texto vai aparecer em destaque na especificação da carga.
+            </p>
+            <textarea
+              value={form.bonus_exigencias}
+              onChange={(event) => setForm({ ...form, bonus_exigencias: event.target.value })}
+              disabled={!supportsCatalogFields}
+              rows={5}
+              placeholder={"Ex: Entregar dentro da janela acordada\nChecklist e comprovante enviados\nSeguir todas as normas operacionais"}
+              className="mt-4 min-h-[132px] w-full resize-y rounded-lg border border-border bg-secondary px-3 py-3 text-sm text-foreground placeholder:text-muted-foreground transition-all duration-200 focus:bg-card focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
             />
           </div>
 

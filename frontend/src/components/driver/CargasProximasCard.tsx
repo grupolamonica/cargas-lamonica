@@ -88,7 +88,7 @@ export default function CargasProximasCard({
             name={item.logoAlt ?? ""}
             logoUrl={item.logoUrl}
             noBg
-            className="absolute -right-2 top-2 h-6 w-[42px] rounded-none border-0 shadow-none"
+            className="absolute right-2 top-3 h-6 w-[44px] rounded-none border-0 shadow-none bg-transparent"
             imageClassName="p-0"
           />
         ) : null}

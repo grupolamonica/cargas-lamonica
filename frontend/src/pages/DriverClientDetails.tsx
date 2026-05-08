@@ -29,6 +29,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import ClientLogo from "@/components/ClientLogo";
 import { cn } from "@/lib/utils";
 import { publicSupabase } from "@/integrations/supabase/public-client";
+import { getBadgeIcon } from "@/lib/badgeIcons";
+import type { CustomBadgeItem } from "@/services/operatorAdmin";
 
 interface ClientRow {
   id: string;
@@ -46,6 +48,8 @@ interface ClientRow {
   reputacao_carga_organizada: boolean;
   reputacao_liberacao_rapida: boolean;
   reputacao_pagamento_rapido: boolean;
+  custom_exigencias: CustomBadgeItem[] | null;
+  custom_reputacoes: CustomBadgeItem[] | null;
 }
 
 interface ClientLoadRow {
@@ -59,9 +63,9 @@ interface ClientLoadRow {
 }
 
 const CLIENT_SELECT =
-  "id, nome, descricao, logo_url, forma_pagamento, prazo_pagamento, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido";
+  "id, nome, descricao, logo_url, forma_pagamento, prazo_pagamento, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_exigencias, custom_reputacoes";
 const CLIENT_FALLBACK_SELECT =
-  "id, nome, descricao, forma_pagamento, prazo_pagamento, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido";
+  "id, nome, descricao, forma_pagamento, prazo_pagamento, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_exigencias, custom_reputacoes";
 const CLIENT_ACTIVE_LOADS_SELECT = "id, data, horario, origem, destino, perfil, valor";
 
 function isMissingClienteLogoColumnError(error: { message?: string; details?: string } | null) {
@@ -171,9 +175,7 @@ function SignalCard({
       </div>
 
       <p className={cn("mt-3 text-[0.88rem] font-semibold leading-snug sm:mt-4 sm:text-sm", active ? "text-white" : "text-foreground")}>{label}</p>
-      <p className={cn("mt-1 text-xs leading-5 sm:text-sm sm:leading-6", active ? "text-white/76" : "text-muted-foreground")}><span className="sm:hidden">{active ? "Confirmado no cadastro." : "Não informado."}</span><span className="hidden sm:inline">
-        {active ? "Informação confirmada para este cliente." : "Esse item não foi informado para este cliente."}
-      </span></p>
+      <p className={cn("mt-1 text-xs leading-5 sm:text-sm sm:leading-6", active ? "text-white/76" : "text-muted-foreground")}>{active ? "Confirmado no cadastro." : "Não informado."}</p>
     </div>
   );
 }
@@ -262,7 +264,7 @@ const DriverClientDetails = () => {
           throw new Error("Cliente não encontrado");
         }
 
-        return fallbackResult.data as ClientRow;
+        return fallbackResult.data as unknown as ClientRow;
       }
 
       if (error) {
@@ -273,7 +275,7 @@ const DriverClientDetails = () => {
         throw new Error("Cliente não encontrado");
       }
 
-      return data as ClientRow;
+      return data as unknown as ClientRow;
     },
   });
 
@@ -442,6 +444,12 @@ const DriverClientDetails = () => {
               {requirementFlags.map((flag) => (
                 <SignalCard key={flag.label} icon={flag.icon} label={flag.label} active={flag.active} />
               ))}
+              {(client.custom_exigencias ?? []).map((badge) => {
+                const Icon = getBadgeIcon(badge.icon_name);
+                return (
+                  <SignalCard key={badge.id} icon={Icon} label={badge.label} active={badge.active} />
+                );
+              })}
             </div>
           </div>
 
@@ -458,6 +466,12 @@ const DriverClientDetails = () => {
               {reputationFlags.map((flag) => (
                 <SignalCard key={flag.label} icon={flag.icon} label={flag.label} active={flag.active} />
               ))}
+              {(client.custom_reputacoes ?? []).map((badge) => {
+                const Icon = getBadgeIcon(badge.icon_name);
+                return (
+                  <SignalCard key={badge.id} icon={Icon} label={badge.label} active={badge.active} />
+                );
+              })}
             </div>
           </div>
         </section>

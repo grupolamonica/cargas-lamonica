@@ -39,7 +39,7 @@ const ClientLogo = ({ name, logoUrl, alt, className, imageClassName, fallbackCla
 
   useEffect(() => {
     setHasImageError(false);
-    setDisplayLogoUrl(noBg ? normalizedLogoUrl : "");
+    setDisplayLogoUrl(normalizedLogoUrl);
     setUsesWhiteSurfaceTreatment(false);
 
     if (!logoSourceCandidates.length) {

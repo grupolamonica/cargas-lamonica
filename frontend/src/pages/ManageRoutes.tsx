@@ -60,6 +60,7 @@ function mapRouteToFormData(route: RouteCatalogRow): RouteFormData {
     perfil_padrao: route.perfil_padrao || "CARRETA",
     valor_padrao: route.valor_padrao !== null ? String(route.valor_padrao) : "",
     bonus_padrao: route.bonus_padrao !== null ? String(route.bonus_padrao) : "",
+    bonus_exigencias: route.bonus_exigencias ?? "",
     ativa: route.ativa,
     observacoes: route.observacoes || "",
   };
@@ -191,6 +192,7 @@ const ManageRoutes = () => {
       perfil_padrao: trimTextOrNull(formData.perfil_padrao),
       valor_padrao: parseMoneyInput(formData.valor_padrao),
       bonus_padrao: parseMoneyInput(formData.bonus_padrao),
+      bonus_exigencias: trimTextOrNull(formData.bonus_exigencias),
       ativa: formData.ativa,
       observacoes: trimTextOrNull(formData.observacoes),
     };

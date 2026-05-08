@@ -308,7 +308,10 @@ export function removeLightNeutralBackground(
 ) {
   const cleanedPixels = new Uint8ClampedArray(pixels);
 
-  if (width && height && clearEdgeConnectedNeutralBackground(cleanedPixels, width, height)) {
+  if (width && height) {
+    // Only use edge-connected flood-fill. If no neutral edge pixels found,
+    // skip global fallback to avoid punching holes in logos with dark/colorful backgrounds.
+    clearEdgeConnectedNeutralBackground(cleanedPixels, width, height);
     return cleanedPixels;
   }
 
