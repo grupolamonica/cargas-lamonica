@@ -41,8 +41,6 @@ interface CargoClientRow {
   forma_pagamento: string | null;
   prazo_pagamento: string | null;
   observacoes: string | null;
-  tipo_veiculo: string | null;
-  peso: string | null;
   exige_antt: boolean;
   exige_carga_monitorada: boolean;
   exige_rastreamento: boolean;
@@ -76,9 +74,9 @@ interface CargoDetailsRow {
 }
 
 const CARGO_DETAILS_SELECT =
-  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, bonus_exigencias, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, tipo_veiculo, peso, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
+  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, bonus_exigencias, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
 const LEGACY_CARGO_DETAILS_SELECT =
-  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, tipo_veiculo, peso, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
+  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
 
 
 const reputationLabels = [
