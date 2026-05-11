@@ -26,3 +26,30 @@ services:
     env_file:
       - backend.env
     # No ports exposed directly: Traefik routes /api/* here
+
+  # ── Watchtower: auto-pull GHCR images and restart on new :latest pushes ──────
+  # CI pushes ghcr.io/…:latest → Watchtower polls every 60s → rolling restart.
+  # Eliminates SSH as a hard deploy requirement for future releases.
+  # Auth: mounts /root/.docker/config.json with GHCR credentials.
+  watchtower:
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /root/.docker/config.json:/config.json:ro
+    environment:
+      WATCHTOWER_POLL_INTERVAL: "60"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+      WATCHTOWER_LABEL_ENABLE: "true"
+    networks:
+      - lamonica-net
+
+  # Opt-in labels for Watchtower (add to base services via override)
+  frontend:
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  backend:
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
