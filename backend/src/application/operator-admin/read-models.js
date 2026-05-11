@@ -275,6 +275,8 @@ function mergeBaseRoutesWithCatalog(routes) {
       observacoes: null,
       created_at: null,
       updated_at: null,
+      rota_id: null,
+      cliente_id: null,
       base_route_label: baseRoute.route,
       persisted: false,
       source: "base",
@@ -300,28 +302,42 @@ function mergeBaseRoutesWithCatalog(routes) {
 }
 
 async function fetchPersistedRoutes(client) {
+  // LEFT JOIN public.rotas para puxar cliente_id (1:N rota → cliente).
+  // Match com normalização (LOWER + BTRIM) para tolerar divergências de
+  // whitespace/case entre route_metrics_cache e public.rotas.
+  // Se public.rotas não existir (schema antigo), fallback ignora cliente_id.
   try {
     const { rows } = await client.query(`
       SELECT
-        id,
-        origin_key,
-        destination_key,
-        origem,
-        destino,
-        distancia_km,
-        duracao_horas,
-        tempo_estimado_horas,
-        perfil_padrao,
-        valor_padrao,
-        bonus_padrao,
-        ativa,
-        observacoes,
-        created_at,
-        updated_at
-      FROM public.route_metrics_cache
-      ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+        rmc.id,
+        rmc.origin_key,
+        rmc.destination_key,
+        rmc.origem,
+        rmc.destino,
+        rmc.distancia_km,
+        rmc.duracao_horas,
+        rmc.tempo_estimado_horas,
+        rmc.perfil_padrao,
+        rmc.valor_padrao,
+        rmc.bonus_padrao,
+        rmc.ativa,
+        rmc.observacoes,
+        rmc.created_at,
+        rmc.updated_at,
+        r.id AS rota_id,
+        r.cliente_id
+      FROM public.route_metrics_cache rmc
+      LEFT JOIN public.rotas r
+        ON LOWER(BTRIM(r.origem))  = LOWER(BTRIM(rmc.origem))
+       AND LOWER(BTRIM(r.destino)) = LOWER(BTRIM(rmc.destino))
+      ORDER BY rmc.updated_at DESC NULLS LAST, rmc.created_at DESC NULLS LAST, rmc.id DESC
       LIMIT 2000
     `);
+
+    if (process.env.NODE_ENV !== "production") {
+      const linked = rows.filter((r) => r.cliente_id).length;
+      console.log(`[fetchPersistedRoutes] ${rows.length} rotas, ${linked} com cliente vinculado`);
+    }
 
     return {
       rows,
@@ -336,7 +352,35 @@ async function fetchPersistedRoutes(client) {
     }
 
     if (!isMissingRouteCatalogColumnsError(error)) {
-      throw error;
+      // Tabela public.rotas pode não existir em schema legado — tenta sem JOIN.
+      try {
+        const { rows: legacyRows } = await client.query(`
+          SELECT
+            id,
+            origin_key,
+            destination_key,
+            origem,
+            destino,
+            distancia_km,
+            duracao_horas,
+            tempo_estimado_horas,
+            perfil_padrao,
+            valor_padrao,
+            bonus_padrao,
+            ativa,
+            observacoes,
+            created_at,
+            updated_at,
+            NULL::uuid AS rota_id,
+            NULL::uuid AS cliente_id
+          FROM public.route_metrics_cache
+          ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+          LIMIT 2000
+        `);
+        return { rows: legacyRows, supportsCatalogFields: true };
+      } catch {
+        throw error;
+      }
     }
 
     const { rows } = await client.query(`
@@ -355,7 +399,9 @@ async function fetchPersistedRoutes(client) {
         true AS ativa,
         NULL::text AS observacoes,
         created_at,
-        updated_at
+        updated_at,
+        NULL::uuid AS rota_id,
+        NULL::uuid AS cliente_id
       FROM public.route_metrics_cache
       ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
       LIMIT 2000
@@ -822,7 +868,7 @@ export async function fetchOperatorClientesListReadModel({ query, correlationId 
 }
 
 export async function fetchOperatorRoutesListReadModel({ query, correlationId }) {
-  const { page, pageSize, offset, maxPageSize, search, status } = parseOperatorRoutesListQuery(query);
+  const { page, pageSize, offset, maxPageSize, search, status, clienteId } = parseOperatorRoutesListQuery(query);
 
   return withPgClient(async (client) => {
     const { rows, supportsCatalogFields } = await fetchPersistedRoutes(client);
@@ -835,7 +881,13 @@ export async function fetchOperatorRoutesListReadModel({ query, correlationId })
           .toLowerCase()
           .includes(search);
       const matchesStatus = status === "todas" || (status === "ativas" ? route.ativa : !route.ativa);
-      return matchesSearch && matchesStatus;
+      const matchesCliente =
+        !clienteId
+          ? true
+          : clienteId === "sem-cliente"
+          ? !route.cliente_id
+          : route.cliente_id === clienteId;
+      return matchesSearch && matchesStatus && matchesCliente;
     });
 
     const paginatedItems = filteredRoutes.slice(offset, offset + pageSize);

@@ -435,21 +435,6 @@ const CargoModal = ({
             </p>
           )}
 
-          <div className="admin-accent-tint rounded-2xl border px-4 py-4 shadow-[0_16px_28px_-24px_hsl(224_94%_37%/0.25)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary/70">Regras para liberar o bônus</p>
-            <h3 className="mt-2 text-sm font-semibold text-foreground">Explique o que o motorista precisa cumprir</h3>
-            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              Escreva uma regra por linha. Esse texto vai aparecer em destaque na especificação da carga para deixar claro quando o bônus é pago.
-            </p>
-            <textarea
-              value={form.bonus_exigencias || ""}
-              onChange={(event) => setForm({ ...form, bonus_exigencias: event.target.value })}
-              rows={5}
-              placeholder={"Ex: Entregar dentro da janela acordada\nChecklist e comprovante enviados\nSeguir todas as normas operacionais"}
-              className={`${inputClass} mt-4 min-h-[132px] resize-y`}
-            />
-          </div>
-
           <div className="admin-card-surface rounded-2xl border px-4 py-4 shadow-[0_14px_28px_-24px_hsl(223_56%_12%/0.18)]">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary/70">Visibilidade no portal</p>
             <h3 className="mt-2 text-sm font-semibold text-foreground">Defina como o motorista vai receber essa carga</h3>

@@ -230,8 +230,14 @@ export function buildRouteLabelMap(loadRows) {
         if (approxLabel) return [row.id, approxLabel];
       }
 
-      unmatched.push({ id: row.id, origem: row.origem, destino: row.destino });
-      return [row.id, null];
+      // Fallback: construct a displayable label from the cargo's own origem/destino.
+      // Use the raw string (not canonicalized — that strips accents for matching purposes).
+      // Strip the "/UF" state suffix only (e.g. "São Bernardo do Campo/SP" → "SÃO BERNARDO DO CAMPO").
+      const rawOrigin = String(row.origem ?? "").replace(/\s*\/\s*[A-Za-z]{2}$/i, "").trim();
+      const rawDest = String(row.destino ?? "").replace(/\s*\/\s*[A-Za-z]{2}$/i, "").trim();
+      const fallbackLabel = rawOrigin && rawDest ? `${rawOrigin.toUpperCase()} X ${rawDest.toUpperCase()}` : null;
+      if (!fallbackLabel) unmatched.push({ id: row.id, origem: row.origem, destino: row.destino });
+      return [row.id, fallbackLabel];
     }),
   );
 

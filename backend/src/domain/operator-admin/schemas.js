@@ -156,6 +156,7 @@ export const routeMutationSchema = z
     perfil_padrao: optionalCanonicalVehicleProfileSchema,
     valor_padrao: optionalNumeric,
     bonus_padrao: optionalNumeric,
+    bonus_exigencias: optionalTrimmedString,
     ativa: z.boolean().default(true),
     observacoes: optionalTrimmedString,
   })
@@ -261,6 +262,7 @@ export function parseOperatorRoutesListQuery(query = {}) {
     ...pagination,
     search: typeof query.search === "string" ? query.search.trim().toLowerCase() : "",
     status: typeof query.status === "string" ? query.status.trim() : "ativas",
+    clienteId: typeof query.clienteId === "string" ? query.clienteId.trim() : "",
   };
 }
 

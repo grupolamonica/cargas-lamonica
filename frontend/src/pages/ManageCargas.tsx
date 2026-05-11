@@ -393,6 +393,7 @@ const ManageCargas = () => {
       queryClient.invalidateQueries({ queryKey: CARGAS_QUERY_KEY }),
       queryClient.invalidateQueries({ queryKey: ["operator", "dashboard-read-model"] }),
       queryClient.invalidateQueries({ queryKey: ["driver", "loads-read-model"] }),
+      queryClient.invalidateQueries({ queryKey: ["driver", "loads-facets"] }),
     ]);
   };
 
@@ -631,7 +632,7 @@ const ManageCargas = () => {
         <section className="admin-panel overflow-hidden p-5 lg:p-6">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">Operacao diaria</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">Operação diária</p>
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 <h2 className="text-2xl font-semibold tracking-tight text-foreground">
                   {(() => {
@@ -814,7 +815,7 @@ const ManageCargas = () => {
                     {pendingPublicationCount} carga{pendingPublicationCount === 1 ? "" : "s"} aguardando dados para aparecer no portal
                   </p>
                   <p className="text-sm leading-relaxed text-amber-900/80">
-                    Complete perfil do veiculo, frete, distancia e tempo estimado para liberar essas cargas ao motorista.
+                    Complete perfil do veículo, frete, distância e tempo estimado para liberar essas cargas ao motorista.
                   </p>
                 </div>
               </div>

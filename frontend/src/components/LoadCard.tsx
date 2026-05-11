@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
 
 interface LoadCardProps {
   id: string;
@@ -69,9 +70,12 @@ const LoadCard = memo(({
   clienteLogoUrlCard,
   onInterestDialogOpenChange,
 }: LoadCardProps) => {
-  const originLabel = origemEstado ? `${origemCidade}, ${origemEstado}` : origemCidade;
-  const destinationLabel = destinoEstado ? `${destinoCidade}, ${destinoEstado}` : destinoCidade;
-  const topRightLabel = clienteNome || "Cliente não informado";
+  const safeOrigemCidade = fixBrokenPortugueseText(origemCidade);
+  const safeDestinoCidade = fixBrokenPortugueseText(destinoCidade);
+  const safeClienteNome = fixBrokenPortugueseText(clienteNome);
+  const originLabel = origemEstado ? `${safeOrigemCidade}, ${origemEstado}` : safeOrigemCidade;
+  const destinationLabel = destinoEstado ? `${safeDestinoCidade}, ${destinoEstado}` : safeDestinoCidade;
+  const topRightLabel = safeClienteNome || "Cliente não informado";
   const loadingLabel = carregamentoLabel?.trim() || "A confirmar";
   const unloadingLabel = descargaLabel?.trim() || "A confirmar";
   const kmLabel = routeDistanceLabel || "A confirmar";
@@ -281,7 +285,7 @@ const LoadCard = memo(({
               Coleta
             </p>
             <p className="text-sm font-extrabold tracking-tight text-card-foreground sm:text-base">
-              {origemCidade}
+              {safeOrigemCidade}
               {origemEstado ? (
                 <>
                   {", "}
@@ -295,7 +299,7 @@ const LoadCard = memo(({
               Entrega
             </p>
             <p className="text-sm font-extrabold tracking-tight text-card-foreground sm:text-base">
-              {destinoCidade}
+              {safeDestinoCidade}
               {destinoEstado ? (
                 <>
                   {", "}

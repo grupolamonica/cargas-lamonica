@@ -38,7 +38,7 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
             origin_key = $2, destination_key = $3, origem = $4, destino = $5,
             distancia_km = $6, duracao_horas = $7, tempo_estimado_horas = $8,
             perfil_padrao = $9, valor_padrao = $10, bonus_padrao = $11,
-            ativa = $12, observacoes = $13, updated_at = now()
+            bonus_exigencias = $12, ativa = $13, observacoes = $14, updated_at = now()
           WHERE id = $1
         `,
         [
@@ -46,7 +46,7 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
           resolvedMetrics.distancia_km, resolvedMetrics.duracao_horas,
           payload.tempo_estimado_horas ?? resolvedMetrics.duracao_horas,
           payload.perfil_padrao, payload.valor_padrao, payload.bonus_padrao,
-          payload.ativa, payload.observacoes,
+          payload.bonus_exigencias, payload.ativa, payload.observacoes,
         ],
       );
     } catch (error) {
@@ -107,6 +107,39 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
       warnings.push("A rota foi salva, mas nao foi possivel atualizar as cargas abertas automaticamente.");
     }
 
+    // Sincroniza com public.rotas (canônica para vínculo cliente).
+    let rotaCanonicalId = null;
+    try {
+      const rotaResult = await client.query(
+        `
+          INSERT INTO public.rotas (origem, destino, distancia_km, duracao_horas, ativa, observacoes)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (origem, destino) DO UPDATE SET
+            distancia_km  = EXCLUDED.distancia_km,
+            duracao_horas = EXCLUDED.duracao_horas,
+            ativa         = EXCLUDED.ativa,
+            observacoes   = EXCLUDED.observacoes,
+            updated_at    = now()
+          RETURNING id
+        `,
+        [
+          payload.origem,
+          payload.destino,
+          resolvedMetrics.distancia_km,
+          resolvedMetrics.duracao_horas,
+          payload.ativa,
+          payload.observacoes,
+        ],
+      );
+      rotaCanonicalId = rotaResult.rows[0]?.id ?? null;
+    } catch (error) {
+      const message = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
+      if (!message.includes('relation "public.rotas"') && !message.includes("public.rotas")) {
+        throw error;
+      }
+      warnings.push("Tabela public.rotas indisponível — vínculo com cliente não foi sincronizado.");
+    }
+
     await insertSecurityAuditEvent(client, {
       eventType: "operator.route.updated",
       actorUserId: operatorId,
@@ -122,7 +155,14 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
 
     return {
       statusCode: 200,
-      payload: { ok: true, cascadedCargaCount, warnings, meta: { correlationId } },
+      payload: {
+        ok: true,
+        id: routeId,
+        rota_id: rotaCanonicalId,
+        cascadedCargaCount,
+        warnings,
+        meta: { correlationId },
+      },
     };
   });
 }

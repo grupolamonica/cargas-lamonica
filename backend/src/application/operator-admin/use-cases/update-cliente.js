@@ -22,8 +22,6 @@ export async function updateOperatorCliente({ clienteId, operatorId, payload, re
       payload.exige_seguro, payload.exige_carga_monitorada, payload.reputacao_pagamento_rapido,
       payload.reputacao_bom_pagador, payload.reputacao_liberacao_rapida,
       payload.reputacao_carga_organizada, payload.reputacao_boa_comunicacao,
-      payload.exige_rastreamento ? "Obrigatorio" : null,
-      payload.exige_antt ? "Obrigatorio" : null,
       payload.observacoes,
     ];
     const warnings = [];
@@ -41,7 +39,7 @@ export async function updateOperatorCliente({ clienteId, operatorId, payload, re
             exige_seguro = $13, exige_carga_monitorada = $14,
             reputacao_pagamento_rapido = $15, reputacao_bom_pagador = $16,
             reputacao_liberacao_rapida = $17, reputacao_carga_organizada = $18,
-            reputacao_boa_comunicacao = $19, rastreamento = $20, antt = $21, observacoes = $22
+            reputacao_boa_comunicacao = $19, observacoes = $20
           WHERE id = $1
         `,
         values,
@@ -58,11 +56,11 @@ export async function updateOperatorCliente({ clienteId, operatorId, payload, re
             exige_carga_monitorada = $9, reputacao_pagamento_rapido = $10,
             reputacao_bom_pagador = $11, reputacao_liberacao_rapida = $12,
             reputacao_carga_organizada = $13, reputacao_boa_comunicacao = $14,
-            rastreamento = $15, antt = $16, observacoes = $17
+            observacoes = $15
           WHERE id = $1
         `,
         [values[0], values[1], values[2], values[8], values[9], values[10], values[11], values[12],
-         values[13], values[14], values[15], values[16], values[17], values[18], values[19], values[20], values[21]],
+         values[13], values[14], values[15], values[16], values[17], values[18], values[19]],
       );
       warnings.push("Client logo column is not available in the current database schema.");
     }

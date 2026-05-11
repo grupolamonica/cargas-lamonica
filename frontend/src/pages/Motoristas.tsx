@@ -64,7 +64,7 @@ const queryOptions = {
 function formatApplicationStatus(application: OperatorDriverApplicationItem) {
   if (application.source === "PUBLIC_LEAD") {
     if (application.status === "QUEUED") {
-      return "Na fila publica";
+      return "Na fila pública";
     }
 
     if (application.status === "APPROVED") {
@@ -101,8 +101,8 @@ function getApplicationTone(application: OperatorDriverApplicationItem) {
 
 function getDriverBadgeLabel(driver: OperatorDriverListItem) {
   if (driver.registrationStatus === "REGISTERED") return "Conta cadastrada";
-  if (driver.sourceType === "HISTORICO") return "Historico Angellira";
-  return "Pre-cadastro publico";
+  if (driver.sourceType === "HISTORICO") return "Histórico Angellira";
+  return "Pré-cadastro público";
 }
 
 function getDriverBadgeTone(driver: OperatorDriverListItem) {
@@ -424,9 +424,9 @@ const Motoristas = () => {
             <section className="admin-panel overflow-hidden p-5 lg:p-6">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">Cadastros automaticos</p>
-                  <h2 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">Revisao de candidatos</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">Cadastros enviados pelo formulario publico /cadastro aguardando revisao.</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">Cadastros automáticos</p>
+                  <h2 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">Revisão de candidatos</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">Cadastros enviados pelo formulário público /cadastro aguardando revisão.</p>
                 </div>
                 <select
                   value={pendentesStatusFilter}
@@ -435,7 +435,7 @@ const Motoristas = () => {
                 >
                   <option value="">Todos</option>
                   <option value="pendente">Pendentes</option>
-                  <option value="em_revisao">Em revisao</option>
+                  <option value="em_revisao">Em revisão</option>
                   <option value="aprovado">Aprovados</option>
                   <option value="rejeitado">Rejeitados</option>
                 </select>
@@ -699,8 +699,8 @@ const Motoristas = () => {
             >
               <option value="todos">Todas as origens</option>
               <option value="cadastrados">Apenas cadastrados</option>
-              <option value="publicos">Apenas pre-cadastros</option>
-              <option value="historico">Historico Angellira</option>
+              <option value="publicos">Apenas pré-cadastros</option>
+              <option value="historico">Histórico Angellira</option>
             </select>
 
             <select
@@ -937,7 +937,7 @@ const Motoristas = () => {
               />
             </div>
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Perfil do veiculo</label>
+              <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Perfil do veículo</label>
               <Input
                 type="text"
                 value={editForm.vehicle_profile}
@@ -1032,7 +1032,7 @@ const Motoristas = () => {
                             {formatApplicationStatus(application)}
                           </span>
                           <span className="inline-flex rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold text-muted-foreground dark:bg-muted/40">
-                            {application.source === "CLAIM" ? "Conta no app" : "Pre-cadastro"}
+                            {application.source === "CLAIM" ? "Conta no app" : "Pré-cadastro"}
                           </span>
                         </div>
 

@@ -75,8 +75,8 @@ export const mapClienteToFormData = (cliente?: Cliente | null): ClienteFormData 
     reputacao_carga_organizada: cliente.reputacao_carga_organizada,
     reputacao_boa_comunicacao: cliente.reputacao_boa_comunicacao,
     observacoes: cliente.observacoes ?? null,
-    custom_reputacoes: (cliente.custom_reputacoes as CustomBadgeItem[] | null) ?? [],
-    custom_exigencias: (cliente.custom_exigencias as CustomBadgeItem[] | null) ?? [],
+    custom_reputacoes: (cliente.custom_reputacoes as unknown as CustomBadgeItem[] | null) ?? [],
+    custom_exigencias: (cliente.custom_exigencias as unknown as CustomBadgeItem[] | null) ?? [],
   };
 };
 

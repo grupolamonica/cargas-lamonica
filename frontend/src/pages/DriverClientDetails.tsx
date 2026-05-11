@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import { publicSupabase } from "@/integrations/supabase/public-client";
 import { getBadgeIcon } from "@/lib/badgeIcons";
 import type { CustomBadgeItem } from "@/services/operatorAdmin";
+import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
 
 interface ClientRow {
   id: string;
@@ -79,7 +80,7 @@ function isMissingDriverVisibilityColumnError(error: { message?: string; details
 }
 
 function formatMaybeText(value: string | null | undefined) {
-  const trimmedValue = value?.trim();
+  const trimmedValue = fixBrokenPortugueseText(value)?.trim();
   return trimmedValue ? trimmedValue : "Não informado";
 }
 
@@ -392,7 +393,7 @@ const DriverClientDetails = () => {
                 </div>
 
                 <h1 className="break-words text-2xl font-black tracking-tight text-white sm:max-w-[30rem] sm:text-4xl">
-                  {client.nome}
+                  {fixBrokenPortugueseText(client.nome)}
                 </h1>
               </div>
 
@@ -408,7 +409,7 @@ const DriverClientDetails = () => {
 
               {client.descricao?.trim() ? (
                 <p className="col-span-2 pl-1 pr-0.5 text-sm leading-relaxed text-white/82 sm:col-span-1 sm:pl-4 sm:pr-1 sm:text-base">
-                  {client.descricao}
+                  {fixBrokenPortugueseText(client.descricao)}
                 </p>
               ) : null}
             </div>
@@ -437,19 +438,23 @@ const DriverClientDetails = () => {
                 <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">Exigências</p>
                 <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">O que você precisa atender</h2>
               </div>
-              <p className="text-xs text-muted-foreground sm:text-sm">{requirementFlags.length} itens</p>
+              <p className="text-xs text-muted-foreground sm:text-sm">
+                {requirementFlags.length + (client.custom_exigencias ?? []).filter((b) => b.active).length} itens
+              </p>
             </div>
 
             <div className="mt-4 grid grid-cols-2 gap-2.5 sm:mt-5 sm:gap-3">
               {requirementFlags.map((flag) => (
                 <SignalCard key={flag.label} icon={flag.icon} label={flag.label} active={flag.active} />
               ))}
-              {(client.custom_exigencias ?? []).map((badge) => {
-                const Icon = getBadgeIcon(badge.icon_name);
-                return (
-                  <SignalCard key={badge.id} icon={Icon} label={badge.label} active={badge.active} />
-                );
-              })}
+              {(client.custom_exigencias ?? [])
+                .filter((b) => b.active)
+                .map((badge) => {
+                  const Icon = getBadgeIcon(badge.icon_name);
+                  return (
+                    <SignalCard key={badge.id} icon={Icon} label={badge.label} active={badge.active} />
+                  );
+                })}
             </div>
           </div>
 
@@ -459,19 +464,23 @@ const DriverClientDetails = () => {
                 <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">Reputação</p>
                 <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">Sinais positivos</h2>
               </div>
-              <p className="text-xs text-muted-foreground sm:text-sm">{reputationFlags.length} itens</p>
+              <p className="text-xs text-muted-foreground sm:text-sm">
+                {reputationFlags.length + (client.custom_reputacoes ?? []).filter((b) => b.active).length} itens
+              </p>
             </div>
 
             <div className="mt-4 grid grid-cols-2 gap-2.5 sm:mt-5 sm:gap-3 xl:grid-cols-3">
               {reputationFlags.map((flag) => (
                 <SignalCard key={flag.label} icon={flag.icon} label={flag.label} active={flag.active} />
               ))}
-              {(client.custom_reputacoes ?? []).map((badge) => {
-                const Icon = getBadgeIcon(badge.icon_name);
-                return (
-                  <SignalCard key={badge.id} icon={Icon} label={badge.label} active={badge.active} />
-                );
-              })}
+              {(client.custom_reputacoes ?? [])
+                .filter((b) => b.active)
+                .map((badge) => {
+                  const Icon = getBadgeIcon(badge.icon_name);
+                  return (
+                    <SignalCard key={badge.id} icon={Icon} label={badge.label} active={badge.active} />
+                  );
+                })}
             </div>
           </div>
         </section>

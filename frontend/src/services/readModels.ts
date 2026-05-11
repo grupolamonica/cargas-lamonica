@@ -145,6 +145,8 @@ export interface OperatorRouteListItem {
   base_route_label: string | null;
   persisted: boolean;
   source: "base" | "base+db" | "db";
+  rota_id: string | null;
+  cliente_id: string | null;
 }
 
 export interface OperatorDriverApplicationItem {

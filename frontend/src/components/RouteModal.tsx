@@ -1,55 +1,57 @@
 import { useEffect, useState } from "react";
-import { Loader2, Sparkles, X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { VEHICLE_PROFILE_OPTIONS, normalizeVehicleProfile } from "@/lib/vehicleProfiles";
 
 export interface RouteFormData {
   origem: string;
   destino: string;
   distancia_km: string;
-  duracao_horas: string;
   tempo_estimado_horas: string;
   perfil_padrao: string;
   valor_padrao: string;
   bonus_padrao: string;
   bonus_exigencias: string;
   ativa: boolean;
-  observacoes: string;
+  cliente_id: string | null;
+}
+
+export interface ClienteOption {
+  id: string;
+  nome: string;
 }
 
 interface RouteModalProps {
   open: boolean;
   onClose: () => void;
   onSave: (data: RouteFormData) => Promise<void>;
-  onResolveMetrics: (origin: string, destination: string) => Promise<{ distancia_km: number | null; duracao_horas: number | null }>;
   initialData?: RouteFormData | null;
   supportsCatalogFields: boolean;
+  clientes: ClienteOption[];
 }
 
 const emptyForm: RouteFormData = {
   origem: "",
   destino: "",
   distancia_km: "",
-  duracao_horas: "",
   tempo_estimado_horas: "",
   perfil_padrao: "CARRETA",
   valor_padrao: "",
   bonus_padrao: "",
   bonus_exigencias: "",
   ativa: true,
-  observacoes: "",
+  cliente_id: null,
 };
 
 const RouteModal = ({
   open,
   onClose,
   onSave,
-  onResolveMetrics,
   initialData,
   supportsCatalogFields,
+  clientes,
 }: RouteModalProps) => {
   const [form, setForm] = useState<RouteFormData>(emptyForm);
   const [saving, setSaving] = useState(false);
-  const [resolvingMetrics, setResolvingMetrics] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -73,26 +75,6 @@ const RouteModal = ({
   const inputClass =
     "w-full rounded-lg border border-border bg-secondary px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground transition-all duration-200 focus:bg-card focus:outline-none focus:ring-2 focus:ring-ring";
 
-  const handleResolveMetrics = async () => {
-    setResolvingMetrics(true);
-
-    try {
-      const metrics = await onResolveMetrics(form.origem, form.destino);
-
-      setForm((currentForm) => ({
-        ...currentForm,
-        distancia_km: metrics.distancia_km !== null ? String(metrics.distancia_km) : currentForm.distancia_km,
-        duracao_horas: metrics.duracao_horas !== null ? String(metrics.duracao_horas) : currentForm.duracao_horas,
-        tempo_estimado_horas:
-          !currentForm.tempo_estimado_horas && metrics.duracao_horas !== null
-            ? String(metrics.duracao_horas)
-            : currentForm.tempo_estimado_horas,
-      }));
-    } finally {
-      setResolvingMetrics(false);
-    }
-  };
-
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setSaving(true);
@@ -110,7 +92,7 @@ const RouteModal = ({
       <form
         role="dialog"
         aria-modal="true"
-        aria-label={initialData ? "Editar rota padrao" : "Cadastrar nova rota"}
+        aria-label={initialData ? "Editar rota padrão" : "Cadastrar nova rota"}
         onClick={(event) => event.stopPropagation()}
         onSubmit={(event) => void handleSubmit(event)}
         className="relative max-h-[92vh] w-full max-w-[720px] overflow-y-auto rounded-2xl bg-card shadow-elevated animate-slide-up"
@@ -118,10 +100,10 @@ const RouteModal = ({
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
           <div>
             <h2 className="text-base font-semibold text-foreground">
-              {initialData ? "Editar rota padrao" : "Cadastrar nova rota"}
+              {initialData ? "Editar rota padrão" : "Cadastrar nova rota"}
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Defina origem, destino, metricas e os valores padrao que o operador quer usar nessa rota.
+              Defina origem, destino, métricas e os valores padrão que o operador quer usar nessa rota.
             </p>
           </div>
 
@@ -137,11 +119,11 @@ const RouteModal = ({
         <div className="space-y-5 px-6 py-5">
           {!supportsCatalogFields ? (
             <div className="rounded-2xl border border-amber-300/45 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              Valor padrao, bonus, perfil sugerido e observacoes dependem da migration nova da tabela de rotas.
+              Valor padrão, bônus e perfil sugerido dependem da migration nova da tabela de rotas.
             </div>
           ) : null}
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Origem *</label>
               <input
@@ -165,23 +147,11 @@ const RouteModal = ({
                 className={inputClass}
               />
             </div>
-
-            <div className="flex items-end">
-              <button
-                type="button"
-                onClick={() => void handleResolveMetrics()}
-                disabled={resolvingMetrics || !form.origem.trim() || !form.destino.trim()}
-                className="inline-flex h-[42px] items-center justify-center gap-2 rounded-lg border border-primary/15 bg-primary/6 px-4 text-sm font-semibold text-primary transition-colors duration-200 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {resolvingMetrics ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                Buscar metricas
-              </button>
-            </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Distancia (km) *</label>
+              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Distância (km) *</label>
               <input
                 type="text"
                 placeholder="Ex: 420"
@@ -192,26 +162,37 @@ const RouteModal = ({
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Duracao da rota (h) *</label>
-              <input
-                type="text"
-                placeholder="Ex: 7.5"
-                value={form.duracao_horas}
-                onChange={(event) => setForm({ ...form, duracao_horas: event.target.value })}
-                required
-                className={inputClass}
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Tempo estimado (h)</label>
+              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Tempo estimado (h) *</label>
               <input
                 type="text"
                 placeholder="Ex: 8"
                 value={form.tempo_estimado_horas}
                 onChange={(event) => setForm({ ...form, tempo_estimado_horas: event.target.value })}
+                required
                 className={inputClass}
               />
             </div>
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Cliente</label>
+            <select
+              value={form.cliente_id ?? ""}
+              onChange={(event) =>
+                setForm({ ...form, cliente_id: event.target.value || null })
+              }
+              className={`${inputClass} cursor-pointer`}
+            >
+              <option value="">Sem cliente vinculado</option>
+              {clientes.map((cliente) => (
+                <option key={cliente.id} value={cliente.id}>
+                  {cliente.nome}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Vincule esta rota a um embarcador. Cada rota pode ser associada a um cliente — ao selecionar um novo, a rota é transferida.
+            </p>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -231,7 +212,7 @@ const RouteModal = ({
               </select>
             </div>
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Valor padrao (R$)</label>
+              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Valor padrão (R$)</label>
               <input
                 type="text"
                 placeholder="Ex: 3200,00"
@@ -242,7 +223,7 @@ const RouteModal = ({
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Bonus padrao (R$)</label>
+              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Bônus padrão (R$)</label>
               <input
                 type="text"
                 placeholder="Ex: 250,00"
@@ -252,17 +233,6 @@ const RouteModal = ({
                 className={inputClass}
               />
             </div>
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Observacoes da rota</label>
-            <textarea
-              value={form.observacoes}
-              onChange={(event) => setForm({ ...form, observacoes: event.target.value })}
-              disabled={!supportsCatalogFields}
-              placeholder="Ex: Janela de entrega apertada, pedagio alto, rota de retorno..."
-              className="min-h-[110px] w-full rounded-lg border border-border bg-secondary px-3 py-3 text-sm text-foreground placeholder:text-muted-foreground transition-all duration-200 focus:bg-card focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
-            />
           </div>
 
           <div className="admin-accent-tint rounded-2xl border px-4 py-4 shadow-[0_16px_28px_-24px_hsl(224_94%_37%/0.25)]">
@@ -283,9 +253,9 @@ const RouteModal = ({
 
           <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/70 bg-secondary/40 px-4 py-3">
             <div>
-              <p className="text-sm font-semibold text-foreground">Rota ativa no catalogo</p>
+              <p className="text-sm font-semibold text-foreground">Rota ativa no catálogo</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Rotas inativas continuam salvas, mas saem da visao de operacao principal.
+                Rotas inativas continuam salvas, mas saem da visão de operação principal.
               </p>
             </div>
             <label className="flex cursor-pointer items-center gap-2">

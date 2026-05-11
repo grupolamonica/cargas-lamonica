@@ -33,6 +33,7 @@ import {
 import { buildLoadingDateTime, buildOperationalDateLabel, formatEstimatedTime } from "@/lib/estimatedTime";
 import { publicSupabase } from "@/integrations/supabase/public-client";
 import { formatCurrency, buildTotalPayment } from "@/lib/currency";
+import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
 
 interface CargoClientRow {
   id: string;
@@ -506,7 +507,7 @@ const DriverCargoDetails = () => {
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/70">Rota disponível</p>
                   <h1 className="mt-3 break-words text-2xl font-black tracking-tight text-white sm:text-4xl">
-                    {cargo.origem} {"\u2192"} {cargo.destino}
+                    {fixBrokenPortugueseText(cargo.origem)} {"\u2192"} {fixBrokenPortugueseText(cargo.destino)}
                   </h1>
                 </div>
 

@@ -850,7 +850,8 @@ export async function fetchGoogleSheetCsv(fetchImpl, sheetUrl) {
   try {
     const response = await fetchImpl(sheetUrl, {
       headers: {
-        Accept: "text/csv",
+        Accept: "text/csv; charset=utf-8",
+        "Accept-Charset": "utf-8",
       },
       signal: controller.signal,
     });
@@ -859,7 +860,11 @@ export async function fetchGoogleSheetCsv(fetchImpl, sheetUrl) {
       throw new Error(`Failed to fetch Google Sheet CSV: ${response.status} ${response.statusText}`);
     }
 
-    return await response.text();
+    // Forçar decodificação UTF-8 — Google Sheets sempre retorna UTF-8, mas
+    // proxies/redes podem omitir o charset. arrayBuffer + TextDecoder
+    // garante que ã/ç/é não sejam corrompidos por fallback latin1.
+    const buffer = await response.arrayBuffer();
+    return new TextDecoder("utf-8", { fatal: false }).decode(buffer);
   } finally {
     clearTimeout(timeout);
   }

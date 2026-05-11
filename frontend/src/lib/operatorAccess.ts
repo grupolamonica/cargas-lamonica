@@ -1,12 +1,6 @@
 type AuthUserLike = {
-  app_metadata?: {
-    role?: string;
-    access_level?: string;
-  };
-  user_metadata?: {
-    role?: string;
-    access_level?: string;
-  };
+  app_metadata?: Record<string, unknown>;
+  user_metadata?: Record<string, unknown>;
 } | null;
 
 export type OperatorAccessLevel = "advanced" | "intermediate";
@@ -26,7 +20,11 @@ function normalizeAccessLevel(value: unknown): OperatorAccessLevel | null {
 }
 
 export function getUserRole(user: AuthUserLike) {
-  return user?.app_metadata?.role || user?.user_metadata?.role || null;
+  const appRole = user?.app_metadata?.role;
+  const userRole = user?.user_metadata?.role;
+  if (typeof appRole === "string") return appRole;
+  if (typeof userRole === "string") return userRole;
+  return null;
 }
 
 export function getOperatorAccessLevel(user: AuthUserLike): OperatorAccessLevel | null {
@@ -51,11 +49,11 @@ export function getOperatorAccessLevel(user: AuthUserLike): OperatorAccessLevel 
 
 export function getOperatorAccessLevelLabel(accessLevel: OperatorAccessLevel | null) {
   if (accessLevel === "intermediate") {
-    return "Acesso intermediario";
+    return "Acesso intermediário";
   }
 
   if (accessLevel === "advanced") {
-    return "Acesso avancado";
+    return "Acesso avançado";
   }
 
   return "Sem acesso";

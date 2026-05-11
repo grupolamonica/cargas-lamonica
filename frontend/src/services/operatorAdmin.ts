@@ -74,6 +74,8 @@ export interface OperatorRoutePayload {
 
 interface MutationResponse {
   ok: boolean;
+  id?: string | null;
+  rota_id?: string | null;
   warnings?: string[];
   cascadedCargaCount?: number;
   meta: {

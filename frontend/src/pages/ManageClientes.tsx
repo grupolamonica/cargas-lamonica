@@ -26,6 +26,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { type Cliente, type ClienteFormData, mapClienteFormToPayload } from "@/lib/clientes";
 import { getBadgeIcon } from "@/lib/badgeIcons";
 import type { CustomBadgeItem } from "@/services/operatorAdmin";
+import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
 import { canWriteOperatorClientes, getOperatorAccessLevel, getOperatorAccessLevelLabel } from "@/lib/operatorAccess";
 import {
   createOperatorCliente,
@@ -55,11 +56,11 @@ const requirementOptions = [
 ] as const;
 
 const reputationOptions = [
-  { key: "reputacao_pagamento_rapido", label: "Pagamento rapido", icon: Clock3 },
+  { key: "reputacao_pagamento_rapido", label: "Pagamento rápido", icon: Clock3 },
   { key: "reputacao_bom_pagador", label: "Bom pagador", icon: CreditCard },
-  { key: "reputacao_liberacao_rapida", label: "Liberacao rapida", icon: Zap },
+  { key: "reputacao_liberacao_rapida", label: "Liberação rápida", icon: Zap },
   { key: "reputacao_carga_organizada", label: "Carga organizada", icon: Package },
-  { key: "reputacao_boa_comunicacao", label: "Boa comunicacao", icon: MessageSquare },
+  { key: "reputacao_boa_comunicacao", label: "Boa comunicação", icon: MessageSquare },
 ] as const;
 
 const ManageClientes = () => {
@@ -90,7 +91,7 @@ const ManageClientes = () => {
       });
 
       return {
-        items: response.items as Cliente[],
+        items: response.items as unknown as Cliente[],
         meta: response.meta,
       };
     },
@@ -215,7 +216,7 @@ const ManageClientes = () => {
                 ) : null}
               </div>
               <p className="mt-3 max-w-2xl text-sm text-muted-foreground">
-                Cadastro rapido com foco em descricao, pagamento, exigencias, reputacao e observacoes internas que pesam na decisao do motorista.
+                Cadastro rápido com foco em descrição, pagamento, exigências, reputação e observações internas que pesam na decisão do motorista.
               </p>
             </div>
 
@@ -253,7 +254,7 @@ const ManageClientes = () => {
 
         {!canManageClientes ? (
           <section className="rounded-2xl border border-amber-300/45 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-200">
-            Seu perfil pode visualizar todos os embarcadores, mas apenas operadores com acesso avancado podem criar, editar ou excluir nessa area.
+            Seu perfil pode visualizar todos os embarcadores, mas apenas operadores com acesso avançado podem criar, editar ou excluir nessa área.
           </section>
         ) : null}
 
@@ -284,7 +285,7 @@ const ManageClientes = () => {
               </div>
               <h3 className="mt-4 text-xl font-semibold text-foreground">Nenhum embarcador encontrado</h3>
               <p className="mt-2 text-sm text-muted-foreground">
-                Cadastre um cliente com pagamento e exigencias claras para agilizar a operacao.
+                Cadastre um cliente com pagamento e exigências claras para agilizar a operação.
               </p>
             </div>
           ) : (
@@ -306,7 +307,7 @@ const ManageClientes = () => {
                         />
 
                         <div className="min-w-0">
-                          <h3 className="truncate text-xl font-semibold tracking-tight text-foreground">{cliente.nome}</h3>
+                          <h3 className="truncate text-xl font-semibold tracking-tight text-foreground">{fixBrokenPortugueseText(cliente.nome)}</h3>
                           <p className="mt-1 text-xs font-medium text-muted-foreground">
                             {cliente.logo_url ? "Logo configurada" : "Sem logo cadastrada"}
                           </p>
@@ -346,20 +347,20 @@ const ManageClientes = () => {
                   <div className="admin-card-surface rounded-[24px] border p-4">
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                       <CreditCard className="h-4 w-4 text-primary" />
-                      Padrao de pagamento
+                      Padrão de pagamento
                     </div>
                     <p className="mt-3 text-sm leading-6 text-foreground">
-                      {cliente.forma_pagamento || "Forma de pagamento não informada"}
+                      {fixBrokenPortugueseText(cliente.forma_pagamento) || "Forma de pagamento não informada"}
                     </p>
                     <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-primary/[0.06] px-3 py-1.5 text-xs font-semibold text-primary">
                       <Clock3 className="h-3.5 w-3.5" />
-                      {cliente.prazo_pagamento || "Prazo não informado"}
+                      {fixBrokenPortugueseText(cliente.prazo_pagamento) || "Prazo não informado"}
                     </div>
                   </div>
 
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                     <div className="admin-card-surface rounded-[24px] border p-4">
-                      <p className="text-sm font-semibold text-foreground">Exigencias padrao</p>
+                      <p className="text-sm font-semibold text-foreground">Exigências padrão</p>
                       <div className="mt-3 grid grid-cols-2 gap-2">
                         {requirementOptions.map((option) => {
                           const Icon = option.icon;
@@ -380,7 +381,7 @@ const ManageClientes = () => {
                             </div>
                           );
                         })}
-                        {(cliente.custom_exigencias as CustomBadgeItem[] | null ?? []).map((badge) => {
+                        {(cliente.custom_exigencias as unknown as CustomBadgeItem[] | null ?? []).map((badge) => {
                           const Icon = getBadgeIcon(badge.icon_name);
                           return (
                             <div
@@ -401,7 +402,7 @@ const ManageClientes = () => {
                     </div>
 
                     <div className="admin-card-surface rounded-[24px] border p-4">
-                      <p className="text-sm font-semibold text-foreground">Cards de reputacao</p>
+                      <p className="text-sm font-semibold text-foreground">Cards de reputação</p>
                       <div className="mt-3 grid grid-cols-2 gap-2">
                         {reputationOptions.map((option) => {
                           const Icon = option.icon;
@@ -422,7 +423,7 @@ const ManageClientes = () => {
                             </div>
                           );
                         })}
-                        {(cliente.custom_reputacoes as CustomBadgeItem[] | null ?? []).map((badge) => {
+                        {(cliente.custom_reputacoes as unknown as CustomBadgeItem[] | null ?? []).map((badge) => {
                           const Icon = getBadgeIcon(badge.icon_name);
                           return (
                             <div
@@ -444,9 +445,9 @@ const ManageClientes = () => {
                   </div>
 
                   <div className="admin-card-surface rounded-[24px] border p-4">
-                    <p className="text-sm font-semibold text-foreground">Observacoes</p>
+                    <p className="text-sm font-semibold text-foreground">Observações</p>
                     <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                      {cliente.observacoes || "Nenhuma observacao cadastrada."}
+                      {fixBrokenPortugueseText(cliente.observacoes) || "Nenhuma observação cadastrada."}
                     </p>
                   </div>
                 </article>

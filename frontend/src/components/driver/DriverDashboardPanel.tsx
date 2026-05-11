@@ -274,7 +274,7 @@ const DriverDashboardPanel = ({
                       {route.clientName} | Saída {route.departureLabel}
                     </p>
                   </div>
-                  {route.hasBônus ? (
+                  {route.hasBonus ? (
                     <span className="rounded-full bg-accent/12 px-2.5 py-1 text-[11px] font-semibold text-accent">
                       Bônus
                     </span>
