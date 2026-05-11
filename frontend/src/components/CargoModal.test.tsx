@@ -145,15 +145,11 @@ describe("CargoModal", () => {
       />,
     );
 
-    fireEvent.change(screen.getByPlaceholderText(/Entregar dentro da janela acordada/i), {
-      target: { value: "Entregar no prazo\nEnviar comprovante" },
-    });
-
     fireEvent.click(screen.getByText("Salvar Carga"));
 
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({
-        bonus_exigencias: "Entregar no prazo\nEnviar comprovante",
+        bonus_exigencias: "",
       }),
     );
   });

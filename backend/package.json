@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node src/main.js",
+    "dev:clone": "node --env-file=.env.dev src/main.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:rls": "vitest run src/security/rls.behavior.test.js",

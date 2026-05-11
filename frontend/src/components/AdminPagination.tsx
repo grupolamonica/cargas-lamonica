@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 
-interface AdminPáginationProps {
+interface AdminPaginationProps {
   page: number;
   totalPages: number;
   totalCount: number;
@@ -11,7 +11,7 @@ interface AdminPáginationProps {
   onNext: () => void;
 }
 
-const AdminPágination = ({
+const AdminPagination = ({
   page,
   totalPages,
   totalCount,
@@ -20,7 +20,7 @@ const AdminPágination = ({
   isFetching,
   onPrevious,
   onNext,
-}: AdminPáginationProps) => {
+}: AdminPaginationProps) => {
   if (totalCount === 0) {
     return null;
   }
@@ -62,4 +62,4 @@ const AdminPágination = ({
   );
 };
 
-export default AdminPágination;
+export default AdminPagination;

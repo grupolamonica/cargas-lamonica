@@ -54,7 +54,7 @@ describe("ManageClientes", () => {
     observacoes: null,
     rastreamento: null,
     antt: null,
-  } as Cliente;
+  } as unknown as Cliente;
 
   beforeEach(() => {
     mockUseAuth.mockReturnValue({

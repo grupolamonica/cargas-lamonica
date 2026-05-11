@@ -1,12 +1,16 @@
-import { memo, useState } from "react";
+import { memo, useState, useMemo } from "react";
 import type { LucideIcon } from "lucide-react";
-import { ArrowRight, Navigation, ShieldCheck, Truck } from "lucide-react";
+import { ArrowRight, Link2, Navigation, Share2, ShieldCheck, Truck } from "lucide-react";
 import { Link } from "react-router-dom";
+import { toast } from "sonner";
 
+import ClientLogo from "@/components/ClientLogo";
 import DriverClaimPanel from "@/components/driver/DriverClaimPanel";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
 
 interface LoadCardProps {
   id: string;
@@ -24,6 +28,8 @@ interface LoadCardProps {
   pagamento: string;
   paymentDetails?: string | null;
   clienteId?: string | null;
+  valorCarga?: number | null;
+  bonusValor?: number | null;
   detailsHref?: string;
   interestHref?: string;
   carregamentoLabel?: string | null;
@@ -33,12 +39,9 @@ interface LoadCardProps {
   index?: number;
   secondaryLabel?: string;
   SecondaryIcon?: LucideIcon;
+  clienteLogoUrlCard?: string | null;
   onInterestDialogOpenChange?: (isOpen: boolean) => void;
 }
-
-const CLIENT_LOGOS: Record<string, string> = {
-  shopee: "/brand-logos/shopee-nearby.png",
-};
 
 const LoadCard = memo(({
   loadId,
@@ -54,6 +57,8 @@ const LoadCard = memo(({
   pagamento,
   paymentDetails,
   clienteId,
+  valorCarga,
+  bonusValor,
   detailsHref,
   carregamentoLabel,
   descargaLabel,
@@ -62,18 +67,110 @@ const LoadCard = memo(({
   index = 0,
   secondaryLabel = "Percurso recomendado",
   SecondaryIcon = Navigation,
+  clienteLogoUrlCard,
   onInterestDialogOpenChange,
 }: LoadCardProps) => {
-  const originLabel = origemEstado ? `${origemCidade}, ${origemEstado}` : origemCidade;
-  const destinationLabel = destinoEstado ? `${destinoCidade}, ${destinoEstado}` : destinoCidade;
-  const topRightLabel = clienteNome || "Cliente não informado";
+  const safeOrigemCidade = fixBrokenPortugueseText(origemCidade);
+  const safeDestinoCidade = fixBrokenPortugueseText(destinoCidade);
+  const safeClienteNome = fixBrokenPortugueseText(clienteNome);
+  const originLabel = origemEstado ? `${safeOrigemCidade}, ${origemEstado}` : safeOrigemCidade;
+  const destinationLabel = destinoEstado ? `${safeDestinoCidade}, ${destinoEstado}` : safeDestinoCidade;
+  const topRightLabel = safeClienteNome || "Cliente não informado";
   const loadingLabel = carregamentoLabel?.trim() || "A confirmar";
   const unloadingLabel = descargaLabel?.trim() || "A confirmar";
   const kmLabel = routeDistanceLabel || "A confirmar";
   const routeDurationValue = routeDurationLabel?.replace(/^Tempo estimado:\s*/i, "").trim() || null;
   const clientHref = clienteId ? `/motorista/cliente/${clienteId}` : null;
-  const clientLogoUrl = CLIENT_LOGOS[topRightLabel.trim().toLowerCase()] ?? null;
+  const clientLogoUrl = clienteLogoUrlCard ?? null;
   const [isInterestDialogOpen, setIsInterestDialogOpen] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
+  const shareUrl = detailsHref ? `${window.location.origin}${detailsHref}` : null;
+
+  const shareText = useMemo(() => {
+    if (!shareUrl) return "";
+    const fmtBRL = (v: number) =>
+      new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v);
+    const hasValor = typeof valorCarga === "number" && Number.isFinite(valorCarga);
+    const hasBonus = typeof bonusValor === "number" && Number.isFinite(bonusValor) && bonusValor > 0;
+    const hasBreakdown = hasValor || hasBonus;
+    const lines: string[] = ["🚚 *CARGA DISPONÍVEL*", ""];
+    lines.push(`🚛 Veículo: ${tipoVeiculo}`);
+    const nomeCliente = clienteNome?.trim();
+    if (nomeCliente) lines.push(`🏢 Cliente: ${nomeCliente}`);
+    lines.push("", `📍 Coleta: ${originLabel}`);
+    if (loadingLabel !== "A confirmar") lines.push(`📅 Carregamento: ${loadingLabel}`);
+    lines.push("", `🏁 Entrega: ${destinationLabel}`);
+    if (unloadingLabel !== "A confirmar") lines.push(`📅 Descarga: ${unloadingLabel}`);
+    const routeParts: string[] = [];
+    if (kmLabel !== "A confirmar") routeParts.push(kmLabel);
+    if (routeDurationValue) routeParts.push(routeDurationValue);
+    if (routeParts.length > 0) lines.push("", `🛣️ Percurso: ${routeParts.join(" | ")}`);
+    lines.push("");
+    if (hasBreakdown) {
+      lines.push("💰 Pagamento");
+      if (hasValor) lines.push(`• Frete: ${fmtBRL(valorCarga!)}`);
+      if (hasBonus) lines.push(`• Bônus: ${fmtBRL(bonusValor!)}`);
+      lines.push(`• Total: ${pagamento}`);
+    } else {
+      lines.push(`💰 Total: ${pagamento}`);
+    }
+    lines.push("", "🔗 Detalhes e candidatura:", shareUrl);
+    return lines.join("\n");
+  }, [shareUrl, originLabel, destinationLabel, tipoVeiculo, pagamento, clienteNome, valorCarga, bonusValor, loadingLabel, unloadingLabel, kmLabel, routeDurationValue]);
+
+  const renderSharePopover = (trigger: React.ReactNode) => {
+    if (!shareUrl) return null;
+
+    const handleCopy = async () => {
+      try { await navigator.clipboard.writeText(shareUrl); } catch { /* ignore */ }
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2000);
+    };
+
+    return (
+      <Popover>
+        <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+        <PopoverContent align="end" side="top" className="w-44 p-1.5">
+          <button type="button" onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(shareText)}`, "_blank")}
+            className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-muted">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#25D366]">
+              <svg viewBox="0 0 24 24" className="h-4 w-4 fill-white" aria-hidden="true"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+            </span>
+            WhatsApp
+          </button>
+          <button type="button" onClick={() => window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`, "_blank")}
+            className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-muted">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#1877F2]">
+              <svg viewBox="0 0 24 24" className="h-4 w-4 fill-white" aria-hidden="true"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+            </span>
+            Facebook
+          </button>
+          <button type="button" onClick={() => { toast.success("Link copiado! Cole no Instagram."); void handleCopy(); }}
+            className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-muted">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full" style={{ background: "linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)" }}>
+              <svg viewBox="0 0 24 24" className="h-4 w-4 fill-white" aria-hidden="true"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/></svg>
+            </span>
+            Instagram
+          </button>
+          <button type="button" onClick={() => window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(shareUrl)}`, "_blank")}
+            className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-muted">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#0A66C2]">
+              <svg viewBox="0 0 24 24" className="h-4 w-4 fill-white" aria-hidden="true"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>
+            </span>
+            LinkedIn
+          </button>
+          <button type="button" onClick={() => void handleCopy()}
+            className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-muted">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted">
+              <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
+            </span>
+            {shareCopied ? "Copiado!" : "Copiar link"}
+          </button>
+        </PopoverContent>
+      </Popover>
+    );
+  };
+
   const hasInterestDialog = Boolean(loadId);
   const hasDetailsAction = Boolean(detailsHref);
   const actionCount = Number(hasInterestDialog) + Number(hasDetailsAction);
@@ -92,7 +189,7 @@ const LoadCard = memo(({
       <DialogTrigger asChild>
         <Button
           type="button"
-          variant="outline"
+          variant="cta"
           size="lg"
           className={buttonClassName}
         >
@@ -106,7 +203,7 @@ const LoadCard = memo(({
   return (
     <Dialog open={isInterestDialogOpen} onOpenChange={handleInterestDialogOpenChange}>
       <div
-        className="group relative transform-gpu will-change-transform rounded-2xl border border-border/50 bg-card p-4 opacity-0 transition-all duration-500 ease-out premium-shadow hover:-translate-y-1 hover:premium-shadow-hover sm:rounded-3xl sm:p-6 lg:rounded-[28px] lg:p-5 animate-fade-in-up"
+        className="group relative rounded-2xl border border-border/50 bg-card p-4 opacity-0 transition-shadow duration-300 ease-out premium-shadow hover:-translate-y-1 hover:transform-gpu hover:premium-shadow-hover sm:rounded-3xl sm:p-6 lg:rounded-[28px] lg:p-5 animate-fade-in-up"
         style={{
           animationDelay: `${index * 80}ms`,
           contentVisibility: "auto",
@@ -125,11 +222,11 @@ const LoadCard = memo(({
         </span>
         {clientLogoUrl ? (
           clientHref ? (
-            <Link to={clientHref} aria-label={`Ver dados de ${topRightLabel}`} className="absolute -right-9 top-[60%] -translate-y-1/2">
-              <img src={clientLogoUrl} alt={topRightLabel} className="h-20 w-auto max-w-[200px] object-contain" />
+            <Link to={clientHref} aria-label={`Ver dados de ${topRightLabel}`} className="absolute right-0 top-[45%] -translate-y-1/2">
+              <ClientLogo name={topRightLabel} logoUrl={clientLogoUrl} noBg className="h-12 w-[84px] rounded-none border-0 shadow-none" imageClassName="p-0" />
             </Link>
           ) : (
-            <img src={clientLogoUrl} alt={topRightLabel} className="absolute -right-9 top-[60%] -translate-y-1/2 h-20 w-auto max-w-[200px] object-contain" />
+            <ClientLogo name={topRightLabel} logoUrl={clientLogoUrl} className="absolute right-0 top-[45%] -translate-y-1/2 h-12 w-[84px] rounded-none border-0 shadow-none bg-transparent" imageClassName="p-0" />
           )
         ) : clientHref ? (
           <Link
@@ -188,7 +285,7 @@ const LoadCard = memo(({
               Coleta
             </p>
             <p className="text-sm font-extrabold tracking-tight text-card-foreground sm:text-base">
-              {origemCidade}
+              {safeOrigemCidade}
               {origemEstado ? (
                 <>
                   {", "}
@@ -202,7 +299,7 @@ const LoadCard = memo(({
               Entrega
             </p>
             <p className="text-sm font-extrabold tracking-tight text-card-foreground sm:text-base">
-              {destinoCidade}
+              {safeDestinoCidade}
               {destinoEstado ? (
                 <>
                   {", "}
@@ -302,11 +399,11 @@ const LoadCard = memo(({
           </span>
           {clientLogoUrl ? (
             clientHref ? (
-              <Link to={clientHref} aria-label={`Ver dados de ${topRightLabel}`} className="absolute -right-9 top-[60%] -translate-y-1/2">
-                <img src={clientLogoUrl} alt={topRightLabel} className="h-24 w-auto max-w-[240px] object-contain" />
+              <Link to={clientHref} aria-label={`Ver dados de ${topRightLabel}`} className="absolute right-0 top-[45%] -translate-y-1/2">
+                <ClientLogo name={topRightLabel} logoUrl={clientLogoUrl} noBg className="h-12 w-[84px] rounded-none border-0 shadow-none" imageClassName="p-0" />
               </Link>
             ) : (
-              <img src={clientLogoUrl} alt={topRightLabel} className="absolute -right-9 top-[60%] -translate-y-1/2 h-24 w-auto max-w-[240px] object-contain" />
+              <ClientLogo name={topRightLabel} logoUrl={clientLogoUrl} className="absolute right-0 top-[45%] -translate-y-1/2 h-12 w-[84px] rounded-none border-0 shadow-none bg-transparent" imageClassName="p-0" />
             )
           ) : clientHref ? (
             <Link
@@ -414,17 +511,15 @@ const LoadCard = memo(({
           </div>
         </div>
 
-        <div className="mt-6">
-          <div className={actionGridClassName}>
-            {renderInterestDialogTrigger(
-              "group/btn h-12 w-full rounded-full border-primary/18 bg-primary/[0.05] px-6 text-primary hover:bg-primary/[0.08]",
-            )}
+        <div className="mt-6 flex items-center gap-2">
+          <div className={cn(actionGridClassName, "flex-1")}>
+            {renderInterestDialogTrigger("group/btn h-12 w-full rounded-full px-6")}
             {detailsHref ? (
               <Button
                 asChild
-                variant="cta"
+                variant="outline"
                 size="lg"
-                className="group/btn h-12 w-full rounded-full px-6"
+                className="group/btn h-12 w-full rounded-full border-primary/30 px-6 text-primary hover:border-primary/50 hover:bg-primary/[0.06] hover:text-primary"
               >
                 <Link to={detailsHref}>
                   <span>Detalhes</span>
@@ -433,21 +528,28 @@ const LoadCard = memo(({
               </Button>
             ) : null}
           </div>
+          {renderSharePopover(
+            <button
+              type="button"
+              aria-label="Compartilhar carga"
+              className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-primary/30 text-primary transition-colors hover:border-primary/50 hover:bg-primary/[0.06]"
+            >
+              <Share2 className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
 
       <div className="relative flex flex-col gap-3 border-t border-border/40 pt-4 sm:flex-row sm:items-center sm:justify-between sm:gap-0 sm:pt-5 lg:hidden">
         <div className="sm:hidden">
           <div className={actionGridClassName}>
-            {renderInterestDialogTrigger(
-              "group/btn w-full rounded-xl border-primary/18 bg-primary/[0.05] px-5 text-primary hover:bg-primary/[0.08]",
-            )}
+            {renderInterestDialogTrigger("group/btn w-full rounded-xl px-5")}
             {detailsHref ? (
               <Button
                 asChild
-                variant="cta"
+                variant="outline"
                 size="lg"
-                className="group/btn w-full rounded-xl px-5"
+                className="group/btn w-full rounded-xl border-primary/30 px-5 text-primary hover:border-primary/50 hover:bg-primary/[0.06] hover:text-primary"
               >
                 <Link to={detailsHref}>
                   <span>Detalhes</span>
@@ -456,6 +558,15 @@ const LoadCard = memo(({
               </Button>
             ) : null}
           </div>
+          {renderSharePopover(
+            <button
+              type="button"
+              className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-xl border border-border/60 bg-muted/30 py-2.5 text-sm font-semibold text-muted-foreground transition-colors hover:border-border hover:bg-muted/60 hover:text-foreground active:scale-[0.98]"
+            >
+              <Share2 className="h-4 w-4" />
+              Compartilhar carga
+            </button>
+          )}
         </div>
 
         <div className="hidden sm:block lg:hidden">
@@ -472,15 +583,13 @@ const LoadCard = memo(({
           ) : null}
         </div>
         <div className="hidden items-center gap-2 sm:flex lg:hidden">
-          {renderInterestDialogTrigger(
-            "group/btn rounded-xl border-primary/18 bg-primary/[0.05] px-5 text-primary hover:bg-primary/[0.08] sm:w-auto sm:rounded-2xl sm:px-7",
-          )}
+          {renderInterestDialogTrigger("group/btn sm:w-auto sm:rounded-2xl sm:px-7")}
           {detailsHref ? (
             <Button
               asChild
-              variant="cta"
+              variant="outline"
               size="lg"
-              className="group/btn rounded-xl px-5 sm:w-auto sm:rounded-2xl sm:px-7"
+              className="group/btn border-primary/30 px-5 text-primary hover:border-primary/50 hover:bg-primary/[0.06] hover:text-primary sm:w-auto sm:rounded-2xl sm:px-7"
             >
               <Link to={detailsHref}>
                 <span>Detalhes</span>
@@ -488,6 +597,15 @@ const LoadCard = memo(({
               </Link>
             </Button>
           ) : null}
+          {renderSharePopover(
+            <button
+              type="button"
+              aria-label="Compartilhar carga"
+              className="inline-flex items-center justify-center rounded-2xl border border-border/40 p-3 text-muted-foreground transition-colors hover:border-border/70 hover:text-foreground"
+            >
+              <Share2 className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
       </div>

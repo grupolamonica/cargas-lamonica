@@ -12,7 +12,9 @@ import {
   BadgeCheck,
   BellRing,
   CalendarClock,
+  Check,
   CheckCircle2,
+  ClipboardList,
   FileBadge2,
   Pencil,
   Phone,
@@ -24,6 +26,7 @@ import {
   Truck,
   UserRound,
   UsersRound,
+  X,
   XCircle,
 } from "lucide-react";
 
@@ -35,7 +38,15 @@ import { Input } from "@/components/ui/input";
 import { buildDisplayDateTime, formatShortDateTime, parseDateStringAsLocal } from "@/lib/dateDisplay";
 import { cn } from "@/lib/utils";
 import { getOperatorAccessToken } from "@/services/apiClient";
-import { fetchOperatorDrivers, type OperatorDriverApplicationItem, type OperatorDriverListItem } from "@/services/readModels";
+import {
+  aprovarCadastro,
+  fetchCadastrosPendentes,
+  fetchOperatorDrivers,
+  rejeitarCadastro,
+  type OperatorDriverApplicationItem,
+  type OperatorDriverListItem,
+  type PendingDriverRegistrationItem,
+} from "@/services/readModels";
 import { toast } from "sonner";
 
 const MOTORISTAS_QUERY_KEY = ["operator", "motoristas-read-model"] as const;
@@ -53,7 +64,7 @@ const queryOptions = {
 function formatApplicationStatus(application: OperatorDriverApplicationItem) {
   if (application.source === "PUBLIC_LEAD") {
     if (application.status === "QUEUED") {
-      return "Na fila publica";
+      return "Na fila pública";
     }
 
     if (application.status === "APPROVED") {
@@ -90,8 +101,8 @@ function getApplicationTone(application: OperatorDriverApplicationItem) {
 
 function getDriverBadgeLabel(driver: OperatorDriverListItem) {
   if (driver.registrationStatus === "REGISTERED") return "Conta cadastrada";
-  if (driver.sourceType === "HISTORICO") return "Historico Angellira";
-  return "Pre-cadastro publico";
+  if (driver.sourceType === "HISTORICO") return "Histórico Angellira";
+  return "Pré-cadastro público";
 }
 
 function getDriverBadgeTone(driver: OperatorDriverListItem) {
@@ -198,8 +209,11 @@ async function updateDriverProfile(driverId: string, payload: Record<string, unk
 }
 
 
+const PENDENTES_QUERY_KEY = ["operator", "cadastros-pendentes"] as const;
+
 const Motoristas = () => {
   const queryClient = useQueryClient();
+  const [mainTab, setMainTab] = useState<"motoristas" | "pendentes">("motoristas");
   const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState("todos");
   const [applicationStatusFilter, setApplicationStatusFilter] = useState("todos");
@@ -317,11 +331,301 @@ const Motoristas = () => {
 
   const hasActiveFilters = deferredSearch.length > 0 || sourceFilter !== "todos" || applicationStatusFilter !== "todos";
 
+  // ─── Pendentes ───────────────────────────────────────────────────────────────
+  const [pendentesStatusFilter, setPendentesStatusFilter] = useState("pendente");
+  const [pendentesPage, setPendentesPage] = useState(1);
+  const [selectedPendente, setSelectedPendente] = useState<PendingDriverRegistrationItem | null>(null);
+  const [rejectObs, setRejectObs] = useState("");
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+
+  const { data: pendentesData, isLoading: pendentesLoading, error: pendentesError } = useQuery({
+    queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, pendentesPage],
+    queryFn: () =>
+      fetchCadastrosPendentes({
+        status: pendentesStatusFilter || undefined,
+        page: pendentesPage,
+        pageSize: 20,
+      }),
+    enabled: mainTab === "pendentes",
+    ...queryOptions,
+  });
+
+  const aprovarMutation = useMutation({
+    mutationFn: (id: string) => aprovarCadastro(id),
+    onSuccess: (_data, id) => {
+      toast.success("Motorista aprovado. Conta criada com sucesso.");
+      if (selectedPendente?.id === id) setSelectedPendente(null);
+      queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Erro ao aprovar cadastro.");
+    },
+  });
+
+  const rejeitarMutation = useMutation({
+    mutationFn: ({ id, obs }: { id: string; obs: string }) => rejeitarCadastro(id, obs),
+    onSuccess: (_data, { id }) => {
+      toast.success("Cadastro rejeitado.");
+      if (selectedPendente?.id === id) setSelectedPendente(null);
+      setShowRejectModal(false);
+      setRejectObs("");
+      setRejectTarget(null);
+      queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Erro ao rejeitar cadastro.");
+    },
+  });
+
+  const pendentesItems = pendentesData?.items ?? [];
+  const pendentesMeta = pendentesData?.meta;
+
   return (
     <div className="min-w-0">
       <DashboardHeader title="Motoristas" />
 
+      {/* Tab switcher */}
+      <div className="border-b border-border bg-background px-6 lg:px-8">
+        <div className="flex gap-1">
+          <button
+            type="button"
+            onClick={() => setMainTab("motoristas")}
+            className={cn(
+              "inline-flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition-colors",
+              mainTab === "motoristas"
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <UsersRound className="h-4 w-4" />
+            Motoristas
+          </button>
+          <button
+            type="button"
+            onClick={() => setMainTab("pendentes")}
+            className={cn(
+              "inline-flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition-colors",
+              mainTab === "pendentes"
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <ClipboardList className="h-4 w-4" />
+            Pendentes
+          </button>
+        </div>
+      </div>
+
       <main className="min-w-0 space-y-5 p-6 lg:p-8">
+        {mainTab === "pendentes" ? (
+          <>
+            {/* Pendentes section */}
+            <section className="admin-panel overflow-hidden p-5 lg:p-6">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">Cadastros automáticos</p>
+                  <h2 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">Revisão de candidatos</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">Cadastros enviados pelo formulário público /cadastro aguardando revisão.</p>
+                </div>
+                <select
+                  value={pendentesStatusFilter}
+                  onChange={(e) => { setPendentesStatusFilter(e.target.value); setPendentesPage(1); }}
+                  className="h-10 rounded-xl border border-border/80 bg-white/92 px-3 text-sm text-foreground outline-none"
+                >
+                  <option value="">Todos</option>
+                  <option value="pendente">Pendentes</option>
+                  <option value="em_revisao">Em revisão</option>
+                  <option value="aprovado">Aprovados</option>
+                  <option value="rejeitado">Rejeitados</option>
+                </select>
+              </div>
+            </section>
+
+            {pendentesLoading ? (
+              <section className="admin-panel flex min-h-[160px] items-center justify-center p-8">
+                <RefreshCw className="h-6 w-6 animate-spin text-primary/60" />
+              </section>
+            ) : pendentesError ? (
+              <section className="admin-panel flex min-h-[160px] flex-col items-center justify-center gap-3 p-8 text-center">
+                <ShieldX className="h-10 w-10 text-rose-500/70" />
+                <p className="text-sm text-muted-foreground">Erro ao carregar cadastros.</p>
+              </section>
+            ) : pendentesItems.length === 0 ? (
+              <section className="admin-panel flex min-h-[160px] flex-col items-center justify-center gap-3 p-8 text-center">
+                <ClipboardList className="h-10 w-10 text-muted-foreground/40" />
+                <p className="text-sm text-muted-foreground">Nenhum cadastro encontrado.</p>
+              </section>
+            ) : (
+              <div className="grid gap-4 xl:grid-cols-[1fr_420px]">
+                {/* Lista */}
+                <section className="admin-panel overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        <th className="px-5 py-3">Motorista</th>
+                        <th className="px-5 py-3">Placa cavalo</th>
+                        <th className="px-5 py-3">Enviado em</th>
+                        <th className="px-5 py-3">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pendentesItems.map((item) => (
+                        <tr
+                          key={item.id}
+                          onClick={() => setSelectedPendente(item)}
+                          className={cn(
+                            "cursor-pointer border-b border-border/50 transition-colors hover:bg-muted/40",
+                            selectedPendente?.id === item.id && "bg-primary/5",
+                          )}
+                        >
+                          <td className="px-5 py-3">
+                            <p className="font-semibold text-foreground">{item.nome_motorista || "—"}</p>
+                            <p className="text-xs text-muted-foreground">{item.cpf_motorista || ""}</p>
+                          </td>
+                          <td className="px-5 py-3 text-foreground">{item.placa_cavalo || "—"}</td>
+                          <td className="px-5 py-3 text-muted-foreground">
+                            {new Date(item.created_at).toLocaleDateString("pt-BR")}
+                          </td>
+                          <td className="px-5 py-3">
+                            <span className={cn(
+                              "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold",
+                              item.status === "pendente" && "admin-tint-warning",
+                              item.status === "em_revisao" && "admin-tint-neutral border-blue-200 bg-blue-50 text-blue-700",
+                              item.status === "aprovado" && "admin-tint-success",
+                              item.status === "rejeitado" && "admin-tint-danger",
+                            )}>
+                              {item.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {pendentesMeta && pendentesMeta.totalPages > 1 && (
+                    <div className="flex items-center justify-between border-t border-border px-5 py-3">
+                      <p className="text-xs text-muted-foreground">
+                        {pendentesMeta.totalCount} registro{pendentesMeta.totalCount !== 1 ? "s" : ""}
+                      </p>
+                      <AdminPagination
+                        page={pendentesPage}
+                        totalPages={pendentesMeta.totalPages}
+                        onPageChange={setPendentesPage}
+                      />
+                    </div>
+                  )}
+                </section>
+
+                {/* Painel de revisao */}
+                {selectedPendente ? (
+                  <section className="admin-panel overflow-hidden p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Candidato</p>
+                        <h3 className="mt-1 text-lg font-bold text-foreground">{selectedPendente.nome_motorista || "—"}</h3>
+                        <p className="text-sm text-muted-foreground">{selectedPendente.cpf_motorista || ""}</p>
+                      </div>
+                      <button type="button" onClick={() => setSelectedPendente(null)} className="rounded-full p-1.5 hover:bg-muted">
+                        <X className="h-4 w-4 text-muted-foreground" />
+                      </button>
+                    </div>
+
+                    {selectedPendente.dados && (
+                      <div className="mt-4 space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                        {Object.entries(selectedPendente.dados as Record<string, unknown>).map(([section, value]) => {
+                          if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+                          const fields = value as Record<string, unknown>;
+                          const fieldEntries = Object.entries(fields).filter(([, v]) => v !== null && v !== "" && v !== undefined && typeof v !== "object");
+                          if (!fieldEntries.length) return null;
+                          return (
+                            <div key={section} className="rounded-xl border border-border/60 p-3">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-primary/60 mb-2">{section}</p>
+                              <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                                {fieldEntries.slice(0, 10).map(([k, v]) => (
+                                  <div key={k}>
+                                    <dt className="text-muted-foreground truncate">{k}</dt>
+                                    <dd className="font-medium text-foreground truncate">{String(v)}</dd>
+                                  </div>
+                                ))}
+                              </dl>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {(selectedPendente.status === "pendente" || selectedPendente.status === "em_revisao") && (
+                      <div className="mt-5 flex gap-3">
+                        <button
+                          type="button"
+                          disabled={aprovarMutation.isPending}
+                          onClick={() => aprovarMutation.mutate(selectedPendente.id)}
+                          className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+                        >
+                          {aprovarMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                          Aprovar
+                        </button>
+                        <button
+                          type="button"
+                          disabled={rejeitarMutation.isPending}
+                          onClick={() => { setRejectTarget(selectedPendente.id); setRejectObs(""); setShowRejectModal(true); }}
+                          className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 transition-colors"
+                        >
+                          <X className="h-4 w-4" />
+                          Rejeitar
+                        </button>
+                      </div>
+                    )}
+                  </section>
+                ) : (
+                  <section className="admin-panel flex min-h-[200px] flex-col items-center justify-center gap-3 p-8 text-center">
+                    <UserRound className="h-8 w-8 text-muted-foreground/40" />
+                    <p className="text-sm text-muted-foreground">Selecione um cadastro para revisar</p>
+                  </section>
+                )}
+              </div>
+            )}
+
+            {/* Modal de rejeicao */}
+            {showRejectModal && (
+              <Dialog open={showRejectModal} onOpenChange={(open) => { if (!open) { setShowRejectModal(false); setRejectTarget(null); setRejectObs(""); } }}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Rejeitar cadastro</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">Informe o motivo da rejeicao (opcional).</p>
+                    <textarea
+                      value={rejectObs}
+                      onChange={(e) => setRejectObs(e.target.value)}
+                      placeholder="Motivo da rejeicao..."
+                      rows={4}
+                      className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary/20 resize-none"
+                    />
+                  </div>
+                  <DialogFooter>
+                    <button
+                      type="button"
+                      onClick={() => { setShowRejectModal(false); setRejectTarget(null); setRejectObs(""); }}
+                      className="rounded-xl border border-border px-4 py-2 text-sm font-semibold"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={rejeitarMutation.isPending}
+                      onClick={() => rejectTarget && rejeitarMutation.mutate({ id: rejectTarget, obs: rejectObs })}
+                      className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+                    >
+                      Confirmar rejeicao
+                    </button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
+          </>
+        ) : (
+          <>
         <AspxSyncCard />
 
         <section className="admin-panel overflow-hidden p-5 lg:p-6">
@@ -395,8 +699,8 @@ const Motoristas = () => {
             >
               <option value="todos">Todas as origens</option>
               <option value="cadastrados">Apenas cadastrados</option>
-              <option value="publicos">Apenas pre-cadastros</option>
-              <option value="historico">Historico Angellira</option>
+              <option value="publicos">Apenas pré-cadastros</option>
+              <option value="historico">Histórico Angellira</option>
             </select>
 
             <select
@@ -612,7 +916,6 @@ const Motoristas = () => {
           onPrevious={() => setPage((currentPage) => Math.max(currentPage - 1, 1))}
           onNext={() => setPage((currentPage) => Math.min(currentPage + 1, meta.totalPages))}
         />
-      </main>
 
       <Dialog open={editingDriver !== null} onOpenChange={(open) => { if (!open) setEditingDriver(null); }}>
         <DialogContent className="max-w-lg">
@@ -634,7 +937,7 @@ const Motoristas = () => {
               />
             </div>
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Perfil do veiculo</label>
+              <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Perfil do veículo</label>
               <Input
                 type="text"
                 value={editForm.vehicle_profile}
@@ -729,7 +1032,7 @@ const Motoristas = () => {
                             {formatApplicationStatus(application)}
                           </span>
                           <span className="inline-flex rounded-full border border-border/80 bg-white px-3 py-1 text-xs font-semibold text-muted-foreground dark:bg-muted/40">
-                            {application.source === "CLAIM" ? "Conta no app" : "Pre-cadastro"}
+                            {application.source === "CLAIM" ? "Conta no app" : "Pré-cadastro"}
                           </span>
                         </div>
 
@@ -801,6 +1104,9 @@ const Motoristas = () => {
         data={detailDriver}
         hideValidation
       />
+          </>
+        )}
+      </main>
     </div>
   );
 };

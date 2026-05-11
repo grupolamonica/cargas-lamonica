@@ -121,6 +121,9 @@ export interface OperatorLeadGroup {
     sheetCavalo: string | null;
     sheetCarreta: string | null;
     sheetStatus?: string | null;
+    clienteId?: string | null;
+    clienteNome?: string | null;
+    clienteLogoUrl?: string | null;
   };
   queueCount: number;
   totalLeads: number;

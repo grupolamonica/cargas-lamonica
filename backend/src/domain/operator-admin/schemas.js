@@ -115,11 +115,20 @@ export const cargoUpdateMutationSchema = z
 
 export const cargoMutationSchema = cargoCreateMutationSchema;
 
+const customBadgeItemSchema = z.object({
+  id: z.string().trim().min(1),
+  label: z.string().trim().min(1).max(80),
+  icon_name: z.string().trim().min(1).max(60),
+  active: z.boolean(),
+});
+
 export const clienteMutationSchema = z
   .object({
     nome: z.string().trim().min(2).max(160),
     descricao: optionalTrimmedString,
     logo_url: optionalTrimmedString,
+    logo_url_card: optionalTrimmedString,
+    logo_url_proximas: optionalTrimmedString,
     forma_pagamento: optionalTrimmedString,
     prazo_pagamento: optionalTrimmedString,
     exige_rastreamento: booleanField,
@@ -132,6 +141,8 @@ export const clienteMutationSchema = z
     reputacao_carga_organizada: booleanField,
     reputacao_boa_comunicacao: booleanField,
     observacoes: optionalTrimmedString,
+    custom_reputacoes: z.array(customBadgeItemSchema).default([]),
+    custom_exigencias: z.array(customBadgeItemSchema).default([]),
   })
   .strict();
 
@@ -145,6 +156,7 @@ export const routeMutationSchema = z
     perfil_padrao: optionalCanonicalVehicleProfileSchema,
     valor_padrao: optionalNumeric,
     bonus_padrao: optionalNumeric,
+    bonus_exigencias: optionalTrimmedString,
     ativa: z.boolean().default(true),
     observacoes: optionalTrimmedString,
   })
@@ -189,6 +201,7 @@ export function parseOperatorDashboardQuery(query = {}) {
     search: typeof query.search === "string" ? query.search.trim() : "",
     status: typeof query.status === "string" ? query.status.trim() : "todos",
     driverVisibility: typeof query.driverVisibility === "string" ? query.driverVisibility.trim() : "todos",
+    clienteId: typeof query.clienteId === "string" ? query.clienteId.trim() : "",
   };
 }
 
@@ -223,6 +236,7 @@ export function parseOperatorCargoListQuery(query = {}) {
     // Intervalo de data de carregamento (ISO YYYY-MM-DD). Vazio = sem filtro.
     dateFrom: typeof query.dateFrom === "string" ? query.dateFrom.trim() : "",
     dateTo: typeof query.dateTo === "string" ? query.dateTo.trim() : "",
+    clienteId: typeof query.clienteId === "string" ? query.clienteId.trim() : "",
   };
 }
 
@@ -248,6 +262,7 @@ export function parseOperatorRoutesListQuery(query = {}) {
     ...pagination,
     search: typeof query.search === "string" ? query.search.trim().toLowerCase() : "",
     status: typeof query.status === "string" ? query.status.trim() : "ativas",
+    clienteId: typeof query.clienteId === "string" ? query.clienteId.trim() : "",
   };
 }
 

@@ -38,6 +38,7 @@ import { formatCurrency, buildTotalPayment } from "@/lib/currency";
 import { buildLoadingDateTime, buildOperationalDateLabel, formatEstimatedTime } from "@/lib/estimatedTime";
 import {
   type OperatorDashboardItem,
+  fetchOperatorClientes,
   fetchOperatorDashboard,
 } from "@/services/readModels";
 
@@ -170,17 +171,19 @@ const OperatorDashboard = () => {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("todos");
   const [visibilityFilter, setVisibilityFilter] = useState("todos");
+  const [clienteFilter, setClienteFilter] = useState("");
   const [page, setPage] = useState(1);
   const [detailCargo, setDetailCargo] = useState<OperatorDashboardItem | null>(null);
   const deferredSearch = useDeferredValue(search.trim());
   const deferredStatusFilter = useDeferredValue(statusFilter);
   const deferredVisibilityFilter = useDeferredValue(visibilityFilter);
+  const deferredClienteFilter = useDeferredValue(clienteFilter);
   const hasActiveFilters =
-    deferredSearch.length > 0 || deferredStatusFilter !== "todos" || deferredVisibilityFilter !== "todos";
+    deferredSearch.length > 0 || deferredStatusFilter !== "todos" || deferredVisibilityFilter !== "todos" || deferredClienteFilter.length > 0;
 
   useEffect(() => {
     setPage(1);
-  }, [deferredSearch, deferredStatusFilter, deferredVisibilityFilter]);
+  }, [deferredSearch, deferredStatusFilter, deferredVisibilityFilter, deferredClienteFilter]);
 
   const {
     data,
@@ -188,7 +191,7 @@ const OperatorDashboard = () => {
     isFetching,
     isLoading,
   } = useQuery({
-    queryKey: ["operator", "dashboard-read-model", deferredSearch, deferredStatusFilter, deferredVisibilityFilter, page],
+    queryKey: ["operator", "dashboard-read-model", deferredSearch, deferredStatusFilter, deferredVisibilityFilter, deferredClienteFilter, page],
     queryFn: () =>
       fetchOperatorDashboard({
         page: String(page),
@@ -196,6 +199,7 @@ const OperatorDashboard = () => {
         search: deferredSearch,
         status: deferredStatusFilter,
         driverVisibility: deferredVisibilityFilter,
+        ...(deferredClienteFilter ? { clienteId: deferredClienteFilter } : {}),
       }),
     placeholderData: keepPreviousData,
     staleTime: 15_000,
@@ -212,6 +216,13 @@ const OperatorDashboard = () => {
     queryFn: fetchAssignableRoutes,
     ...ADMIN_ROUTES_QUERY_OPTIONS,
   });
+
+  const { data: clientesData } = useQuery({
+    queryKey: ["operator", "clientes-selector"],
+    queryFn: () => fetchOperatorClientes({ pageSize: "200" }),
+    staleTime: 5 * 60_000,
+  });
+  const clienteOptions = clientesData?.items ?? [];
 
   useEffect(() => {
     if (error) {
@@ -323,6 +334,17 @@ const OperatorDashboard = () => {
               <option value="PREMIUM">Premium</option>
             </select>
 
+            <select
+              value={clienteFilter}
+              onChange={(event) => setClienteFilter(event.target.value)}
+              className="h-12 rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
+            >
+              <option value="">Todos os clientes</option>
+              {clienteOptions.map((c) => (
+                <option key={c.id} value={c.id}>{c.nome}</option>
+              ))}
+            </select>
+
             <Button
               type="button"
               variant="outline"
@@ -331,6 +353,7 @@ const OperatorDashboard = () => {
                 setSearch("");
                 setStatusFilter("todos");
                 setVisibilityFilter("todos");
+                setClienteFilter("");
               }}
               disabled={!hasActiveFilters}
             >

@@ -1,8 +1,10 @@
 import "../../../infrastructure/config/load-env.js";
 
+import crypto from "node:crypto";
+
 import { ZodError } from "zod";
 
-import { recordSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
+import { insertSecurityAuditEvent, recordSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 import {
   getAuthorizationHeader,
@@ -19,19 +21,30 @@ import {
   driverProfileUpdateMutationSchema,
   routeMutationSchema,
 } from "../../../domain/operator-admin/schemas.js";
+import {
+  buildInternalErrorResponse,
+  buildServiceErrorResponse,
+} from "../error-mapping.js";
 import { zodErrorToHttpResponse } from "../schemas/common.js";
 import { cargoIdParamsSchema } from "../schemas/cargo-schemas.js";
-import { clienteIdParamsSchema } from "../schemas/cliente-schemas.js";
+import {
+  attachClienteRotaBodySchema,
+  clienteIdParamsSchema,
+  clienteRotaParamsSchema,
+} from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
 import { dashboardQuerySchema } from "../schemas/operator-schemas.js";
 import {
+  attachClienteRota,
   createOperatorCargo,
   createOperatorCliente,
   createOperatorRoute,
   deleteOperatorCargo,
   deleteOperatorCliente,
+  detachClienteRota,
   fetchOperatorDashboardReadModel,
+  listClienteRotas,
   redactExpiredPublicLeadPii,
   revalidateAllVehiclesAngellira,
   updateOperatorCargo,
@@ -48,6 +61,7 @@ import {
   fetchOperatorDriversListReadModel,
   fetchOperatorRoutesListReadModel,
   fetchOperatorVehiclesListReadModel,
+  fetchPendingDriverRegistrations,
 } from "../../../application/operator-admin/read-models.js";
 import { fetchDriverFlowMetrics } from "../../../domain/operator-admin/driver-flow-metrics.js";
 import {
@@ -56,7 +70,7 @@ import {
   UnauthorizedError,
 } from "../../../domain/load-claims/errors.js";
 import { assertOperatorAccessLevel, assertOperatorPermission, hasOperatorPermission } from "../../../application/load-claims/operator-access.js";
-import { requireOperatorSession } from "../../../application/load-claims/auth.js";
+import { getAdminClient, requireOperatorSession } from "../../../application/load-claims/auth.js";
 import { createSupabaseAdminClient, syncGoogleSheetLoads } from "../../../application/google-sheets/google-sheet-loads.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 
@@ -97,29 +111,13 @@ function toErrorResponse(error, correlationId) {
   if (error instanceof ZodError) {
     return zodErrorToHttpResponse(error, correlationId);
   }
-
   if (error instanceof LoadClaimServiceError) {
-    return {
-      statusCode: error.statusCode,
-      payload: {
-        error: error.name,
-        code: error.code,
-        message: error.message,
-        details: error.details,
-        meta: { correlationId },
-      },
-    };
+    return buildServiceErrorResponse(error, correlationId, { includeDetails: true });
   }
-
-  return {
-    statusCode: 500,
-    payload: {
-      error: "InternalServerError",
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Unexpected error while processing the operator request.",
-      meta: { correlationId },
-    },
-  };
+  return buildInternalErrorResponse(
+    correlationId,
+    "Unexpected error while processing the operator request.",
+  );
 }
 
 async function withOperatorSession(request, action, optionsOrExecute, maybeExecute) {
@@ -380,6 +378,71 @@ export async function resolveDeleteOperatorClienteResponse(request) {
       requestIp,
       correlationId,
     });
+    },
+  );
+}
+
+export async function resolveListClienteRotasResponse(request) {
+  return withOperatorSession(
+    request,
+    "list-cliente-rotas",
+    {
+      requiredPermission: "operator:read",
+      forbiddenMessage: "Sem permissao para visualizar embarcadores.",
+    },
+    async ({ correlationId }) => {
+      const { clienteId } = clienteIdParamsSchema.parse({
+        clienteId: getQueryParam(request, "clienteId"),
+      });
+      return listClienteRotas({ clienteId, correlationId });
+    },
+  );
+}
+
+export async function resolveAttachClienteRotaResponse(request) {
+  return withOperatorSession(
+    request,
+    "attach-cliente-rota",
+    {
+      requiredPermission: "clientes:write",
+      forbiddenMessage: "Somente operadores com acesso avancado podem atrelar rotas a embarcadores.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { clienteId } = clienteIdParamsSchema.parse({
+        clienteId: getQueryParam(request, "clienteId"),
+      });
+      const body = attachClienteRotaBodySchema.parse(await parseJsonBody(request));
+      return attachClienteRota({
+        clienteId,
+        rotaId: body.rotaId,
+        operatorId,
+        requestIp,
+        correlationId,
+      });
+    },
+  );
+}
+
+export async function resolveDetachClienteRotaResponse(request) {
+  return withOperatorSession(
+    request,
+    "detach-cliente-rota",
+    {
+      requiredPermission: "clientes:write",
+      forbiddenMessage: "Somente operadores com acesso avancado podem desatrelar rotas de embarcadores.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { clienteId, rotaId } = clienteRotaParamsSchema.parse({
+        clienteId: getQueryParam(request, "clienteId"),
+        rotaId: getQueryParam(request, "rotaId"),
+      });
+      return detachClienteRota({
+        clienteId,
+        rotaId,
+        operatorId,
+        requestIp,
+        correlationId,
+      });
     },
   );
 }
@@ -945,4 +1008,204 @@ export async function resolveOperatorOverviewDigestResponse(request) {
     }
     return { statusCode: 500, payload: { error: "INTERNAL_ERROR", meta: { correlationId } } };
   }
+}
+
+// ─── Cadastros pendentes de motoristas ───────────────────────────────────────
+
+/**
+ * GET /api/operator/cadastros-pendentes?status=pendente&page=1&pageSize=20
+ */
+export async function resolveOperatorCadastrosPendentesResponse(request) {
+  return withOperatorSession(request, "read-cadastros-pendentes", async ({ correlationId }) => {
+    const query = request.query || {};
+    return fetchPendingDriverRegistrations({
+      status: typeof query.status === "string" ? query.status.trim() : null,
+      page: query.page,
+      pageSize: query.pageSize,
+      correlationId,
+    });
+  });
+}
+
+/**
+ * POST /api/operator/cadastros/:id/aprovar
+ * Cria usuário Supabase Auth (driver) + insere em driver_profiles + atualiza status.
+ */
+export async function resolveOperatorAprovarCadastroResponse(request) {
+  return withOperatorSession(request, "aprovar-cadastro", async ({ correlationId, requestIp, operatorId, user }) => {
+    assertOperatorAccessLevel(
+      user,
+      "intermediate",
+      "Apenas operadores com acesso intermediário ou avançado podem aprovar cadastros.",
+    );
+
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+
+    return withPgClient(async (client) => {
+      // 1. Busca o registro pendente
+      const { rows } = await client.query(
+        `SELECT id, id_cadastro, status, dados FROM public.pending_driver_registrations WHERE id = $1`,
+        [id],
+      );
+      if (!rows.length) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      const registro = rows[0];
+      if (registro.status === "aprovado") {
+        return { statusCode: 409, payload: { error: "Conflict", message: "Cadastro já foi aprovado.", meta: { correlationId } } };
+      }
+
+      // 2. Extrai dados do motorista
+      const motorista = registro.dados?.motorista || {};
+      const nome = String(motorista.nome || "").trim();
+      const cpfClean = String(motorista.cpf || "").replace(/\D/g, "");
+      const telefone = String(motorista.telefones?.[0] || motorista.telefone || "").replace(/\D/g, "") || null;
+
+      if (!cpfClean) {
+        return { statusCode: 422, payload: { error: "ValidationError", message: "CPF do motorista ausente nos dados do cadastro.", meta: { correlationId } } };
+      }
+
+      // 3. Cria usuário Supabase Auth (driver auth client)
+      const adminClient = getAdminClient();
+      const email = `${cpfClean}@motorista.lmc.internal`;
+      const { data: authData, error: authError } = await adminClient.auth.admin.createUser({
+        email,
+        password: crypto.randomUUID(),
+        email_confirm: true,
+        user_metadata: {
+          role: "driver",
+          source: "cadastro-operador",
+          full_name: nome,
+          cpf: cpfClean,
+        },
+      });
+
+      if (authError) {
+        // Já existe: retorna 409 para que o operador saiba
+        if (authError.status === 422 || /already registered/i.test(authError.message || "")) {
+          return { statusCode: 409, payload: { error: "Conflict", message: `Email ${email} já registrado. Motorista pode já ter conta.`, meta: { correlationId } } };
+        }
+        throw authError;
+      }
+
+      const driverId = authData.user.id;
+
+      // 4. Insere driver_profile
+      const cavaloPlaca = String(registro.dados?.cavalo?.placa || "").trim() || null;
+      const vehicleProfile = cavaloPlaca ? "cavalo" : null;
+
+      await client.query(
+        `
+          INSERT INTO public.driver_profiles (
+            user_id, full_name, phone, document_number,
+            vehicle_profile, active, documents_valid
+          )
+          VALUES ($1, $2, $3, $4, $5, true, true)
+          ON CONFLICT (user_id) DO UPDATE SET
+            full_name = EXCLUDED.full_name,
+            phone = EXCLUDED.phone,
+            document_number = EXCLUDED.document_number,
+            vehicle_profile = EXCLUDED.vehicle_profile,
+            documents_valid = EXCLUDED.documents_valid,
+            updated_at = now()
+        `,
+        [driverId, nome || null, telefone, cpfClean, vehicleProfile],
+      );
+
+      // 5. Atualiza registro para aprovado
+      await client.query(
+        `UPDATE public.pending_driver_registrations
+         SET status = 'aprovado', reviewed_at = now(), reviewed_by_id = $1
+         WHERE id = $2`,
+        [operatorId, id],
+      );
+
+      // 6. Audit log
+      await insertSecurityAuditEvent(client, {
+        eventType: "operator.cadastro.approved",
+        actorUserId: operatorId,
+        actorRole: "operator",
+        resourceType: "pending_driver_registration",
+        resourceId: id,
+        action: "approve",
+        outcome: "success",
+        requestIp,
+        correlationId,
+        metadata: { driverId, cpf: cpfClean, nome },
+      });
+
+      return {
+        statusCode: 200,
+        payload: { ok: true, driverId, meta: { correlationId } },
+      };
+    });
+  });
+}
+
+/**
+ * POST /api/operator/cadastros/:id/rejeitar
+ * Body: { observacoes?: string }
+ */
+export async function resolveOperatorRejeitarCadastroResponse(request) {
+  return withOperatorSession(request, "rejeitar-cadastro", async ({ correlationId, requestIp, operatorId, user }) => {
+    assertOperatorAccessLevel(
+      user,
+      "intermediate",
+      "Apenas operadores com acesso intermediário ou avançado podem rejeitar cadastros.",
+    );
+
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+
+    let body = {};
+    try {
+      body = await parseJsonBody(request);
+    } catch {
+      // body is optional
+    }
+    const observacoes = typeof body?.observacoes === "string" ? body.observacoes.trim().slice(0, 1000) : null;
+
+    return withPgClient(async (client) => {
+      const { rows } = await client.query(
+        `SELECT id, status FROM public.pending_driver_registrations WHERE id = $1`,
+        [id],
+      );
+      if (!rows.length) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      if (rows[0].status === "rejeitado") {
+        return { statusCode: 409, payload: { error: "Conflict", message: "Cadastro já foi rejeitado.", meta: { correlationId } } };
+      }
+
+      await client.query(
+        `UPDATE public.pending_driver_registrations
+         SET status = 'rejeitado', observacoes = $1, reviewed_at = now(), reviewed_by_id = $2
+         WHERE id = $3`,
+        [observacoes, operatorId, id],
+      );
+
+      await insertSecurityAuditEvent(client, {
+        eventType: "operator.cadastro.rejected",
+        actorUserId: operatorId,
+        actorRole: "operator",
+        resourceType: "pending_driver_registration",
+        resourceId: id,
+        action: "reject",
+        outcome: "success",
+        requestIp,
+        correlationId,
+        metadata: { observacoes },
+      });
+
+      return {
+        statusCode: 200,
+        payload: { ok: true, meta: { correlationId } },
+      };
+    });
+  });
 }

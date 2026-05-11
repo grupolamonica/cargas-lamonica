@@ -9,6 +9,8 @@ import {
   ShieldCheck,
   Truck,
 } from "lucide-react";
+import type { CustomBadgeItem } from "@/services/operatorAdmin";
+import { getBadgeIcon } from "@/lib/badgeIcons";
 import { Link, useParams } from "react-router-dom";
 
 import DriverClaimPanel from "@/components/driver/DriverClaimPanel";
@@ -31,6 +33,7 @@ import {
 import { buildLoadingDateTime, buildOperationalDateLabel, formatEstimatedTime } from "@/lib/estimatedTime";
 import { publicSupabase } from "@/integrations/supabase/public-client";
 import { formatCurrency, buildTotalPayment } from "@/lib/currency";
+import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
 
 interface CargoClientRow {
   id: string;
@@ -39,8 +42,6 @@ interface CargoClientRow {
   forma_pagamento: string | null;
   prazo_pagamento: string | null;
   observacoes: string | null;
-  tipo_veiculo: string | null;
-  peso: string | null;
   exige_antt: boolean;
   exige_carga_monitorada: boolean;
   exige_rastreamento: boolean;
@@ -50,6 +51,8 @@ interface CargoClientRow {
   reputacao_carga_organizada: boolean;
   reputacao_liberacao_rapida: boolean;
   reputacao_pagamento_rapido: boolean;
+  custom_reputacoes: unknown;
+  custom_exigencias: unknown;
 }
 
 interface CargoDetailsRow {
@@ -72,9 +75,9 @@ interface CargoDetailsRow {
 }
 
 const CARGO_DETAILS_SELECT =
-  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, bonus_exigencias, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, tipo_veiculo, peso, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido)";
+  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, bonus_exigencias, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
 const LEGACY_CARGO_DETAILS_SELECT =
-  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, tipo_veiculo, peso, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido)";
+  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
 
 
 const reputationLabels = [
@@ -472,7 +475,7 @@ const DriverCargoDetails = () => {
         <section className="relative overflow-hidden rounded-[32px] border border-white/70 bg-[linear-gradient(135deg,hsl(223_56%_12%),hsl(223_55%_22%))] p-5 text-white shadow-[0_30px_70px_-30px_hsl(215_25%_12%/0.55)] sm:p-8">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(225_100%_65%/0.18),transparent_36%),radial-gradient(circle_at_bottom_left,hsl(200_100%_55%/0.14),transparent_30%)]" />
           <div className="relative space-y-6">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center justify-between gap-3">
               <Button
                 asChild
                 variant="outline"
@@ -484,13 +487,14 @@ const DriverCargoDetails = () => {
                 </Link>
               </Button>
 
-              <div className="flex flex-wrap gap-2">
+              <div className="hidden sm:flex flex-wrap gap-2">
                 <Button
                   type="button"
+                  variant="cta"
                   onClick={() => setIsClaimDialogOpen(true)}
-                  className="group h-11 rounded-full border border-white/16 bg-white/[0.12] px-4 text-white shadow-[0_18px_34px_-24px_hsl(223_56%_6%/0.48)] backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:bg-white/[0.18]"
+                  className="group h-11 rounded-full px-4"
                 >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/14 transition-colors group-hover:bg-white/20">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/20 transition-colors group-hover:bg-white/28">
                     <ShieldCheck className="h-3.5 w-3.5" />
                   </span>
                   Candidatar-se
@@ -498,18 +502,12 @@ const DriverCargoDetails = () => {
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              <Badge className="border-white/10 bg-white/12 text-white">{cargo.perfil}</Badge>
-              <Badge className="border-white/10 bg-white/12 text-white">{estimatedTime}</Badge>
-              <Badge className="border-white/10 bg-white/12 text-white">{formatCargoStatus(cargo.status)}</Badge>
-            </div>
-
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_320px]">
               <div className="space-y-4">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/70">Rota disponível</p>
                   <h1 className="mt-3 break-words text-2xl font-black tracking-tight text-white sm:text-4xl">
-                    {cargo.origem} {"\u2192"} {cargo.destino}
+                    {fixBrokenPortugueseText(cargo.origem)} {"\u2192"} {fixBrokenPortugueseText(cargo.destino)}
                   </h1>
                 </div>
 
@@ -589,7 +587,7 @@ const DriverCargoDetails = () => {
               </CardDescription>
               <CardTitle className="text-2xl tracking-tight text-foreground">Coleta, entrega e percurso</CardTitle>
             </CardHeader>
-            <CardContent className="grid gap-3 sm:grid-cols-2">
+            <CardContent className="grid grid-cols-2 gap-3">
               <DetailMetric icon={Clock3} label="Carregamento" value={loadingLabel} />
               <DetailMetric icon={Clock3} label="Descarga" value={unloadingLabel} />
               <DetailMetric icon={Package} label="Tempo estimado" value={estimatedTime} />
@@ -630,7 +628,7 @@ const DriverCargoDetails = () => {
         </section>
 
         <section className="grid gap-6 xl:grid-cols-2">
-          {visibleRequirementLabels.length > 0 ? (
+          {(visibleRequirementLabels.length > 0 || ((cliente?.custom_exigencias ?? []) as CustomBadgeItem[]).some((b) => b.active)) ? (
             <Card className="admin-panel overflow-hidden">
               <CardHeader>
                 <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
@@ -648,6 +646,17 @@ const DriverCargoDetails = () => {
                     {label}
                   </Badge>
                 ))}
+                {((cliente?.custom_exigencias ?? []) as CustomBadgeItem[])
+                  .filter((b) => b.active)
+                  .map((b) => {
+                    const Icon = getBadgeIcon(b.icon_name);
+                    return (
+                      <Badge key={b.id} className="gap-1 border-primary/20 bg-primary/10 px-3 py-1.5 text-primary">
+                        <Icon className="h-3.5 w-3.5" />
+                        {b.label}
+                      </Badge>
+                    );
+                  })}
               </CardContent>
             </Card>
           ) : null}
@@ -674,6 +683,17 @@ const DriverCargoDetails = () => {
                     </Badge>
                   ))
                 : <p className="text-sm text-muted-foreground">Sem reputacao cadastrada para este cliente.</p>}
+              {((cliente?.custom_reputacoes ?? []) as CustomBadgeItem[])
+                .filter((b) => b.active)
+                .map((b) => {
+                  const Icon = getBadgeIcon(b.icon_name);
+                  return (
+                    <Badge key={b.id} className="gap-1 border-accent/20 bg-accent/10 px-3 py-1.5 text-accent">
+                      <Icon className="h-3.5 w-3.5" />
+                      {b.label}
+                    </Badge>
+                  );
+                })}
             </CardContent>
           </Card>
         </section>
@@ -682,10 +702,11 @@ const DriverCargoDetails = () => {
       <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 sm:bottom-6 sm:justify-end sm:px-6 lg:px-8">
         <Button
           type="button"
+          variant="cta"
           onClick={() => setIsClaimDialogOpen(true)}
-          className="pointer-events-auto group h-14 w-full rounded-full border border-[hsl(224_72%_58%/0.22)] bg-[linear-gradient(135deg,hsl(223_73%_34%),hsl(222_88%_48%))] px-6 text-sm font-semibold text-white shadow-[0_26px_46px_-24px_hsl(223_68%_20%/0.55)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_32px_54px_-24px_hsl(223_68%_18%/0.58)] sm:min-w-[220px] sm:w-auto"
+          className="pointer-events-auto group h-14 w-full rounded-full px-6 text-sm sm:min-w-[220px] sm:w-auto"
         >
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/16 transition-colors group-hover:bg-white/22">
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/20 transition-colors group-hover:bg-white/28">
             <ShieldCheck className="h-4 w-4" />
           </span>
           Candidatar-se

@@ -136,7 +136,7 @@ function formatAgeLabel(ageHours: number) {
 
 const MISSING_FIELD_LABELS: Record<string, string> = {
   perfil: "Perfil",
-  distancia_km: "Distancia",
+  distancia_km: "Distância",
   origem: "Origem",
   destino: "Destino",
 };
@@ -285,8 +285,8 @@ const Overview = () => {
                     Painel operacional com leitura real de cargas, fila e disputas.
                   </h2>
                   <p className="max-w-3xl text-sm leading-relaxed text-white/78 sm:text-base">
-                    Visao cruzada de cargas ativas, interesse de motoristas na fila de WhatsApp e disputas digitais para
-                    acompanhar o ritmo da operacao em tempo real.
+                    Visão cruzada de cargas ativas, interesse de motoristas na fila de WhatsApp e disputas digitais para
+                    acompanhar o ritmo da operação em tempo real.
                   </p>
                 </div>
               </div>
@@ -304,7 +304,7 @@ const Overview = () => {
                   <p className="mt-2 text-2xl font-black tracking-tight text-white">
                     {formatNumber(snapshot.hero.departuresNext24h)}
                   </p>
-                  <p className="mt-1 text-sm text-white/72">saidas com janela curta</p>
+                  <p className="mt-1 text-sm text-white/72">saídas com janela curta</p>
                 </div>
                 <div className="rounded-[24px] border border-white/12 bg-white/10 px-4 py-4 backdrop-blur">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/60">Ultimo movimento</p>
@@ -429,7 +429,7 @@ const Overview = () => {
           <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
             <CardHeader className="space-y-3">
               <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
-                Atencao necessaria
+                Atenção necessária
               </CardDescription>
               <CardTitle className="text-2xl tracking-tight text-foreground">
                 Cargas que precisam de acao
@@ -473,7 +473,7 @@ const Overview = () => {
                   ))
                 ) : (
                   <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
-                    Nenhuma carga precisa de atencao neste momento.
+                    Nenhuma carga precisa de atenção neste momento.
                   </div>
                 )}
               </div>

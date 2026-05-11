@@ -29,10 +29,19 @@ export interface OperatorCargoPayload {
   sheet_data_descarga: string | null;
 }
 
+export interface CustomBadgeItem {
+  id: string;
+  label: string;
+  icon_name: string;
+  active: boolean;
+}
+
 export interface OperatorClientePayload {
   nome: string;
   descricao: string | null;
   logo_url: string | null;
+  logo_url_card: string | null;
+  logo_url_proximas: string | null;
   forma_pagamento: string | null;
   prazo_pagamento: string | null;
   exige_rastreamento: boolean;
@@ -45,6 +54,8 @@ export interface OperatorClientePayload {
   reputacao_carga_organizada: boolean;
   reputacao_boa_comunicacao: boolean;
   observacoes: string | null;
+  custom_reputacoes: CustomBadgeItem[];
+  custom_exigencias: CustomBadgeItem[];
 }
 
 export interface OperatorRoutePayload {
@@ -56,12 +67,15 @@ export interface OperatorRoutePayload {
   perfil_padrao: string | null;
   valor_padrao: number | null;
   bonus_padrao: number | null;
+  bonus_exigencias: string | null;
   ativa: boolean;
   observacoes: string | null;
 }
 
 interface MutationResponse {
   ok: boolean;
+  id?: string | null;
+  rota_id?: string | null;
   warnings?: string[];
   cascadedCargaCount?: number;
   meta: {
@@ -165,6 +179,68 @@ export async function updateOperatorCliente(clienteId: string, payload: Operator
 export async function deleteOperatorCliente(clienteId: string) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<MutationResponse>(`/api/operator/clientes/${clienteId}`, {
+    method: "DELETE",
+    accessToken,
+  });
+}
+
+// ── Cliente <-> Rota associations (N:M) ───────────────────────────
+
+export interface ClienteRotaTarifa {
+  tipo_veiculo: string;
+  valor_frete: number | null;
+  bonus: number | null;
+  bonus_exigencias: string | null;
+}
+
+export interface ClienteRotaItem {
+  rota_id: string;
+  origem: string;
+  destino: string;
+  distancia_km: number | null;
+  tarifas: ClienteRotaTarifa[];
+}
+
+export interface ClienteRotasResponse {
+  cliente_id: string;
+  cliente_nome: string;
+  rotas: ClienteRotaItem[];
+  meta: { correlationId: string };
+}
+
+export async function fetchClienteRotas(clienteId: string) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<ClienteRotasResponse>(
+    `/api/operator/clientes/${clienteId}/rotas`,
+    { accessToken },
+  );
+}
+
+export interface AttachClienteRotaResponse {
+  cliente_id: string;
+  rota_id: string;
+  previous_cliente_id: string | null;
+  transferred: boolean;
+  already_attached: boolean;
+  meta: { correlationId: string };
+}
+
+export async function attachClienteRota(clienteId: string, rotaId: string) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<AttachClienteRotaResponse>(
+    `/api/operator/clientes/${clienteId}/rotas`,
+    { method: "POST", accessToken, body: { rotaId } },
+  );
+}
+
+export async function detachClienteRota(clienteId: string, rotaId: string) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{
+    cliente_id: string;
+    rota_id: string;
+    removed: boolean;
+    meta: { correlationId: string };
+  }>(`/api/operator/clientes/${clienteId}/rotas/${rotaId}`, {
     method: "DELETE",
     accessToken,
   });

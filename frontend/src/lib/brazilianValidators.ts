@@ -10,8 +10,8 @@ const VALID_DDD_SET = new Set([
   91, 92, 93, 94, 95, 96, 97, 98, 99,
 ]);
 
-const OLD_PLATE_PATTERN = /^[A-Z]{3}[0-9]{4}$/;
-const MERCOSUL_PLATE_PATTERN = /^[A-Z]{3}[0-9][A-Z][0-9]{2}$/;
+export const OLD_PLATE_PATTERN = /^[A-Z]{3}[0-9]{4}$/;
+export const MERCOSUL_PLATE_PATTERN = /^[A-Z]{3}[0-9][A-Z][0-9]{2}$/;
 
 export function onlyDigits(value: string | null | undefined): string {
   return String(value || "").replace(/\D/g, "");

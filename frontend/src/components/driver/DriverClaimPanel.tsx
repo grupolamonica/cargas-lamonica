@@ -638,7 +638,7 @@ const DriverClaimPanel = ({ loadId, panelId = "driver-dispute-panel", className 
             <button
               type="button"
               onClick={() => void handleRestartAfterCancellation()}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 sm:w-auto"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-accent to-[hsl(155_70%_44%)] px-5 py-3 text-sm font-bold text-accent-foreground shadow-[0_4px_14px_hsl(155_70%_38%/0.3)] transition-all hover:-translate-y-0.5 hover:shadow-[0_6px_20px_hsl(155_70%_38%/0.4)] active:translate-y-0 active:shadow-[0_2px_8px_hsl(155_70%_38%/0.3)] sm:w-auto"
             >
               <Truck className="h-4 w-4" />
               Candidatar-se novamente
@@ -906,7 +906,7 @@ const DriverClaimPanel = ({ loadId, panelId = "driver-dispute-panel", className 
                 type="button"
                 onClick={() => void handlePreRegistration()}
                 disabled={isPreRegistrationBlocked || actionLoading === "pre-register"}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-semibold text-white transition-opacity disabled:opacity-60 sm:w-auto"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-accent to-[hsl(155_70%_44%)] px-5 py-3 text-sm font-bold text-accent-foreground shadow-[0_4px_14px_hsl(155_70%_38%/0.3)] transition-all hover:-translate-y-0.5 hover:shadow-[0_6px_20px_hsl(155_70%_38%/0.4)] active:translate-y-0 active:shadow-[0_2px_8px_hsl(155_70%_38%/0.3)] disabled:pointer-events-none disabled:opacity-60 sm:w-auto"
               >
                 {actionLoading === "pre-register" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Truck className="h-4 w-4" />}
                 {hasSavedPreRegistration ? "Atualizar candidatura" : "Candidatar-se"}

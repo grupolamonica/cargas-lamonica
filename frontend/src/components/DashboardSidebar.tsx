@@ -58,7 +58,7 @@ const navigationItems: NavigationItem[] = [
   { icon: Bell, label: "Fila", path: "/leads" },
   { icon: History, label: "Hist\u00f3rico fila", path: "/historico-fila" },
   { icon: UsersRound, label: "Motoristas", path: "/motoristas" },
-  { icon: Truck, label: "Veiculos", path: "/veiculos" },
+  { icon: Truck, label: "Veículos", path: "/veiculos" },
   { icon: FileSpreadsheet, label: "Monitor", path: "/planilha" },
   { icon: ClipboardList, label: "Auditoria", path: "/auditoria", requiredAccessLevel: "advanced" },
 ];
@@ -133,7 +133,7 @@ const DashboardSidebar = memo(({ collapsed, onToggle }: DashboardSidebarProps) =
                   Lamonica
                 </p>
                 <p className="mt-0.5 text-[0.72rem] text-gray-500 dark:text-gray-400">
-                  Acesso rapido
+                  Acesso rápido
                 </p>
               </div>
             </div>

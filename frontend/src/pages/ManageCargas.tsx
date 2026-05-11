@@ -213,6 +213,7 @@ const ManageCargas = () => {
   // por padr\u00e3o as cargas programadas para o dia corrente.
   const [dateFrom, setDateFrom] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [dateTo, setDateTo] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [clienteFilter, setClienteFilter] = useState<string>("");
   const [page, setPage] = useState(1);
   const deferredSearch = useDeferredValue(search);
   const deferredStatusFilter = useDeferredValue(statusFilter);
@@ -223,6 +224,7 @@ const ManageCargas = () => {
   const deferredPerfilFilter = useDeferredValue(perfilFilter);
   const deferredDateFrom = useDeferredValue(dateFrom);
   const deferredDateTo = useDeferredValue(dateTo);
+  const deferredClienteFilter = useDeferredValue(clienteFilter);
   const todayIsoDate = new Date().toISOString().slice(0, 10);
   const hasActiveFilters =
     deferredSearch.trim().length > 0 ||
@@ -233,7 +235,8 @@ const ManageCargas = () => {
     deferredDestinoFilter.trim().length > 0 ||
     deferredPerfilFilter !== "todos" ||
     deferredDateFrom.length > 0 ||
-    deferredDateTo.length > 0;
+    deferredDateTo.length > 0 ||
+    deferredClienteFilter.length > 0;
 
   useEffect(() => {
     setPage(1);
@@ -247,6 +250,7 @@ const ManageCargas = () => {
     deferredPerfilFilter,
     deferredDateFrom,
     deferredDateTo,
+    deferredClienteFilter,
   ]);
 
   const {
@@ -255,7 +259,7 @@ const ManageCargas = () => {
     isFetching: cargasFetching,
     isLoading: cargasLoading,
   } = useQuery({
-    queryKey: [...CARGAS_QUERY_KEY, deferredSearch.trim(), deferredStatusFilter, deferredVisibilityFilter, deferredSourceFilter, deferredDateFrom, deferredDateTo, page],
+    queryKey: [...CARGAS_QUERY_KEY, deferredSearch.trim(), deferredStatusFilter, deferredVisibilityFilter, deferredSourceFilter, deferredDateFrom, deferredDateTo, deferredClienteFilter, page],
     queryFn: () =>
       fetchOperatorCargas({
         page: String(page),
@@ -266,6 +270,7 @@ const ManageCargas = () => {
         source: deferredSourceFilter,
         dateFrom: deferredDateFrom,
         dateTo: deferredDateTo,
+        ...(deferredClienteFilter ? { clienteId: deferredClienteFilter } : {}),
       }),
     ...ADMIN_CARGAS_QUERY_OPTIONS,
   });
@@ -388,6 +393,7 @@ const ManageCargas = () => {
       queryClient.invalidateQueries({ queryKey: CARGAS_QUERY_KEY }),
       queryClient.invalidateQueries({ queryKey: ["operator", "dashboard-read-model"] }),
       queryClient.invalidateQueries({ queryKey: ["driver", "loads-read-model"] }),
+      queryClient.invalidateQueries({ queryKey: ["driver", "loads-facets"] }),
     ]);
   };
 
@@ -626,7 +632,7 @@ const ManageCargas = () => {
         <section className="admin-panel overflow-hidden p-5 lg:p-6">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">Operacao diaria</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">Operação diária</p>
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 <h2 className="text-2xl font-semibold tracking-tight text-foreground">
                   {(() => {
@@ -741,6 +747,17 @@ const ManageCargas = () => {
                 className="rounded-2xl border border-border/80 bg-white/92 px-4 py-3 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
               />
 
+              <select
+                value={clienteFilter}
+                onChange={(event) => setClienteFilter(event.target.value)}
+                className="rounded-2xl border border-border/80 bg-white/92 px-4 py-3 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10 cursor-pointer"
+              >
+                <option value="">Todos os clientes</option>
+                {clientes.map((c) => (
+                  <option key={c.id} value={c.id}>{c.nome}</option>
+                ))}
+              </select>
+
               <button
                 type="button"
                 onClick={() => {
@@ -753,6 +770,7 @@ const ManageCargas = () => {
                   setPerfilFilter("todos");
                   setDateFrom("");
                   setDateTo("");
+                  setClienteFilter("");
                 }}
                 disabled={!hasActiveFilters}
                 className="inline-flex items-center justify-center rounded-2xl border border-border/80 bg-white/92 px-4 py-3 text-sm font-semibold text-foreground transition-colors duration-200 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
@@ -797,7 +815,7 @@ const ManageCargas = () => {
                     {pendingPublicationCount} carga{pendingPublicationCount === 1 ? "" : "s"} aguardando dados para aparecer no portal
                   </p>
                   <p className="text-sm leading-relaxed text-amber-900/80">
-                    Complete perfil do veiculo, frete, distancia e tempo estimado para liberar essas cargas ao motorista.
+                    Complete perfil do veículo, frete, distância e tempo estimado para liberar essas cargas ao motorista.
                   </p>
                 </div>
               </div>

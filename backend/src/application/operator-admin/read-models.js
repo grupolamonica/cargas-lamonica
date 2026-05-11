@@ -275,6 +275,8 @@ function mergeBaseRoutesWithCatalog(routes) {
       observacoes: null,
       created_at: null,
       updated_at: null,
+      rota_id: null,
+      cliente_id: null,
       base_route_label: baseRoute.route,
       persisted: false,
       source: "base",
@@ -300,28 +302,42 @@ function mergeBaseRoutesWithCatalog(routes) {
 }
 
 async function fetchPersistedRoutes(client) {
+  // LEFT JOIN public.rotas para puxar cliente_id (1:N rota → cliente).
+  // Match com normalização (LOWER + BTRIM) para tolerar divergências de
+  // whitespace/case entre route_metrics_cache e public.rotas.
+  // Se public.rotas não existir (schema antigo), fallback ignora cliente_id.
   try {
     const { rows } = await client.query(`
       SELECT
-        id,
-        origin_key,
-        destination_key,
-        origem,
-        destino,
-        distancia_km,
-        duracao_horas,
-        tempo_estimado_horas,
-        perfil_padrao,
-        valor_padrao,
-        bonus_padrao,
-        ativa,
-        observacoes,
-        created_at,
-        updated_at
-      FROM public.route_metrics_cache
-      ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+        rmc.id,
+        rmc.origin_key,
+        rmc.destination_key,
+        rmc.origem,
+        rmc.destino,
+        rmc.distancia_km,
+        rmc.duracao_horas,
+        rmc.tempo_estimado_horas,
+        rmc.perfil_padrao,
+        rmc.valor_padrao,
+        rmc.bonus_padrao,
+        rmc.ativa,
+        rmc.observacoes,
+        rmc.created_at,
+        rmc.updated_at,
+        r.id AS rota_id,
+        r.cliente_id
+      FROM public.route_metrics_cache rmc
+      LEFT JOIN public.rotas r
+        ON LOWER(BTRIM(r.origem))  = LOWER(BTRIM(rmc.origem))
+       AND LOWER(BTRIM(r.destino)) = LOWER(BTRIM(rmc.destino))
+      ORDER BY rmc.updated_at DESC NULLS LAST, rmc.created_at DESC NULLS LAST, rmc.id DESC
       LIMIT 2000
     `);
+
+    if (process.env.NODE_ENV !== "production") {
+      const linked = rows.filter((r) => r.cliente_id).length;
+      console.log(`[fetchPersistedRoutes] ${rows.length} rotas, ${linked} com cliente vinculado`);
+    }
 
     return {
       rows,
@@ -336,7 +352,35 @@ async function fetchPersistedRoutes(client) {
     }
 
     if (!isMissingRouteCatalogColumnsError(error)) {
-      throw error;
+      // Tabela public.rotas pode não existir em schema legado — tenta sem JOIN.
+      try {
+        const { rows: legacyRows } = await client.query(`
+          SELECT
+            id,
+            origin_key,
+            destination_key,
+            origem,
+            destino,
+            distancia_km,
+            duracao_horas,
+            tempo_estimado_horas,
+            perfil_padrao,
+            valor_padrao,
+            bonus_padrao,
+            ativa,
+            observacoes,
+            created_at,
+            updated_at,
+            NULL::uuid AS rota_id,
+            NULL::uuid AS cliente_id
+          FROM public.route_metrics_cache
+          ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+          LIMIT 2000
+        `);
+        return { rows: legacyRows, supportsCatalogFields: true };
+      } catch {
+        throw error;
+      }
     }
 
     const { rows } = await client.query(`
@@ -355,7 +399,9 @@ async function fetchPersistedRoutes(client) {
         true AS ativa,
         NULL::text AS observacoes,
         created_at,
-        updated_at
+        updated_at,
+        NULL::uuid AS rota_id,
+        NULL::uuid AS cliente_id
       FROM public.route_metrics_cache
       ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
       LIMIT 2000
@@ -472,7 +518,7 @@ function isCargoAwaitingPublicationData(row, routeCatalogMetrics) {
 }
 
 export async function fetchOperatorCargoListReadModel({ query, correlationId }) {
-  const { page, pageSize, offset, maxPageSize, search, status, driverVisibility, source, dateFrom, dateTo } = parseOperatorCargoListQuery(query);
+  const { page, pageSize, offset, maxPageSize, search, status, driverVisibility, source, dateFrom, dateTo, clienteId } = parseOperatorCargoListQuery(query);
   const usePendingDataFilter = status === "aguardando_dados";
 
   const buildCargoFilterContext = ({ supportsOptionalColumns }) => {
@@ -547,6 +593,12 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
     if (dateTo && /^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
       values.push(dateTo);
       clauses.push(`cargas.data <= $${index}::date`);
+      index += 1;
+    }
+
+    if (clienteId) {
+      values.push(clienteId);
+      clauses.push(`cargas.cliente_id = $${index}::uuid`);
       index += 1;
     }
 
@@ -698,38 +750,43 @@ export async function fetchOperatorClientesListReadModel({ query, correlationId 
       const result = await client.query(
         `
           SELECT
-            id,
-            created_at,
-            nome,
-            descricao,
-            logo_url,
-            forma_pagamento,
-            prazo_pagamento,
-            peso,
-            tipo_veiculo,
-            valor_frete,
-            exige_rastreamento,
-            exige_antt,
-            exige_seguro,
-            exige_carga_monitorada,
-            reputacao_pagamento_rapido,
-            reputacao_bom_pagador,
-            reputacao_liberacao_rapida,
-            reputacao_carga_organizada,
-            reputacao_boa_comunicacao,
-            observacoes,
-            rastreamento,
-            antt
-          FROM public.clientes
+            c.id,
+            c.created_at,
+            c.nome,
+            c.descricao,
+            c.logo_url,
+            c.logo_url_card,
+            c.logo_url_proximas,
+            c.forma_pagamento,
+            c.prazo_pagamento,
+            c.exige_rastreamento,
+            c.exige_antt,
+            c.exige_seguro,
+            c.exige_carga_monitorada,
+            c.reputacao_pagamento_rapido,
+            c.reputacao_bom_pagador,
+            c.reputacao_liberacao_rapida,
+            c.reputacao_carga_organizada,
+            c.reputacao_boa_comunicacao,
+            c.observacoes,
+            c.custom_reputacoes,
+            c.custom_exigencias,
+            COALESCE(
+              (SELECT array_agg(r.id ORDER BY r.created_at)
+               FROM public.rotas r
+               WHERE r.cliente_id = c.id),
+              ARRAY[]::uuid[]
+            ) AS rota_ids
+          FROM public.clientes c
           WHERE (
             $1::text IS NULL OR
-            nome ILIKE $1 OR
-            COALESCE(descricao, '') ILIKE $1 OR
-            COALESCE(forma_pagamento, '') ILIKE $1 OR
-            COALESCE(prazo_pagamento, '') ILIKE $1 OR
-            COALESCE(observacoes, '') ILIKE $1
+            c.nome ILIKE $1 OR
+            COALESCE(c.descricao, '') ILIKE $1 OR
+            COALESCE(c.forma_pagamento, '') ILIKE $1 OR
+            COALESCE(c.prazo_pagamento, '') ILIKE $1 OR
+            COALESCE(c.observacoes, '') ILIKE $1
           )
-          ORDER BY created_at DESC, id DESC
+          ORDER BY c.created_at DESC, c.id DESC
           LIMIT $2 OFFSET $3
         `,
         [searchPattern, pageSize, offset],
@@ -749,11 +806,10 @@ export async function fetchOperatorClientesListReadModel({ query, correlationId 
             nome,
             descricao,
             NULL::text AS logo_url,
+            NULL::text AS logo_url_card,
+            NULL::text AS logo_url_proximas,
             forma_pagamento,
             prazo_pagamento,
-            NULL::text AS peso,
-            NULL::text AS tipo_veiculo,
-            NULL::text AS valor_frete,
             exige_rastreamento,
             exige_antt,
             exige_seguro,
@@ -764,8 +820,9 @@ export async function fetchOperatorClientesListReadModel({ query, correlationId 
             reputacao_carga_organizada,
             reputacao_boa_comunicacao,
             observacoes,
-            rastreamento,
-            antt
+            '[]'::jsonb AS custom_reputacoes,
+            '[]'::jsonb AS custom_exigencias,
+            ARRAY[]::uuid[] AS rota_ids
           FROM public.clientes
           WHERE (
             $1::text IS NULL OR
@@ -811,7 +868,7 @@ export async function fetchOperatorClientesListReadModel({ query, correlationId 
 }
 
 export async function fetchOperatorRoutesListReadModel({ query, correlationId }) {
-  const { page, pageSize, offset, maxPageSize, search, status } = parseOperatorRoutesListQuery(query);
+  const { page, pageSize, offset, maxPageSize, search, status, clienteId } = parseOperatorRoutesListQuery(query);
 
   return withPgClient(async (client) => {
     const { rows, supportsCatalogFields } = await fetchPersistedRoutes(client);
@@ -824,7 +881,13 @@ export async function fetchOperatorRoutesListReadModel({ query, correlationId })
           .toLowerCase()
           .includes(search);
       const matchesStatus = status === "todas" || (status === "ativas" ? route.ativa : !route.ativa);
-      return matchesSearch && matchesStatus;
+      const matchesCliente =
+        !clienteId
+          ? true
+          : clienteId === "sem-cliente"
+          ? !route.cliente_id
+          : route.cliente_id === clienteId;
+      return matchesSearch && matchesStatus && matchesCliente;
     });
 
     const paginatedItems = filteredRoutes.slice(offset, offset + pageSize);
@@ -2008,6 +2071,84 @@ export async function fetchOperatorAuditLogsReadModel({ query, correlationId }) 
             const bLabel = (b.displayName || b.email || b.id).toLowerCase();
             return aLabel.localeCompare(bLabel);
           }),
+      },
+    };
+  });
+}
+
+const PENDING_DRIVER_DEFAULT_PAGE_SIZE = 20;
+const PENDING_DRIVER_MAX_PAGE_SIZE = 100;
+
+/**
+ * Lista paginada de registros de cadastro pendentes de aprovação.
+ *
+ * @param {object} opts
+ * @param {string|null} opts.status   - Filtro: 'pendente' | 'em_revisao' | 'aprovado' | 'rejeitado' | null (todos)
+ * @param {number} opts.page
+ * @param {number} opts.pageSize
+ * @param {string} [opts.correlationId]
+ */
+export async function fetchPendingDriverRegistrations({ status, page, pageSize, correlationId }) {
+  const safePage = Math.max(1, Number.parseInt(String(page || 1), 10) || 1);
+  const safePageSize = Math.min(
+    PENDING_DRIVER_MAX_PAGE_SIZE,
+    Math.max(1, Number.parseInt(String(pageSize || PENDING_DRIVER_DEFAULT_PAGE_SIZE), 10) || PENDING_DRIVER_DEFAULT_PAGE_SIZE),
+  );
+  const offset = (safePage - 1) * safePageSize;
+  const statusFilter = typeof status === "string" && status.trim() ? status.trim() : null;
+
+  return withPgClient(async (client) => {
+    const [itemsResult, countResult] = await Promise.all([
+      client.query(
+        `
+        SELECT
+          id,
+          id_cadastro,
+          created_at,
+          status,
+          observacoes,
+          reviewed_at,
+          reviewed_by_id,
+          dados->'motorista'->>'nome'  AS nome_motorista,
+          dados->'motorista'->>'cpf'   AS cpf_motorista,
+          dados->'cavalo'->>'placa'    AS placa_cavalo,
+          dados                        AS dados
+        FROM public.pending_driver_registrations
+        WHERE ($1::text IS NULL OR status = $1)
+        ORDER BY created_at DESC
+        LIMIT $2 OFFSET $3
+        `,
+        [statusFilter, safePageSize, offset],
+      ),
+      client.query(
+        `
+        SELECT COUNT(*)::int AS total
+        FROM public.pending_driver_registrations
+        WHERE ($1::text IS NULL OR status = $1)
+        `,
+        [statusFilter],
+      ),
+    ]);
+
+    const totalCount = countResult.rows[0]?.total ?? 0;
+
+    return {
+      statusCode: 200,
+      payload: {
+        items: itemsResult.rows.map((row) => ({
+          id: row.id,
+          id_cadastro: row.id_cadastro,
+          created_at: row.created_at,
+          status: row.status,
+          observacoes: row.observacoes || null,
+          reviewed_at: row.reviewed_at || null,
+          reviewed_by_id: row.reviewed_by_id || null,
+          nome_motorista: row.nome_motorista || null,
+          cpf_motorista: row.cpf_motorista || null,
+          placa_cavalo: row.placa_cavalo || null,
+          dados: row.dados || null,
+        })),
+        meta: buildPaginationMeta(safePage, safePageSize, totalCount, PENDING_DRIVER_MAX_PAGE_SIZE, correlationId),
       },
     };
   });

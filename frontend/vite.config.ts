@@ -37,11 +37,13 @@ export default defineConfig({
     port: 3000,
     proxy: {
       "/api": "http://localhost:3001",
+      "/ocr-api": "http://localhost:8765",
     },
   },
   preview: {
     proxy: {
       "/api": "http://localhost:3001",
+      "/ocr-api": "http://localhost:8765",
     },
   },
   build: {

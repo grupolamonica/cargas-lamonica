@@ -20,11 +20,6 @@ describe("clientes helpers", () => {
       reputacao_carga_organizada: false,
       reputacao_boa_comunicacao: false,
       observacoes: null,
-      rastreamento: null,
-      antt: null,
-      peso: null,
-      tipo_veiculo: null,
-      valor_frete: null,
     } as Cliente;
 
     expect(mapClienteToFormData(cliente).logo_url).toBe("https://example.com/logo.png");

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 import { z } from "zod";
 import { CANONICAL_VEHICLE_PROFILES, normalizeVehicleProfile } from "../../../domain/vehicle-profiles.js";
+import { buildInternalErrorResponse, buildServiceErrorResponse } from "../error-mapping.js";
 import { zodErrorToHttpResponse } from "../schemas/common.js";
 import { loadIdParamsSchema, loadAndClaimParamsSchema, loadAndLeadParamsSchema } from "../schemas/load-claim-schemas.js";
 
@@ -133,31 +134,11 @@ function toErrorResponse(error, correlationId, scope = "load-claims") {
   if (error instanceof z.ZodError) {
     return zodErrorToHttpResponse(error, correlationId);
   }
-
   if (error instanceof LoadClaimServiceError) {
-    return {
-      statusCode: error.statusCode,
-      payload: {
-        error: error.name,
-        code: error.code,
-        message: error.message,
-        details: error.details ?? null,
-        meta: { correlationId },
-      },
-    };
+    return buildServiceErrorResponse(error, correlationId, { includeDetails: true });
   }
-
   logUnexpectedError(error, correlationId, scope);
-
-  return {
-    statusCode: 500,
-    payload: {
-      error: "InternalServerError",
-      code: "INTERNAL_SERVER_ERROR",
-      message: getUnexpectedUserMessage(scope),
-      meta: { correlationId },
-    },
-  };
+  return buildInternalErrorResponse(correlationId, getUnexpectedUserMessage(scope));
 }
 
 export async function resolveCreateLoadClaimResponse(request) {

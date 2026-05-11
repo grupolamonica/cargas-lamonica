@@ -70,6 +70,35 @@ services:
       - "traefik.http.routers.lmc-backend.priority=10"
       - "traefik.http.services.lmc-backend.loadbalancer.server.port=3001"
 
+  # ── Cadastro-OCR (FastAPI Python — OCR + consultas externas) ────────────
+  cadastro-ocr:
+    build:
+      context: ./cadastro-motorista/backend
+      dockerfile: Dockerfile
+    image: lamonica-cadastro-ocr:latest
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+      - platform_public
+    environment:
+      INFOSIMPLES_TOKEN: ${INFOSIMPLES_TOKEN:-}
+      OCR_COMPROVANTE_PROVIDER: ${OCR_COMPROVANTE_PROVIDER:-local}
+      OCR_CARTAO_CNPJ_PROVIDER: ${OCR_CARTAO_CNPJ_PROVIDER:-local}
+    volumes:
+      - cadastro_anexos:/app/backend/anexos_tmp
+    # Não expõe porta externamente — Traefik roteia /ocr-api/* para este container
+    expose:
+      - "8765"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=platform_public"
+      - "traefik.http.routers.lmc-cadastro-ocr.rule=PathPrefix(`/ocr-api`)"
+      - "traefik.http.routers.lmc-cadastro-ocr.entrypoints=web"
+      - "traefik.http.routers.lmc-cadastro-ocr.priority=20"
+      - "traefik.http.middlewares.lmc-ocr-strip.stripprefix.prefixes=/ocr-api"
+      - "traefik.http.routers.lmc-cadastro-ocr.middlewares=lmc-ocr-strip"
+      - "traefik.http.services.lmc-cadastro-ocr.loadbalancer.server.port=8765"
+
   # ── ASPX cookie renewal (persistent container on VPS) ────────────────────
   aspx-renewal:
     build:
@@ -84,6 +113,11 @@ services:
     environment:
       ASPX_ALLOW_PLAYWRIGHT_LOGIN: "1"
       PYTHONUNBUFFERED: "1"
+
+# ── Volumes ───────────────────────────────────────────────────────────────
+volumes:
+  cadastro_anexos:
+    name: lamonica_cadastro_anexos
 
 # ── Networks ──────────────────────────────────────────────────────────────
 networks:

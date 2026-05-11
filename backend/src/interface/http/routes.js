@@ -31,11 +31,14 @@ import {
 
 import {
   resolveCreateOperatorCargoResponse,
+  resolveAttachClienteRotaResponse,
   resolveCreateOperatorClienteResponse,
   resolveCreateOperatorRouteResponse,
   resolveDeleteOperatorCargoResponse,
   resolveDeleteOperatorClienteResponse,
+  resolveDetachClienteRotaResponse,
   resolveDuplicateOperatorCargoResponse,
+  resolveListClienteRotasResponse,
   resolveOperatorAuditLogsResponse,
   resolveOperatorCargoListReadModelResponse,
   resolveOperatorClientesListReadModelResponse,
@@ -57,6 +60,9 @@ import {
   resolveUpdateOperatorRouteResponse,
   resolveDriverSponsorClicksResponse,
   resolveOperatorOverviewDigestResponse,
+  resolveOperatorCadastrosPendentesResponse,
+  resolveOperatorAprovarCadastroResponse,
+  resolveOperatorRejeitarCadastroResponse,
 } from "./operator-admin/handlers.js";
 
 import {
@@ -66,6 +72,8 @@ import {
   resolveDriverPortalVisitResponse,
   resolveDriverSponsorClickResponse,
 } from "./public-loads/handlers.js";
+
+import { resolveFinalizarCadastroResponse } from "./cadastro/handlers.js";
 
 import { resolveRouteInfoResponse } from "./route-info.handler.js";
 import { resolveSheetSyncResponse } from "./sheet-sync.handler.js";
@@ -131,6 +139,9 @@ export function registerRoutes(app) {
     }
   });
 
+  // Public cadastro (no auth)
+  router.post("/api/public/cadastro/finalizar", wrap(resolveFinalizarCadastroResponse));
+
   // Driver / public loads
   router.get("/api/driver/loads", wrap(resolveDriverLoadsReadModelResponse));
   router.get("/api/driver/loads/facets", wrap(resolveDriverLoadFacetsResponse));
@@ -182,6 +193,11 @@ export function registerRoutes(app) {
   router.get("/api/operator/motoristas", wrap(resolveOperatorDriversListReadModelResponse));
   router.patch("/api/operator/motoristas/:driverId", wrap(resolveUpdateOperatorDriverProfileResponse));
 
+  // Cadastros pendentes de motoristas (rota fixa antes da parametrizada)
+  router.get("/api/operator/cadastros-pendentes", wrap(resolveOperatorCadastrosPendentesResponse));
+  router.post("/api/operator/cadastros/:id/aprovar", wrap(resolveOperatorAprovarCadastroResponse));
+  router.post("/api/operator/cadastros/:id/rejeitar", wrap(resolveOperatorRejeitarCadastroResponse));
+
   // Veículos
   router.get("/api/operator/veiculos", wrap(resolveOperatorVehiclesListReadModelResponse));
   router.post("/api/operator/veiculos/revalidate", wrap(resolveRevalidateAllVehiclesResponse));
@@ -210,6 +226,10 @@ export function registerRoutes(app) {
   router.post("/api/operator/clientes", wrap(resolveCreateOperatorClienteResponse));
   router.patch("/api/operator/clientes/:clienteId", wrap(resolveUpdateOperatorClienteResponse));
   router.delete("/api/operator/clientes/:clienteId", wrap(resolveDeleteOperatorClienteResponse));
+  // Cliente <-> rota associations (N:M via cliente_rotas table)
+  router.get("/api/operator/clientes/:clienteId/rotas", wrap(resolveListClienteRotasResponse));
+  router.post("/api/operator/clientes/:clienteId/rotas", wrap(resolveAttachClienteRotaResponse));
+  router.delete("/api/operator/clientes/:clienteId/rotas/:rotaId", wrap(resolveDetachClienteRotaResponse));
 
   // Routes catalog
   router.get("/api/operator/routes", wrap(resolveOperatorRoutesListReadModelResponse));

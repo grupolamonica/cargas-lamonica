@@ -45,14 +45,15 @@ import {
   toMobileDateLabel,
   toFilterDateLabel,
   splitLocation,
-  toTitleCase,
-  normalizeDisplayCity,
+  formatCityDisplay,
 } from "@/hooks/useDriverLoads";
 import { useLeadNotifications } from "@/hooks/useLeadNotifications";
+import { useDriverGeolocation } from "@/hooks/useDriverGeolocation";
+import { getOriginCoords, haversineKm } from "@/lib/cityCoordinates";
 import lamonicaLogo from "@/assets/lamonica-logo-white.png";
 import { SponsoredCarousel } from "@/components/SponsoredCarousel";
 
-const DRIVER_SUPPORT_WHATSAPP_NUMBER = "5571939950665";
+const DRIVER_SUPPORT_WHATSAPP_NUMBER = "557139950665";
 const DRIVER_CADASTRO_MESSAGE =
   "Olá, quero fazer meu cadastro para receber cargas da Lamonica.";
 const DRIVER_SAC_MESSAGE =
@@ -191,8 +192,26 @@ const DriverPortal = () => {
 
 
 
-  // Próximas 3 cargas por data (sempre populado, independente de localização)
-  const nearbyCargas = useMemo(() => cargas.slice(0, 3), [cargas]);
+  const { location: driverLocation, loading: locationLoading, denied: locationDenied, unavailable: locationUnavailable } = useDriverGeolocation();
+
+  /** Only show cargas within this radius (km). Beyond this they are not meaningfully "próximas". */
+  const MAX_NEARBY_KM = 400;
+
+  const nearbyCargas = useMemo(() => {
+    if (!driverLocation) return [];
+    return [...cargas]
+      .map((cargo) => {
+        const coords = getOriginCoords(cargo.origem);
+        const distKm = coords
+          ? haversineKm(driverLocation.lat, driverLocation.lon, coords.lat, coords.lon)
+          : Infinity;
+        return { cargo, distKm };
+      })
+      .filter((item) => item.distKm !== Infinity && item.distKm <= MAX_NEARBY_KM)
+      .sort((a, b) => a.distKm - b.distKm)
+      .slice(0, 3)
+      .map((item) => item.cargo);
+  }, [cargas, driverLocation]);
 
   const nearbyItems = useMemo(() => nearbyCargas.map((cargo) => {
     const [routeOrigin, routeDestination] = cargo.routeLabel
@@ -201,22 +220,19 @@ const DriverPortal = () => {
     const originRaw = routeOrigin ? null : splitLocation(cargo.origem);
     const destinationRaw = routeDestination ? null : splitLocation(cargo.destino);
     const origCity = routeOrigin
-      ? toTitleCase(routeOrigin)
-      : toTitleCase(normalizeDisplayCity(originRaw!.city));
+      ? formatCityDisplay(routeOrigin)
+      : formatCityDisplay(originRaw!.city);
     const destCity = routeDestination
-      ? toTitleCase(routeDestination)
-      : toTitleCase(normalizeDisplayCity(destinationRaw!.city));
+      ? formatCityDisplay(routeDestination)
+      : formatCityDisplay(destinationRaw!.city);
     const dateLabel = (() => {
       try { return `${format(parseISO(cargo.data), "dd/MM")} às ${cargo.horario}`; }
       catch { return cargo.horario || ""; }
     })();
-    const distLabel =
-      typeof cargo.distancia_km === "number" && Number.isFinite(cargo.distancia_km)
-        ? `${Math.round(cargo.distancia_km).toLocaleString("pt-BR")} km`
-        : "";
-    const logoUrl = cargo.clienteNome?.toLowerCase() === "shopee" ? "/brand-logos/shopee-icon.png" : undefined;
+    const distLabel = "";
+    const logoUrl = cargo.clienteLogoUrlProximas ?? undefined;
     return { id: cargo.id, dateLabel, originCity: origCity, destCity: destCity, perfil: cargo.perfil || "", distLabel, logoUrl, logoAlt: cargo.clienteNome ?? undefined };
-  }), [nearbyCargas]);
+  }), [nearbyCargas, driverLocation]);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -377,7 +393,7 @@ const DriverPortal = () => {
           </div>
 
           <div className="hidden lg:block">
-            <div className="mt-0 flex gap-5 xl:gap-6">
+            <div className="mt-0 flex items-start gap-5 xl:gap-6">
               {/* carousel — left */}
               <div className="min-w-0 flex-1">
                 <SponsoredCarousel inline />
@@ -389,7 +405,9 @@ const DriverPortal = () => {
                   items={nearbyItems}
                   buildHref={(id) => `/motorista/cargas/${id}`}
                   title="Cargas próximas a você"
-                  emptyLabel="Nenhuma carga disponível no momento."
+                  loading={locationLoading}
+                  denied={locationDenied}
+                  unavailable={locationUnavailable}
                 />
               </div>
             </div>
@@ -1097,6 +1115,21 @@ const DriverPortal = () => {
         </div>
 
         <div ref={resultsSectionRef} className="lg:hidden">
+          {/* Cargas próximas — mobile/tablet (desktop has it in the header section) */}
+          {/* Only render when loading OR when there are nearby cargas — avoids empty/error states taking space on mobile */}
+          {(locationLoading || nearbyItems.length > 0) ? (
+            <div className="mb-6">
+              <CargasProximasCard
+                items={nearbyItems}
+                buildHref={(id) => `/motorista/cargas/${id}`}
+                title="Cargas próximas a você"
+                loading={locationLoading}
+                denied={locationDenied}
+                unavailable={locationUnavailable}
+              />
+            </div>
+          ) : null}
+
           <div className="mb-6 flex items-center gap-3">
             <h2 className="text-xs font-extrabold uppercase tracking-[0.2em] text-muted-foreground">
               Cargas disponíveis

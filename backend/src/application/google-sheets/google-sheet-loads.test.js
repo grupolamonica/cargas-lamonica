@@ -615,6 +615,92 @@ describe("google sheet loads sync", () => {
     warnSpy.mockRestore();
   });
 
+  it("reverts BOOKED loads to OPEN when the sheet clears the motorista and status", async () => {
+    const existingId = createSheetLoadId("LT0Q4302267L1");
+    const supabaseClient = createSupabaseMock({
+      existingSheetRows: [
+        {
+          id: existingId,
+          sheet_lh: "LT0Q4302267L1",
+          status: "BOOKED",
+          valor: 5000,
+          perfil: "CARRETA",
+          bonus: null,
+          distancia_km: null,
+          duracao_horas: null,
+          cliente_id: SHEET_CLIENT_ID,
+          is_template: false,
+          created_by: null,
+        },
+      ],
+    });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+
+    const result = await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    expect(result.revertedToOpenCount).toBe(1);
+
+    const upsertCall = supabaseClient.calls.find((call) => call[0] === "upsert");
+    expect(upsertCall).toBeTruthy();
+    expect(upsertCall[2][0]).toMatchObject({
+      sheet_lh: "LT0Q4302267L1",
+      status: "OPEN",
+    });
+  });
+
+  it("preserves RESERVED status when the sheet shows the load as available", async () => {
+    const existingId = createSheetLoadId("LT0Q4302267L1");
+    const supabaseClient = createSupabaseMock({
+      existingSheetRows: [
+        {
+          id: existingId,
+          sheet_lh: "LT0Q4302267L1",
+          status: "RESERVED",
+          valor: 5000,
+          perfil: "CARRETA",
+          bonus: null,
+          distancia_km: null,
+          duracao_horas: null,
+          cliente_id: SHEET_CLIENT_ID,
+          is_template: false,
+          created_by: null,
+        },
+      ],
+    });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+
+    const result = await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    expect(result.revertedToOpenCount).toBe(0);
+
+    const upsertCall = supabaseClient.calls.find((call) => call[0] === "upsert");
+    expect(upsertCall).toBeTruthy();
+    expect(upsertCall[2][0]).toMatchObject({
+      sheet_lh: "LT0Q4302267L1",
+      status: "RESERVED",
+    });
+  });
+
   it("preserves operator-edited valor on existing loads even when sheet exports a different amount", async () => {
     const supabaseClient = createSupabaseMock({
       existingSheetRows: [

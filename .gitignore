@@ -44,3 +44,12 @@ frontend/.env
 *.njsproj
 *.sln
 *.sw?
+
+# Local artifacts (never commit)
+prod_schema.sql
+*.dump
+.bg-shell/
+.claude/worktrees/
+
+# User uploads (cadastro-motorista local OCR)
+**/anexos_tmp/

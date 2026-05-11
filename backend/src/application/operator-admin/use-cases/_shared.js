@@ -230,8 +230,14 @@ export function buildRouteLabelMap(loadRows) {
         if (approxLabel) return [row.id, approxLabel];
       }
 
-      unmatched.push({ id: row.id, origem: row.origem, destino: row.destino });
-      return [row.id, null];
+      // Fallback: construct a displayable label from the cargo's own origem/destino.
+      // Use the raw string (not canonicalized — that strips accents for matching purposes).
+      // Strip the "/UF" state suffix only (e.g. "São Bernardo do Campo/SP" → "SÃO BERNARDO DO CAMPO").
+      const rawOrigin = String(row.origem ?? "").replace(/\s*\/\s*[A-Za-z]{2}$/i, "").trim();
+      const rawDest = String(row.destino ?? "").replace(/\s*\/\s*[A-Za-z]{2}$/i, "").trim();
+      const fallbackLabel = rawOrigin && rawDest ? `${rawOrigin.toUpperCase()} X ${rawDest.toUpperCase()}` : null;
+      if (!fallbackLabel) unmatched.push({ id: row.id, origem: row.origem, destino: row.destino });
+      return [row.id, fallbackLabel];
     }),
   );
 
@@ -261,6 +267,9 @@ export function mapDriverLoadReadModelItem(row) {
     clienteId: row.clienteId ?? null,
     clienteNome: row.clienteNome ?? null,
     clienteDescricao: row.clienteDescricao ?? null,
+    clienteLogoUrl: row.clienteLogoUrl ?? null,
+    clienteLogoUrlCard: row.clienteLogoUrlCard ?? null,
+    clienteLogoUrlProximas: row.clienteLogoUrlProximas ?? null,
     carregamentoLabel: row.carregamentoLabel ?? null,
     descargaLabel: row.descargaLabel ?? null,
     routeLabel: row.routeLabel ?? null,
@@ -325,6 +334,9 @@ export async function queryDriverLoadCandidateRows(client, { whereSql, values })
           cargas.cliente_id AS "clienteId",
           clientes.nome AS "clienteNome",
           clientes.descricao AS "clienteDescricao",
+          clientes.logo_url AS "clienteLogoUrl",
+          clientes.logo_url_card AS "clienteLogoUrlCard",
+          clientes.logo_url_proximas AS "clienteLogoUrlProximas",
           ${withSheetScheduleColumns ? 'cargas.sheet_data_carregamento AS "carregamentoLabel"' : 'NULL::text AS "carregamentoLabel"'},
           ${withSheetScheduleColumns ? 'cargas.sheet_data_descarga AS "descargaLabel"' : 'NULL::text AS "descargaLabel"'}
         FROM public.cargas

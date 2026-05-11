@@ -1,5 +1,5 @@
 import type { Tables } from "@/integrations/supabase/types";
-import type { OperatorClientePayload } from "@/services/operatorAdmin";
+import type { CustomBadgeItem, OperatorClientePayload } from "@/services/operatorAdmin";
 
 export type Cliente = Tables<"clientes">;
 
@@ -7,6 +7,8 @@ export interface ClienteFormData {
   nome: string;
   descricao: string | null;
   logo_url: string | null;
+  logo_url_card: string | null;
+  logo_url_proximas: string | null;
   forma_pagamento: string | null;
   prazo_pagamento: string | null;
   exige_rastreamento: boolean;
@@ -19,6 +21,8 @@ export interface ClienteFormData {
   reputacao_carga_organizada: boolean;
   reputacao_boa_comunicacao: boolean;
   observacoes: string | null;
+  custom_reputacoes: CustomBadgeItem[];
+  custom_exigencias: CustomBadgeItem[];
 }
 
 const toNullableString = (value?: string | null) => {
@@ -30,6 +34,8 @@ export const createEmptyClienteForm = (): ClienteFormData => ({
   nome: "",
   descricao: null,
   logo_url: null,
+  logo_url_card: null,
+  logo_url_proximas: null,
   forma_pagamento: null,
   prazo_pagamento: null,
   exige_rastreamento: false,
@@ -42,6 +48,8 @@ export const createEmptyClienteForm = (): ClienteFormData => ({
   reputacao_carga_organizada: false,
   reputacao_boa_comunicacao: false,
   observacoes: null,
+  custom_reputacoes: [],
+  custom_exigencias: [],
 });
 
 export const mapClienteToFormData = (cliente?: Cliente | null): ClienteFormData => {
@@ -53,10 +61,12 @@ export const mapClienteToFormData = (cliente?: Cliente | null): ClienteFormData 
     nome: cliente.nome,
     descricao: cliente.descricao ?? null,
     logo_url: cliente.logo_url ?? null,
+    logo_url_card: cliente.logo_url_card ?? null,
+    logo_url_proximas: cliente.logo_url_proximas ?? null,
     forma_pagamento: cliente.forma_pagamento ?? null,
     prazo_pagamento: cliente.prazo_pagamento ?? null,
-    exige_rastreamento: cliente.exige_rastreamento || Boolean(cliente.rastreamento?.trim()),
-    exige_antt: cliente.exige_antt || Boolean(cliente.antt?.trim()),
+    exige_rastreamento: cliente.exige_rastreamento,
+    exige_antt: cliente.exige_antt,
     exige_seguro: cliente.exige_seguro,
     exige_carga_monitorada: cliente.exige_carga_monitorada,
     reputacao_pagamento_rapido: cliente.reputacao_pagamento_rapido,
@@ -65,6 +75,8 @@ export const mapClienteToFormData = (cliente?: Cliente | null): ClienteFormData 
     reputacao_carga_organizada: cliente.reputacao_carga_organizada,
     reputacao_boa_comunicacao: cliente.reputacao_boa_comunicacao,
     observacoes: cliente.observacoes ?? null,
+    custom_reputacoes: (cliente.custom_reputacoes as unknown as CustomBadgeItem[] | null) ?? [],
+    custom_exigencias: (cliente.custom_exigencias as unknown as CustomBadgeItem[] | null) ?? [],
   };
 };
 
@@ -72,6 +84,8 @@ export const mapClienteFormToPayload = (form: ClienteFormData): OperatorClienteP
   nome: form.nome.trim(),
   descricao: toNullableString(form.descricao),
   logo_url: toNullableString(form.logo_url),
+  logo_url_card: toNullableString(form.logo_url_card),
+  logo_url_proximas: toNullableString(form.logo_url_proximas),
   forma_pagamento: toNullableString(form.forma_pagamento),
   prazo_pagamento: toNullableString(form.prazo_pagamento),
   exige_rastreamento: form.exige_rastreamento,
@@ -84,4 +98,6 @@ export const mapClienteFormToPayload = (form: ClienteFormData): OperatorClienteP
   reputacao_carga_organizada: form.reputacao_carga_organizada,
   reputacao_boa_comunicacao: form.reputacao_boa_comunicacao,
   observacoes: toNullableString(form.observacoes),
+  custom_reputacoes: form.custom_reputacoes,
+  custom_exigencias: form.custom_exigencias,
 });

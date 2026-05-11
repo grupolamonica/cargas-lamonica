@@ -89,6 +89,7 @@ export function DriverLoadsList({
           clienteId={cargo.clienteId}
           clienteNome={cargo.clienteNome}
           clienteDescricao={cargo.clienteDescricao}
+          clienteLogoUrlCard={cargo.clienteLogoUrlCard ?? null}
           carregamentoLabel={loadingScheduleLabel}
           descargaLabel={descargaScheduleLabel}
           origemCidade={origin.city}
@@ -102,6 +103,8 @@ export function DriverLoadsList({
           secondarySupportText={routeDurationLabel}
           pagamento={paymentLabel}
           paymentDetails={paymentDetailsLabel}
+          valorCarga={cargo.valor}
+          bonusValor={cargo.bonus}
           routeDistanceLabel={routeDistanceLabel}
           routeDurationLabel={routeDurationLabel}
           detailsHref={`/motorista/cargas/${cargo.id}`}

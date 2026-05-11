@@ -222,7 +222,7 @@ const Veiculos = () => {
 
   return (
     <div className="min-w-0">
-      <DashboardHeader title="Veiculos" />
+      <DashboardHeader title="Veículos" />
 
       <main className="min-w-0 space-y-5 p-6 lg:p-8">
         {/* Summary + Filters */}
@@ -232,7 +232,7 @@ const Veiculos = () => {
               <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">Frota cadastrada</p>
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 <h2 className="text-2xl font-semibold tracking-tight text-foreground">
-                  {summary.totalVehicles} veiculo{summary.totalVehicles === 1 ? "" : "s"} registrado{summary.totalVehicles === 1 ? "" : "s"}
+                  {summary.totalVehicles} veículo{summary.totalVehicles === 1 ? "" : "s"} registrado{summary.totalVehicles === 1 ? "" : "s"}
                 </h2>
                 {isFetching && !isLoading ? (
                   <span className="inline-flex items-center gap-2 rounded-full border border-primary/12 bg-primary/8 px-3 py-1 text-xs font-semibold text-primary">
@@ -242,7 +242,7 @@ const Veiculos = () => {
                 ) : null}
               </div>
               <p className="mt-3 max-w-3xl text-sm text-muted-foreground">
-                Veiculos cadastrados automaticamente quando motoristas enviam placas durante o processo de candidatura. Os dados de vigencia sao verificados pelo Angellira.
+                Veículos cadastrados automaticamente quando motoristas enviam placas durante o processo de candidatura. Os dados de vigência são verificados pelo Angellira.
               </p>
               <div className="mt-4">
                 <button
@@ -380,7 +380,7 @@ const Veiculos = () => {
           <section className="admin-panel flex min-h-[260px] flex-col items-center justify-center gap-4 p-10 text-center">
             <Truck className="h-14 w-14 text-muted-foreground/35" />
             <div className="space-y-1">
-              <p className="text-lg font-bold text-foreground">Nenhum veiculo encontrado</p>
+              <p className="text-lg font-bold text-foreground">Nenhum veículo encontrado</p>
               <p className="text-sm text-muted-foreground">
                 Ajuste os filtros ou aguarde motoristas enviarem suas placas durante candidaturas.
               </p>
@@ -389,7 +389,7 @@ const Veiculos = () => {
         ) : (
           <section className="space-y-4">
             <div className="text-sm text-muted-foreground">
-              Exibindo {items.length} veiculo{items.length === 1 ? "" : "s"} nesta pagina.
+              Exibindo {items.length} veículo{items.length === 1 ? "" : "s"} nesta página.
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

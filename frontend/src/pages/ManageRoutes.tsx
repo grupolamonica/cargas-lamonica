@@ -41,9 +41,8 @@ import {
   parseOptionalNumber,
   trimTextOrNull,
 } from "@/lib/routeCatalog";
-import { createOperatorRoute, updateOperatorRoute } from "@/services/operatorAdmin";
-import { fetchOperatorRoutes, type OperatorRouteListItem } from "@/services/readModels";
-import { resolveRouteMetrics } from "@/services/routeMetrics";
+import { attachClienteRota, createOperatorRoute, updateOperatorRoute } from "@/services/operatorAdmin";
+import { fetchOperatorClientes, fetchOperatorRoutes, type OperatorRouteListItem } from "@/services/readModels";
 
 type RouteCatalogRow = OperatorRouteListItem;
 
@@ -55,13 +54,13 @@ function mapRouteToFormData(route: RouteCatalogRow): RouteFormData {
     origem: route.origem,
     destino: route.destino,
     distancia_km: String(route.distancia_km ?? ""),
-    duracao_horas: String(route.duracao_horas ?? ""),
     tempo_estimado_horas: route.tempo_estimado_horas !== null ? String(route.tempo_estimado_horas) : "",
     perfil_padrao: route.perfil_padrao || "CARRETA",
     valor_padrao: route.valor_padrao !== null ? String(route.valor_padrao) : "",
     bonus_padrao: route.bonus_padrao !== null ? String(route.bonus_padrao) : "",
+    bonus_exigencias: route.bonus_exigencias ?? "",
     ativa: route.ativa,
-    observacoes: route.observacoes || "",
+    cliente_id: route.cliente_id ?? null,
   };
 }
 
@@ -70,6 +69,7 @@ const ManageRoutes = () => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ativas");
+  const [clienteFilter, setClienteFilter] = useState("todos");
   const [modalOpen, setModalOpen] = useState(false);
   const [editingRoute, setEditingRoute] = useState<RouteCatalogRow | null>(null);
   const [detailRoute, setDetailRoute] = useState<RouteCatalogRow | null>(null);
@@ -78,7 +78,7 @@ const ManageRoutes = () => {
 
   useEffect(() => {
     setPage(1);
-  }, [deferredSearch, statusFilter]);
+  }, [deferredSearch, statusFilter, clienteFilter]);
 
   const {
     data,
@@ -86,13 +86,14 @@ const ManageRoutes = () => {
     isFetching,
     isLoading,
   } = useQuery({
-    queryKey: [...ROUTES_QUERY_KEY, deferredSearch, statusFilter, page],
+    queryKey: [...ROUTES_QUERY_KEY, deferredSearch, statusFilter, clienteFilter, page],
     queryFn: () =>
       fetchOperatorRoutes({
         page: String(page),
         pageSize: String(PAGE_SIZE),
         search: deferredSearch,
         status: statusFilter,
+        ...(clienteFilter && clienteFilter !== "todos" ? { clienteId: clienteFilter } : {}),
       }),
     staleTime: 60_000,
     gcTime: 10 * 60_000,
@@ -100,6 +101,19 @@ const ManageRoutes = () => {
     refetchOnReconnect: false,
     placeholderData: keepPreviousData,
   });
+
+  const { data: clientesData } = useQuery({
+    queryKey: ["admin", "clientes-options-for-routes"] as const,
+    queryFn: () => fetchOperatorClientes({ page: "1", pageSize: "200" }),
+    staleTime: 5 * 60_000,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+
+  const clienteOptions = (clientesData?.items ?? [])
+    .map((c) => ({ id: c.id, nome: c.nome }))
+    .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
 
   useEffect(() => {
     if (error) {
@@ -133,19 +147,8 @@ const ManageRoutes = () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "cargas-read-model"] }),
       queryClient.invalidateQueries({ queryKey: ["operator", "dashboard-read-model"] }),
       queryClient.invalidateQueries({ queryKey: ["driver", "loads-read-model"] }),
+      queryClient.invalidateQueries({ queryKey: ["driver", "loads-facets"] }),
     ]);
-  };
-
-  const resolveMetricsForModal = async (origin: string, destination: string) => {
-    const metrics = await resolveRouteMetrics(origin, destination);
-
-    if (metrics.distancia_km === null || metrics.duracao_horas === null) {
-      toast.warning("Não foi possível resolver a rota agora.");
-    } else {
-      toast.success("Métricas da rota atualizadas.");
-    }
-
-    return metrics;
   };
 
   const handleSave = async (formData: RouteFormData) => {
@@ -167,18 +170,16 @@ const ManageRoutes = () => {
       return;
     }
 
-    const manualDistance = parseOptionalNumber(formData.distancia_km);
-    const manualDuration = parseOptionalNumber(formData.duracao_horas);
-    const resolvedMetrics =
-      manualDistance !== null && manualDuration !== null
-        ? { distancia_km: manualDistance, duracao_horas: manualDuration }
-        : await resolveRouteMetrics(originValue, destinationValue);
+    const distanciaKm = parseOptionalNumber(formData.distancia_km);
+    const tempoEstimadoHoras = parseOptionalNumber(formData.tempo_estimado_horas);
 
-    const distanciaKm = manualDistance ?? resolvedMetrics.distancia_km;
-    const duracaoHoras = manualDuration ?? resolvedMetrics.duracao_horas;
+    if (distanciaKm === null) {
+      toast.error("Informe a distância da rota.");
+      return;
+    }
 
-    if (distanciaKm === null || duracaoHoras === null) {
-      toast.error("Não foi possível salvar sem distância e duração.");
+    if (tempoEstimadoHoras === null) {
+      toast.error("Informe o tempo estimado da rota.");
       return;
     }
 
@@ -186,16 +187,18 @@ const ManageRoutes = () => {
       origem: originValue,
       destino: destinationValue,
       distancia_km: distanciaKm,
-      duracao_horas: duracaoHoras,
-      tempo_estimado_horas: parseOptionalNumber(formData.tempo_estimado_horas) ?? duracaoHoras,
+      duracao_horas: tempoEstimadoHoras,
+      tempo_estimado_horas: tempoEstimadoHoras,
       perfil_padrao: trimTextOrNull(formData.perfil_padrao),
       valor_padrao: parseMoneyInput(formData.valor_padrao),
       bonus_padrao: parseMoneyInput(formData.bonus_padrao),
+      bonus_exigencias: trimTextOrNull(formData.bonus_exigencias),
       ativa: formData.ativa,
-      observacoes: trimTextOrNull(formData.observacoes),
+      observacoes: null,
     };
 
     let cascadedCargaCount = 0;
+    let savedRouteId: string | null = null;
 
     try {
       const response = editingRoute?.persisted
@@ -206,9 +209,27 @@ const ManageRoutes = () => {
         toast.warning(warning);
       });
       cascadedCargaCount = response.cascadedCargaCount ?? 0;
+      // Para attachClienteRota usamos o id de public.rotas (canônico).
+      // Edit: pega rota_id do row existente. Create: backend retorna rota_id.
+      savedRouteId = editingRoute?.persisted
+        ? (editingRoute.rota_id ?? response.rota_id ?? null)
+        : (response.rota_id ?? null);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Erro ao salvar rota");
       return;
+    }
+
+    if (formData.cliente_id && savedRouteId) {
+      try {
+        const attachResult = await attachClienteRota(formData.cliente_id, savedRouteId);
+        if (attachResult.transferred) {
+          toast.info("Rota transferida para o novo cliente.");
+        } else if (!attachResult.already_attached) {
+          toast.success("Rota vinculada ao cliente.");
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Rota salva, mas falha ao vincular cliente.");
+      }
     }
 
     if (cascadedCargaCount > 0) {
@@ -234,11 +255,11 @@ const ManageRoutes = () => {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">Catálogo operacional</p>
                 <h2 className="mt-3 text-2xl font-semibold tracking-tight text-foreground">
-                  Rotas com distancia, tempo estimado e valores de referencia
+                  Rotas com distância, tempo estimado e valores de referência
                 </h2>
               </div>
               <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-                Cadastre as rotas padrão da operação para manter origem, destino, distancia, duracao, valor, bonus e perfil sugerido em um único lugar.
+                Cadastre as rotas padrão da operação para manter origem, destino, distância, duração, valor, bônus e perfil sugerido em um único lugar.
               </p>
             </div>
 
@@ -280,7 +301,7 @@ const ManageRoutes = () => {
               <Input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Pesquisar por origem, destino, perfil ou observacao..."
+                placeholder="Pesquisar por origem, destino, perfil ou observação..."
                 className="h-12 rounded-2xl border-border/80 bg-white/92 pl-11 pr-4"
               />
             </div>
@@ -293,6 +314,21 @@ const ManageRoutes = () => {
               <option value="ativas">Somente ativas</option>
               <option value="inativas">Somente inativas</option>
               <option value="todas">Todas</option>
+            </select>
+
+            <select
+              value={clienteFilter}
+              onChange={(event) => setClienteFilter(event.target.value)}
+              className="h-12 rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
+              aria-label="Filtrar por cliente"
+            >
+              <option value="todos">Todos os clientes</option>
+              <option value="sem-cliente">Sem cliente vinculado</option>
+              {clienteOptions.map((cliente) => (
+                <option key={cliente.id} value={cliente.id}>
+                  {cliente.nome}
+                </option>
+              ))}
             </select>
 
             {canManageRoutes ? (
@@ -324,7 +360,7 @@ const ManageRoutes = () => {
 
         {!canManageRoutes ? (
           <section className="rounded-2xl border border-amber-300/45 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-200">
-            Seu perfil pode visualizar todo o catalogo operacional, mas apenas operadores com acesso avancado podem criar ou editar rotas padrao.
+            Seu perfil pode visualizar todo o catálogo operacional, mas apenas operadores com acesso avançado podem criar ou editar rotas padrão.
           </section>
         ) : null}
 
@@ -435,9 +471,9 @@ const ManageRoutes = () => {
             setEditingRoute(null);
           }}
           onSave={handleSave}
-          onResolveMetrics={resolveMetricsForModal}
           supportsCatalogFields={supportsCatalogFields}
           initialData={editingRoute ? mapRouteToFormData(editingRoute) : null}
+          clientes={clienteOptions}
         />
       ) : null}
 
@@ -445,7 +481,6 @@ const ManageRoutes = () => {
         <DialogContent className="max-w-3xl">
           {detailRoute ? (() => {
             const effectiveEstimatedHours = detailRoute.tempo_estimado_horas ?? detailRoute.duracao_horas;
-            const routeObservations = trimTextOrNull(detailRoute.observacoes) || "Sem observações adicionais para essa rota padrão.";
             const updatedAtLabel = formatDateOnly(detailRoute.updated_at, "Base importada");
 
             return (
@@ -496,7 +531,7 @@ const ManageRoutes = () => {
                         {formatRouteCurrency(detailRoute.valor_padrao, "Sem valor padrão")}
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Bonus: {formatRouteCurrency(detailRoute.bonus_padrao, "Sem bônus padrão")}
+                        Bônus: {formatRouteCurrency(detailRoute.bonus_padrao, "Sem bônus padrão")}
                       </p>
                     </CardContent>
                   </Card>
@@ -513,15 +548,11 @@ const ManageRoutes = () => {
                     <CardContent className="p-4">
                       <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                         <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-                        Atualizacao
+                        Atualização
                       </div>
                       <p className="mt-2 text-sm font-semibold text-foreground">{updatedAtLabel}</p>
                     </CardContent>
                   </Card>
-                </div>
-                <div className="rounded-[24px] border border-border/60 bg-white/80 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-primary/60">Observações da rota</p>
-                  <p className="mt-3 text-sm leading-relaxed text-foreground">{routeObservations}</p>
                 </div>
               </>
             );

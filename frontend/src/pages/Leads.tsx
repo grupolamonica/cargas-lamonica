@@ -4,6 +4,7 @@ import { Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Loader2, 
 import { differenceInDays } from "date-fns";
 import { toast } from "sonner";
 
+import ClientLogo from "@/components/ClientLogo";
 import DashboardHeader from "@/components/DashboardHeader";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
 import { cn } from "@/lib/utils";
@@ -13,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { approveOperatorLoadLead, cancelOperatorLoadLead, createDirectAllocation, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type DirectAllocationPayload, type OperatorLeadGroup, type PublicLeadValidationSummary } from "@/services/loadClaims";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { VEHICLE_PROFILE_OPTIONS } from "@/lib/vehicleProfiles";
-import { fetchSheetMonitor, type SheetMonitorRow } from "@/services/readModels";
+import { fetchOperatorClientes, fetchSheetMonitor, type SheetMonitorRow } from "@/services/readModels";
 
 interface SheetAllocation {
   driverName: string;
@@ -117,6 +118,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   const [search, setSearch] = useState("");
   const [loadStatusFilter, setLoadStatusFilter] = useState("todos");
   const [leadStatusFilter, setLeadStatusFilter] = useState("todos");
+  const [clienteFilter, setClienteFilter] = useState("");
   const [collapsedLoadIds, setCollapsedLoadIds] = useState<string[]>([]);
   const [directAllocLoadId, setDirectAllocLoadId] = useState<string | null>(null);
   const [directAllocLoading, setDirectAllocLoading] = useState(false);
@@ -148,6 +150,13 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     refetchOnWindowFocus: false,
     retry: false,
   });
+
+  const { data: clientesData } = useQuery({
+    queryKey: ["operator", "clientes-selector"],
+    queryFn: () => fetchOperatorClientes({ pageSize: "200" }),
+    staleTime: 5 * 60_000,
+  });
+  const clienteOptions = clientesData?.items ?? [];
 
   const sheetAllocationByLh = useMemo(() => {
     const map = new Map<string, SheetAllocation>();
@@ -271,13 +280,19 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
       .filter((group): group is OperatorLeadGroup => Boolean(group));
   }, [groups, deferredSearch, loadStatusFilter, leadStatusFilter, historicoMode, sheetAllocationByLh]);
 
+  const filteredByCliente = useMemo(() =>
+    clienteFilter
+      ? filteredGroups.filter((g) => g.load.clienteId === clienteFilter)
+      : filteredGroups,
+  [filteredGroups, clienteFilter]);
+
   const PAGE_SIZE = 10;
-  const totalPages = Math.ceil(filteredGroups.length / PAGE_SIZE);
-  const paginatedGroups = filteredGroups.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const totalPages = Math.ceil(filteredByCliente.length / PAGE_SIZE);
+  const paginatedGroups = filteredByCliente.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const hasActiveFilters =
-    deferredSearch.length > 0 || loadStatusFilter !== "todos" || leadStatusFilter !== "todos";
-  const visibleLoadIds = useMemo(() => filteredGroups.map((group) => group.load.id), [filteredGroups]);
+    deferredSearch.length > 0 || loadStatusFilter !== "todos" || leadStatusFilter !== "todos" || clienteFilter !== "";
+  const visibleLoadIds = useMemo(() => filteredByCliente.map((group) => group.load.id), [filteredByCliente]);
   const allVisibleGroupsCollapsed =
     visibleLoadIds.length > 0 && visibleLoadIds.every((loadId) => collapsedLoadIds.includes(loadId));
 
@@ -285,7 +300,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   useEffect(() => {
     knownLoadIdsRef.current = [];
     setPage(1);
-  }, [historicoMode, loadStatusFilter, leadStatusFilter, deferredSearch]);
+  }, [historicoMode, loadStatusFilter, leadStatusFilter, deferredSearch, clienteFilter]);
 
   useEffect(() => {
     const unseenLoadIds = groups
@@ -542,7 +557,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
             </div>
           </div>
 
-          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_220px_220px_auto_auto_auto]">
+          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_200px_200px_200px_auto_auto_auto]">
             <div className="relative">
               <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -592,12 +607,24 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
               <option value="APPROVED">Reservados</option>
             </select>
 
+            <select
+              value={clienteFilter}
+              onChange={(event) => setClienteFilter(event.target.value)}
+              className="h-12 rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
+            >
+              <option value="">Todos os clientes</option>
+              {clienteOptions.map((c) => (
+                <option key={c.id} value={c.id}>{c.nome}</option>
+              ))}
+            </select>
+
             <button
               type="button"
               onClick={() => {
                 setSearch("");
                 setLoadStatusFilter("todos");
                 setLeadStatusFilter("todos");
+                setClienteFilter("");
               }}
               disabled={!hasActiveFilters}
               className="inline-flex items-center justify-center rounded-2xl border border-border/80 bg-white/92 px-4 text-sm font-semibold text-foreground transition-colors duration-200 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted/40"
@@ -751,7 +778,16 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                             </span>
                           ) : null}
                         </div>
-                        <h3 className="mt-2 text-xl font-semibold tracking-tight text-foreground">{routeLabel}</h3>
+                        <h3 className="mt-2 flex items-center gap-2 text-xl font-semibold tracking-tight text-foreground">
+                          {routeLabel}
+                          {group.load.clienteLogoUrl ? (
+                            <ClientLogo
+                              logoUrl={group.load.clienteLogoUrl}
+                              name={group.load.clienteNome ?? ""}
+                              className="h-6 w-6"
+                            />
+                          ) : null}
+                        </h3>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <LoadStatusBadge status={effectiveStatus} />
                           <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2.5 py-0.5 text-[0.68rem] font-semibold text-muted-foreground">

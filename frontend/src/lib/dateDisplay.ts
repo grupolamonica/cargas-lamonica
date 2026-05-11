@@ -84,3 +84,20 @@ export function parseDateStringAsLocal(dateStr: string | null | undefined): Date
   if (!dateStr) return null;
   return new Date(dateStr + "T12:00:00");
 }
+
+/**
+ * Normalize a date input value (DD/MM/YYYY or YYYY-MM-DD) to ISO date string (YYYY-MM-DD).
+ * Returns empty string if the input is invalid or empty.
+ */
+export function normalizeDateInputValue(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  // DD/MM/YYYY → YYYY-MM-DD
+  const brMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (brMatch) return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
+  // Already YYYY-MM-DD
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) return trimmed;
+  return "";
+}

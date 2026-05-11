@@ -224,7 +224,7 @@ describe("Motoristas", () => {
   it("mostra o nome do motorista cadastrado e o fallback seguro do pre-cadastro publico", () => {
     render(<Motoristas />);
 
-    expect(screen.getByText("Motoristas")).toBeInTheDocument();
+    expect(screen.getAllByText("Motoristas")[0]).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Maria Santos" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Motorista sem cadastro no app" })).toBeInTheDocument();
     expect(screen.getByText("71912345678")).toBeInTheDocument();

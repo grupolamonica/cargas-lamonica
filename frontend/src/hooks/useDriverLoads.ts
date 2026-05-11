@@ -23,6 +23,9 @@ export interface Cargo {
   clienteId?: string | null;
   clienteNome?: string | null;
   clienteDescricao?: string | null;
+  clienteLogoUrl?: string | null;
+  clienteLogoUrlCard?: string | null;
+  clienteLogoUrlProximas?: string | null;
   carregamentoLabel?: string | null;
   descargaLabel?: string | null;
   routeLabel?: string | null;
@@ -68,21 +71,40 @@ export const toTitleCase = (str: string) =>
 /** Maps ASCII canonical city names (as stored in routeLabel) to their accented display forms. */
 const CITY_ACCENT_MAP: Record<string, string> = {
   "CAMACARI": "Camaçari",
+  "CAMPO GRANDE": "Campo Grande",
+  "FEIRA DE SANTANA": "Feira de Santana",
+  "FRANCO DA ROCHA": "Franco da Rocha",
+  "GUARULHOS": "Guarulhos",
   "JABOATAO DOS GUARARAPES": "Jaboatão dos Guararapes",
   "JAGUARIUNA": "Jaguariúna",
   "MACAE": "Macaé",
   "MACEIO": "Maceió",
+  "PEDREIRA": "Pedreira",
+  "RECIFE": "Recife",
+  "SALVADOR": "Salvador",
   "SANTANA DE PARNAIBA": "Santana de Parnaíba",
   "SAO JOAO DE MERITI": "São João de Meriti",
   "SAO JOAO DO MERITI": "São João do Meriti",
   "SAO JOSE DO RIO PRETO": "São José do Rio Preto",
   "SAO PAULO": "São Paulo",
   "SIMOES FILHO": "Simões Filho",
+  "SJ RIO PRETO": "SJ Rio Preto",
 };
 
 /** Returns accented city name from routeLabel canonical form, falls back to toTitleCase. */
 export const toDisplayCityName = (name: string): string =>
   CITY_ACCENT_MAP[name.trim().toUpperCase()] ?? toTitleCase(name);
+
+/**
+ * Formats a raw city string (from cargo.origem/destino or routeLabel) for display.
+ * Strips trailing numeric suffixes (e.g. "SJ Rio Preto-02" → "SJ Rio Preto"),
+ * normalises diacritics for the accent-map lookup, and falls back to toTitleCase.
+ */
+export const formatCityDisplay = (raw: string): string => {
+  const stripped = raw.replace(/[-\s]+\d+\s*$/, "").trim();
+  const key = normalizeText(stripped).toUpperCase();
+  return CITY_ACCENT_MAP[key] ?? toTitleCase(stripped);
+};
 
 export const formatLocationLabel = (location: string) => {
   const { city, uf } = splitLocation(location);
