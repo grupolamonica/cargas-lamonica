@@ -383,6 +383,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV),
     });
 
@@ -407,6 +408,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV_WITH_OPERATIONAL_ALIASES)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV_WITH_OPERATIONAL_ALIASES),
     });
 
@@ -450,6 +452,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV),
     });
 
@@ -494,6 +497,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV),
     });
 
@@ -522,6 +526,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV),
     });
 
@@ -553,6 +558,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV),
     });
 
@@ -592,6 +598,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV_WITH_ONE_INVALID_ROW)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV_WITH_ONE_INVALID_ROW),
     });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -638,6 +645,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV),
     });
 
@@ -681,6 +689,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV),
     });
 
@@ -711,6 +720,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV_WITH_VALUE)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV_WITH_VALUE),
     });
 
@@ -740,6 +750,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV),
     });
 
@@ -772,6 +783,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV_WITH_BLANK_VALUE_COLUMN)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV_WITH_BLANK_VALUE_COLUMN),
     });
 
@@ -807,6 +819,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV),
     });
 
@@ -842,6 +855,7 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV),
     });
 

@@ -103,6 +103,9 @@ async function main() {
   const client = await pool.connect();
 
   try {
+    // Disable statement timeout for the session — DDL can take longer than default
+    await client.query("SET statement_timeout = 0");
+
     console.log(JSON.stringify({ step: "mode", apply }));
 
     const before = await checkState(client);
