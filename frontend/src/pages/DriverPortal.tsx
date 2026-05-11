@@ -230,7 +230,7 @@ const DriverPortal = () => {
       catch { return cargo.horario || ""; }
     })();
     const distLabel = "";
-    const logoUrl = cargo.clienteLogoUrlProximas ?? undefined;
+    const logoUrl = (cargo.clienteLogoUrlCard ?? cargo.clienteLogoUrlProximas) ?? undefined;
     return { id: cargo.id, dateLabel, originCity: origCity, destCity: destCity, perfil: cargo.perfil || "", distLabel, logoUrl, logoAlt: cargo.clienteNome ?? undefined };
   }), [nearbyCargas, driverLocation]);
 
