@@ -170,7 +170,7 @@ const ClientLogo = ({ name, logoUrl, alt, className, imageClassName, fallbackCla
           alt={alt || `Logo de ${name}`}
           className={cn(
             "h-full w-full object-contain p-4",
-            usesWhiteSurfaceTreatment && "bg-white",
+            !noBg && usesWhiteSurfaceTreatment && "bg-white",
             imageClassName,
           )}
           loading="lazy"
@@ -178,7 +178,7 @@ const ClientLogo = ({ name, logoUrl, alt, className, imageClassName, fallbackCla
           draggable="false"
           onError={() => setHasImageError(true)}
           style={
-            usesWhiteSurfaceTreatment
+            !noBg && usesWhiteSurfaceTreatment
               ? {
                   filter: "brightness(1.16) contrast(1.04) saturate(1.08)",
                 }
