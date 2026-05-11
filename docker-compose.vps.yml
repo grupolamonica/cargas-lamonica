@@ -21,16 +21,22 @@ services:
         VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
         VITE_API_BASE_URL: ""
     # No ports: Traefik handles edge traffic on port 80/443
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
 
   backend:
     env_file:
       - backend.env
     # No ports exposed directly: Traefik routes /api/* here
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
 
   # ── Watchtower: auto-pull GHCR images and restart on new :latest pushes ──────
   # CI pushes ghcr.io/…:latest → Watchtower polls every 60s → rolling restart.
   # Eliminates SSH as a hard deploy requirement for future releases.
-  # Auth: mounts /root/.docker/config.json with GHCR credentials.
+  # Auth: mounts /root/.docker/config.json with GHCR credentials (run once:
+  #   echo TOKEN | docker login ghcr.io -u antoniocesar-dev --password-stdin
+  # where TOKEN is a GitHub PAT with read:packages scope).
   watchtower:
     image: containrrr/watchtower:latest
     restart: unless-stopped
@@ -44,12 +50,3 @@ services:
       WATCHTOWER_LABEL_ENABLE: "true"
     networks:
       - lamonica-net
-
-  # Opt-in labels for Watchtower (add to base services via override)
-  frontend:
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-
-  backend:
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
