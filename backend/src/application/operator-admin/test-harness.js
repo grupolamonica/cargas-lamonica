@@ -34,6 +34,8 @@ const schemaSql = `
     nome text NOT NULL,
     descricao text,
     logo_url text,
+    logo_url_card text,
+    logo_url_proximas text,
     forma_pagamento text,
     prazo_pagamento text,
     exige_rastreamento boolean NOT NULL DEFAULT false,

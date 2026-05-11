@@ -213,19 +213,32 @@ function isMissingClienteLogoColumnError(error) {
 }
 
 function isMissingRouteCatalogTableError(error) {
+  // Must match "route_metrics_cache" as the missing relation, not just as part of a SQL snippet.
+  // PostgreSQL error code 42P01 = undefined_table; message format: relation "X" does not exist
+  if (error?.code === "42P01") {
+    const msg = (error?.message || "").toLowerCase();
+    return msg.includes("route_metrics_cache") && !msg.includes('"rotas"') && !msg.includes("rotas\" does not exist");
+  }
   const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
-  return combinedMessage.includes("route_metrics_cache");
+  return combinedMessage.includes("route_metrics_cache") && !combinedMessage.includes("rotas\" does not exist");
 }
 
 function isMissingRouteCatalogColumnsError(error) {
-  const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
+  // Only fire when the column itself is missing (not when it appears in a SQL snippet).
+  // PostgreSQL error code 42703 = undefined_column; pg-mem does not set code so we
+  // require "does not exist" or "column" near the keyword to avoid false positives from
+  // SQL fragments embedded in the error message (e.g. from pg-mem's "Failed SQL statement").
+  if (error?.code === "42703") return true;
+  const msg = (error?.message || "").toLowerCase();
+  const isColumnMissingPattern = msg.includes("does not exist") && msg.includes("column");
+  if (!isColumnMissingPattern) return false;
   return (
-    combinedMessage.includes("tempo_estimado_horas") ||
-    combinedMessage.includes("perfil_padrao") ||
-    combinedMessage.includes("valor_padrao") ||
-    combinedMessage.includes("bonus_padrao") ||
-    combinedMessage.includes("ativa") ||
-    combinedMessage.includes("observacoes")
+    msg.includes("tempo_estimado_horas") ||
+    msg.includes("perfil_padrao") ||
+    msg.includes("valor_padrao") ||
+    msg.includes("bonus_padrao") ||
+    msg.includes("ativa") ||
+    msg.includes("observacoes")
   );
 }
 
