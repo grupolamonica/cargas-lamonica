@@ -371,14 +371,14 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
 
   const handleApprove = async (loadId: string, leadId: string, validation?: PublicLeadValidationSummary | null) => {
     const ovs = validation?.overallStatus;
-    const FAIL_STATUSES = ["INVALID", "NOT_FOUND", "PLATE_MISMATCH", "INCOMPLETE"];
+    const WARN_STATUSES = ["INVALID", "NOT_FOUND", "PLATE_MISMATCH", "INCOMPLETE"];
 
-    if (ovs && FAIL_STATUSES.includes(ovs)) {
-      toast.error("Este motorista tem pendências bloqueantes. A reserva não pode ser realizada.");
-      return;
-    }
-
-    if (ovs === "UNAVAILABLE") {
+    if (ovs && WARN_STATUSES.includes(ovs)) {
+      const reasons = (validation?.warnings || []).filter(Boolean).slice(0, 3);
+      const reasonsText = reasons.length ? `\n\n• ${reasons.join("\n• ")}` : "";
+      const prompt = `Este motorista tem pendências cadastrais.${reasonsText}\n\nConfirma a reserva mesmo assim?`;
+      if (!window.confirm(prompt)) return;
+    } else if (ovs === "UNAVAILABLE") {
       if (!window.confirm("Validação ainda não foi concluída para este motorista. Prosseguir mesmo assim?")) return;
     } else if (ovs === "EXPIRING" || ovs === "PARTIAL") {
       if (!window.confirm("Este motorista tem alertas de vigência próximos de vencer. Confirma a reserva?")) return;
