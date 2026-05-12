@@ -1,0 +1,62 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CODEOWNERS — Lamonica Cargas
+#
+# Define ownership por área. GitHub usa este arquivo para sugerir/exigir
+# reviewers automaticamente em Pull Requests (ver CONTRIBUTING.md §7).
+#
+# ⚠ IMPORTANTE: menções a times de organização (@grupolamonica/<time>) só
+# funcionam se este repositório estiver dentro da organização GitHub
+# "grupolamonica" e os times existirem lá. Enquanto o repo estiver em conta
+# pessoal (antoniocesar-dev/cargas-lamonica), GitHub ignora as menções de time.
+#
+# Regras:
+# - Cada linha: <path-pattern> <owner1> <owner2> ...
+# - A última regra que casa com o arquivo é a aplicada.
+# - Use globs estilo gitignore.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Default owner — qualquer arquivo não coberto pelas regras abaixo
+*                                          @grupolamonica/backend-senior
+
+# ── Backend ─────────────────────────────────────────────────────────────────
+/backend/                                  @grupolamonica/backend-senior
+/backend/src/domain/                       @grupolamonica/backend-senior
+/backend/src/application/                  @grupolamonica/backend-senior
+/backend/src/infrastructure/               @grupolamonica/backend-senior
+/backend/src/interface/                    @grupolamonica/backend-senior
+
+# Áreas críticas — review sênior obrigatório
+/backend/src/security/                     @grupolamonica/backend-senior
+/backend/src/interface/http/operator-admin/ @grupolamonica/backend-senior
+/backend/src/interface/http/load-claims/   @grupolamonica/backend-senior
+/backend/src/scripts/                      @grupolamonica/backend-senior @grupolamonica/devops
+
+# Migrations e schema — exigir review extra
+/backend/supabase/                         @grupolamonica/backend-senior @grupolamonica/devops
+/supabase/                                 @grupolamonica/backend-senior @grupolamonica/devops
+/prod_schema.sql                           @grupolamonica/backend-senior @grupolamonica/devops
+
+# ── Frontend ────────────────────────────────────────────────────────────────
+/frontend/                                 @grupolamonica/frontend
+/frontend/src/pages/                       @grupolamonica/frontend
+/frontend/src/components/                  @grupolamonica/frontend
+/frontend/src/hooks/                       @grupolamonica/frontend
+/frontend/src/lib/                         @grupolamonica/frontend
+
+# ── Infra / DevOps ──────────────────────────────────────────────────────────
+/.github/                                  @grupolamonica/devops
+/.github/workflows/                        @grupolamonica/devops
+/.github/CODEOWNERS                        @grupolamonica/devops
+/docker-compose.yml                        @grupolamonica/devops
+/docker-compose.*.yml                      @grupolamonica/devops
+/traefik/                                  @grupolamonica/devops
+/traefik.yml                               @grupolamonica/devops
+/frontend/Dockerfile                       @grupolamonica/devops @grupolamonica/frontend
+/frontend/nginx.conf                       @grupolamonica/devops @grupolamonica/frontend
+/backend/Dockerfile                        @grupolamonica/devops @grupolamonica/backend-senior
+/scripts/                                  @grupolamonica/devops
+
+# ── Documentação e contratos ────────────────────────────────────────────────
+/CONTRIBUTING.md                           @grupolamonica/backend-senior @grupolamonica/devops
+/CLAUDE.md                                 @grupolamonica/backend-senior
+/README.md                                 @grupolamonica/backend-senior @grupolamonica/frontend
