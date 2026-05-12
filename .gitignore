@@ -48,8 +48,13 @@ frontend/.env
 # Local artifacts (never commit)
 prod_schema.sql
 *.dump
+backup-pre-migration-*.json
+data-dump-*.json
 .bg-shell/
 .claude/worktrees/
+
+# Claude Code local settings (may contain secrets in tool allowlist)
+.claude/settings.local.json
 
 # User uploads (cadastro-motorista local OCR)
 **/anexos_tmp/
