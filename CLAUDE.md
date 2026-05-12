@@ -1,5 +1,33 @@
 # Lamonica Cargas — Project Guide for Claude Code
 
+## ⚠ Norma de engenharia (LER PRIMEIRO)
+
+**Toda contribuição neste repositório — humana ou via Claude Code — DEVE seguir o [`CONTRIBUTING.md`](./CONTRIBUTING.md).**
+
+Este documento é a **fonte da verdade** sobre:
+- Estrutura de branches (`feature/`, `fix/`, `hotfix/`, `release/`)
+- **Conventional Commits** (`feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `style`, `build`, `ci`, `chore`, `revert`)
+- Pull Request profissional (template em `.github/PULL_REQUEST_TEMPLATE.md`)
+- Política de review e CODEOWNERS
+- Squash and merge obrigatório
+- Proteções de `main` (sem push direto, sem force push, CI obrigatório, histórico linear)
+- Versionamento SemVer + tags + release notes
+- Fluxo de hotfix em produção
+- Política de tamanho de PR (até 300 linhas ideal; 1000+ proibido)
+
+**Regras inegociáveis para o Claude Code ao operar neste projeto:**
+
+1. **NUNCA fazer push direto na `main`.** Sempre criar branch (`feature/`, `fix/`, `hotfix/`).
+2. **NUNCA usar commits genéricos** como "ajustes", "correção", "final". Sempre Conventional Commits com escopo.
+3. **Separar commits por mudança lógica** — um commit responde "qual decisão técnica foi feita aqui?".
+4. **Antes de qualquer commit/push**, validar que está seguindo o `CONTRIBUTING.md`.
+5. **NUNCA usar `--force`** em push. Apenas `--force-with-lease` quando absolutamente necessário (após rebase).
+6. **NUNCA pular hooks** (`--no-verify`) sem autorização explícita do usuário.
+7. **Antes de abrir PR**, rodar lint + tests + build localmente.
+8. **PR pequeno e objetivo.** Se a mudança ficar >600 linhas, sugerir quebra antes de continuar.
+9. **Hotfix é exceção, não rotina** — exige autorização explícita e segue fluxo dedicado.
+10. **Secrets/tokens nunca no código.** Verificar antes de cada commit.
+
 ## Project
 
 **Lamonica Cargas** (LMC) — Plataforma logística full-stack para operação de cargas, clientes, leads e portal do motorista.
