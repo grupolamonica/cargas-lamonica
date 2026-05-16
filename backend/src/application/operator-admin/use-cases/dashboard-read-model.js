@@ -246,10 +246,17 @@ export async function fetchDriverLoadsReadModel({ query, correlationId }) {
 
 export async function fetchDriverLoadFacets({ correlationId }) {
   return withPgClient(async (client) => {
+    // Defense-in-depth: também cruza com a planilha (sheet_motorista/sheet_status)
+    // para que cargas já alocadas no Google Sheets não vazem nas facets do driver
+    // mesmo que o sync demore para refletir status='BOOKED' no DB.
+    const sheetUnallocatedSql =
+      "COALESCE(sheet_motorista, '') = '' "
+      + "AND COALESCE(sheet_status, '') = ''";
+
     const buildFacetWhereSql = (includeDriverVisibilityFilter) =>
       includeDriverVisibilityFilter
-        ? "status = 'OPEN' AND COALESCE(is_template, false) = false AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'"
-        : "status = 'OPEN' AND COALESCE(is_template, false) = false";
+        ? `status = 'OPEN' AND COALESCE(is_template, false) = false AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC' AND ${sheetUnallocatedSql}`
+        : `status = 'OPEN' AND COALESCE(is_template, false) = false AND ${sheetUnallocatedSql}`;
 
     const queryFacetRows = async (includeDriverVisibilityFilter) => {
       const whereSql = buildFacetWhereSql(includeDriverVisibilityFilter);
