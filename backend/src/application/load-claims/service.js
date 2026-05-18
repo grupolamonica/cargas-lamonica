@@ -860,6 +860,14 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
       config,
     });
 
+    // Defense-in-depth contra sync atrasado da planilha (Google Sheets/Shopee):
+    // mesmo se `cargas.status` ainda é OPEN/RESERVED no DB, o sheet já pode ter
+    // alocado a carga (sheet_motorista/sheet_status preenchidos). Nesse caso,
+    // não criar reserva nem waitlist — cair direto na trilha LOAD_UNAVAILABLE.
+    const sheetMotoristaLocked = String(loadRow.sheet_motorista ?? "").trim() !== "";
+    const sheetStatusLocked = String(loadRow.sheet_status ?? "").trim() !== "";
+    const sheetLocked = sheetMotoristaLocked || sheetStatusLocked;
+
     const driverProfile = await getDriverProfile(client, driverId, { lock: true });
     const existingClaim = await findLatestClaimForDriver(client, {
       loadId,
@@ -979,7 +987,7 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
       });
     }
 
-    if (loadRow.status === LOAD_STATUS.OPEN) {
+    if (!sheetLocked && loadRow.status === LOAD_STATUS.OPEN) {
       const reservedClaim = await updateClaimRow(client, claimRow.id, {
         status: transition(claimRow.status, "win_reservation"),
       });
@@ -1037,7 +1045,7 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
       });
     }
 
-    if (loadRow.status === LOAD_STATUS.RESERVED && config.waitlist_enabled) {
+    if (!sheetLocked && loadRow.status === LOAD_STATUS.RESERVED && config.waitlist_enabled) {
       const waitlistSize = await resequenceWaitlist(client, loadId);
       const waitlistedClaim = await updateClaimRow(client, claimRow.id, {
         status: transition(claimRow.status, "waitlist"),
@@ -1105,6 +1113,9 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
       correlationId: resolvedCorrelationId,
       payload: {
         loadStatus: loadRow.status,
+        sheetLocked,
+        sheetMotoristaLocked,
+        sheetStatusLocked,
       },
     });
 

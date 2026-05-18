@@ -178,6 +178,78 @@ describe("operator-admin service", () => {
     });
   });
 
+  it("oculta cargas com motorista alocado na planilha (sheet_motorista preenchido) do painel do motorista", async () => {
+    const cliente = await seedCliente({ nome: "Cliente Sheet Lock Motorista" });
+
+    // Carga "limpa" — deve aparecer no painel
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Salvador / BA",
+      destino: "Simoes Filho / BA",
+      perfil: "CARRETA",
+      status: "OPEN",
+      is_template: false,
+      data: "2026-04-08",
+      driver_visibility: "PUBLIC",
+    });
+    // Carga com motorista já alocado na planilha — NÃO deve aparecer mesmo
+    // que status='OPEN' (caso o sync atrase em refletir BOOKED no DB)
+    const lockedByMotorista = await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Feira de Santana / BA",
+      destino: "Simoes Filho / BA",
+      perfil: "CARRETA",
+      status: "OPEN",
+      is_template: false,
+      data: "2026-04-09",
+      driver_visibility: "PUBLIC",
+    });
+    await query(`UPDATE public.cargas SET sheet_motorista = $2 WHERE id = $1`, [
+      lockedByMotorista.id,
+      "JOAO SILVA",
+    ]);
+    // Carga com sheet_status preenchido (ex.: DESCARREGADO) — também não deve aparecer
+    const lockedByStatus = await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Camacari / BA",
+      destino: "Simoes Filho / BA",
+      perfil: "CARRETA",
+      status: "OPEN",
+      is_template: false,
+      data: "2026-04-10",
+      driver_visibility: "PUBLIC",
+    });
+    await query(`UPDATE public.cargas SET sheet_status = $2 WHERE id = $1`, [
+      lockedByStatus.id,
+      "DESCARREGADO",
+    ]);
+    // Carga com sheet_motorista = '' explicitamente (caso o sync persista string vazia em vez de NULL)
+    const emptyStringSheetMotorista = await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Lauro de Freitas / BA",
+      destino: "Simoes Filho / BA",
+      perfil: "CARRETA",
+      status: "OPEN",
+      is_template: false,
+      data: "2026-04-11",
+      driver_visibility: "PUBLIC",
+    });
+    await query(`UPDATE public.cargas SET sheet_motorista = $2 WHERE id = $1`, [
+      emptyStringSheetMotorista.id,
+      "",
+    ]);
+
+    const response = await service.fetchDriverLoadsReadModel({
+      query: { page: "1", pageSize: "10" },
+      correlationId: "corr-driver-sheet-lock",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.items).toHaveLength(2);
+    const origens = response.payload.items.map((item) => item.origem).sort();
+    expect(origens).toEqual(["Lauro de Freitas / BA", "Salvador / BA"]);
+  });
+
   it("permite ajustar a visibilidade de uma carga reservada sem invalidar o status operacional", async () => {
     const operator = await seedUser({ email: "operador-update-reserved@teste.local" });
     const cliente = await seedCliente({ nome: "Cliente Reserved" });

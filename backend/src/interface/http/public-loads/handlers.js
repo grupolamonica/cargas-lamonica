@@ -97,7 +97,7 @@ async function fetchLatestSheetSyncTimestamp(supabaseClient) {
   return parseSheetSyncTimestamp(data?.[0]?.sheet_synced_at);
 }
 
-async function ensureDriverLoadsSheetFresh({
+export async function ensureDriverLoadsSheetFresh({
   now = Date.now(),
   createClient = createSupabaseAdminClient,
   syncLoads = syncGoogleSheetLoads,
@@ -275,6 +275,9 @@ export async function resolveDriverLoadsDigestResponse(request) {
 
   try {
     const digest = await withPgClient(async (client) => {
+      // Cruza com a planilha (sheet_motorista/sheet_status) para que o digest
+      // não conte cargas já alocadas no Google Sheets — caso o sync atrase,
+      // o frontend não dispara invalidação para cargas que já estão fechadas.
       const { rows } = await client.query(`
         SELECT
           COALESCE(EXTRACT(EPOCH FROM MAX(updated_at))::bigint, 0) AS ts,
@@ -283,6 +286,8 @@ export async function resolveDriverLoadsDigestResponse(request) {
         WHERE status = 'OPEN'
           AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'
           AND COALESCE(is_template, false) = false
+          AND COALESCE(sheet_motorista, '') = ''
+          AND COALESCE(sheet_status, '') = ''
       `);
       const r = rows[0] || {};
       return `${r.ts}:${r.cnt}`;

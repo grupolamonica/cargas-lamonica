@@ -63,6 +63,7 @@ import {
   fetchOperatorVehiclesListReadModel,
   fetchPendingDriverRegistrations,
 } from "../../../application/operator-admin/read-models.js";
+import { ensureDriverLoadsSheetFresh } from "../public-loads/handlers.js";
 import { fetchDriverFlowMetrics } from "../../../domain/operator-admin/driver-flow-metrics.js";
 import {
   ForbiddenError,
@@ -492,6 +493,11 @@ export async function resolveUpdateOperatorRouteResponse(request) {
 
 export async function resolveOperatorDashboardReadModelResponse(request) {
   return withOperatorSession(request, "read-operator-dashboard", async ({ correlationId }) => {
+    // Opportunistic refresh — sync da planilha roda em background se snapshot
+    // estiver stale (>7min). Stale-while-revalidate: serve dados atuais agora,
+    // próxima request reflete o sync. Sem isso, operador vê cargas marcadas no
+    // sheet como ainda OPEN por minutos/horas até o próximo tick periódico.
+    await ensureDriverLoadsSheetFresh();
     const query = dashboardQuerySchema.parse(request.query || {});
     return fetchOperatorDashboardReadModel({
       query,
@@ -502,6 +508,7 @@ export async function resolveOperatorDashboardReadModelResponse(request) {
 
 export async function resolveOperatorCargoListReadModelResponse(request) {
   return withOperatorSession(request, "read-operator-cargas", async ({ correlationId }) => {
+    await ensureDriverLoadsSheetFresh();
     return fetchOperatorCargoListReadModel({
       query: request.query || {},
       correlationId,

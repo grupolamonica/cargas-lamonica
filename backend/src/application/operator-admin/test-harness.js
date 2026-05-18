@@ -75,6 +75,11 @@ const schemaSql = `
     sheet_lh text,
     sheet_data_carregamento text,
     sheet_data_descarga text,
+    sheet_motorista text,
+    sheet_cavalo text,
+    sheet_carreta text,
+    sheet_status text,
+    sheet_synced_at timestamptz,
     created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()

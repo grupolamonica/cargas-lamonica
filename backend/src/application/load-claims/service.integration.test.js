@@ -66,6 +66,58 @@ describe.sequential("load-claim service integration", () => {
     expect(claims[0].status).toBe(CLAIM_STATUS.REJECTED);
   }, 15_000);
 
+  it("rejects a claim as LOAD_UNAVAILABLE when the source spreadsheet already locked the load (sheet_motorista set)", async () => {
+    const { id: loadId } = await harness.seedLoad();
+    const { userId: driverId } = await harness.seedDriverProfile();
+
+    // Simula sync atrasado: sheet já alocou (sheet_motorista preenchido)
+    // mas o status do DB ainda está OPEN — o driver portal nem deveria mostrar,
+    // e mesmo se o cliente forçar POST, o createLoadClaim precisa rejeitar.
+    await harness.query(
+      `UPDATE public.cargas SET sheet_motorista = $2 WHERE id = $1`,
+      [loadId, "JOAO SILVA"],
+    );
+
+    const result = await service.createLoadClaim({
+      loadId,
+      driverId,
+      idempotencyKey: harness.buildIdempotencyKey("sheet-locked-motorista"),
+      correlationId: "corr-sheet-locked-motorista",
+    });
+
+    const load = await harness.getLoad(loadId);
+    const claims = await harness.getClaimsByLoad(loadId);
+
+    expect(result.statusCode).toBe(200);
+    expect(result.payload.outcome).toBe("REJECTED");
+    expect(result.payload.claim?.rejectedReason).toBe("LOAD_UNAVAILABLE");
+    expect(load.status).toBe(LOAD_STATUS.OPEN); // DB intacto — só rejeita
+    expect(load.reserved_driver_id).toBeNull();
+    expect(claims).toHaveLength(1);
+    expect(claims[0].status).toBe(CLAIM_STATUS.REJECTED);
+  }, 15_000);
+
+  it("rejects a claim as LOAD_UNAVAILABLE when the source spreadsheet set sheet_status (load no longer available)", async () => {
+    const { id: loadId } = await harness.seedLoad();
+    const { userId: driverId } = await harness.seedDriverProfile();
+
+    await harness.query(
+      `UPDATE public.cargas SET sheet_status = $2 WHERE id = $1`,
+      [loadId, "DESCARREGADO"],
+    );
+
+    const result = await service.createLoadClaim({
+      loadId,
+      driverId,
+      idempotencyKey: harness.buildIdempotencyKey("sheet-locked-status"),
+      correlationId: "corr-sheet-locked-status",
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.payload.outcome).toBe("REJECTED");
+    expect(result.payload.claim?.rejectedReason).toBe("LOAD_UNAVAILABLE");
+  }, 15_000);
+
   it("runs the OPEN -> RESERVED -> BOOKED flow for the winning driver", async () => {
     const { id: loadId } = await harness.seedLoad();
     const { userId: driverId } = await harness.seedDriverProfile();
