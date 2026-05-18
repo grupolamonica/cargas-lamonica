@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 
 import "../../infrastructure/config/load-env.js";
+import { logStructuredEvent } from "../../infrastructure/security-log.js";
 import { withPgClient } from "../../infrastructure/pg/postgres.js";
 import { normalizeVehicleProfile } from "../../domain/vehicle-profiles.js";
 import { baseRouteValues as BASE_ROUTE_VALUES } from "../../domain/operator-admin/base-route-values.js";
@@ -599,11 +600,44 @@ export function createSupabaseAdminClient() {
   });
 }
 
+/**
+ * Erro tipado lançado quando o `clientes.nome` esperado pelo sync não existe.
+ *
+ * Incidente 2026-05-18: cliente "Shopee" foi renomeado para "E-COMMERCE" no DB
+ * de produção e o `GOOGLE_SHEET_DEFAULT_CLIENT_NAME` env var não estava setada.
+ * O `throw new Error("Missing required sheet client record: Shopee")` opaco
+ * derrubou TODOS os caminhos de sync (periódico, sync-sheet manual,
+ * ensureDriverLoadsSheetFresh) por 4 dias sem alerta — só descobrimos por
+ * inspeção manual de logs após uma queixa do operador.
+ *
+ * O guard estruturado abaixo emite `[security-event] sheet.client.missing`
+ * que o Loki/promtail/Grafana stack já indexam, com `clientName`,
+ * `availableClientsHint` (quantos clientes existem) e `remediation` (hint
+ * acionável). Continua lançando — sync sem o client_id correto não faz
+ * sentido — mas agora cada falha é uma linha de log alarmável.
+ */
+export class SheetClientNotConfiguredError extends Error {
+  constructor(clientName, { availableClientsCount = null } = {}) {
+    super(
+      `Sheet client record not found: "${clientName}". `
+      + `Verify env GOOGLE_SHEET_DEFAULT_CLIENT_NAME matches an existing `
+      + `public.clientes.nome row, or insert/rename the client.`,
+    );
+    this.name = "SheetClientNotConfiguredError";
+    this.code = "SHEET_CLIENT_NOT_CONFIGURED";
+    this.clientName = clientName;
+    this.availableClientsCount = availableClientsCount;
+  }
+}
+
 async function resolveSheetClientId(supabaseClient, clientName = DEFAULT_SHEET_CLIENT_NAME) {
   const trimmedClientName = clientName.trim();
 
   if (!trimmedClientName) {
-    throw new Error("Missing required sheet client name.");
+    logStructuredEvent("error", "sheet.client.name_missing", {
+      remediation: "Set env GOOGLE_SHEET_DEFAULT_CLIENT_NAME or pass clientName explicitly.",
+    });
+    throw new SheetClientNotConfiguredError("(empty)");
   }
 
   const { data, error } = await supabaseClient
@@ -619,7 +653,31 @@ async function resolveSheetClientId(supabaseClient, clientName = DEFAULT_SHEET_C
   const [client] = data || [];
 
   if (!client?.id) {
-    throw new Error(`Missing required sheet client record: ${trimmedClientName}`);
+    // Conta clientes existentes para enriquecer o alarme (não bloqueia se falhar).
+    let availableClientsCount = null;
+    try {
+      const { count } = await supabaseClient
+        .from(SHEET_CLIENTS_TABLE)
+        .select("id", { count: "exact", head: true });
+      availableClientsCount = count ?? null;
+    } catch {
+      // count é melhor-esforço — não impede o throw principal.
+    }
+
+    logStructuredEvent("error", "sheet.client.missing", {
+      clientName: trimmedClientName,
+      table: SHEET_CLIENTS_TABLE,
+      availableClientsCount,
+      envVar: "GOOGLE_SHEET_DEFAULT_CLIENT_NAME",
+      remediation:
+        "Cliente esperado pelo sync não existe em public.clientes.nome. "
+        + "Verificar env GOOGLE_SHEET_DEFAULT_CLIENT_NAME no backend.env, "
+        + "ou renomear/inserir a linha em clientes.",
+    });
+
+    throw new SheetClientNotConfiguredError(trimmedClientName, {
+      availableClientsCount,
+    });
   }
 
   return client.id;
@@ -1038,6 +1096,12 @@ export async function syncGoogleSheetLoads({
   sheetUrl = getSheetExportUrl(),
   supabaseClient = createSupabaseAdminClient(),
   sheetClientId,
+  /**
+   * Sobrescreve o nome do cliente buscado em `public.clientes.nome`. Por
+   * default cai no env `GOOGLE_SHEET_DEFAULT_CLIENT_NAME` (ou "Shopee").
+   * Útil em testes e em pipelines com múltiplos sheets.
+   */
+  clientName,
 } = {}) {
   if (typeof fetchImpl !== "function") {
     throw new Error("A fetch implementation is required.");
@@ -1071,7 +1135,10 @@ export async function syncGoogleSheetLoads({
   const fallbackSheetClientId =
     typeof sheetClientId === "string" && sheetClientId.trim() !== ""
       ? sheetClientId.trim()
-      : await resolveSheetClientId(supabaseClient);
+      : await resolveSheetClientId(
+          supabaseClient,
+          clientName ?? DEFAULT_SHEET_CLIENT_NAME,
+        );
   const existingSheetLoads = await fetchExistingSheetLoads(supabaseClient);
   const routeCatalogRows = await fetchRouteCatalogRows(supabaseClient);
   const routeTemplateRows = await fetchRouteTemplateRows(supabaseClient);

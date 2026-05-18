@@ -17,6 +17,7 @@ import {
   formatSpreadsheetLocation,
   createSheetLoadId,
   parseAvailableGoogleSheetLoads,
+  SheetClientNotConfiguredError,
   syncGoogleSheetLoads,
   updateSheetMonitorSnapshot,
 } from "./google-sheet-loads.js";
@@ -879,6 +880,71 @@ describe("google sheet loads sync", () => {
     expect(
       sheetRangeCalls.some((call) => call[2] === 1000 && call[3] === 1999),
     ).toBe(true);
+  });
+
+  // Regressão do incidente 2026-05-18 — cliente "Shopee" foi renomeado pra
+  // "E-COMMERCE" no DB e o sync ficou 4 dias travado sem alerta visível.
+  // Garantir que o erro é tipado E que `[security-event] sheet.client.missing`
+  // sai no log para o Loki/Grafana poder alarmar.
+  it("throws a typed SheetClientNotConfiguredError when the sheet client name does not exist in DB", async () => {
+    const supabaseClient = createSupabaseMock({ clientRows: [] });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(
+        syncGoogleSheetLoads({
+          fetchImpl,
+          sheetUrl: "https://example.test/sheet.csv",
+          supabaseClient,
+          clientName: "Shopee",
+        }),
+      ).rejects.toMatchObject({
+        name: "SheetClientNotConfiguredError",
+        code: "SHEET_CLIENT_NOT_CONFIGURED",
+        clientName: "Shopee",
+      });
+
+      // Confirma que o structured log foi emitido pra que o Loki/Grafana
+      // tenha um sinal alarmável ao invés de um throw opaco.
+      const eventLogged = errorSpy.mock.calls.some(
+        (call) => typeof call[0] === "string" && call[0].includes("sheet.client.missing"),
+      );
+      expect(eventLogged).toBe(true);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("throws a typed SheetClientNotConfiguredError when the client name is blank", async () => {
+    const supabaseClient = createSupabaseMock();
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(
+        syncGoogleSheetLoads({
+          fetchImpl,
+          sheetUrl: "https://example.test/sheet.csv",
+          supabaseClient,
+          clientName: "   ",
+        }),
+      ).rejects.toBeInstanceOf(SheetClientNotConfiguredError);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 
