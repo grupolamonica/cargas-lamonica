@@ -97,7 +97,7 @@ async function fetchLatestSheetSyncTimestamp(supabaseClient) {
   return parseSheetSyncTimestamp(data?.[0]?.sheet_synced_at);
 }
 
-async function ensureDriverLoadsSheetFresh({
+export async function ensureDriverLoadsSheetFresh({
   now = Date.now(),
   createClient = createSupabaseAdminClient,
   syncLoads = syncGoogleSheetLoads,
