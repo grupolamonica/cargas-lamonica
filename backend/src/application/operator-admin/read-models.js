@@ -2219,3 +2219,75 @@ export async function fetchPendingDriverRegistrations({ status, page, pageSize, 
     };
   });
 }
+
+// ─── Overview Snapshot (replaces 3x supabase.from() in frontend Overview.tsx) ─
+
+export async function fetchOverviewSnapshot({ correlationId: _correlationId }) {
+  return withPgClient(async (client) => {
+    const [cargosResult, leadsResult, claimsResult] = await Promise.all([
+      client.query(`
+        SELECT
+          c.id, c.data, c.horario, c.origem, c.destino,
+          c.distancia_km, c.duracao_horas, c.perfil, c.valor, c.bonus,
+          c.status, c.is_template, c.created_at, c.updated_at,
+          c.sheet_data_carregamento,
+          cl.id AS cliente_id, cl.nome AS cliente_nome,
+          cl.prazo_pagamento AS cliente_prazo_pagamento,
+          cl.forma_pagamento AS cliente_forma_pagamento,
+          cl.reputacao_bom_pagador AS cliente_reputacao_bom_pagador,
+          cl.reputacao_pagamento_rapido AS cliente_reputacao_pagamento_rapido
+        FROM public.cargas c
+        LEFT JOIN public.clientes cl ON c.cliente_id = cl.id
+        ORDER BY c.created_at DESC
+        LIMIT 500
+      `),
+      client.query(`
+        SELECT id, load_id, status, created_at, queued_at, approved_at, whatsapp_clicked_at, vehicle_type
+        FROM public.load_public_leads
+        ORDER BY created_at DESC
+        LIMIT 500
+      `),
+      client.query(`
+        SELECT id, load_id, status, created_at, claimed_at, promoted_at, confirmed_at, queue_position
+        FROM public.load_claims
+        ORDER BY created_at DESC
+        LIMIT 500
+      `),
+    ]);
+
+    return {
+      statusCode: 200,
+      payload: {
+        cargas: cargosResult.rows.map((row) => ({
+          id: row.id,
+          data: row.data,
+          horario: row.horario,
+          origem: row.origem,
+          destino: row.destino,
+          distancia_km: row.distancia_km,
+          duracao_horas: row.duracao_horas,
+          perfil: row.perfil,
+          valor: row.valor,
+          bonus: row.bonus,
+          status: row.status,
+          is_template: row.is_template,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          sheet_data_carregamento: row.sheet_data_carregamento,
+          cliente: row.cliente_id
+            ? {
+                id: row.cliente_id,
+                nome: row.cliente_nome,
+                prazo_pagamento: row.cliente_prazo_pagamento,
+                forma_pagamento: row.cliente_forma_pagamento,
+                reputacao_bom_pagador: row.cliente_reputacao_bom_pagador,
+                reputacao_pagamento_rapido: row.cliente_reputacao_pagamento_rapido,
+              }
+            : null,
+        })),
+        leads: leadsResult.rows,
+        claims: claimsResult.rows,
+      },
+    };
+  });
+}

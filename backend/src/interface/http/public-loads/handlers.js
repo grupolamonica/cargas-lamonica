@@ -283,3 +283,34 @@ export async function resolveDriverLoadsDigestResponse(request) {
     };
   }
 }
+
+// ─── Driver clientes brief (replaces supabase.from('clientes') in driverClients.ts) ─
+
+/**
+ * GET /api/driver/clientes-brief?ids[]=uuid1&ids[]=uuid2
+ * Returns id, nome, descricao for up to 50 clientes by UUID.
+ * No auth required — clientes data is not PII.
+ */
+export async function resolveDriverClientsBriefResponse(request) {
+  const correlationId = getCorrelationId(request);
+  const rawIds = request.query?.ids;
+  const ids = [].concat(rawIds || []).filter(Boolean).slice(0, 50);
+
+  if (ids.length === 0) {
+    return { statusCode: 200, payload: { clientes: [], meta: { correlationId } } };
+  }
+
+  try {
+    const clientes = await withPgClient(async (client) => {
+      const { rows } = await client.query(
+        `SELECT id, nome, descricao FROM public.clientes WHERE id = ANY($1::uuid[])`,
+        [ids],
+      );
+      return rows;
+    });
+    return { statusCode: 200, payload: { clientes, meta: { correlationId } } };
+  } catch (err) {
+    logger.error({ err }, "driver-clientes-brief: erro ao buscar clientes");
+    return { statusCode: 500, payload: { error: "SERVICE_UNAVAILABLE", meta: { correlationId } } };
+  }
+}

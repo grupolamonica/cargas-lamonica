@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchSponsorClicks, fetchOperatorOverviewDigest } from "@/services/readModels";
+import { getOperatorAccessToken, requestJson } from "@/services/apiClient";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -27,13 +28,6 @@ import {
   type OverviewLeadRow,
 } from "@/lib/overviewMetrics";
 import { supabase } from "@/integrations/supabase/client";
-
-const OVERVIEW_CARGO_SELECT =
-  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, status, is_template, created_at, updated_at, sheet_data_carregamento, cliente:clientes(id, nome, prazo_pagamento, forma_pagamento, reputacao_bom_pagador, reputacao_pagamento_rapido)";
-const OVERVIEW_LEAD_SELECT =
-  "id, load_id, status, created_at, queued_at, approved_at, whatsapp_clicked_at, vehicle_type";
-const OVERVIEW_CLAIM_SELECT =
-  "id, load_id, status, created_at, claimed_at, promoted_at, confirmed_at, queue_position";
 
 function formatNumber(value: number) {
   return value.toLocaleString("pt-BR", {
@@ -169,28 +163,17 @@ const Overview = () => {
     staleTime: 60_000,
     refetchOnWindowFocus: true,
     queryFn: async () => {
-      const [cargosResult, leadsResult, claimsResult] = await Promise.all([
-        supabase.from("cargas").select(OVERVIEW_CARGO_SELECT).order("created_at", { ascending: false }).limit(500),
-        supabase.from("load_public_leads").select(OVERVIEW_LEAD_SELECT).order("created_at", { ascending: false }).limit(500),
-        supabase.from("load_claims").select(OVERVIEW_CLAIM_SELECT).order("created_at", { ascending: false }).limit(500),
-      ]);
-
-      if (cargosResult.error) {
-        throw cargosResult.error;
-      }
-
-      if (leadsResult.error) {
-        throw leadsResult.error;
-      }
-
-      if (claimsResult.error) {
-        throw claimsResult.error;
-      }
+      const accessToken = await getOperatorAccessToken();
+      const response = await requestJson<{
+        cargas: OverviewCargoRow[];
+        leads: OverviewLeadRow[];
+        claims: OverviewClaimRow[];
+      }>("/api/operator/overview-snapshot", { accessToken });
 
       return buildOverviewSnapshot(
-        toOverviewCargoRows(cargosResult.data),
-        toOverviewLeadRows(leadsResult.data),
-        toOverviewClaimRows(claimsResult.data),
+        toOverviewCargoRows(response.cargas || []),
+        toOverviewLeadRows(response.leads || []),
+        toOverviewClaimRows(response.claims || []),
       );
     },
   });

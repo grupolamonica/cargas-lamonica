@@ -62,6 +62,7 @@ import {
   fetchOperatorRoutesListReadModel,
   fetchOperatorVehiclesListReadModel,
   fetchPendingDriverRegistrations,
+  fetchOverviewSnapshot,
 } from "../../../application/operator-admin/read-models.js";
 import { ensureDriverLoadsSheetFresh } from "../public-loads/handlers.js";
 import { fetchDriverFlowMetrics } from "../../../domain/operator-admin/driver-flow-metrics.js";
@@ -1228,5 +1229,17 @@ export async function resolveOperatorRejeitarCadastroResponse(request) {
         payload: { ok: true, meta: { correlationId } },
       };
     });
+  });
+}
+
+// ─── Overview Snapshot ────────────────────────────────────────────────────────
+
+/**
+ * GET /api/operator/overview-snapshot
+ * Replaces 3x supabase.from() in frontend Overview.tsx.
+ */
+export async function resolveOperatorOverviewSnapshotResponse(request) {
+  return withOperatorSession(request, "read-overview-snapshot", async ({ correlationId }) => {
+    return fetchOverviewSnapshot({ correlationId });
   });
 }

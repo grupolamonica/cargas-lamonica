@@ -1,6 +1,3 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
-
-import type { Database } from "@/integrations/supabase/types";
 
 export interface DriverClientBrief {
   id: string;
@@ -56,20 +53,20 @@ export function mergeDriverClientsIntoRows<T extends DriverCargoClientJoinRow>(
 }
 
 export async function fetchDriverClientsByIds(
-  supabaseClient: SupabaseClient<Database>,
+  _supabaseClient: unknown, // kept for backward compat with call sites
   clientIds: string[],
-) {
+): Promise<Map<string, DriverClientBrief>> {
   if (clientIds.length === 0) {
     return new Map<string, DriverClientBrief>();
   }
 
-  const { data, error } = await supabaseClient.from("clientes").select("id, nome, descricao").in("id", clientIds);
+  const params = clientIds.map((id) => `ids[]=${encodeURIComponent(id)}`).join("&");
+  const response = await fetch(`/api/driver/clientes-brief?${params}`);
 
-  if (error) {
-    throw error;
+  if (!response.ok) {
+    throw new Error(`Failed to fetch clientes: ${response.status}`);
   }
 
-  return new Map(
-    ((data || []) as DriverClientBrief[]).map((client) => [client.id, client] as const),
-  );
+  const { clientes } = (await response.json()) as { clientes: DriverClientBrief[] };
+  return new Map((clientes || []).map((c) => [c.id, c] as const));
 }

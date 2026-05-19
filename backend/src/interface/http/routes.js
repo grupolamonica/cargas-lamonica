@@ -65,6 +65,7 @@ import {
   resolveOperatorCadastrosPendentesResponse,
   resolveOperatorAprovarCadastroResponse,
   resolveOperatorRejeitarCadastroResponse,
+  resolveOperatorOverviewSnapshotResponse,
 } from "./operator-admin/handlers.js";
 
 import {
@@ -73,6 +74,7 @@ import {
   resolveDriverLoadsReadModelResponse,
   resolveDriverPortalVisitResponse,
   resolveDriverSponsorClickResponse,
+  resolveDriverClientsBriefResponse,
 } from "./public-loads/handlers.js";
 
 import { resolveFinalizarCadastroResponse } from "./cadastro/handlers.js";
@@ -148,6 +150,7 @@ export function registerRoutes(app) {
   router.get("/api/driver/loads", wrap(resolveDriverLoadsReadModelResponse));
   router.get("/api/driver/loads/facets", wrap(resolveDriverLoadFacetsResponse));
   router.get("/api/driver/loads/digest", wrap(resolveDriverLoadsDigestResponse));
+  router.get("/api/driver/clientes-brief", wrap(resolveDriverClientsBriefResponse));
   router.post("/api/driver/portal-view", wrap(resolveDriverPortalVisitResponse));
   router.post("/api/driver/sponsor-click", wrap(resolveDriverSponsorClickResponse));
 
@@ -177,6 +180,7 @@ export function registerRoutes(app) {
 
   // Operator dashboard & audit
   router.get("/api/operator/dashboard", wrap(resolveOperatorDashboardReadModelResponse));
+  router.get("/api/operator/overview-snapshot", wrap(resolveOperatorOverviewSnapshotResponse));
   router.get("/api/operator/overview/digest", wrap(resolveOperatorOverviewDigestResponse));
   router.get("/api/operator/audit-logs", wrap(resolveOperatorAuditLogsResponse));
   router.get("/api/operator/driver-flow-metrics", wrap(resolveOperatorDriverFlowMetricsResponse));
