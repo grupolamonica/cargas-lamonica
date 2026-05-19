@@ -21,32 +21,26 @@ services:
         VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
         VITE_API_BASE_URL: ""
     # No ports: Traefik handles edge traffic on port 80/443
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
 
   backend:
     env_file:
       - backend.env
     # No ports exposed directly: Traefik routes /api/* here
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
 
-  # ── Watchtower: auto-pull GHCR images and restart on new :latest pushes ──────
-  # CI pushes ghcr.io/…:latest → Watchtower polls every 60s → rolling restart.
-  # Eliminates SSH as a hard deploy requirement for future releases.
-  # Auth: mounts /root/.docker/config.json with GHCR credentials (run once:
-  #   echo TOKEN | docker login ghcr.io -u antoniocesar-dev --password-stdin
-  # where TOKEN is a GitHub PAT with read:packages scope).
-  watchtower:
-    image: containrrr/watchtower:latest
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /root/.docker/config.json:/config.json:ro
-    environment:
-      WATCHTOWER_POLL_INTERVAL: "60"
-      WATCHTOWER_CLEANUP: "true"
-      WATCHTOWER_INCLUDE_RESTARTING: "true"
-      WATCHTOWER_LABEL_ENABLE: "true"
-    networks:
-      - lamonica-net
+  # ── Watchtower: DISABLED — deploy is handled exclusively by GitHub Actions deploy.yml
+  # Auto-pull every 60s caused rollouts of broken images without smoke tests.
+  # To re-enable temporarily for a manual deploy cycle, comment this block out
+  # and run: docker compose ... up -d watchtower
+  # watchtower:
+  #   image: containrrr/watchtower:latest
+  #   restart: unless-stopped
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - /root/.docker/config.json:/config.json:ro
+  #   environment:
+  #     WATCHTOWER_POLL_INTERVAL: "60"
+  #     WATCHTOWER_CLEANUP: "true"
+  #     WATCHTOWER_INCLUDE_RESTARTING: "true"
+  #     WATCHTOWER_LABEL_ENABLE: "true"
+  #   networks:
+  #     - lamonica-net

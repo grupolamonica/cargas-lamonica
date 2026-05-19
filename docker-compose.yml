@@ -27,6 +27,13 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.1"
+        reservations:
+          memory: 32M
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=platform_public"
@@ -55,12 +62,23 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3001"
+      REDIS_URL: "redis://redis:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:3001/health"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 256M
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=platform_public"
@@ -89,6 +107,13 @@ services:
     # Não expõe porta externamente — Traefik roteia /ocr-api/* para este container
     expose:
       - "8765"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+        reservations:
+          memory: 512M
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=platform_public"
@@ -98,6 +123,32 @@ services:
       - "traefik.http.middlewares.lmc-ocr-strip.stripprefix.prefixes=/ocr-api"
       - "traefik.http.routers.lmc-cadastro-ocr.middlewares=lmc-ocr-strip"
       - "traefik.http.services.lmc-cadastro-ocr.loadbalancer.server.port=8765"
+
+  # ── Redis (rate limits, idempotency cache, operator directory cache) ──────
+  redis:
+    image: redis:7-alpine
+    container_name: lamonica-redis
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    command: redis-server --appendonly yes --maxmemory 64mb --maxmemory-policy allkeys-lru
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.1"
+        reservations:
+          memory: 64M
+
+  # ── Backend with Redis dependency ─────────────────────────────────────────
+  # (backend service defined above; Redis dependency added via override)
 
   # ── ASPX cookie renewal (persistent container on VPS) ────────────────────
   aspx-renewal:
@@ -118,6 +169,8 @@ services:
 volumes:
   cadastro_anexos:
     name: lamonica_cadastro_anexos
+  redis_data:
+    name: lamonica_redis_data
 
 # ── Networks ──────────────────────────────────────────────────────────────
 networks:

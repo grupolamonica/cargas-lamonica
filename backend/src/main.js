@@ -6,6 +6,7 @@ import "./infrastructure/config/load-env.js"; // side-effect: popula process.env
 import crypto from "node:crypto";
 import express from "express";
 import { getPostgresPool } from "./infrastructure/pg/postgres.js";
+import { closeRedisClient } from "./infrastructure/redis.js";
 import { registerRoutes } from "./interface/http/routes.js";
 
 // ─── Constantes de middleware ─────────────────────────────────────────────────
@@ -214,6 +215,13 @@ async function bootstrap() {
         console.log("[lamonica-backend] pg Pool drenado");
       } catch (err) {
         console.error("[lamonica-backend] Erro ao drenar pg Pool:", err);
+      }
+
+      try {
+        await closeRedisClient();
+        console.log("[lamonica-backend] Redis desconectado");
+      } catch (err) {
+        console.error("[lamonica-backend] Erro ao fechar Redis:", err);
       }
 
       console.log("[lamonica-backend] Shutdown completo");
