@@ -8,6 +8,7 @@ import express from "express";
 import { getPostgresPool } from "./infrastructure/pg/postgres.js";
 import { closeRedisClient } from "./infrastructure/redis.js";
 import { registerRoutes } from "./interface/http/routes.js";
+import { logger } from "./infrastructure/logger.js";
 
 // ─── Constantes de middleware ─────────────────────────────────────────────────
 
@@ -125,15 +126,11 @@ async function waitForPg(pool, maxAttempts = 8) {
       return true;
     } catch (err) {
       const delayMs = Math.min(5_000 * 2 ** i, 60_000);
-      console.warn(
-        `[lamonica-backend] pg connection attempt ${i + 1}/${maxAttempts} failed (${err.message}) — retrying in ${delayMs / 1000}s`,
-      );
+      logger.warn({ attempt: i + 1, maxAttempts, delayMs, err }, "pg connection attempt failed — retrying");
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }
-  console.error(
-    "[lamonica-backend] Could not connect to pg after all attempts — starting in degraded mode",
-  );
+  logger.error({}, "Could not connect to pg after all attempts — starting in degraded mode");
   return false;
 }
 
@@ -165,10 +162,10 @@ async function bootstrap() {
       CREATE INDEX IF NOT EXISTS idx_analytics_events_type_created
         ON public.analytics_events(event_type, created_at DESC)
     `);
-    console.info("[lamonica-backend] analytics_events: OK");
+    logger.info({}, "analytics_events: OK");
   } catch (err) {
     // Não bloqueia o startup — tabela pode já existir com permissões diferentes
-    console.warn("[lamonica-backend] analytics_events setup warning:", err?.message);
+    logger.warn({ err }, "analytics_events setup warning");
   }
 
   // 3. Registrar rotas de negócio (43 endpoints)
@@ -183,9 +180,9 @@ async function bootstrap() {
       try {
         const { syncGoogleSheetLoads, createSupabaseAdminClient } = await import("./application/google-sheets/google-sheet-loads.js");
         await syncGoogleSheetLoads({ supabaseClient: createSupabaseAdminClient() });
-        console.info("[sheet-sync-periodic] sync concluído");
+        logger.info({}, "sheet-sync-periodic: sync concluído");
       } catch (err) {
-        console.error("[sheet-sync-periodic] erro:", err?.message);
+        logger.error({ err }, "sheet-sync-periodic: erro");
       } finally {
         sheetSyncRunning = false;
       }
@@ -194,8 +191,8 @@ async function bootstrap() {
 
   // 5. Iniciar HTTP server
   const server = app.listen(PORT, () => {
-    console.log(`[lamonica-backend] Servidor ouvindo em http://localhost:${PORT}`);
-    console.log(`[lamonica-backend] GET /health disponível`);
+    logger.info({ port: PORT }, "Servidor ouvindo");
+    logger.info({}, "GET /health disponível");
   });
 
   // ─── Graceful shutdown ──────────────────────────────────────────────────────
@@ -203,34 +200,34 @@ async function bootstrap() {
   // SIGINT:  Ctrl+C em desenvolvimento.
 
   async function gracefulShutdown(signal) {
-    console.log(`[lamonica-backend] ${signal} recebido — iniciando graceful shutdown`);
+    logger.info({ signal }, "sinal recebido — iniciando graceful shutdown");
 
     // Parar de aceitar novas conexões (closeAllConnections fecha keep-alive pendentes)
     server.closeAllConnections?.();
     server.close(async () => {
-      console.log("[lamonica-backend] HTTP server fechado");
+      logger.info({}, "HTTP server fechado");
 
       try {
         await getPostgresPool().end();
-        console.log("[lamonica-backend] pg Pool drenado");
+        logger.info({}, "pg Pool drenado");
       } catch (err) {
-        console.error("[lamonica-backend] Erro ao drenar pg Pool:", err);
+        logger.error({ err }, "Erro ao drenar pg Pool");
       }
 
       try {
         await closeRedisClient();
-        console.log("[lamonica-backend] Redis desconectado");
+        logger.info({}, "Redis desconectado");
       } catch (err) {
-        console.error("[lamonica-backend] Erro ao fechar Redis:", err);
+        logger.error({ err }, "Erro ao fechar Redis");
       }
 
-      console.log("[lamonica-backend] Shutdown completo");
+      logger.info({}, "Shutdown completo");
       process.exit(0);
     });
 
     // Timeout de segurança: força saída se shutdown demorar > 10s
     setTimeout(() => {
-      console.error("[lamonica-backend] Timeout no shutdown — forçando saída");
+      logger.error({}, "Timeout no shutdown — forçando saída");
       process.exit(1);
     }, 10_000);
   }
@@ -240,6 +237,6 @@ async function bootstrap() {
 }
 
 bootstrap().catch((err) => {
-  console.error("[lamonica-backend] Falha no bootstrap:", err);
+  logger.error({ err }, "Falha no bootstrap");
   process.exit(1);
 });

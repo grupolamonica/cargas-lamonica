@@ -2,6 +2,7 @@ import { Pool } from "pg";
 
 import "../config/load-env.js";
 import { buildPostgresSslConfig } from "./postgres-ssl.js";
+import { logger } from "../logger.js";
 
 let pool;
 
@@ -31,7 +32,7 @@ export function getPostgresPool() {
       if (!pool) return;
       const { totalCount, idleCount, waitingCount } = pool;
       if (waitingCount > 2 || (totalCount > 0 && idleCount === 0)) {
-        console.warn("[pg] pool pressure", { totalCount, idleCount, waitingCount });
+        logger.warn({ totalCount, idleCount, waitingCount }, "pg pool pressure");
       }
     }, 30_000).unref();
   }
@@ -61,7 +62,7 @@ export async function withPgTransaction(callback) {
       try {
         await client.query("ROLLBACK");
       } catch (rollbackError) {
-        console.error("[postgres] ROLLBACK failed — original error follows:", rollbackError);
+        logger.error({ err: rollbackError }, "ROLLBACK failed — original error follows");
       }
       throw error;
     }

@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 
 import "../../infrastructure/config/load-env.js";
+import { logger } from "../../infrastructure/logger.js";
 import { logStructuredEvent } from "../../infrastructure/security-log.js";
 import { withPgClient } from "../../infrastructure/pg/postgres.js";
 import { normalizeVehicleProfile } from "../../domain/vehicle-profiles.js";
@@ -1062,13 +1063,7 @@ export async function updateSheetMonitorSnapshot({ csvText, supabaseClient }) {
     .maybeSingle();
 
   if (error) {
-    console.error("[sheet-monitor-snapshot] failed to upsert snapshot", {
-      name: error?.name,
-      code: error?.code,
-      message: error?.message,
-      details: error?.details,
-      hint: error?.hint,
-    });
+    logger.error({ err: error }, "sheet-monitor-snapshot: failed to upsert snapshot");
     return {
       rows,
       summary,
@@ -1108,7 +1103,7 @@ export async function syncGoogleSheetLoads({
   }
 
   if (!sheetUrl) {
-    console.warn("[google-sheet-loads] GOOGLE_SHEET_ID nao configurado. Sincronizacao de planilha ignorada.");
+    logger.warn({}, "GOOGLE_SHEET_ID nao configurado. Sincronizacao de planilha ignorada.");
     return {
       skipped: true,
       reason: "GOOGLE_SHEET_ID_NOT_CONFIGURED",
@@ -1126,10 +1121,7 @@ export async function syncGoogleSheetLoads({
   const syncedAt = new Date().toISOString();
 
   if (invalidRows.length > 0) {
-    console.warn("[google-sheet-loads] skipped rows with invalid datetime", {
-      count: invalidRows.length,
-      rows: invalidRows.slice(0, 10),
-    });
+    logger.warn({ count: invalidRows.length, rows: invalidRows.slice(0, 10) }, "skipped rows with invalid datetime");
   }
 
   const fallbackSheetClientId =
@@ -1257,10 +1249,7 @@ export async function syncGoogleSheetLoads({
       );
     });
 
-    console.info(
-      `[google-sheet-loads] ${staleInSheet.length} cargas fechadas pela planilha (OPEN/RESERVED→BOOKED, sheet_lh preservado)`,
-      { count: staleInSheet.length },
-    );
+    logger.info({ count: staleInSheet.length }, "cargas fechadas pela planilha (OPEN/RESERVED→BOOKED, sheet_lh preservado)");
   }
 
   // Cargas completamente removidas da planilha: expira OPEN, transita RESERVED→BOOKED.
@@ -1289,10 +1278,7 @@ export async function syncGoogleSheetLoads({
       );
     });
 
-    console.info(
-      `[google-sheet-loads] ${staleTrulyGone.length} cargas removidas da planilha (OPEN→EXPIRED, RESERVED→BOOKED)`,
-      { count: staleTrulyGone.length },
-    );
+    logger.info({ count: staleTrulyGone.length }, "cargas removidas da planilha (OPEN→EXPIRED, RESERVED→BOOKED)");
   }
 
   // Persist a full snapshot (all rows + summary) so the Sheet Monitor
@@ -1301,18 +1287,11 @@ export async function syncGoogleSheetLoads({
     await updateSheetMonitorSnapshot({ csvText, supabaseClient });
   } catch (snapshotError) {
     // Non-fatal — the sync itself succeeded; log and continue.
-    console.error("[sheet-monitor-snapshot] snapshot update failed after sync", {
-      name: snapshotError?.name,
-      code: snapshotError?.code,
-      message: snapshotError?.message,
-    });
+    logger.error({ err: snapshotError }, "sheet-monitor-snapshot: snapshot update failed after sync");
   }
 
   if (revertedToOpenCount > 0) {
-    console.info(
-      `[google-sheet-loads] ${revertedToOpenCount} cargas BOOKED revertidas para OPEN (motorista removido da planilha)`,
-      { count: revertedToOpenCount },
-    );
+    logger.info({ count: revertedToOpenCount }, "cargas BOOKED revertidas para OPEN (motorista removido da planilha)");
   }
 
   return {

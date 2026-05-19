@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import { z } from "zod";
+import { logger } from "../../../infrastructure/logger.js";
 import { CANONICAL_VEHICLE_PROFILES, normalizeVehicleProfile } from "../../../domain/vehicle-profiles.js";
 import { buildInternalErrorResponse, buildServiceErrorResponse } from "../error-mapping.js";
 import { zodErrorToHttpResponse } from "../schemas/common.js";
@@ -101,13 +102,11 @@ function getCorrelationId(request) {
 }
 
 function logUnexpectedError(error, correlationId, scope) {
-  console.error("[load-claims-handler]", {
+  logger.error({
     scope,
     correlationId,
-    name: error?.name,
-    code: error?.code,
-    message: error instanceof Error ? error.message : String(error),
-  });
+    err: error,
+  }, "load-claims-handler: unexpected error");
 }
 
 function getUnexpectedUserMessage(scope) {
@@ -243,10 +242,7 @@ export async function resolveRegisterDriverResponse(request) {
       try {
         await getAdminClient().auth.admin.deleteUser(user.id);
       } catch (deleteError) {
-        console.error("[register-driver] Failed to rollback auth user after profile creation failure:", {
-          userId: user.id,
-          deleteError: deleteError?.message,
-        });
+        logger.error({ userId: user.id, err: deleteError }, "register-driver: Failed to rollback auth user after profile creation failure");
       }
       throw profileError;
     }

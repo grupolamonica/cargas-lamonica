@@ -2,6 +2,7 @@ import { request as httpRequest } from "node:http";
 import { lookup } from "node:dns/promises";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
+import { logger } from "../../infrastructure/logger.js";
 
 const SUCCESS_CACHE_CONTROL = "public, max-age=1800, s-maxage=86400, stale-while-revalidate=604800";
 const DEFAULT_MAX_LOGO_BYTES = 2 * 1024 * 1024;
@@ -292,10 +293,7 @@ async function fetchLogoUpstreamResponseViaNodeRequest(targetUrl, redirectCount 
   }
 
   if (!upstreamResponse) {
-    console.error("[client-logo-proxy] node request failed", {
-      host: targetUrl.hostname,
-      attempts: failedAddressMessages,
-    });
+    logger.error({ host: targetUrl.hostname, attempts: failedAddressMessages }, "client-logo-proxy: node request failed");
 
     return {
       error: createJsonError(502, "LOGO_FETCH_FAILED", "Nao foi possivel baixar a logo informada."),

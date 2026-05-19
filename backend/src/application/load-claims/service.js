@@ -1,4 +1,5 @@
 import { withPgClient, withPgTransaction } from "../../infrastructure/pg/postgres.js";
+import { logger } from "../../infrastructure/logger.js";
 
 import { rehydrateStoredValidationSummary } from "./public-lead-validation.js";
 import { getLoadClaimConfig } from "../../domain/load-claims/config.js";
@@ -688,12 +689,7 @@ async function prepareIdempotencyRecord(client, { scope, driverId, loadId, idemp
     // da primeira request antes de chegar aqui; se ainda assim response_body_json for null,
     // a primeira falhou (rollback). Prosseguimos como nova tentativa.
     if (!insertedRecord) {
-      console.warn("[load-claims] idempotency record found without response — concurrent processing or prior failure", {
-        scope,
-        loadId,
-        correlationId,
-        idempotencyKey,
-      });
+      logger.warn({ scope, loadId, correlationId, idempotencyKey }, "idempotency record found without response — concurrent processing or prior failure");
     }
 
     return {

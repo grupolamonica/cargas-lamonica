@@ -3,6 +3,7 @@
 // Importa handlers existentes — sem reescrever lógica de negócio.
 
 import { Router } from "express";
+import { logger } from "../../infrastructure/logger.js";
 
 import {
   resolveAspxSyncStatusResponse,
@@ -98,7 +99,7 @@ function wrap(handler) {
       const { statusCode, payload } = await handler(withParams(req));
       return res.status(statusCode).json(payload);
     } catch (err) {
-      console.error("[routes] Erro não tratado:", err.message);
+      logger.error({ err }, "routes: Erro não tratado");
       return res.status(500).json({ error: "InternalServerError" });
     }
   };
@@ -121,7 +122,7 @@ export function registerRoutes(app) {
       }
       return res.status(statusCode).json(payload);
     } catch (err) {
-      console.error("[routes] route-info erro:", err.message);
+      logger.error({ err }, "routes: route-info erro");
       return res.status(500).json({ error: "InternalServerError" });
     }
   });
@@ -134,7 +135,7 @@ export function registerRoutes(app) {
       Object.entries(headers || {}).forEach(([k, v]) => res.setHeader(k, v));
       return res.status(statusCode).send(body);
     } catch (err) {
-      console.error("[routes] client-logo erro:", err.message);
+      logger.error({ err }, "routes: client-logo erro");
       return res.status(500).end();
     }
   });

@@ -1,20 +1,19 @@
 import { sanitizeLogPayload } from "../../infrastructure/security-log.js";
+import { logger } from "../../infrastructure/logger.js";
 
 export function logLoadClaimEvent(level, message, payload = {}) {
-  const logEntry = {
-    scope: "load-claims",
-    level,
-    message,
-    timestamp: new Date().toISOString(),
-    ...sanitizeLogPayload(payload),
-  };
-
-  const serializedLogEntry = JSON.stringify(logEntry);
+  const sanitized = sanitizeLogPayload(payload);
+  const data = { scope: "load-claims", ...sanitized };
 
   if (level === "error") {
-    console.error(serializedLogEntry);
+    logger.error(data, message);
     return;
   }
 
-  console.log(serializedLogEntry);
+  if (level === "warn") {
+    logger.warn(data, message);
+    return;
+  }
+
+  logger.info(data, message);
 }

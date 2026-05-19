@@ -4,6 +4,7 @@ import {
   createSupabaseAdminClient,
   syncGoogleSheetLoads,
 } from "../../../application/google-sheets/google-sheet-loads.js";
+import { logger } from "../../../infrastructure/logger.js";
 import { ValidationError } from "../../../domain/load-claims/errors.js";
 import { buildInternalErrorResponse, buildValidationErrorResponse } from "../error-mapping.js";
 import { getCorrelationId, getQueryParam, getRequestIp } from "../http-utils.js";
@@ -121,11 +122,7 @@ export async function ensureDriverLoadsSheetFresh({
       }),
     )
       .catch((error) => {
-        console.error("[driver-loads-sheet-sync]", {
-          name: error?.name,
-          code: error?.code,
-          message: error?.message,
-        });
+        logger.error({ err: error }, "driver-loads-sheet-sync error");
       })
       .finally(() => {
         driverLoadsSheetRefreshPromise = null;
@@ -136,11 +133,7 @@ export async function ensureDriverLoadsSheetFresh({
     await syncPromise;
     return true;
   } catch (error) {
-    console.error("[driver-loads-sheet-sync-check]", {
-      name: error?.name,
-      code: error?.code,
-      message: error?.message,
-    });
+    logger.error({ err: error }, "driver-loads-sheet-sync-check error");
     return false;
   }
 }
@@ -196,7 +189,7 @@ export async function resolveDriverPortalVisitResponse(request) {
       payload: { ok: true, meta: { correlationId } },
     };
   } catch (err) {
-    console.error("[portal-visit] falha ao registrar visita:", err?.message);
+    logger.error({ err }, "portal-visit: falha ao registrar visita");
     return {
       statusCode: 200,
       payload: { ok: false, meta: { correlationId } },
@@ -283,7 +276,7 @@ export async function resolveDriverLoadsDigestResponse(request) {
       payload: { digest, meta: { correlationId } },
     };
   } catch (err) {
-    console.error("[driver-loads-digest] erro ao calcular digest:", err?.message);
+    logger.error({ err }, "driver-loads-digest: erro ao calcular digest");
     return {
       statusCode: 503,
       payload: { error: "SERVICE_UNAVAILABLE", meta: { correlationId } },

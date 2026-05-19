@@ -4,6 +4,7 @@
  */
 
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
+import { logger } from "../../../infrastructure/logger.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 import { ForbiddenError, NotFoundError } from "../../../domain/load-claims/errors.js";
 import { getRouteInfo } from "../../../infrastructure/geoapify/index.js";
@@ -242,10 +243,7 @@ export function buildRouteLabelMap(loadRows) {
   );
 
   if (unmatched.length > 0) {
-    console.warn(
-      `[buildRouteLabelMap] ${unmatched.length} carga(s) sem rota correspondente:\n` +
-        unmatched.map((u) => `  id=${u.id}  origem="${u.origem}"  destino="${u.destino}"`).join("\n"),
-    );
+    logger.warn({ count: unmatched.length, unmatched }, "carga(s) sem rota correspondente");
   }
 
   return result;

@@ -1,6 +1,7 @@
 import "../../infrastructure/config/load-env.js";
 
 import { getRouteInfo } from "../../infrastructure/geoapify/index.js";
+import { logger } from "../../infrastructure/logger.js";
 import {
   ConfigurationError,
   RouteResolutionError,
@@ -63,13 +64,7 @@ function logRouteInfoError(error, origin, destination) {
     return;
   }
 
-  console.error("[route-info-api]", {
-    origin,
-    destination,
-    name: error?.name,
-    code: error?.code,
-    message: error?.message,
-  });
+  logger.error({ origin, destination, err: error }, "route-info-api error");
 }
 
 export async function resolveRouteInfoResponse(origin, destination) {

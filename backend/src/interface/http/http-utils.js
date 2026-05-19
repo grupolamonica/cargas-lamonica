@@ -1,9 +1,12 @@
+import { logger } from "../../infrastructure/logger.js";
+
 const DEFAULT_TRUSTED_IP_HEADERS = ["cf-connecting-ip", "x-real-ip", "x-forwarded-for"];
 
 // Warn at startup if proxy header trust is not explicitly configured
 if (process.env.TRUST_PROXY_HEADERS === undefined || process.env.TRUST_PROXY_HEADERS === "") {
-  console.warn(
-    "[http-utils] TRUST_PROXY_HEADERS is not set — defaulting to true (trusting cf-connecting-ip, x-real-ip, x-forwarded-for). " +
+  logger.warn(
+    {},
+    "TRUST_PROXY_HEADERS is not set — defaulting to true (trusting cf-connecting-ip, x-real-ip, x-forwarded-for). " +
     "Set TRUST_PROXY_HEADERS=true to suppress this warning, or TRUST_PROXY_HEADERS=false to disable proxy header trust."
   );
 }

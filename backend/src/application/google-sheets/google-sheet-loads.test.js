@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { logger } from "../../infrastructure/logger.js";
 
 const pgQueryCalls = [];
 vi.mock("../../infrastructure/pg/postgres.js", () => ({
@@ -602,7 +603,7 @@ describe("google sheet loads sync", () => {
       arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV_WITH_ONE_INVALID_ROW)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV_WITH_ONE_INVALID_ROW),
     });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
 
     const result = await syncGoogleSheetLoads({
       fetchImpl,
@@ -614,10 +615,8 @@ describe("google sheet loads sync", () => {
     expect(result.availableLoadsCount).toBe(1);
     expect(result.skippedInvalidLoadsCount).toBe(1);
     expect(warnSpy).toHaveBeenCalledWith(
-      "[google-sheet-loads] skipped rows with invalid datetime",
-      expect.objectContaining({
-        count: 1,
-      }),
+      expect.objectContaining({ count: 1 }),
+      "skipped rows with invalid datetime",
     );
 
     warnSpy.mockRestore();
@@ -1013,7 +1012,7 @@ describe("updateSheetMonitorSnapshot", () => {
       details: null,
     };
     const supabaseClient = createSnapshotSupabaseClient({ upsertError });
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
 
     try {
       const result = await updateSheetMonitorSnapshot({
@@ -1030,9 +1029,9 @@ describe("updateSheetMonitorSnapshot", () => {
       // Rows/summary still returned so the UI never shows an empty screen.
       expect(Array.isArray(result.rows)).toBe(true);
       expect(result.summary).toBeDefined();
-      expect(consoleErrorSpy).toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalled();
     } finally {
-      consoleErrorSpy.mockRestore();
+      errorSpy.mockRestore();
     }
   });
 });

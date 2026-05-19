@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import "../../infrastructure/config/load-env.js";
+import { logger } from "../../infrastructure/logger.js";
 
 import { createSupabaseAdminClient, syncGoogleSheetLoads } from "../../application/google-sheets/google-sheet-loads.js";
 
@@ -65,11 +66,7 @@ export async function resolveSheetSyncResponse(request) {
       },
     };
   } catch (error) {
-    console.error("[sheet-sync-api]", {
-      name: error?.name,
-      code: error?.code,
-      message: error?.message,
-    });
+    logger.error({ err: error }, "sheet-sync-api error");
 
     return {
       statusCode: 500,

@@ -1,4 +1,5 @@
 import { ConfigurationError, TimeoutError, UpstreamApiError } from "./errors.js";
+import { logger } from "../logger.js";
 
 const GEOAPIFY_BASE_URL = "https://api.geoapify.com";
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -87,7 +88,7 @@ function logGeoapifyError(operation, error, context = {}) {
     providerBody: error?.details?.providerBody ?? null,
   };
 
-  console.error("[geoapify]", payload);
+  logger.error(payload, "geoapify error");
 }
 
 async function parseJsonResponse(response, operation, context) {
