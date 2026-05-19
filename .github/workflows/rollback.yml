@@ -60,8 +60,17 @@ jobs:
                 image: ${BACKEND_TAG}
             EOF
 
-            docker compose -f docker-compose.yml -f docker-compose.deploy.yml --profile production up -d --remove-orphans
+            docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.deploy.yml up -d --remove-orphans
             echo "Rollback to sha-${ROLLBACK_SHA} complete."
+
+            # Verify the correct SHA is actually running
+            sleep 5
+            RUNNING_BACKEND=$(docker inspect --format='{{.Config.Image}}' lamonica-backend-1 2>/dev/null || echo "unknown")
+            if [[ "$RUNNING_BACKEND" != *"sha-${ROLLBACK_SHA}"* ]]; then
+              echo "WARNING: Expected sha-${ROLLBACK_SHA} in backend image, got: $RUNNING_BACKEND"
+            else
+              echo "Verified: backend running ${RUNNING_BACKEND}"
+            fi
 
       - name: Verify rollback with smoke tests
         uses: appleboy/ssh-action@v1.2.0

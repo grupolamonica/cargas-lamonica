@@ -19,11 +19,21 @@ export function getPostgresPool() {
   if (!pool) {
     pool = new Pool({
       connectionString: getConnectionString(),
-      max: Number(process.env.CLAIMS_DB_POOL_MAX || 10),
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 5_000,
+      max: Number(process.env.CLAIMS_DB_POOL_MAX || 25),
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 3_000,
+      statementTimeoutMillis: Number(process.env.CLAIMS_DB_STATEMENT_TIMEOUT_MS || 15_000),
       ssl: buildPostgresSslConfig(),
     });
+
+    // Log pool pressure — warn when connections are exhausted or queued
+    setInterval(() => {
+      if (!pool) return;
+      const { totalCount, idleCount, waitingCount } = pool;
+      if (waitingCount > 2 || (totalCount > 0 && idleCount === 0)) {
+        console.warn("[pg] pool pressure", { totalCount, idleCount, waitingCount });
+      }
+    }, 30_000).unref();
   }
 
   return pool;
