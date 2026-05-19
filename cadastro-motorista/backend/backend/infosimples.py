@@ -78,10 +78,24 @@ async def consultar(service: str, params: dict) -> dict:
         ) from exc
 
 
-async def ocr(service: str, imagem_base64: str) -> dict:
+async def ocr(
+    service: str,
+    payload_base64: str,
+    *,
+    param_name: str = "image_base64",
+) -> dict:
+    """Chama um endpoint /api/v2/imagens/<service>.
+
+    Infosimples espera o conteúdo em parâmetros diferentes conforme o service:
+    - `image_base64`  → `ocr/cnh`, `ocr/crlv`, `ocr/imposto-renda-declaracao` etc.
+    - `pdf_base64`    → `ocr/contas/cpfl`, `ocr/contas/cemig`, todos os contas/*
+                        (validado em 2026-05-19: enviar image_base64 dá code 606).
+
+    O caller decide qual usar via `param_name`.
+    """
     payload = {
         "token": INFOSIMPLES_TOKEN,
-        "image_base64": imagem_base64,
+        param_name: payload_base64,
     }
     client = _require_client()
     try:

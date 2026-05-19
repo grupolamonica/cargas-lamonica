@@ -3,3 +3,9 @@ uvicorn[standard]>=0.30.0
 httpx>=0.27.0
 python-dotenv>=1.0.0
 python-multipart>=0.0.9
+
+# Necessário para o handler de comprovante de residência converter
+# JPG/PNG → PDF antes de chamar Infosimples (`/imagens/ocr/contas/*`
+# só aceita `pdf_base64`). EasyOCR puxa Pillow também, mas o stack
+# leve precisa ter independentemente.
+Pillow>=10.0.0

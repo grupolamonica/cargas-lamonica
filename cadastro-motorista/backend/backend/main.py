@@ -1,3 +1,5 @@
+import base64
+import io
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -220,15 +222,74 @@ class CartaoCNPJRequest(OCRRequest):
     pass
 
 
+def _decode_imagem_payload(payload: str) -> tuple[bytes, str]:
+    """Aceita data-URI (`data:image/jpeg;base64,...`) ou base64 puro. Retorna
+    (bytes, mime) — mime é "application/pdf" se a entrada já era PDF.
+    """
+    raw = payload
+    mime = "application/octet-stream"
+    if raw.startswith("data:"):
+        header, _, raw = raw.partition(",")
+        # data:image/jpeg;base64
+        if ";" in header and ":" in header:
+            mime = header.split(":", 1)[1].split(";", 1)[0].strip() or mime
+    try:
+        return base64.b64decode(raw, validate=False), mime
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Base64 inválido: {exc}")
+
+
+def _garantir_pdf_base64(imagem_base64: str) -> str:
+    """Converte imagem JPG/PNG → PDF em memória. Se já é PDF, devolve a string
+    sem prefixo `data:` para a Infosimples consumir.
+
+    Necessário porque /imagens/ocr/contas/* exige `pdf_base64` (não aceita
+    `image_base64`). PIL/Pillow vem como dependência transitiva do easyocr.
+    """
+    data, mime = _decode_imagem_payload(imagem_base64)
+    if mime == "application/pdf" or data[:4] == b"%PDF":
+        return base64.b64encode(data).decode("ascii")
+
+    try:
+        from PIL import Image  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Conversão imagem→PDF indisponível: Pillow não instalado no "
+                "sidecar. Reinstale a imagem cadastro-ocr com easyocr (que "
+                "puxa Pillow) ou envie um PDF direto."
+            ),
+        ) from exc
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        # PDF não suporta alpha + alguns modos; força RGB
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="PDF", resolution=200.0)
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Não foi possível converter a imagem para PDF: {exc}",
+        ) from exc
+
+
 CONCESSIONARIAS_OCR = {
-    "cpfl": "ocr/contas-cpfl",
-    "enel": "ocr/contas-enel",
-    "cemig": "ocr/contas-cemig",
-    "light": "ocr/contas-light",
-    "energisa": "ocr/contas-energisa",
-    "neoenergia": "ocr/contas-neoenergia",
-    "rge": "ocr/contas-rge",
-    "elektro": "ocr/contas-elektro",
+    # Infosimples Imagens usa BARRAS, não hífens (`ocr/contas/cpfl`, não
+    # `ocr/contas-cpfl`). O slug com hífen retorna code 602 ("serviço
+    # informado na URL não é válido"). Validado via curl direto contra
+    # api.infosimples.com em 2026-05-19.
+    "cpfl": "ocr/contas/cpfl",
+    "enel": "ocr/contas/enel",
+    "cemig": "ocr/contas/cemig",
+    "light": "ocr/contas/light",
+    "energisa": "ocr/contas/energisa",
+    "neoenergia": "ocr/contas/neoenergia",
+    "rge": "ocr/contas/rge",
+    "elektro": "ocr/contas/elektro",
 }
 
 
@@ -377,16 +438,33 @@ async def ocr_comprovante_residencia(req: ComprovanteRequest):
             detail=f"Concessionária inválida. Opções: {', '.join(CONCESSIONARIAS_OCR)}.",
         )
     try:
-        return await infosimples.ocr(service, req.imagem)
+        # Infosimples /imagens/ocr/contas/* exige `pdf_base64` (não `image_base64`).
+        # Se o motorista enviou JPG/PNG, convertemos para PDF em memória antes
+        # de chamar. PDFs vindos do frontend passam direto.
+        pdf_b64 = await asyncio.to_thread(_garantir_pdf_base64, req.imagem)
+        return await infosimples.ocr(service, pdf_b64, param_name="pdf_base64")
     except Exception as e:
         raise _tratar_erro(e, f"ocr/comprovante-{req.concessionaria}")
 
 
 @app.post("/api/ocr/cartao-cnpj")
 async def ocr_cartao_cnpj(req: CartaoCNPJRequest):
-    """OCR do Comprovante de Inscrição CNPJ (Receita Federal).
-    Default: provider 'local' (EasyOCR) — layout estável, regex resolve bem.
-    Opcional: provider 'infosimples' (fallback se qualidade cair).
+    """Extrai dados do Comprovante de Inscrição CNPJ.
+
+    Infosimples NÃO tem endpoint Imagens dedicado a cartão CNPJ (validado em
+    2026-05-19 testando 18+ slugs; todos retornam code 602). O endpoint que
+    cobre o caso de uso é `/consultas/receita-federal/cnpj` — dados oficiais
+    a partir do número do CNPJ.
+
+    Estratégia 'local' (recomendada e default):
+    1. EasyOCR local extrai texto da imagem
+    2. Regex pega os 14 dígitos
+    3. Sidecar chama Infosimples consulta receita-federal/cnpj com o CNPJ
+    4. Retorna no formato OCR (campos extraidos + envelope) — drop-in
+       compatível com o frontend existente.
+
+    Se easyocr não estiver disponível na imagem do sidecar, devolve 503
+    com instrução clara.
     """
     # Compat: ":carreta" indica que e o cartao CNPJ do dono da carreta
     # (quando carreta tem proprietario diferente do cavalo).
@@ -397,26 +475,63 @@ async def ocr_cartao_cnpj(req: CartaoCNPJRequest):
         id_efetivo = id_efetivo[: -len(":carreta")]
     await asyncio.to_thread(_persistir_anexo_basico, tipo, req.imagem, id_efetivo)
 
-    if OCR_CARTAO_CNPJ_PROVIDER == "local":
-        if not local_ocr.is_available():
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "OCR local selecionado mas easyocr nao instalado. "
-                    "Execute: pip install -r requirements-ocr.txt"
-                ),
-            )
-        try:
-            return await local_ocr.ocr_cartao_cnpj(req.imagem)
-        except Exception as e:
-            raise _tratar_erro(e, "local/cartao-cnpj")
-
-    # Infosimples não tem OCR dedicado a cartão CNPJ — reusa o genérico de CNPJ.
-    # Para cartão CNPJ escaneado recomenda-se sempre 'local'.
+    if not local_ocr.is_available():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "OCR de cartão CNPJ exige EasyOCR no sidecar. "
+                "Reinstale a imagem cadastro-ocr habilitando requirements-ocr.txt no Dockerfile. "
+                "Alternativa: peça o motorista digitar o CNPJ e use /api/consulta/cnpj."
+            ),
+        )
     try:
-        return await infosimples.ocr("ocr/cnpj", req.imagem)
+        # 1) Local OCR só extrai os 14 dígitos do CNPJ (não confiamos no resto do
+        #    layout — cartão CNPJ tem dezenas de variações).
+        local_result = await local_ocr.ocr_cartao_cnpj(req.imagem)
     except Exception as e:
-        raise _tratar_erro(e, "infosimples/cartao-cnpj")
+        raise _tratar_erro(e, "local/cartao-cnpj")
+
+    cnpj_digits = "".join(filter(str.isdigit, (local_result.get("cnpj") or "")))
+    if len(cnpj_digits) != 14:
+        # OCR não conseguiu identificar CNPJ válido — retorna o resultado local
+        # como fallback (frontend mostra mensagem amigável). Não chama Infosimples
+        # com CNPJ ruim (gastaria crédito sem retorno).
+        return local_result
+
+    try:
+        # 2) Consulta Receita Federal — dados oficiais da empresa.
+        rf = await infosimples.consultar(
+            "receita-federal/cnpj", {"cnpj": cnpj_digits}
+        )
+    except Exception as e:
+        # Se RF caiu, ainda devolve o que o OCR local pegou
+        log.warning("consulta/cnpj falhou — devolvendo só dados do OCR local: %s", e)
+        return local_result
+
+    # 3) Devolve um envelope no formato esperado pelo frontend (compatível com
+    #    o que `ocrCartaoCnpj` em cadastroApi.ts já espera ler).
+    rf_data = (rf.get("data") or [{}])[0] if isinstance(rf.get("data"), list) else (rf.get("data") or {})
+    return {
+        "code": 200,
+        "code_message": "Cartão CNPJ extraído via OCR local + Receita Federal.",
+        "data": [
+            {
+                "cnpj": cnpj_digits,
+                "razao_social": rf_data.get("razao_social") or rf_data.get("nome") or "",
+                "nome_fantasia": rf_data.get("nome_fantasia") or "",
+                "cep": rf_data.get("endereco_cep") or rf_data.get("cep") or "",
+                "uf": rf_data.get("endereco_uf") or rf_data.get("uf") or "",
+                "municipio": rf_data.get("endereco_municipio") or rf_data.get("municipio") or "",
+                "bairro": rf_data.get("endereco_bairro") or rf_data.get("bairro") or "",
+                "logradouro": rf_data.get("endereco_logradouro") or rf_data.get("logradouro") or "",
+                "numero": rf_data.get("endereco_numero") or rf_data.get("numero") or "",
+                "_source": {
+                    "ocr_local": local_result.get("cnpj"),
+                    "receita_federal": rf.get("header", {}).get("service"),
+                },
+            }
+        ],
+    }
 
 
 # ── Consultas — Motorista ────────────────────────────────────────────────────
