@@ -282,6 +282,7 @@ async function requestAngelliraToken({ correlationId } = {}) {
       "Content-Type": "application/json",
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
       Connection: "close",
+      ...(correlationId ? { "X-Correlation-Id": correlationId } : {}),
     },
     body: JSON.stringify({
       login: username,
@@ -321,6 +322,7 @@ async function requestAngelliraToken({ correlationId } = {}) {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
       Connection: "close",
       ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      ...(correlationId ? { "X-Correlation-Id": correlationId } : {}),
     },
     body: grantBody.toString(),
     // IMPORTANTE: O grant retorna 302 com o token no Location header (URL fragment).
@@ -631,9 +633,11 @@ async function runAngelliraLookup(queryFor, rawValue, { correlationId } = {}) {
 
       // Usamos node:https em vez de fetch para a consulta, pois o undici (fetch)
       // apresenta problemas de connection pool quando auth e api compartilham IP.
-      let response = await httpsGetJson(url, {
+      const queryHeaders = {
         Authorization: `Bearer ${token}`,
-      });
+        ...(correlationId ? { "X-Correlation-Id": correlationId } : {}),
+      };
+      let response = await httpsGetJson(url, queryHeaders);
 
       if (response.status === 401 || response.status === 403) {
         tokenCache = {
@@ -644,6 +648,7 @@ async function runAngelliraLookup(queryFor, rawValue, { correlationId } = {}) {
         const refreshedToken = await requestAngelliraToken({ correlationId });
         response = await httpsGetJson(url, {
           Authorization: `Bearer ${refreshedToken}`,
+          ...(correlationId ? { "X-Correlation-Id": correlationId } : {}),
         });
       }
 

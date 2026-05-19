@@ -107,14 +107,14 @@ async function parseJsonResponse(response, operation, context) {
   }
 }
 
-async function fetchWithTimeout(url, timeoutMs) {
+async function fetchWithTimeout(url, timeoutMs, extraHeaders = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     return await fetch(url, {
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers: { Accept: "application/json", ...extraHeaders },
       signal: controller.signal,
     });
   } catch (error) {
@@ -138,7 +138,8 @@ const GEOAPIFY_MAX_ATTEMPTS = 3;
 const GEOAPIFY_BASE_DELAY_MS = 300;
 
 export async function getGeoapifyJson(pathname, params, options = {}) {
-  const { operation = "geoapify_request", timeoutMs = DEFAULT_TIMEOUT_MS, context = {} } = options;
+  const { operation = "geoapify_request", timeoutMs = DEFAULT_TIMEOUT_MS, context = {}, correlationId } = options;
+  const extraHeaders = correlationId ? { "X-Correlation-Id": correlationId } : {};
 
   if (isCircuitOpen()) {
     const circuitError = new UpstreamApiError("Geoapify circuit breaker is open — skipping request.", {
@@ -158,7 +159,7 @@ export async function getGeoapifyJson(pathname, params, options = {}) {
     let response;
 
     try {
-      response = await fetchWithTimeout(url, timeoutMs);
+      response = await fetchWithTimeout(url, timeoutMs, extraHeaders);
     } catch (error) {
       error.operation = error.operation ?? operation;
       error.details = { ...(error.details ?? {}), ...context };
