@@ -91,7 +91,6 @@ async function fetchAllAspxDrivers(client) {
   let offset = 0;
 
   // Paginação manual: a tabela pode passar de ~1000 registros.
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const { data, error } = await client
       .from("aspx_drivers")

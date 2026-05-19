@@ -1,3 +1,5 @@
+import { logger } from "./logger.js";
+
 const REDACTED_VALUE = "[REDACTED]";
 const SENSITIVE_KEY_PATTERN =
   /(authorization|token|secret|password|cookie|cpf|phone|plate|document|email|whatsapp|set-cookie|idempotency|request_hash|fingerprint)/i;
@@ -42,7 +44,12 @@ export function sanitizeLogPayload(payload) {
 }
 
 export function logStructuredEvent(level, eventName, payload = {}) {
-  const logger = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
-
-  logger(`[security-event] ${eventName}`, sanitizeLogPayload(payload));
+  const sanitized = sanitizeLogPayload(payload);
+  if (level === "error") {
+    logger.error(sanitized, `[security-event] ${eventName}`);
+  } else if (level === "warn") {
+    logger.warn(sanitized, `[security-event] ${eventName}`);
+  } else {
+    logger.info(sanitized, `[security-event] ${eventName}`);
+  }
 }

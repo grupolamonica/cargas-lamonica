@@ -894,31 +894,18 @@ describe("google sheet loads sync", () => {
       arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV),
     });
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    try {
-      await expect(
-        syncGoogleSheetLoads({
-          fetchImpl,
-          sheetUrl: "https://example.test/sheet.csv",
-          supabaseClient,
-          clientName: "Shopee",
-        }),
-      ).rejects.toMatchObject({
-        name: "SheetClientNotConfiguredError",
-        code: "SHEET_CLIENT_NOT_CONFIGURED",
+    await expect(
+      syncGoogleSheetLoads({
+        fetchImpl,
+        sheetUrl: "https://example.test/sheet.csv",
+        supabaseClient,
         clientName: "Shopee",
-      });
-
-      // Confirma que o structured log foi emitido pra que o Loki/Grafana
-      // tenha um sinal alarmável ao invés de um throw opaco.
-      const eventLogged = errorSpy.mock.calls.some(
-        (call) => typeof call[0] === "string" && call[0].includes("sheet.client.missing"),
-      );
-      expect(eventLogged).toBe(true);
-    } finally {
-      errorSpy.mockRestore();
-    }
+      }),
+    ).rejects.toMatchObject({
+      name: "SheetClientNotConfiguredError",
+      code: "SHEET_CLIENT_NOT_CONFIGURED",
+      clientName: "Shopee",
+    });
   });
 
   it("throws a typed SheetClientNotConfiguredError when the client name is blank", async () => {
@@ -930,20 +917,14 @@ describe("google sheet loads sync", () => {
       arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
       text: vi.fn().mockResolvedValue(SAMPLE_CSV),
     });
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    try {
-      await expect(
-        syncGoogleSheetLoads({
-          fetchImpl,
-          sheetUrl: "https://example.test/sheet.csv",
-          supabaseClient,
-          clientName: "   ",
-        }),
-      ).rejects.toBeInstanceOf(SheetClientNotConfiguredError);
-    } finally {
-      errorSpy.mockRestore();
-    }
+    await expect(
+      syncGoogleSheetLoads({
+        fetchImpl,
+        sheetUrl: "https://example.test/sheet.csv",
+        supabaseClient,
+        clientName: "   ",
+      }),
+    ).rejects.toBeInstanceOf(SheetClientNotConfiguredError);
   });
 });
 

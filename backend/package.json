@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node src/main.js",
     "dev:clone": "node --env-file=.env.dev src/main.js",
+    "lint": "eslint src/ --max-warnings 0",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:rls": "vitest run src/security/rls.behavior.test.js",
@@ -38,6 +39,7 @@
   "devDependencies": {
     "@types/node": "^22.16.5",
     "autocannon": "^8.0.0",
+    "eslint": "^9.39.4",
     "pg-mem": "^3.0.14",
     "tinybench": "^6.0.1",
     "vitest": "^3.2.4"
