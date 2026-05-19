@@ -1,0 +1,41 @@
+# Tunnel override: prod-build frontend+backend exposed on host ports
+# No Traefik, no external networks. nginx proxies /api -> backend internally.
+# Usage:
+#   docker compose -f docker-compose.yml -f .tunnel/docker-compose.tunnel.yml up -d --build frontend backend
+
+services:
+  frontend:
+    ports:
+      - "8081:80"
+    volumes:
+      - ./.tunnel/nginx.tunnel.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - lamonica-net
+    labels: []
+
+  backend:
+    ports:
+      - "3001:3001"
+    networks:
+      - lamonica-net
+    labels: []
+
+  # OCR sidecar (FastAPI). Mesma imagem que produção, sem Traefik labels.
+  cadastro-ocr:
+    networks:
+      - lamonica-net
+    labels: []
+    ports:
+      - "8765:8765"
+    environment:
+      # run.py defaulta a 127.0.0.1; sem HOST=0.0.0.0 nginx do frontend
+      # bate em "connection refused" via docker network (502 upstream).
+      HOST: "0.0.0.0"
+
+networks:
+  platform_public:
+    external: false
+    name: tunnel_platform_public_unused
+  platform_monitoring:
+    external: false
+    name: tunnel_platform_monitoring_unused
