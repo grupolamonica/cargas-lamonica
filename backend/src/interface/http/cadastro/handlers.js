@@ -10,31 +10,17 @@ import {
 import { finalizarCadastroSchema } from "../schemas/cadastro-schemas.js";
 import { zodErrorToHttpResponse } from "../schemas/common.js";
 import { finalizarCadastro } from "../../../application/cadastro/use-cases/finalizar-cadastro.js";
+import { checkRateLimit } from "../../../infrastructure/rate-limit-redis.js";
 
 // Submissão rate-limit por IP: máx 10 cadastros por IP por 60 segundos.
-// Evita spam sem bloquear motoristas legítimos em redes compartilhadas (CGNAT).
+// Estado compartilhado via Redis — funciona em múltiplas réplicas.
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 10;
-const ipRateLimitMap = new Map();
 
-setInterval(() => {
-  const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
-  for (const [key, value] of ipRateLimitMap) {
-    if (value.resetAt <= cutoff) ipRateLimitMap.delete(key);
-  }
-}, 60_000).unref();
-
-function isRateLimited(ip) {
+async function isRateLimited(ip) {
   if (!ip) return false;
-  const now = Date.now();
-  const entry = ipRateLimitMap.get(ip);
-  if (!entry || now > entry.resetAt) {
-    ipRateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
-    return false;
-  }
-  entry.count += 1;
-  if (entry.count > RATE_LIMIT_MAX) return true;
-  return false;
+  const allowed = await checkRateLimit(`ratelimit:cadastro:${ip}`, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
+  return !allowed;
 }
 
 /**
@@ -45,7 +31,7 @@ export async function resolveFinalizarCadastroResponse(request) {
   const correlationId = getCorrelationId(request);
   const requestIp = getRequestIp(request);
 
-  if (isRateLimited(requestIp)) {
+  if (await isRateLimited(requestIp)) {
     return {
       statusCode: 429,
       payload: {

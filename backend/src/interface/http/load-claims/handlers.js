@@ -39,30 +39,21 @@ import {
   processExpiredLoadClaims,
 } from "../../../application/load-claims/service.js";
 
-// Simple per-IP rate limit for driver registration (in-process, serverless best-effort)
-const registrationRateLimitByIp = new Map(); // ip -> { count, windowStart }
+// Per-IP rate limit for driver registration — state in Redis, shared across replicas.
 const REGISTRATION_RATE_LIMIT = 5; // max registrations per IP per window
 const REGISTRATION_RATE_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
-function checkRegistrationRateLimit(ip) {
+async function checkRegistrationRateLimit(ip) {
   if (!ip) return; // can't rate-limit without IP
-  const now = Date.now();
-  const entry = registrationRateLimitByIp.get(ip);
-
-  if (!entry || now - entry.windowStart > REGISTRATION_RATE_WINDOW_MS) {
-    registrationRateLimitByIp.set(ip, { count: 1, windowStart: now });
-    return;
-  }
-
-  if (entry.count >= REGISTRATION_RATE_LIMIT) {
+  const { checkRateLimit } = await import("../../../infrastructure/rate-limit-redis.js");
+  const allowed = await checkRateLimit(`ratelimit:registration:${ip}`, REGISTRATION_RATE_LIMIT, REGISTRATION_RATE_WINDOW_MS);
+  if (!allowed) {
     const rateLimitError = Object.assign(
       new Error("Too many registration attempts from this IP. Please try again later."),
       { statusCode: 429, code: "TOO_MANY_REQUESTS" },
     );
     throw rateLimitError;
   }
-
-  entry.count += 1;
 }
 
 const canonicalVehicleProfileSchema = z
@@ -237,7 +228,7 @@ export async function resolveRegisterDriverResponse(request) {
   const correlationId = getCorrelationId(request);
 
   try {
-    checkRegistrationRateLimit(getRequestIp(request));
+    await checkRegistrationRateLimit(getRequestIp(request));
     const payload = driverRegistrationSchema.parse(await parseJsonBody(request));
     const user = await registerDriverUser(payload);
     let profileResponse;

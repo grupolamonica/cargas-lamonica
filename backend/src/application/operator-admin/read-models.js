@@ -13,14 +13,25 @@ import {
 
 // Cache in-memory de user_id \u2192 { email, displayName } para evitar listUsers
 // em toda chamada ao audit-logs. TTL curto (60s) \u00e9 suficiente.
-const OPERATOR_DIRECTORY_TTL_MS = 60_000;
-let operatorDirectoryCache = { at: 0, map: new Map() };
+import { logger } from "../../infrastructure/logger.js";
+import { getRedisClient } from "../../infrastructure/redis.js";
+
+const OPERATOR_DIR_KEY = "lamonica:operator-directory";
+const OPERATOR_DIR_TTL_SECONDS = 60;
+
+let operatorDirectoryFallback = new Map();
 
 async function resolveOperatorDirectory() {
-  const now = Date.now();
-  if (now - operatorDirectoryCache.at < OPERATOR_DIRECTORY_TTL_MS) {
-    return operatorDirectoryCache.map;
+  try {
+    const redis = getRedisClient();
+    const cached = await redis.get(OPERATOR_DIR_KEY);
+    if (cached) {
+      return new Map(Object.entries(JSON.parse(cached)));
+    }
+  } catch (err) {
+    logger.warn({ err }, "[operator-directory] Redis miss — fetching from Supabase");
   }
+
   try {
     const admin = createSupabaseAdminClient();
     const { data } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
@@ -42,14 +53,19 @@ async function resolveOperatorDirectory() {
             : null;
       map.set(user.id, { email, displayName: prettyName, role, accessLevel });
     }
-    operatorDirectoryCache = { at: now, map };
+
+    try {
+      const redis = getRedisClient();
+      await redis.setex(OPERATOR_DIR_KEY, OPERATOR_DIR_TTL_SECONDS, JSON.stringify(Object.fromEntries(map)));
+    } catch (err) {
+      logger.warn({ err }, "[operator-directory] Redis set failed");
+    }
+
+    operatorDirectoryFallback = map;
     return map;
   } catch (error) {
-    console.error("[operator-directory] Failed to refresh — returning stale cache:", {
-      message: error instanceof Error ? error.message : String(error),
-      code: error?.code,
-    });
-    return operatorDirectoryCache.map;
+    logger.error({ err: error }, "[operator-directory] Supabase fetch failed — returning stale fallback");
+    return operatorDirectoryFallback;
   }
 }
 import {

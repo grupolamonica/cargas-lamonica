@@ -1,7 +1,7 @@
 // backend/src/infrastructure/redis.js
 // Redis client singleton — shared across rate-limit, idempotency, operator-directory cache.
 // Fails open when Redis is unavailable so the application stays functional.
-import "../config/load-env.js";
+import "./config/load-env.js";
 import { logger } from "./logger.js";
 import Redis from "ioredis";
 

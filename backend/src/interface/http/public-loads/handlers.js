@@ -15,32 +15,17 @@ import {
 import { recordDriverPortalVisit } from "../../../domain/operator-admin/driver-flow-metrics.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 
+// Portal visit rate-limit: 1 analytics event per IP per 30s.
+// This is a soft analytics signal, not a security gate — fail-open is acceptable.
+// State in Redis so multi-replica deployments don't double-count visits.
 const PORTAL_VISIT_RATE_LIMIT_MS = 30_000;
-const portalVisitRateLimitByIp = new Map();
 
-// MD-02: cleanup periódico para evitar crescimento ilimitado com IPs dinâmicos (CGNAT/mobile)
-setInterval(() => {
-  const cutoff = Date.now() - PORTAL_VISIT_RATE_LIMIT_MS;
-  for (const [key, value] of portalVisitRateLimitByIp) {
-    if (value < cutoff) portalVisitRateLimitByIp.delete(key);
-  }
-}, 60_000).unref();
-
-function isPortalVisitRateLimited(ip) {
+async function isPortalVisitRateLimited(ip) {
   if (!ip) return false;
-  const now = Date.now();
-  const lastSeen = portalVisitRateLimitByIp.get(ip);
-  if (lastSeen && now - lastSeen < PORTAL_VISIT_RATE_LIMIT_MS) {
-    return true;
-  }
-  portalVisitRateLimitByIp.set(ip, now);
-  if (portalVisitRateLimitByIp.size > 5000) {
-    const cutoff = now - PORTAL_VISIT_RATE_LIMIT_MS;
-    for (const [key, value] of portalVisitRateLimitByIp) {
-      if (value < cutoff) portalVisitRateLimitByIp.delete(key);
-    }
-  }
-  return false;
+  const { checkRateLimit } = await import("../../../infrastructure/rate-limit-redis.js");
+  // 1 event per window per IP (max=1 means the 2nd call returns false=allowed=false)
+  const allowed = await checkRateLimit(`ratelimit:portal-visit:${ip}`, 1, PORTAL_VISIT_RATE_LIMIT_MS);
+  return !allowed;
 }
 
 const DRIVER_LOADS_SHEET_STALE_AFTER_MS = Math.max(
@@ -196,7 +181,7 @@ export async function resolveDriverPortalVisitResponse(request) {
   const correlationId = getCorrelationId(request);
   const requestIp = getRequestIp(request);
 
-  if (isPortalVisitRateLimited(requestIp)) {
+  if (await isPortalVisitRateLimited(requestIp)) {
     return {
       statusCode: 200,
       payload: { ok: true, rateLimited: true, meta: { correlationId } },

@@ -75,37 +75,20 @@ import { getAdminClient, requireOperatorSession } from "../../../application/loa
 import { createSupabaseAdminClient, syncGoogleSheetLoads } from "../../../application/google-sheets/google-sheet-loads.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 
-const IDEMPOTENCY_TTL_MS = 5 * 60_000;
-const MAX_IDEMPOTENCY_CACHE_SIZE = 5_000;
-const idempotencyCache = new Map();
+import {
+  getIdempotencyResult,
+  setIdempotencyResult,
+} from "../../../infrastructure/idempotency-redis.js";
 
-function checkIdempotencyCache(key) {
-  const entry = idempotencyCache.get(key);
-  if (!entry) return null;
-  if (entry.expiresAt <= Date.now()) {
-    idempotencyCache.delete(key);
-    return null;
-  }
-  return entry.response;
+// Idempotency cache backed by Redis — shared across replicas.
+// Falls back to null (cache miss) on Redis failure, causing re-execution.
+
+async function checkIdempotencyCache(key) {
+  return getIdempotencyResult(key);
 }
 
-function setIdempotencyCache(key, response) {
-  if (idempotencyCache.size >= MAX_IDEMPOTENCY_CACHE_SIZE) {
-    // MD-01: varre expirados antes de deletar arbitrariamente (FIFO não é LRU)
-    const now = Date.now();
-    let deleted = false;
-    for (const [k, v] of idempotencyCache) {
-      if (v.expiresAt <= now) {
-        idempotencyCache.delete(k);
-        deleted = true;
-        break;
-      }
-    }
-    if (!deleted) {
-      idempotencyCache.delete(idempotencyCache.keys().next().value);
-    }
-  }
-  idempotencyCache.set(key, { response, expiresAt: Date.now() + IDEMPOTENCY_TTL_MS });
+async function setIdempotencyCache(key, response) {
+  await setIdempotencyResult(key, response);
 }
 
 function toErrorResponse(error, correlationId) {
@@ -141,7 +124,7 @@ async function withOperatorSession(request, action, optionsOrExecute, maybeExecu
 
     if (rawIdempotencyKey) {
       const cacheKey = `${user.id}:${action}:${rawIdempotencyKey}`;
-      const cachedResponse = checkIdempotencyCache(cacheKey);
+      const cachedResponse = await checkIdempotencyCache(cacheKey);
       if (cachedResponse) {
         return cachedResponse;
       }
@@ -153,7 +136,7 @@ async function withOperatorSession(request, action, optionsOrExecute, maybeExecu
         operatorAccessLevel: accessLevel,
         user,
       });
-      setIdempotencyCache(cacheKey, response);
+      await setIdempotencyCache(cacheKey, response);
       return response;
     }
 
