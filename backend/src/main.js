@@ -189,6 +189,19 @@ async function bootstrap() {
     }, 5 * 60 * 1000);
   }
 
+  // 4b. Sheet sync job worker — processes operator-triggered async syncs every 30s
+  {
+    setInterval(async () => {
+      if (!process.env.GOOGLE_SHEET_ID) return;
+      try {
+        const { processNextSheetSyncJob } = await import("./application/operator-admin/use-cases/sheet-sync-queue.js");
+        await processNextSheetSyncJob();
+      } catch (err) {
+        logger.error({ err }, "sheet-sync-worker: erro");
+      }
+    }, 30_000);
+  }
+
   // 5. Iniciar HTTP server
   const server = app.listen(PORT, () => {
     logger.info({ port: PORT }, "Servidor ouvindo");

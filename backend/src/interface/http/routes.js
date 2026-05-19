@@ -48,6 +48,7 @@ import {
   resolveOperatorDriversListReadModelResponse,
   resolveOperatorRoutesListReadModelResponse,
   resolveOperatorSheetSyncResponse,
+  resolveSheetSyncStatusResponse,
   resolveOperatorVehiclesListReadModelResponse,
   resolveRedactPublicLeadPiiResponse,
   resolveRevalidateAllVehiclesResponse,
@@ -215,6 +216,7 @@ export function registerRoutes(app) {
   // /api/operator/cargas/sync-sheet deve ser registrada antes de /api/operator/cargas/:cargoId
   // para que Express não interprete "sync-sheet" como valor de :cargoId.
   router.post("/api/operator/cargas/sync-sheet", wrap(resolveOperatorSheetSyncResponse));
+  router.get("/api/operator/sheet-sync-status/:jobId", wrap(resolveSheetSyncStatusResponse));
   router.get("/api/operator/cargas", wrap(resolveOperatorCargoListReadModelResponse));
   router.post("/api/operator/cargas", wrap(resolveCreateOperatorCargoResponse));
   router.patch("/api/operator/cargas/:cargoId", wrap(resolveUpdateOperatorCargoResponse));

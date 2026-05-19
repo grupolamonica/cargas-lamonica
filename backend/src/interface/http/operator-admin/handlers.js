@@ -74,6 +74,7 @@ import { assertOperatorAccessLevel, assertOperatorPermission, hasOperatorPermiss
 import { getAdminClient, requireOperatorSession } from "../../../application/load-claims/auth.js";
 import { createSupabaseAdminClient, syncGoogleSheetLoads } from "../../../application/google-sheets/google-sheet-loads.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
+import { enqueueSheetSyncJob, getSheetSyncJob } from "../../../application/operator-admin/use-cases/sheet-sync-queue.js";
 
 import {
   getIdempotencyResult,
@@ -590,22 +591,40 @@ export async function resolveOperatorSheetSyncResponse(request) {
       requiredPermission: "cargos:write",
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem atualizar cargas.",
     },
-    async ({ correlationId }) => {
-      const supabaseClient = createSupabaseAdminClient();
-      const result = await syncGoogleSheetLoads({ supabaseClient });
-      logStructuredEvent("info", "operator-admin.sheet-sync.requested", {
+    async ({ correlationId, operatorId }) => {
+      const jobId = await enqueueSheetSyncJob({ operatorId, correlationId });
+      logStructuredEvent("info", "operator-admin.sheet-sync.enqueued", {
         correlationId,
-        inserted: result?.inserted ?? null,
-        updated: result?.updated ?? null,
+        jobId,
+        operatorId,
       });
       return {
-        statusCode: 200,
+        statusCode: 202,
         payload: {
-          ok: true,
-          ...result,
+          jobId,
+          status: "pending",
+          pollUrl: `/api/operator/sheet-sync-status/${jobId}`,
           meta: { correlationId },
         },
       };
+    },
+  );
+}
+
+export async function resolveSheetSyncStatusResponse(request) {
+  return withOperatorSession(
+    request,
+    "sheet-sync-status",
+    async ({ correlationId }) => {
+      const jobId = request.params?.jobId;
+      if (!jobId) {
+        return { statusCode: 400, payload: { error: "MISSING_JOB_ID", meta: { correlationId } } };
+      }
+      const job = await getSheetSyncJob(jobId);
+      if (!job) {
+        return { statusCode: 404, payload: { error: "NOT_FOUND", meta: { correlationId } } };
+      }
+      return { statusCode: 200, payload: { ...job, meta: { correlationId } } };
     },
   );
 }
