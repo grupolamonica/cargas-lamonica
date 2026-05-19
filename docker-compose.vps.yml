@@ -27,6 +27,56 @@ services:
       - backend.env
     # No ports exposed directly: Traefik routes /api/* here
 
+  # ── Prometheus (metrics scraping) ─────────────────────────────────────────
+  # Requires: METRICS_ENABLED=true + METRICS_TOKEN in backend.env
+  # Grafana available at https://grafana.${DOMAIN} after DNS is live.
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: lamonica-prometheus
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.listen-address=:9090"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.2"
+
+  # ── Grafana (dashboards) ──────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: lamonica-grafana
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+      - platform_public
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-changeme}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "https://grafana.${DOMAIN:-localhost}"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=platform_public"
+      - "traefik.http.routers.lmc-grafana.rule=Host(`grafana.${DOMAIN}`)"
+      - "traefik.http.routers.lmc-grafana.entrypoints=websecure"
+      - "traefik.http.routers.lmc-grafana.tls.certresolver=letsencrypt"
+      - "traefik.http.services.lmc-grafana.loadbalancer.server.port=3000"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.2"
+
   # ── Watchtower: DISABLED — deploy is handled exclusively by GitHub Actions deploy.yml
   # Auto-pull every 60s caused rollouts of broken images without smoke tests.
   # To re-enable temporarily for a manual deploy cycle, comment this block out
@@ -44,3 +94,9 @@ services:
   #     WATCHTOWER_LABEL_ENABLE: "true"
   #   networks:
   #     - lamonica-net
+
+volumes:
+  prometheus_data:
+    name: lamonica_prometheus_data
+  grafana_data:
+    name: lamonica_grafana_data

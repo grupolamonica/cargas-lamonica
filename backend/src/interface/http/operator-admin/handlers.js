@@ -972,18 +972,30 @@ export async function resolveOperatorOverviewDigestResponse(request) {
   const correlationId = getCorrelationId(request);
 
   try {
-    await requireOperatorSession(getAuthorizationHeader(request));
+    // Extract operator ID from session to filter digest by tenant
+    const operatorUser = await requireOperatorSession(getAuthorizationHeader(request));
+    const operatorId = operatorUser.id;
 
     const digest = await withPgClient(async (client) => {
+      // Filter by created_by = operatorId so each operator sees only their own data
       const { rows } = await client.query(`
         SELECT
-          (SELECT COALESCE(EXTRACT(EPOCH FROM MAX(updated_at))::bigint, 0) FROM public.cargas)            AS cargas_ts,
-          (SELECT COUNT(*)::bigint FROM public.cargas)                                                    AS cargas_count,
-          (SELECT COALESCE(EXTRACT(EPOCH FROM MAX(created_at))::bigint, 0) FROM public.load_public_leads) AS leads_ts,
-          (SELECT COUNT(*)::bigint FROM public.load_public_leads)                                         AS leads_count,
-          (SELECT COALESCE(EXTRACT(EPOCH FROM MAX(created_at))::bigint, 0) FROM public.load_claims)       AS claims_ts,
-          (SELECT COUNT(*)::bigint FROM public.load_claims)                                               AS claims_count
-      `);
+          (SELECT COALESCE(EXTRACT(EPOCH FROM MAX(updated_at))::bigint, 0)
+             FROM public.cargas WHERE created_by = $1)                                                        AS cargas_ts,
+          (SELECT COUNT(*)::bigint FROM public.cargas WHERE created_by = $1)                                   AS cargas_count,
+          (SELECT COALESCE(EXTRACT(EPOCH FROM MAX(lpl.created_at))::bigint, 0)
+             FROM public.load_public_leads lpl
+             JOIN public.cargas c ON c.id = lpl.load_id AND c.created_by = $1)                                AS leads_ts,
+          (SELECT COUNT(*)::bigint
+             FROM public.load_public_leads lpl
+             JOIN public.cargas c ON c.id = lpl.load_id AND c.created_by = $1)                                AS leads_count,
+          (SELECT COALESCE(EXTRACT(EPOCH FROM MAX(lc.created_at))::bigint, 0)
+             FROM public.load_claims lc
+             JOIN public.cargas c ON c.id = lc.load_id AND c.created_by = $1)                                 AS claims_ts,
+          (SELECT COUNT(*)::bigint
+             FROM public.load_claims lc
+             JOIN public.cargas c ON c.id = lc.load_id AND c.created_by = $1)                                 AS claims_count
+      `, [operatorId]);
       const r = rows[0] || {};
       return `${r.cargas_ts}:${r.cargas_count}:${r.leads_ts}:${r.leads_count}:${r.claims_ts}:${r.claims_count}`;
     });

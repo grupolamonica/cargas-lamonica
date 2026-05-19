@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "lamonica-backend"
+    static_configs:
+      - targets: ["backend:3001"]
+    metrics_path: "/metrics"
+    bearer_token: "${METRICS_TOKEN}"
+
+  - job_name: "traefik"
+    static_configs:
+      - targets: ["traefik:8080"]
+    metrics_path: "/metrics"
