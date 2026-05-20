@@ -414,10 +414,14 @@ def main() -> None:
 
 
 # ==============================
-# RENEW LOOP (servico Docker persistente)
+# RENEW LOOP + SYNC LOOP (servico Docker persistente)
 # ==============================
+# `--renew-loop`   -> renova cookies (legacy, ainda suportado)
+# `--sync-loop`    -> sincroniza motoristas ASPX -> Supabase a cada N min
+# `--service-loop` -> roda os dois em um unico loop (recomendado em prod)
 _RENEW_CHECK_INTERVAL_SEC = 3600       # verifica a cada 1h
 _RENEW_THRESHOLD_SEC = 12 * 3600      # renova se < 12h restantes
+_SYNC_INTERVAL_SEC = int(os.environ.get("ASPX_SYNC_INTERVAL_SEC", "3600"))  # default 1h
 
 
 def _cookies_remaining_seconds() -> float | None:
@@ -489,8 +493,111 @@ def renew_loop() -> None:
         time.sleep(_RENEW_CHECK_INTERVAL_SEC)
 
 
+def sync_loop() -> None:
+    """Loop persistente do sync ASPX -> Supabase aspx_drivers.
+
+    Roda main() a cada ASPX_SYNC_INTERVAL_SEC (default 1h). Erros isolados nao
+    derrubam o loop. Compativel com cookie persistido pelo renew_loop.
+
+    Originalmente isso seria um GitHub Action externo (workflows/aspx-sync.yml),
+    mas o portal ASPX bloqueia IPs de runners. Roda no container persistente
+    da VPS pra manter aspx_drivers atualizado.
+    """
+    print(
+        f"[sync-loop] Iniciado. Sincroniza a cada {_SYNC_INTERVAL_SEC // 60} min."
+    )
+    while True:
+        try:
+            main()
+        except SystemExit as exc:
+            print(f"[sync-loop] Sync abortado: {exc}", file=sys.stderr)
+        except Exception as exc:
+            print(f"[sync-loop] Erro inesperado: {exc}", file=sys.stderr)
+
+        print(f"[sync-loop] Proxima sync em {_SYNC_INTERVAL_SEC // 60} min.")
+        time.sleep(_SYNC_INTERVAL_SEC)
+
+
+def service_loop() -> None:
+    """Combina renew + sync no mesmo processo.
+
+    Em prod, este e o CMD do container aspx-renewal. Faz tres coisas a cada
+    intervalo curto (default 1h):
+      1. Garante cookies validos (Playwright login se < 12h restantes)
+      2. Roda main() — UPSERT em aspx_drivers
+      3. Sleep ate proxima iteracao
+
+    Se cookies expirados E ASPX_ALLOW_PLAYWRIGHT_LOGIN=0 -> aborta sync da
+    iteracao (mas nao morre o loop). Se sync falhar, continua tentando.
+    """
+    if not ALLOW_PLAYWRIGHT_LOGIN:
+        print(
+            "[service-loop] Aviso: ASPX_ALLOW_PLAYWRIGHT_LOGIN=0 — login via "
+            "Playwright bloqueado. Loop continua, mas sync vai falhar se "
+            "cookies expirarem.",
+            file=sys.stderr,
+        )
+
+    print(
+        f"[service-loop] Iniciado. Loop a cada {_SYNC_INTERVAL_SEC // 60} min "
+        f"(renew threshold: {_RENEW_THRESHOLD_SEC // 3600}h)."
+    )
+
+    while True:
+        # 1) Garante cookies validos antes da sync
+        try:
+            remaining = _cookies_remaining_seconds()
+            if remaining is None or remaining < _RENEW_THRESHOLD_SEC:
+                if ALLOW_PLAYWRIGHT_LOGIN:
+                    msg = (
+                        "expirado/ausente"
+                        if remaining is None
+                        else f"expira em {int(remaining // 3600)}h"
+                    )
+                    print(f"[service-loop] Cookie {msg} — renovando via Playwright...")
+                    email, senha, device_id = carregar_credenciais_aspx()
+                    _login_playwright(email, senha, device_id)
+                    print("[service-loop] Cookie renovado.")
+                else:
+                    print(
+                        "[service-loop] Cookie precisa renovar mas Playwright "
+                        "desabilitado — pulando sync desta iteracao.",
+                        file=sys.stderr,
+                    )
+                    time.sleep(_SYNC_INTERVAL_SEC)
+                    continue
+            else:
+                print(
+                    f"[service-loop] Cookie valido por mais {int(remaining // 3600)}h."
+                )
+        except SystemExit as exc:
+            print(f"[service-loop] Erro renovando cookie: {exc}", file=sys.stderr)
+            time.sleep(_SYNC_INTERVAL_SEC)
+            continue
+        except Exception as exc:
+            print(f"[service-loop] Erro renovando cookie: {exc}", file=sys.stderr)
+            time.sleep(_SYNC_INTERVAL_SEC)
+            continue
+
+        # 2) Roda o sync
+        try:
+            main()
+        except SystemExit as exc:
+            print(f"[service-loop] Sync abortado: {exc}", file=sys.stderr)
+        except Exception as exc:
+            print(f"[service-loop] Erro inesperado no sync: {exc}", file=sys.stderr)
+
+        # 3) Sleep ate proxima
+        print(f"[service-loop] Proxima iteracao em {_SYNC_INTERVAL_SEC // 60} min.")
+        time.sleep(_SYNC_INTERVAL_SEC)
+
+
 if __name__ == "__main__":
-    if "--renew-loop" in sys.argv:
+    if "--service-loop" in sys.argv:
+        service_loop()
+    elif "--sync-loop" in sys.argv:
+        sync_loop()
+    elif "--renew-loop" in sys.argv:
         renew_loop()
     else:
         main()
