@@ -6,4 +6,4 @@ RUN pip install --no-cache-dir requests playwright \
 WORKDIR /app
 COPY asp.py .
 
-CMD ["python", "asp.py", "--renew-loop"]
+CMD ["python", "asp.py", "--service-loop"]
