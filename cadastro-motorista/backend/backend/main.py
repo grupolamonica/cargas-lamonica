@@ -12,10 +12,12 @@ from pydantic import BaseModel, field_validator
 import asyncio
 
 import anexo_storage
+import gpt4o_vision
 import infosimples
 import local_ocr
 from config import (
     BUNDLE_DIR,
+    GPT4O_VISION_MODEL,
     INFOSIMPLES_TOKEN,
     MAX_IMAGE_BASE64_BYTES,
     OCR_CARTAO_CNPJ_PROVIDER,
@@ -32,6 +34,14 @@ async def lifespan(app: FastAPI):
     client = httpx.AsyncClient(timeout=150)
     infosimples.set_client(client)
     log.info("Infosimples httpx client inicializado")
+
+    # GPT-4o Vision client (Fase 1+2 migracao OCR). Idempotente; no-op se
+    # OPENAI_API_KEY ausente. install_log_redactor() roda dentro de
+    # init_client_from_env() so quando inicializa com sucesso.
+    if gpt4o_vision.init_client_from_env():
+        log.info("GPT-4o Vision pronto (model=%s)", GPT4O_VISION_MODEL)
+    else:
+        log.info("GPT-4o Vision desabilitado (OPENAI_API_KEY ausente ou SDK off)")
 
     # Warm-up do OCR local se algum provider=local (pré-carrega modelos em background).
     precisa_local = "local" in (OCR_COMPROVANTE_PROVIDER, OCR_CARTAO_CNPJ_PROVIDER)
@@ -144,6 +154,7 @@ if (FRONTEND / "cadastro.html").is_file():
 @app.get("/api/status")
 async def status():
     token_ok = bool(INFOSIMPLES_TOKEN) and INFOSIMPLES_TOKEN != "COLE_SEU_TOKEN_AQUI"
+    gpt4o_ready = gpt4o_vision.is_available()
     return {
         "ok": token_ok,
         "token_configurado": token_ok,
@@ -151,7 +162,10 @@ async def status():
             "comprovante": OCR_COMPROVANTE_PROVIDER,
             "cartao_cnpj": OCR_CARTAO_CNPJ_PROVIDER,
             "local_disponivel": local_ocr.is_available(),
+            "gpt4o_vision_available": gpt4o_ready,
+            "gpt4o_vision_model": GPT4O_VISION_MODEL if gpt4o_ready else None,
         },
+        "gpt4o_budget": gpt4o_vision.budget_snapshot() if gpt4o_ready else None,
     }
 
 
