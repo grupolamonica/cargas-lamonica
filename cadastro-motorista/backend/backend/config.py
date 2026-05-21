@@ -54,36 +54,16 @@ TIMEOUT_OCR = 120
 # imagens muito grandes sao processadas localmente sem custo externo.
 MAX_IMAGE_BASE64_BYTES = 10_000_000
 
-# ── Providers de OCR ─────────────────────────────────────────────────────────
-# "infosimples" = usa API paga (atual, precisão alta, layouts brasileiros treinados)
-# "local"       = usa EasyOCR rodando na própria máquina (grátis, offline)
-# Default seguro: infosimples (mantém comportamento existente).
-OCR_COMPROVANTE_PROVIDER = os.getenv("OCR_COMPROVANTE_PROVIDER", "infosimples").lower()
-OCR_CARTAO_CNPJ_PROVIDER = os.getenv("OCR_CARTAO_CNPJ_PROVIDER", "local").lower()
-
-# CNH e CRLV permanecem SEMPRE no Infosimples — parser deles agrega valor real
-# nesses casos (estrutura complexa, campos aninhados, normalização).
-# Não criamos toggle para não introduzir regressão na qualidade.
-
-_PROVIDERS_VALIDOS = {"infosimples", "local"}
-if OCR_COMPROVANTE_PROVIDER not in _PROVIDERS_VALIDOS:
-    logging.warning(
-        "OCR_COMPROVANTE_PROVIDER='%s' inválido — usando 'infosimples'.",
-        OCR_COMPROVANTE_PROVIDER,
-    )
-    OCR_COMPROVANTE_PROVIDER = "infosimples"
-if OCR_CARTAO_CNPJ_PROVIDER not in _PROVIDERS_VALIDOS:
-    logging.warning(
-        "OCR_CARTAO_CNPJ_PROVIDER='%s' inválido — usando 'local'.",
-        OCR_CARTAO_CNPJ_PROVIDER,
-    )
-    OCR_CARTAO_CNPJ_PROVIDER = "local"
+# Fase 3 (2026-05-21): vars OCR_COMPROVANTE_PROVIDER / OCR_CARTAO_CNPJ_PROVIDER
+# foram removidas junto com o EasyOCR. Provider primario agora vem do
+# OCR_<DOC>_STRATEGY (vide bloco abaixo). CNH e CRLV continuam SEMPRE no
+# Infosimples na strategy "legacy"; Vision atua so como fallback.
 
 if not INFOSIMPLES_TOKEN or INFOSIMPLES_TOKEN == "COLE_SEU_TOKEN_AQUI":
     logging.warning(
         "INFOSIMPLES_TOKEN não configurado — consultas via Infosimples falharão. "
         "Edite o arquivo .env com um token válido. "
-        "(OCR local continua funcionando se OCR_*_PROVIDER=local.)"
+        "(GPT-4o Vision continua funcionando se OPENAI_API_KEY estiver setado.)"
     )
 
 

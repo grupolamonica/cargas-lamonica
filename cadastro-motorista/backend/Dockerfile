@@ -2,13 +2,10 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# Instala dependências base (Infosimples + consultas externas)
+# Dependencias: Infosimples (httpx) + GPT-4o Vision (openai) + consultas externas.
+# Fase 3 (2026-05-21): EasyOCR removido — imagem ~300MB menor.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# OCR local opcional via EasyOCR — comentar se usar apenas Infosimples
-# COPY requirements-ocr.txt .
-# RUN pip install --no-cache-dir -r requirements-ocr.txt
 
 COPY . .
 
