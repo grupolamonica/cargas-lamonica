@@ -89,31 +89,32 @@ def redact(text: str) -> str:
     return _TOKEN_REDACT_RE.sub("sk-***REDACTED***", text)
 
 
-class _RedactingFilter(logging.Filter):
-    """Logger filter que esconde tokens em qualquer mensagem.
+def install_log_redactor() -> None:
+    """Instala redator global via ``logging.setLogRecordFactory``. Idempotente.
 
-    Registrado pelo lifespan do FastAPI no logger raiz — protege contra
-    bibliotecas terceiras que possam logar config/headers.
+    Aplica a redação NO MOMENTO de criação do record — antes do filter chain
+    e do handler. Funciona para records criados em qualquer logger (módulos
+    terceiros incluso), o que não acontece se usarmos ``Logger.addFilter()``
+    no root (filtros do parent não são chamados pelos descendentes).
     """
+    factory = logging.getLogRecordFactory()
+    if getattr(factory, "_gpt4o_redactor_installed", False):
+        return
+    original = factory
 
-    def filter(self, record: logging.LogRecord) -> bool:
+    def redactor_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
+        record = original(*args, **kwargs)
         try:
             msg = record.getMessage()
         except Exception:  # pragma: no cover
-            return True
+            return record
         if "sk-" in msg:
             record.msg = redact(str(record.msg))
             record.args = ()
-        return True
+        return record
 
-
-def install_log_redactor() -> None:
-    """Instala filtro de redação no logger raiz. Idempotente."""
-    root = logging.getLogger()
-    for existing in root.filters:
-        if isinstance(existing, _RedactingFilter):
-            return
-    root.addFilter(_RedactingFilter())
+    redactor_factory._gpt4o_redactor_installed = True  # type: ignore[attr-defined]
+    logging.setLogRecordFactory(redactor_factory)
 
 
 # ─── Pricing (USD por 1M tokens) — atualizar se OpenAI mudar tabela ──────────
