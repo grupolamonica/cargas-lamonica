@@ -82,8 +82,23 @@ services:
       - platform_public
     environment:
       INFOSIMPLES_TOKEN: ${INFOSIMPLES_TOKEN:-}
-      OCR_COMPROVANTE_PROVIDER: ${OCR_COMPROVANTE_PROVIDER:-local}
-      OCR_CARTAO_CNPJ_PROVIDER: ${OCR_CARTAO_CNPJ_PROVIDER:-local}
+      # Fase 3 (2026-05-21): OCR_COMPROVANTE_PROVIDER e OCR_CARTAO_CNPJ_PROVIDER
+      # removidos (EasyOCR foi descomissionado). Strategy por endpoint abaixo.
+      # GPT-4o Vision (Fase 2 da migracao OCR — vide docs/lgpd-openai-processor.md)
+      # OPENAI_API_KEY vem via secret (NUNCA hardcoded). Defaults preservam
+      # comportamento atual ate consent screen + DPA estarem em ordem.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GPT4O_VISION_MODEL: ${GPT4O_VISION_MODEL:-gpt-4o}
+      GPT4O_VISION_TIMEOUT_SECONDS: ${GPT4O_VISION_TIMEOUT_SECONDS:-30}
+      GPT4O_VISION_MAX_RETRIES: ${GPT4O_VISION_MAX_RETRIES:-2}
+      GPT4O_DAILY_BUDGET_USD: ${GPT4O_DAILY_BUDGET_USD:-25.0}
+      # Strategy por endpoint (legacy | infosimples-with-vision-fallback | vision-only)
+      OCR_CNH_STRATEGY: ${OCR_CNH_STRATEGY:-legacy}
+      OCR_CRLV_STRATEGY: ${OCR_CRLV_STRATEGY:-legacy}
+      OCR_CARTAO_CNPJ_STRATEGY: ${OCR_CARTAO_CNPJ_STRATEGY:-legacy}
+      OCR_RNTRC_STRATEGY: ${OCR_RNTRC_STRATEGY:-vision-only}
+      OCR_COMPROVANTE_STRATEGY: ${OCR_COMPROVANTE_STRATEGY:-legacy}
+      OCR_SELFIE_CNH_STRATEGY: ${OCR_SELFIE_CNH_STRATEGY:-vision-only}
     volumes:
       - cadastro_anexos:/app/backend/anexos_tmp
     # Não expõe porta externamente — Traefik roteia /ocr-api/* para este container

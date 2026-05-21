@@ -1082,3 +1082,81 @@ export async function finalizarCadastro(
   }
   return res.json() as Promise<{ ok: boolean; id: string }>;
 }
+
+// ───────────────────── RNTRC (comprovante ANTT) ──────────────────────────
+// Fase 2 da migracao OCR — provider primario: GPT-4o Vision (sem fallback).
+
+export type RntrcExtracted = {
+  rntrc: string;
+  documento: string;              // CPF (11) ou CNPJ (14), digits only
+  tipo: "PF" | "PJ" | "";
+  nome: string;
+};
+
+export async function ocrRntrc(
+  file: File,
+  idCadastro?: string,
+): Promise<RntrcExtracted> {
+  const imagem = await fileToBase64(file);
+  const data = await ocr("/api/ocr/rntrc", imagem, idCadastro);
+  const v = (...k: string[]) => ocrValor(data, ...k);
+  const onlyDigits = (s: string) => s.replace(/\D/g, "");
+
+  const documento = onlyDigits(v("documento", "cpf_cnpj", "cnpj", "cpf"));
+  let tipo: "PF" | "PJ" | "" = "";
+  const tipoRaw = v("tipo").toUpperCase();
+  if (tipoRaw === "PF" || tipoRaw === "PJ") {
+    tipo = tipoRaw;
+  } else if (documento.length === 11) {
+    tipo = "PF";
+  } else if (documento.length === 14) {
+    tipo = "PJ";
+  }
+
+  return {
+    rntrc: onlyDigits(v("rntrc")),
+    documento,
+    tipo,
+    nome: v("nome", "titular", "razao_social"),
+  };
+}
+
+// ───────────────────── Selfie c/ CNH (anti-fraude) ────────────────────────
+// Fase 2 — endpoint novo. GPT-4o Vision valida se o motorista esta segurando
+// a propria CNH. Retorna match_score (0-1) + flags de visibilidade.
+
+export type SelfieCnhExtracted = {
+  cnh_visible: boolean;
+  face_visible: boolean;
+  match_score: number | null;      // null quando alguma das faces nao visivel
+  nome_cnh_legivel: string;
+  observacoes: string;
+};
+
+function parseBoolish(raw: string): boolean {
+  return raw.trim().toLowerCase() === "true";
+}
+
+function parseScore(raw: string): number | null {
+  if (!raw || raw.trim().toLowerCase() === "null") return null;
+  const n = Number(raw.replace(",", "."));
+  if (Number.isNaN(n)) return null;
+  return Math.min(1, Math.max(0, n));
+}
+
+export async function ocrSelfieCnh(
+  file: File,
+  idCadastro?: string,
+): Promise<SelfieCnhExtracted> {
+  const imagem = await fileToBase64(file);
+  const data = await ocr("/api/ocr/selfie-cnh", imagem, idCadastro);
+  const v = (...k: string[]) => ocrValor(data, ...k);
+
+  return {
+    cnh_visible: parseBoolish(v("cnh_visible")),
+    face_visible: parseBoolish(v("face_visible")),
+    match_score: parseScore(v("match_score")),
+    nome_cnh_legivel: v("nome_cnh_legivel"),
+    observacoes: v("observacoes"),
+  };
+}
