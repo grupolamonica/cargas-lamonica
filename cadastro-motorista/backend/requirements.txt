@@ -7,3 +7,5 @@ python-multipart>=0.0.9
 openai>=1.50.0
 # PDF page-split (Bug #2 da Fase F — CRLV com 2 páginas no Infosimples fallback)
 pypdf>=4.0.0
+# PDF→JPEG rasterização para GPT-4o Vision (RNTRC, selfie-cnh recebidos como PDF)
+pymupdf>=1.24.0

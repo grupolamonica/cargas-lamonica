@@ -300,6 +300,43 @@ def _extrair_primeira_pagina_pdf_base64(imagem_base64: str) -> str:
         return imagem_base64
 
 
+def _pdf_to_jpeg_base64(imagem_base64: str) -> str:
+    """Converte a página 1 de um PDF em JPEG base64 para GPT-4o Vision.
+
+    GPT-4o Vision não aceita PDFs diretamente (apenas JPEG/PNG/WEBP/GIF).
+    Usa pymupdf (fitz) para rasterizar. Se o input não for PDF ou a biblioteca
+    não estiver disponível, devolve o payload original sem mexer.
+    """
+    import base64 as _b64
+    import io as _io
+    try:
+        raw = imagem_base64
+        if raw.startswith("data:"):
+            _, _, raw = raw.partition(",")
+        data = _b64.b64decode(raw, validate=False)
+    except Exception:
+        return imagem_base64
+    if data[:4] != b"%PDF":
+        return imagem_base64  # já é imagem — sem conversão
+    try:
+        import fitz  # type: ignore[import-untyped]  # pymupdf
+    except ImportError:
+        log.warning("pymupdf indisponivel — devolvendo PDF original (Vision pode rejeitar)")
+        return imagem_base64
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+        page = doc[0]
+        # DPI 150 — equilibrio entre qualidade OCR e tamanho do payload
+        pix = page.get_pixmap(dpi=150)
+        jpeg_bytes = pix.tobytes("jpeg")
+        doc.close()
+        log.info("PDF rasterizado para JPEG (%d bytes) para Vision API", len(jpeg_bytes))
+        return _b64.b64encode(jpeg_bytes).decode("ascii")
+    except Exception as exc:
+        log.warning("Falha ao rasterizar PDF para JPEG: %s — devolvendo original", exc)
+        return imagem_base64
+
+
 def _persistir_anexo_basico(tipo: str, imagem_base64: str, id_cadastro: str) -> None:
     """Salva o arquivo enviado em ANEXOS_DIR/<id>/<categoria>/<tipo>.<ext>.
 
@@ -593,8 +630,12 @@ async def ocr_rntrc(req: OCRRequest):
                 ),
             )
 
+        # Bug #3 — PDF RNTRC: GPT-4o Vision nao aceita PDFs diretamente.
+        # Rasteriza pagina 1 para JPEG antes de enviar ao Vision API.
+        imagem_para_vision = await asyncio.to_thread(_pdf_to_jpeg_base64, req.imagem)
+
         async def _vision_extract() -> dict:
-            return await gpt4o_vision.extract("rntrc", req.imagem)
+            return await gpt4o_vision.extract("rntrc", imagem_para_vision)
 
         return await ocr_router.route(
             "rntrc",
