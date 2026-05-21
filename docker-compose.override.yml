@@ -63,6 +63,15 @@ services:
     env_file:
       - backend/.env
 
+  # ── OCR sidecar: expose 8765 em dev pro Vite proxy /ocr-api ─────────────────
+  # vite.config.ts: "/ocr-api" → "http://localhost:8765"
+  # Producao usa Traefik com path /ocr-api — em dev precisa porta direta.
+  cadastro-ocr:
+    ports:
+      - "8765:8765"
+    environment:
+      HOST: "0.0.0.0"  # default e 127.0.0.1 (internal-only) — dev precisa 0.0.0.0 pro port map funcionar
+
   # ── Disable Traefik in dev ───────────────────────────────────────────────────
   # Traefik is only needed in production for TLS + domain routing.
   # In dev: vite proxy (/api → localhost:3001) handles frontend→backend routing.

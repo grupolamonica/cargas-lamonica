@@ -238,6 +238,68 @@ CONCESSIONARIAS_OCR = {
 
 # ── OCR — API de Imagens ─────────────────────────────────────────────────────
 
+# 2026-05-21 — Helpers de PDF preservados da branch antiga (Fase F Bug #2).
+# Infosimples /ocr/crlv rejeita PDFs com >1 página (erro 701). CRLVs reais
+# costumam vir com 2 páginas (frente + verso); a frente tem todos os dados.
+# Usamos pypdf para extrair a página 1 antes de chamar Infosimples no path
+# de fallback do ocr_router. Vision (GPT-4o) processa multi-página direto,
+# então é só pro primary=infosimples.
+
+
+def _is_pdf_payload(imagem_base64: str) -> bool:
+    """True se o base64 representa um PDF. Detecta `data:application/pdf`
+    ou magic bytes `%PDF` após decode. Permite rotear JPG/PNG e PDF nativo
+    por paths diferentes quando o provider precisa de PDF (Infosimples)."""
+    import base64 as _b64
+    try:
+        raw = imagem_base64
+        if raw.startswith("data:"):
+            _, _, raw = raw.partition(",")
+        data = _b64.b64decode(raw, validate=False)
+    except Exception:
+        return False
+    return data[:4] == b"%PDF"
+
+
+def _extrair_primeira_pagina_pdf_base64(imagem_base64: str) -> str:
+    """Garante 1 página — Infosimples /ocr/crlv rejeita PDFs multi-página.
+    Se input não for PDF, devolve sem mexer. Se for PDF com 1 página, idem.
+    Se for PDF com 2+, extrai apenas página 1 (frente do CRLV onde estão
+    todos os dados do veículo)."""
+    import base64 as _b64
+    import io as _io
+    try:
+        raw = imagem_base64
+        if raw.startswith("data:"):
+            _, _, raw = raw.partition(",")
+        data = _b64.b64decode(raw, validate=False)
+    except Exception:
+        return imagem_base64
+    if data[:4] != b"%PDF":
+        return imagem_base64
+    try:
+        from pypdf import PdfReader, PdfWriter  # type: ignore[import-untyped]
+    except ImportError:
+        log.warning("pypdf indisponivel — devolvendo PDF original")
+        return imagem_base64
+    try:
+        reader = PdfReader(_io.BytesIO(data))
+        if len(reader.pages) <= 1:
+            return imagem_base64
+        writer = PdfWriter()
+        writer.add_page(reader.pages[0])
+        buf = _io.BytesIO()
+        writer.write(buf)
+        log.info(
+            "PDF multipagina (%s paginas) -> extraida pagina 1 para OCR",
+            len(reader.pages),
+        )
+        return _b64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception as exc:
+        log.warning("Falha ao extrair pagina 1 do PDF: %s — devolvendo original", exc)
+        return imagem_base64
+
+
 def _persistir_anexo_basico(tipo: str, imagem_base64: str, id_cadastro: str) -> None:
     """Salva o arquivo enviado em ANEXOS_DIR/<id>/<categoria>/<tipo>.<ext>.
 
@@ -400,8 +462,16 @@ async def ocr_crlv(req: OCRRequest):
             id_efetivo = id_efetivo[: -len(":carreta")]
         await asyncio.to_thread(_persistir_anexo_basico, tipo, req.imagem, id_efetivo)
 
+        # Fase F Bug #2: Infosimples /ocr/crlv exige PDFs com 1 pagina. CRLVs
+        # reais costumam vir com 2 (frente + verso). Vision aceita multi-pagina,
+        # so o path Infosimples precisa do split. Calculado uma vez antes do
+        # route() pra evitar duplicar trabalho se primary chamar 2x.
+        imagem_para_infosimples = await asyncio.to_thread(
+            _extrair_primeira_pagina_pdf_base64, req.imagem
+        )
+
         async def _primary_infosimples() -> dict:
-            return await infosimples.ocr("ocr/crlv", req.imagem)
+            return await infosimples.ocr("ocr/crlv", imagem_para_infosimples)
 
         async def _vision_extract() -> dict:
             return await gpt4o_vision.extract("crlv", req.imagem)

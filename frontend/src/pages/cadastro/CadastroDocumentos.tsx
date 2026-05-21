@@ -2853,34 +2853,33 @@ const CadastroDocumentos = () => {
   };
 
   // ─── Handler: Comprovante de residencia (motorista) ───
-  // Fluxo: OCR extrai dados do comprovante -> se houver CEP, dispara
-  // /api/consulta/cep automaticamente. CEP DB e autoritativo (mais preciso que OCR)
-  // para uf/cidade/bairro/logradouro; o numero permanece o que o OCR achou.
+  // Fluxo (16/05/2026): OCR extrai SOMENTE cep+numero. Logradouro/bairro/
+  // cidade/UF vem do consultaCep (ViaCEP direto do browser, sem proxy/InfoSimples)
+  // que e autoritativo. Numero do OCR pode ser sobrescrito manualmente.
   const handleComprovanteMotoristaFile = async (file: File) => {
     try {
       const ext = await ocrComprovante(file, concessionaria, form.id_cadastro);
       const cepDigits = onlyDigits(ext.cep);
 
-      // 1) Auto-consulta o CEP extraido (Infosimples + fallback ViaCEP)
+      // 1) Auto-consulta o CEP extraido (ViaCEP direto do browser)
       let cepData: Awaited<ReturnType<typeof consultaCep>> | null = null;
       if (cepDigits.length === 8) {
         try {
           cepData = await consultaCep(ext.cep);
         } catch {
-          // Sem dados de CEP — segue com o que o OCR conseguiu.
+          // Sem dados de CEP — usuario preenche manualmente.
         }
       }
 
-      // 2) Merge: CEP DB > OCR > valor atual.
+      // 2) CEP DB autoritativo para endereco; OCR fornece numero.
       setForm((f) => ({
         ...f,
         endereco_motorista: {
           cep: ext.cep ? formatCep(ext.cep) : f.endereco_motorista.cep,
-          uf: cepData?.uf || ext.uf || f.endereco_motorista.uf,
-          cidade: cepData?.cidade || ext.cidade || f.endereco_motorista.cidade,
-          bairro: cepData?.bairro || ext.bairro || f.endereco_motorista.bairro,
-          logradouro:
-            cepData?.logradouro || ext.logradouro || f.endereco_motorista.logradouro,
+          uf: cepData?.uf || f.endereco_motorista.uf,
+          cidade: cepData?.cidade || f.endereco_motorista.cidade,
+          bairro: cepData?.bairro || f.endereco_motorista.bairro,
+          logradouro: cepData?.logradouro || f.endereco_motorista.logradouro,
           numero: ext.numero || f.endereco_motorista.numero,
         },
       }));
@@ -2935,16 +2934,16 @@ const CadastroDocumentos = () => {
       const targetKey: "proprietario_pj" | "proprietario_pf" =
         propTipo === "PJ" ? "proprietario_pj" : "proprietario_pf";
 
+      // CEP DB autoritativo para endereco; OCR fornece numero (contrato 16/05).
       setForm((f) => ({
         ...f,
         [targetKey]: {
           ...f[targetKey],
           cep: ext.cep ? formatCep(ext.cep) : f[targetKey].cep,
-          uf: cepData?.uf || ext.uf || f[targetKey].uf,
-          cidade: cepData?.cidade || ext.cidade || f[targetKey].cidade,
-          bairro: cepData?.bairro || ext.bairro || f[targetKey].bairro,
-          logradouro:
-            cepData?.logradouro || ext.logradouro || f[targetKey].logradouro,
+          uf: cepData?.uf || f[targetKey].uf,
+          cidade: cepData?.cidade || f[targetKey].cidade,
+          bairro: cepData?.bairro || f[targetKey].bairro,
+          logradouro: cepData?.logradouro || f[targetKey].logradouro,
           numero: ext.numero || f[targetKey].numero,
         },
       }));

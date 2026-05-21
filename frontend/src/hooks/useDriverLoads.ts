@@ -5,6 +5,7 @@ import { addDays, format, isSameDay, parseISO, startOfToday } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
 import { fetchDriverLoadFacets, fetchDriverLoads, fetchDriverLoadsDigest } from "@/services/readModels";
+import { formatVehicleProfileLabel, normalizeVehicleProfile } from "@/lib/vehicleProfiles";
 
 export const PAGE_SIZE = 12;
 
@@ -284,10 +285,19 @@ export function useDriverLoads() {
     () => buildLocationOptions(facetsResponse?.destinoOptions || []),
     [facetsResponse?.destinoOptions],
   );
-  const perfis = useMemo(
-    () => [...(facetsResponse?.perfilOptions || [])].sort((a, b) => a.localeCompare(b, "pt-BR")),
-    [facetsResponse?.perfilOptions],
-  );
+  // Normaliza facets via normalizeVehicleProfile para deduplicar variações
+  // ("BITRUCK"/"BITREM", "CARRETA EXPRESSA"/"CARRETA_EXPRESSA"). Mantém o
+  // valor canônico para envio ao backend e o label apresentado no UI.
+  const perfis = useMemo<FilterOption[]>(() => {
+    const seen = new Map<string, FilterOption>();
+    (facetsResponse?.perfilOptions || []).forEach((raw) => {
+      const canonical = normalizeVehicleProfile(raw);
+      if (!seen.has(canonical)) {
+        seen.set(canonical, { value: canonical, label: formatVehicleProfileLabel(canonical) });
+      }
+    });
+    return Array.from(seen.values()).sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+  }, [facetsResponse?.perfilOptions]);
 
   const activeFilterCount = useMemo(
     () =>
@@ -304,7 +314,7 @@ export function useDriverLoads() {
       [
         origemFilter ? `Origem: ${getFilterLabel(origemFilter, origemOptions, "Todas")}` : "",
         destinoFilter ? `Destino: ${getFilterLabel(destinoFilter, destinoOptions, "Todos")}` : "",
-        perfilFilter ? `Veículo: ${perfilFilter}` : "",
+        perfilFilter ? `Veículo: ${formatVehicleProfileLabel(perfilFilter)}` : "",
         dateFrom || dateTo ? `Período: ${buildPeriodLabel(dateFrom, dateTo)}` : "",
       ].filter(Boolean),
     [origemFilter, destinoFilter, perfilFilter, dateFrom, dateTo, origemOptions, destinoOptions],

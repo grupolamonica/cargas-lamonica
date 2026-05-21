@@ -1,7 +1,24 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import path from "path";
+
+// ─── Validação de envs em build de produção ─────────────────────────────────
+// Em build (npm run build), exige VITE_SUPABASE_URL e VITE_SUPABASE_PUBLISHABLE_KEY
+// presentes. Se vierem vazios, o bundle gera createClient("","") e quebra em runtime
+// com "supabaseUrl is required" — falha cedo, com mensagem clara.
+function assertProdEnv(mode: string, cwd: string) {
+  if (mode !== "production") return;
+  const env = { ...loadEnv(mode, cwd, ""), ...process.env };
+  const required = ["VITE_SUPABASE_URL", "VITE_SUPABASE_PUBLISHABLE_KEY"];
+  const missing = required.filter((k) => !env[k] || String(env[k]).trim() === "");
+  if (missing.length > 0) {
+    throw new Error(
+      `[vite build] Variáveis obrigatórias ausentes em build de produção: ${missing.join(", ")}. ` +
+        `Configure GitHub secrets e os build-args do Dockerfile.`,
+    );
+  }
+}
 
 // ─── HTTPS LOCAL (desenvolvimento) ───────────────────────────────────────────
 //
@@ -27,7 +44,9 @@ import path from "path";
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  assertProdEnv(mode, process.cwd());
+  return {
   // basicSsl() ativado APENAS com: npm run dev:https (VITE_HTTPS=true)
   // Em produção (npm run build) este plugin é ignorado automaticamente.
   plugins: [react(), ...(process.env.VITE_HTTPS === "true" ? [basicSsl()] : [])],
@@ -35,15 +54,22 @@ export default defineConfig({
   server: {
     host: "0.0.0.0", // aceita conexões de qualquer IP na rede local
     port: 3000,
+    allowedHosts: true,
     proxy: {
       "/api": "http://localhost:3001",
-      "/ocr-api": "http://localhost:8765",
+      "/ocr-api": {
+        target: "http://localhost:8765",
+        rewrite: (path) => path.replace(/^\/ocr-api/, ""),
+      },
     },
   },
   preview: {
     proxy: {
       "/api": "http://localhost:3001",
-      "/ocr-api": "http://localhost:8765",
+      "/ocr-api": {
+        target: "http://localhost:8765",
+        rewrite: (path) => path.replace(/^\/ocr-api/, ""),
+      },
     },
   },
   build: {
@@ -56,4 +82,5 @@ export default defineConfig({
       "@shared": path.resolve(__dirname, "../shared"),
     },
   },
+  };
 });

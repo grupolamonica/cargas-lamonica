@@ -5,3 +5,5 @@ python-dotenv>=1.0.0
 python-multipart>=0.0.9
 # GPT-4o Vision OCR client (Fase 1 da migração OCR — 2026-05-21)
 openai>=1.50.0
+# PDF page-split (Bug #2 da Fase F — CRLV com 2 páginas no Infosimples fallback)
+pypdf>=4.0.0

@@ -5,7 +5,11 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
 import ClientLogo from "@/components/ClientLogo";
-import DriverClaimPanel from "@/components/driver/DriverClaimPanel";
+import DriverClaimPanel, {
+  type DriverClaimPanelMode,
+  type PreSubmitInterceptor,
+} from "@/components/driver/DriverClaimPanel";
+import type { PreCheckResponse } from "@/api/candidaturaApi";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -41,6 +45,20 @@ interface LoadCardProps {
   SecondaryIcon?: LucideIcon;
   clienteLogoUrlCard?: string | null;
   onInterestDialogOpenChange?: (isOpen: boolean) => void;
+  /**
+   * Wiring opcional do fluxo de cadastro v2 (Phase 7/8). Quando o consumidor
+   * (DriverPortal) fornece estes callbacks, o "Candidatar-se" do card passa a
+   * disparar o pre-check e abrir o wizard de cadastro — mesmo comportamento da
+   * tela `/motorista/cargas/:id` (DriverCargoDetails).
+   */
+  driverClaimMode?: DriverClaimPanelMode;
+  onDriverClaimPreSubmit?: PreSubmitInterceptor;
+  onDriverClaimCompleteRegistration?: (params: {
+    preCheckResponse: PreCheckResponse;
+    cpf: string;
+    horsePlate: string;
+    trailerPlates: string[];
+  }) => void;
 }
 
 const LoadCard = memo(({
@@ -69,6 +87,9 @@ const LoadCard = memo(({
   SecondaryIcon = Navigation,
   clienteLogoUrlCard,
   onInterestDialogOpenChange,
+  driverClaimMode,
+  onDriverClaimPreSubmit,
+  onDriverClaimCompleteRegistration,
 }: LoadCardProps) => {
   const safeOrigemCidade = fixBrokenPortugueseText(origemCidade);
   const safeDestinoCidade = fixBrokenPortugueseText(destinoCidade);
@@ -623,6 +644,17 @@ const LoadCard = memo(({
           <DriverClaimPanel
             loadId={loadId}
             panelId={`driver-claim-dialog-${loadId}`}
+            mode={driverClaimMode}
+            onPreSubmitInterceptor={onDriverClaimPreSubmit}
+            onCompleteRegistration={
+              onDriverClaimCompleteRegistration
+                ? (params) => {
+                    // Fecha o dialog do card antes do consumidor abrir o wizard.
+                    handleInterestDialogOpenChange(false);
+                    onDriverClaimCompleteRegistration(params);
+                  }
+                : undefined
+            }
             className="admin-dialog-surface rounded-[28px] border shadow-[0_32px_64px_-38px_hsl(223_56%_10%/0.38)] sm:rounded-[32px]"
           />
         </DialogContent>

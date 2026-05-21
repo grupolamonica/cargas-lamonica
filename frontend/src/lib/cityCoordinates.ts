@@ -40,7 +40,14 @@ export function normalizeOriginKey(origem: string): string {
 
 export function getOriginCoords(origem: string): CityCoord | null {
   const key = normalizeOriginKey(origem);
-  return CITY_COORDS[key] ?? null;
+  const coords = CITY_COORDS[key] ?? null;
+  // Dev-only: log misses para mapear cidades faltando no whitelist.
+  // TODO: substituir lookup hardcoded por Geoapify geocoding (refactor futuro — D-01).
+  if (!coords && import.meta.env?.DEV) {
+    // eslint-disable-next-line no-console
+    console.info(`[cityCoordinates] miss: "${key}" (origem original: "${origem}")`);
+  }
+  return coords;
 }
 
 export function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {

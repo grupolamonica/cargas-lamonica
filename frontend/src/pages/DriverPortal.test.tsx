@@ -1,9 +1,21 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: { auth: { getSession: vi.fn(), signInWithPassword: vi.fn(), signOut: vi.fn() } },
+}));
+
+// Mock driver auth (Phase 8 entry-point fix added useDriverAuth() to DriverPortal).
+vi.mock("@/hooks/useDriverAuth", () => ({
+  useDriverAuth: () => ({
+    session: null,
+    profile: null,
+    loading: false,
+    signOut: vi.fn(),
+  }),
+  DriverAuthProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 import DriverPortal from "@/pages/DriverPortal";
@@ -192,9 +204,11 @@ describe("DriverPortal", () => {
     "abre a central de notificacoes e mostra a carga salva para o motorista",
     async () => {
       render(
-        <MemoryRouter>
-          <DriverPortal />
-        </MemoryRouter>,
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MemoryRouter>
+            <DriverPortal />
+          </MemoryRouter>
+        </QueryClientProvider>,
       );
 
       expect(screen.getAllByRole("button", { name: /Abrir notificações/i })).toHaveLength(2);
@@ -215,9 +229,11 @@ describe("DriverPortal", () => {
 
   it("mostra os atalhos de cadastro, Suporte e dúvidas na home do motorista", () => {
     render(
-      <MemoryRouter>
-        <DriverPortal />
-      </MemoryRouter>,
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <DriverPortal />
+        </MemoryRouter>
+      </QueryClientProvider>,
     );
 
     const cadastroLinks = screen.getAllByRole("link", { name: "Cadastro" });
@@ -276,9 +292,11 @@ describe("DriverPortal", () => {
     });
 
     render(
-      <MemoryRouter>
-        <DriverPortal />
-      </MemoryRouter>,
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <DriverPortal />
+        </MemoryRouter>
+      </QueryClientProvider>,
     );
 
     fireEvent.click(screen.getAllByRole("button", { name: /Próxima/i })[0]);
@@ -288,9 +306,11 @@ describe("DriverPortal", () => {
 
   it("revalida as cargas do motorista ao voltar para a tela e via digest poll de 5min", () => {
     render(
-      <MemoryRouter>
-        <DriverPortal />
-      </MemoryRouter>,
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <DriverPortal />
+        </MemoryRouter>
+      </QueryClientProvider>,
     );
 
     const loadsQueryOptions = mockUseQuery.mock.calls

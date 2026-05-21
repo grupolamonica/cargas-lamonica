@@ -8,6 +8,8 @@ import ClientLogo from "@/components/ClientLogo";
 import DashboardHeader from "@/components/DashboardHeader";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
 import { cn } from "@/lib/utils";
+import { confirmAction } from "@/lib/confirm";
+import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 import { buildDisplayDateTime, formatFullDateTime, formatShortDateTime } from "@/lib/dateDisplay";
 import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
@@ -110,6 +112,7 @@ function buildTrailerPlateLabel(lead: OperatorLeadGroup["leads"][number]) {
 
 const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   const queryClient = useQueryClient();
+  const permissions = useOperatorPermissions();
   const [approvingLeadId, setApprovingLeadId] = useState<string | null>(null);
   const [cancellingLeadId, setCancellingLeadId] = useState<string | null>(null);
   const [revalidating, setRevalidating] = useState(false);
@@ -421,9 +424,12 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   };
 
   const handleCancel = async (loadId: string, leadId: string, cpf: string | null) => {
-    const cpfLabel = cpf?.trim() ? ` do CPF ${cpf}` : "";
-    const confirmed = window.confirm(
-      `Tem certeza que deseja cancelar a candidatura${cpfLabel}? O motorista verá que a candidatura foi cancelada.`,
+    // UI-02: mensagem genérica para não vazar CPF em logs/screenshots/AT.
+    // Para distinguir candidaturas no diálogo, exibimos apenas o sufixo do CPF (defense in depth).
+    const cpfSuffix = cpf?.trim() ? cpf.trim().slice(-2).padStart(2, "*") : null;
+    const tail = cpfSuffix ? ` (final ${cpfSuffix})` : "";
+    const confirmed = confirmAction(
+      `Tem certeza que deseja cancelar a candidatura${tail}? O motorista verá que a candidatura foi cancelada.`,
     );
 
     if (!confirmed) {
@@ -864,7 +870,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                             {group.load.sheetStatus}
                           </span>
                         ) : null}
-                        {group.load.status === "OPEN" && !historicoMode ? (
+                        {group.load.status === "OPEN" && !historicoMode && permissions.canAllocateLeads ? (
                           <button
                             type="button"
                             onClick={() => {
@@ -964,7 +970,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                                       type="button"
                                       onClick={() => void handleCancel(group.load.id, lead.id, lead.cpf)}
                                       disabled={cancellingLeadId === lead.id}
-                                      title={`Cancelar candidatura${lead.cpf ? ` do CPF ${lead.cpf}` : ""}`}
+                                      title={`Cancelar candidatura${lead.cpf ? ` (final ${lead.cpf.trim().slice(-2)})` : ""}`}
                                       className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-4 py-2 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-400/40 dark:bg-red-500/15 dark:text-red-200 dark:hover:bg-red-500/25"
                                     >
                                       {cancellingLeadId === lead.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}

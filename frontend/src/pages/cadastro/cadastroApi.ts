@@ -220,9 +220,65 @@ function extractPhones(data: ConsultaEnvelope["data"]): string[] {
   return [...new Set(normalized)];
 }
 
+// Linguagem motorista — sem mostrar "código N" nem URL técnica.
+// 2026-05-21 Fase H.1: frases curtas (max ~50 chars) — motorista com baixa
+// visão lê melhor frases curtas que parágrafos longos.
+const OCR_GENERIC_ERROR = "Não conseguimos ler agora.";
+const OCR_NETWORK_ERROR = "Deu problema do nosso lado.";
+const OCR_WRONG_DOC_ERROR = "Esse não parece o documento certo.";
+
+/**
+ * Vocabulario tecnico que NUNCA deve chegar ao motorista. Quando detectamos
+ * isso na mensagem do backend, substituimos pelo generico amigavel.
+ */
+const TECHNICAL_PATTERN =
+  /HTTP\s*\d{3}|falha\s+na\s+requisi|timeout|fetch\s+failed|network\s*error|internal\s*server|Erro\s+\d{3,}|FastAPI|EasyOCR|OCR_\w+|Token\s+(?:de\s+autentica|invalid)|Bearer|JWT|detran-[a-z]{2}|Concessionária\s+inválida|Bucket\s+not\s+found|STORAGE_\w+|INFOSIMPLES_\w+|supabase|UPLOAD_\w+|api[_\s]error|exception|traceback|null\s*reference|undefined\s+is\s+not/i;
+
+/**
+ * Hints baseados em palavras-chave que sugerem "documento errado" — quando
+ * o OCR processou OK mas nao extraiu os campos certos (ex.: motorista mandou
+ * selfie no slot do CRLV).
+ */
+const WRONG_DOC_HINTS =
+  /(?:n[aã]o\s+(?:foi\s+possivel|conseguimos)\s+extrair|sem\s+texto|extra[íi]u\s+0\b|tipo\s+de\s+documento|documento\s+(?:n[aã]o\s+reconhecido|inv[aá]lido))/i;
+
+/**
+ * Converte qualquer mensagem (front, backend, sidecar) em algo amigavel
+ * para o motorista. Filtra jargao tecnico e detecta padroes de "doc errado".
+ *
+ * Centralizado aqui para que `extractDetail`, `ocr*` e `OcrUploadTile`
+ * compartilhem a mesma logica de scrubbing.
+ */
+export function humanizeOcrMessage(message?: string, status?: number): string {
+  if (!message) {
+    return status && status >= 500 ? OCR_NETWORK_ERROR : OCR_GENERIC_ERROR;
+  }
+  const trimmed = String(message).trim();
+  if (!trimmed) {
+    return status && status >= 500 ? OCR_NETWORK_ERROR : OCR_GENERIC_ERROR;
+  }
+  if (TECHNICAL_PATTERN.test(trimmed)) {
+    return status && status >= 500 ? OCR_NETWORK_ERROR : OCR_GENERIC_ERROR;
+  }
+  if (WRONG_DOC_HINTS.test(trimmed)) {
+    return OCR_WRONG_DOC_ERROR;
+  }
+  // Mensagem ja parece amigavel — sanity check de tamanho (> 200 chars =
+  // provavelmente trace/stack disfarcado de mensagem).
+  if (trimmed.length > 200) {
+    return status && status >= 500 ? OCR_NETWORK_ERROR : OCR_GENERIC_ERROR;
+  }
+  return trimmed;
+}
+
 function extractDetail(detail: unknown, status: number): string {
-  if (typeof detail === "string" && detail.trim()) return detail;
-  if (Array.isArray(detail)) {
+  // FastAPI validation errors (4xx): mostra a primeira msg traduzida quando útil,
+  // senão genérico. Server-side details podem vazar jargão técnico (Python/GPT/EasyOCR),
+  // então filtramos via humanizeOcrMessage.
+  if (typeof detail === "string" && detail.trim() && status < 500) {
+    return humanizeOcrMessage(detail, status);
+  }
+  if (Array.isArray(detail) && status < 500) {
     // FastAPI validation errors: [{loc, msg, type}, ...]
     const msgs = detail
       .map((d) => {
@@ -231,16 +287,10 @@ function extractDetail(detail: unknown, status: number): string {
         return "";
       })
       .filter(Boolean);
-    if (msgs.length) return msgs.join("; ");
+    if (msgs.length) return humanizeOcrMessage(msgs[0], status);
   }
-  if (detail && typeof detail === "object") {
-    try {
-      return JSON.stringify(detail);
-    } catch {
-      // ignore
-    }
-  }
-  return `Falha na requisicao (HTTP ${status}).`;
+  // 5xx ou detalhe vazio → mensagem genérica
+  return status >= 500 ? OCR_NETWORK_ERROR : OCR_GENERIC_ERROR;
 }
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
@@ -354,6 +404,17 @@ function splitLocal(texto: string): { cidade: string; uf: string } {
   return { cidade: texto.trim(), uf: "" };
 }
 
+/**
+ * Converte data BR (DD/MM/AAAA) para ISO (AAAA-MM-DD). Usado pelos componentes
+ * cadastro-v2 que esperam o formato ISO no draft + payload final.
+ */
+export function brDateToIso(date: string): string {
+  if (!date) return date;
+  const m = date.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return date;
+}
+
 export async function ocrCnh(
   file: File,
   idCadastro?: string,
@@ -368,7 +429,7 @@ export async function ocrCnh(
   const localCnh = splitLocal(v("local_expedicao", "local", "local_emissao"));
   const localNasc = splitLocal(v("local_nascimento", "naturalidade_local"));
 
-  const validade = v("validade", "data_validade", "vencimento");
+  const validade = brDateToIso(v("validade", "data_validade", "vencimento"));
   let primeira =
     v("data_1_habilitacao", "primeira_habilitacao", "1_habilitacao",
       "primeira_habilitacao_data", "data_primeira_habilitacao",
@@ -1159,4 +1220,86 @@ export async function ocrSelfieCnh(
     nome_cnh_legivel: v("nome_cnh_legivel"),
     observacoes: v("observacoes"),
   };
+}
+
+// ───────────────────── Persistência draft (Supabase Storage) ─────────────────────
+
+/**
+ * Resposta do endpoint `POST /api/cadastro/upload-draft-file`.
+ *
+ * O backend grava o arquivo em `cadastro-drafts/{ownerId}/{cargaId}/{slot}_{ts}.{ext}`
+ * (bucket privado) e devolve uma URL assinada com TTL ~24h para preview.
+ */
+export interface UploadDraftFileResponse {
+  storage_path: string;
+  signed_url: string;
+  slot: string;
+  filename: string;
+  size: number;
+  content_type: string;
+  expires_at: string;
+}
+
+// Mensagens motorista-friendly — alinhadas com o tom já usado pelo OCR sidecar.
+const UPLOAD_DRAFT_GENERIC_ERROR =
+  "Não conseguimos guardar esse arquivo agora. Tenta de novo daqui a pouco.";
+const UPLOAD_DRAFT_NETWORK_ERROR =
+  "Deu problema do nosso lado ao guardar o arquivo. Tenta de novo daqui a pouco.";
+
+/**
+ * Envia um arquivo do wizard para o bucket privado `cadastro-drafts` via
+ * backend Node.js. Best-effort: cada chamada é independente, falhas não
+ * bloqueiam o OCR nem o submit final.
+ */
+export async function uploadDraftFile(
+  file: File,
+  slot: string,
+  cargaId: string,
+  options?: { cpf?: string; accessToken?: string | null },
+): Promise<UploadDraftFileResponse> {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("slot", slot);
+  fd.append("cargaId", cargaId);
+  if (options?.cpf) fd.append("cpf", options.cpf);
+
+  const headers: Record<string, string> = {};
+  if (options?.accessToken) headers.Authorization = `Bearer ${options.accessToken}`;
+
+  let res: Response;
+  try {
+    res = await fetch("/api/cadastro/upload-draft-file", {
+      method: "POST",
+      headers,
+      body: fd,
+    });
+  } catch (networkError) {
+    if (import.meta.env.DEV) {
+      console.warn("[uploadDraftFile] network error", networkError);
+    }
+    throw new Error(UPLOAD_DRAFT_NETWORK_ERROR);
+  }
+
+  let json: unknown = null;
+  let parseErr = false;
+  try {
+    json = await res.json();
+  } catch {
+    parseErr = true;
+  }
+
+  if (!res.ok) {
+    if (parseErr) {
+      throw new Error(
+        res.status >= 500 ? UPLOAD_DRAFT_NETWORK_ERROR : UPLOAD_DRAFT_GENERIC_ERROR,
+      );
+    }
+    const detail =
+      (json as { message?: unknown; detail?: unknown; error?: unknown }) ?? {};
+    const candidate = detail.message ?? detail.detail ?? detail.error;
+    throw new Error(extractDetail(candidate, res.status));
+  }
+
+  if (parseErr) throw new Error(UPLOAD_DRAFT_GENERIC_ERROR);
+  return json as UploadDraftFileResponse;
 }

@@ -32,6 +32,20 @@ vi.mock("@/services/apiClient", () => ({
   getOperatorAccessToken: vi.fn().mockResolvedValue("test-token"),
 }));
 
+vi.mock("@/hooks/useOperatorPermissions", () => ({
+  useOperatorPermissions: () => ({
+    isOperator: true,
+    isAdvanced: true,
+    isIntermediate: false,
+    canApproveMotoristas: true,
+    canRejectMotoristas: true,
+    canEditMotoristas: true,
+    canBulkRevalidateVehicles: true,
+    canAllocateLeads: true,
+    canCancelLeads: true,
+  }),
+}));
+
 const mockMutate = vi.fn();
 
 describe("Motoristas", () => {

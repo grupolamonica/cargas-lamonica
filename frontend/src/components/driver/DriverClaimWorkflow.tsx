@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, ArrowRight, BellRing, CheckCircle2 } from "lucide-react";
+import { Activity, AlertCircle, ArrowRight, BellRing, CheckCircle2, ClipboardList, Loader2, RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatShortDateTime } from "@/lib/dateDisplay";
@@ -12,6 +12,10 @@ interface DriverClaimWorkflowProps {
   notifications: DriverLeadNotification[];
   notificationCount: number;
   onDismissNotification: (notification: DriverLeadNotification) => void;
+  /** Callback quando motorista clica em "Completar/Atualizar cadastro". */
+  onCompleteRegistration?: (loadId: string) => void;
+  /** loadId que está sendo carregado (pre-check em progresso) — exibe spinner no botão. */
+  registrationLoadingId?: string | null;
 }
 
 export function DriverClaimWorkflow({
@@ -20,6 +24,8 @@ export function DriverClaimWorkflow({
   notifications,
   notificationCount,
   onDismissNotification,
+  onCompleteRegistration,
+  registrationLoadingId,
 }: DriverClaimWorkflowProps) {
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -49,6 +55,10 @@ export function DriverClaimWorkflow({
         <div className="max-h-[calc(86vh-7.5rem)] overflow-y-auto px-3 py-3 sm:max-h-[calc(82vh-8.5rem)] sm:px-4 sm:py-4">
           {notificationCount ? (
             <div className="grid gap-3">
+              {/* N-01: hint sobre cadência de atualização — motorista entende que não é tempo real. */}
+              <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground/80">
+                Atualizamos a cada 15 segundos enquanto sua candidatura está em análise.
+              </p>
               {notifications.map((notification) => {
                 const routeLabel = `${notification.origem} -> ${notification.destino}`;
                 const happenedAtLabel = formatShortDateTime(notification.happenedAt, "Agora");
@@ -111,6 +121,33 @@ export function DriverClaimWorkflow({
                                 : "Abrir carga"}
                             <ArrowRight className="h-4 w-4" />
                           </Link>
+
+                          {/* CTA de cadastro: aparece para candidaturas sem cadastro ou com documentos próximos do vencimento */}
+                          {(notification.kind === "PRE_REGISTERED" || notification.kind === "QUEUED") &&
+                            onCompleteRegistration ? (
+                            <button
+                              type="button"
+                              disabled={registrationLoadingId === notification.loadId}
+                              onClick={() => {
+                                onCompleteRegistration(notification.loadId);
+                              }}
+                              className={cn(
+                                "inline-flex w-full items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors sm:w-auto",
+                                notification.kind === "PRE_REGISTERED"
+                                  ? "bg-amber-500 text-white hover:bg-amber-600"
+                                  : "border border-primary/40 bg-white/90 text-primary hover:bg-primary/8 hover:text-primary",
+                                registrationLoadingId === notification.loadId && "cursor-not-allowed opacity-60",
+                              )}
+                            >
+                              {registrationLoadingId === notification.loadId ? (
+                                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                              ) : (
+                                <ClipboardList className="h-4 w-4" aria-hidden="true" />
+                              )}
+                              Completar cadastro
+                            </button>
+                          ) : null}
+
                           <button
                             type="button"
                             onClick={() => onDismissNotification(notification)}
