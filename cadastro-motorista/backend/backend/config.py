@@ -138,3 +138,42 @@ if not OPENAI_API_KEY:
         "OPENAI_API_KEY não configurado — GPT-4o Vision indisponível. "
         "Endpoints OCR rodam só com provider primário (Infosimples/local)."
     )
+
+
+# ── OCR Routing Strategies (Fase 2 da migração OCR) ──────────────────────────
+# Cada endpoint OCR tem uma estratégia configurável por env var:
+#   "legacy"                          = comportamento atual (Infosimples ou
+#                                       EasyOCR local conforme OCR_*_PROVIDER)
+#   "infosimples-with-vision-fallback" = tenta Infosimples; se code != 200 ou
+#                                        exception, cai pra GPT-4o Vision
+#   "vision-only"                     = chama GPT-4o Vision direto
+#
+# Defaults preservam comportamento atual (=legacy). Ativacao por endpoint
+# (rollback granular: setar uma var = "legacy" + restart cadastro-ocr).
+#
+# Recomendacao por endpoint (pos-validacao da Fase 1):
+#   CNH/CRLV: infosimples-with-vision-fallback (validacao federal preserva)
+#   cartao_cnpj/rntrc/comprovante: vision-only (EasyOCR substituido)
+#   selfie_cnh (novo endpoint Fase 2): vision-only (unico provider)
+
+_VALID_STRATEGIES = frozenset({"legacy", "infosimples-with-vision-fallback", "vision-only"})
+
+
+def _read_strategy(env_name: str, default: str = "legacy") -> str:
+    raw = os.getenv(env_name, default).strip().lower()
+    if raw not in _VALID_STRATEGIES:
+        logging.warning(
+            "%s='%s' invalido (opcoes: %s) — usando default %s",
+            env_name, raw, ", ".join(sorted(_VALID_STRATEGIES)), default,
+        )
+        return default
+    return raw
+
+
+OCR_CNH_STRATEGY = _read_strategy("OCR_CNH_STRATEGY")
+OCR_CRLV_STRATEGY = _read_strategy("OCR_CRLV_STRATEGY")
+OCR_CARTAO_CNPJ_STRATEGY = _read_strategy("OCR_CARTAO_CNPJ_STRATEGY")
+OCR_RNTRC_STRATEGY = _read_strategy("OCR_RNTRC_STRATEGY")
+OCR_COMPROVANTE_STRATEGY = _read_strategy("OCR_COMPROVANTE_STRATEGY")
+# Selfie eh novo endpoint Fase 2 — default vision-only ja que nao tem fallback.
+OCR_SELFIE_CNH_STRATEGY = _read_strategy("OCR_SELFIE_CNH_STRATEGY", default="vision-only")
