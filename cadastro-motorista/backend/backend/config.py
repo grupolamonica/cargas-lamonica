@@ -85,3 +85,56 @@ if not INFOSIMPLES_TOKEN or INFOSIMPLES_TOKEN == "COLE_SEU_TOKEN_AQUI":
         "Edite o arquivo .env com um token válido. "
         "(OCR local continua funcionando se OCR_*_PROVIDER=local.)"
     )
+
+
+# ── GPT-4o Vision (Fase 1 da migração OCR — 2026-05-21) ─────────────────────
+# Cliente OpenAI Vision API usado como:
+#   - Fallback para CNH/CRLV quando Infosimples retornar code != 200 (Fase 2)
+#   - Provider primário para cartão CNPJ, RNTRC, comprovante residência e
+#     selfie c/ CNH (endpoint novo) — vide ocr_router.route().
+# Token vem SO via env var OPENAI_API_KEY — nunca em código/repo/log/commit.
+# Default GPT4O_VISION_MODEL="gpt-4o" (modelo geral, suporta vision em alta
+# resolução). Trocar para "gpt-4o-mini" reduz custo ~10x mas perde acurácia
+# em CNH/CRLV brasileiros.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+GPT4O_VISION_MODEL = os.getenv("GPT4O_VISION_MODEL", "gpt-4o").strip()
+
+
+def _env_int(name: str, default: int) -> int:
+    """Lê env var como int com fallback silencioso pro default."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logging.warning("%s='%s' não é int — usando default %s", name, raw, default)
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """Lê env var como float com fallback silencioso pro default."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logging.warning("%s='%s' não é float — usando default %s", name, raw, default)
+        return default
+
+
+GPT4O_VISION_TIMEOUT_SECONDS = _env_int("GPT4O_VISION_TIMEOUT_SECONDS", 30)
+GPT4O_VISION_MAX_RETRIES = _env_int("GPT4O_VISION_MAX_RETRIES", 2)
+
+# Orçamento diário em USD para chamadas Vision. Quando atingido, envelope
+# retorna code=429 ("Limite diário de OCR atingido"). Reset diário UTC.
+# Default 25.0 cobre volume previsto (500 cadastros/mês × 6 docs × ~$0.02
+# ≈ $60/mês = ~$2/dia, deixando folga 12x para picos/burst).
+GPT4O_DAILY_BUDGET_USD = _env_float("GPT4O_DAILY_BUDGET_USD", 25.0)
+
+if not OPENAI_API_KEY:
+    logging.info(
+        "OPENAI_API_KEY não configurado — GPT-4o Vision indisponível. "
+        "Endpoints OCR rodam só com provider primário (Infosimples/local)."
+    )
