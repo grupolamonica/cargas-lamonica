@@ -46,6 +46,8 @@ const schemaSql = `
     nome text NOT NULL,
     descricao text,
     logo_url text,
+    logo_url_card text,
+    logo_url_proximas text,
     created_at timestamptz NOT NULL DEFAULT now()
   );
 
@@ -93,6 +95,8 @@ const schemaSql = `
     viagem_id uuid REFERENCES public.cargas_casadas(id) ON DELETE SET NULL,
     ordem_viagem integer,
     sheet_lh text,
+    sheet_data_carregamento text,
+    sheet_data_descarga text,
     sheet_motorista text,
     sheet_status text,
     created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
@@ -166,6 +170,24 @@ const schemaSql = `
     actor_id text,
     correlation_id text,
     created_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.route_metrics_cache (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    origin_key text NOT NULL,
+    destination_key text NOT NULL,
+    origem text NOT NULL,
+    destino text NOT NULL,
+    distancia_km numeric,
+    duracao_horas numeric,
+    tempo_estimado_horas numeric,
+    perfil_padrao text,
+    valor_padrao numeric,
+    bonus_padrao numeric,
+    ativa boolean NOT NULL DEFAULT true,
+    observacoes text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
   );
 `;
 
@@ -249,8 +271,9 @@ export async function seedCarga(overrides = {}) {
     `INSERT INTO public.cargas (
        id, cliente_id, data, horario, origem, destino, perfil,
        valor, bonus, driver_visibility, status, is_template,
+       distancia_km, duracao_horas,
        reserved_driver_id, booked_driver_id, viagem_id, ordem_viagem, created_by, created_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
     [
       id,
       overrides.cliente_id ?? null,
@@ -264,6 +287,10 @@ export async function seedCarga(overrides = {}) {
       overrides.driver_visibility ?? "PREMIUM",
       overrides.status ?? "OPEN",
       overrides.is_template ?? false,
+      // route metrics opcionais — passar quando o teste depende de publishable state.
+      // (driver-portal listing filtra cargas sem distancia/duracao via buildDriverLoadPublicationState)
+      overrides.distancia_km ?? null,
+      overrides.duracao_horas ?? null,
       overrides.reserved_driver_id ?? null,
       overrides.booked_driver_id ?? null,
       overrides.viagem_id ?? null,
