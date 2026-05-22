@@ -13,6 +13,8 @@ import { DriverAuthProvider } from "./hooks/useDriverAuth";
 
 const Overview = lazy(() => import("./pages/Overview"));
 const ManageCargas = lazy(() => import("./pages/ManageCargas"));
+const ManagePacotes = lazy(() => import("./pages/ManagePacotes"));
+const PacoteDetails = lazy(() => import("./pages/PacoteDetails"));
 const ManageClientes = lazy(() => import("./pages/ManageClientes"));
 const ManageRoutes = lazy(() => import("./pages/ManageRoutes"));
 const Leads = lazy(() => import("./pages/Leads"));
@@ -89,6 +91,8 @@ const App = () => {
                   <Route path="/painel" element={<Overview />} />
                   <Route path="/clientes" element={<ManageClientes />} />
                   <Route path="/cargas" element={<ManageCargas />} />
+                  <Route path="/pacotes" element={<ManagePacotes />} />
+                  <Route path="/pacotes/:pacoteId" element={<PacoteDetails />} />
                   <Route path="/rotas" element={<ManageRoutes />} />
                   <Route path="/operador" element={<OperatorDashboard />} />
                   <Route path="/leads" element={<Leads />} />
