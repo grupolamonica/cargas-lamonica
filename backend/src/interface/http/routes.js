@@ -71,6 +71,7 @@ import {
   resolveDriverLoadsReadModelResponse,
   resolveDriverPortalVisitResponse,
   resolveDriverSponsorClickResponse,
+  resolveGetPublicPacoteResponse,
 } from "./public-loads/handlers.js";
 
 import {
@@ -160,6 +161,8 @@ export function registerRoutes(app) {
   router.get("/api/driver/loads/digest", wrap(resolveDriverLoadsDigestResponse));
   router.post("/api/driver/portal-view", wrap(resolveDriverPortalVisitResponse));
   router.post("/api/driver/sponsor-click", wrap(resolveDriverSponsorClickResponse));
+  // Phase 10 (cargas-casadas): driver-facing anonimo, espelha /api/driver/loads
+  router.get("/api/driver/pacotes/:pacoteId", wrap(resolveGetPublicPacoteResponse));
 
   // Driver registration & profile
   // resolveDriverProfileResponse despacha GET vs PUT via request.method internamente

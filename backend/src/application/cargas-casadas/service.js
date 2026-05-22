@@ -11,3 +11,4 @@ export { publishPacote } from "./use-cases/publish-pacote.js";
 export { cancelPacote } from "./use-cases/cancel-pacote.js";
 export { listPacotes } from "./use-cases/list-pacotes.js";
 export { getPacote } from "./use-cases/get-pacote.js";
+export { getPublicPacote } from "./use-cases/get-public-pacote.js";

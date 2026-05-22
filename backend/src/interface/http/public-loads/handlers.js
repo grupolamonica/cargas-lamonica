@@ -1,17 +1,30 @@
 import "../../../infrastructure/config/load-env.js";
 
+import { ZodError } from "zod";
+
 import {
   createSupabaseAdminClient,
   syncGoogleSheetLoads,
 } from "../../../application/google-sheets/google-sheet-loads.js";
-import { ValidationError } from "../../../domain/load-claims/errors.js";
-import { buildInternalErrorResponse, buildValidationErrorResponse } from "../error-mapping.js";
+import {
+  LoadClaimServiceError,
+  NotFoundError,
+  ValidationError,
+} from "../../../domain/load-claims/errors.js";
+import {
+  buildInternalErrorResponse,
+  buildServiceErrorResponse,
+  buildValidationErrorResponse,
+} from "../error-mapping.js";
+import { zodErrorToHttpResponse } from "../schemas/common.js";
 import { getCorrelationId, getQueryParam, getRequestIp } from "../http-utils.js";
 import {
   fetchDriverLoadFacets,
   fetchDriverLoadsReadModel,
   getHealthSnapshot,
 } from "../../../application/operator-admin/service.js";
+import { getPublicPacote } from "../../../application/cargas-casadas/service.js";
+import { pacoteIdParamsSchema } from "../../../domain/cargas-casadas/schemas.js";
 import { recordDriverPortalVisit } from "../../../domain/operator-admin/driver-flow-metrics.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 
@@ -303,5 +316,44 @@ export async function resolveDriverLoadsDigestResponse(request) {
       statusCode: 503,
       payload: { error: "SERVICE_UNAVAILABLE", meta: { correlationId } },
     };
+  }
+}
+
+/**
+ * GET /api/driver/pacotes/:pacoteId — Phase 10 (cargas-casadas)
+ *
+ * Anonimo (sem driver auth) — espelha resolveDriverLoadsReadModelResponse.
+ * Retorna pacote completo + cargas ordenadas APENAS quando o pacote esta em
+ * status publicado/reservado/em_andamento. Outros status (incluindo rascunho,
+ * concluido, cancelado, ou pacoteId inexistente) -> 404 com mesma mensagem
+ * para nao vazar informacao (T-10-20).
+ *
+ * Validacao do pacoteId via pacoteIdParamsSchema (UUID strict) — pacoteId
+ * invalido -> 400.
+ */
+export async function resolveGetPublicPacoteResponse(request) {
+  const correlationId = getCorrelationId(request);
+  try {
+    const { pacoteId } = pacoteIdParamsSchema.parse({
+      pacoteId: getQueryParam(request, "pacoteId"),
+    });
+    return await getPublicPacote({ pacoteId, correlationId });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return zodErrorToHttpResponse(error, correlationId);
+    }
+    if (error instanceof NotFoundError) {
+      return buildServiceErrorResponse(error, correlationId);
+    }
+    if (error instanceof ValidationError) {
+      return buildValidationErrorResponse(error, correlationId);
+    }
+    if (error instanceof LoadClaimServiceError) {
+      return buildServiceErrorResponse(error, correlationId);
+    }
+    return buildInternalErrorResponse(
+      correlationId,
+      "Unexpected error while loading the pacote.",
+    );
   }
 }
