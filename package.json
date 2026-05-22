@@ -9,9 +9,16 @@
     "test:frontend": "npm --prefix frontend run test",
     "test:backend": "npm --prefix backend run test",
     "test": "npm run test:frontend && npm run test:backend",
+    "test:e2e:cargas-casadas": "playwright test --config=playwright.config.ts --reporter=list --workers=1",
+    "test:e2e:cargas-casadas:list": "playwright test --config=playwright.config.ts --list",
     "install:all": "npm --prefix frontend install && npm --prefix backend install"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^22.19.19",
+    "@types/pg": "^8.20.0",
+    "concurrently": "^9.1.2",
+    "pg": "^8.21.0",
+    "typescript": "^5.9.3"
   }
 }
