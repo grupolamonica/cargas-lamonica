@@ -10,6 +10,7 @@ import {
   selectCargasByPacote,
   selectPacoteForUpdate,
 } from "./_shared.js";
+import { invalidatePendingClaimsForPacote } from "./invalidate-pending-claims.js";
 
 /**
  * Reordena as cargas de um pacote em massa.
@@ -67,6 +68,8 @@ export async function reorderCargasInPacote({
     let novaVersion = pacote.version;
     if (pacote.status === PACOTE_STATUS.PUBLICADO) {
       novaVersion = await bumpPacoteVersion(client, pacoteId);
+      // D-06: invalida candidaturas pendentes apos mutacao em pacote publicado.
+      await invalidatePendingClaimsForPacote(client, pacoteId, "PACOTE_VERSION_BUMPED");
     }
 
     await auditPacoteEvent(client, {

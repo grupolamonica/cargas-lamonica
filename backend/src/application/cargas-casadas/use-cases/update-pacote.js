@@ -5,6 +5,7 @@ import {
 } from "../../../domain/cargas-casadas/constants.js";
 import { ConflictError } from "../../../domain/load-claims/errors.js";
 import { auditPacoteEvent, bumpPacoteVersion, selectPacoteForUpdate } from "./_shared.js";
+import { invalidatePendingClaimsForPacote } from "./invalidate-pending-claims.js";
 
 /**
  * Atualiza valor_total do pacote.
@@ -32,6 +33,9 @@ export async function updatePacote({ operatorId, pacoteId, payload, requestIp, c
           WHERE id = $1`,
         [pacoteId, novoValor],
       );
+      // D-06: invalida candidaturas pendentes (REJECTED + libera reservas).
+      // Mesma transacao — atomic com o bump de version.
+      await invalidatePendingClaimsForPacote(client, pacoteId, "PACOTE_VERSION_BUMPED");
     } else {
       await client.query(
         `UPDATE public.cargas_casadas
