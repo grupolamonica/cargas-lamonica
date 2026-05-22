@@ -16,6 +16,7 @@ import {
   selectCargaForUpdate,
   selectPacoteForUpdate,
 } from "./_shared.js";
+import { invalidatePendingClaimsForPacote } from "./invalidate-pending-claims.js";
 
 /**
  * Adiciona uma carga avulsa a um pacote.
@@ -143,6 +144,8 @@ export async function addCargaToPacote({
     let novaVersion = pacote.version;
     if (pacote.status === PACOTE_STATUS.PUBLICADO) {
       novaVersion = await bumpPacoteVersion(client, pacoteId);
+      // D-06: invalida candidaturas pendentes apos mutacao em pacote publicado.
+      await invalidatePendingClaimsForPacote(client, pacoteId, "PACOTE_VERSION_BUMPED");
     }
 
     await auditPacoteEvent(client, {

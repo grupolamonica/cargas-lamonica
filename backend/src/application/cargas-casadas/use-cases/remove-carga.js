@@ -5,6 +5,7 @@ import {
 } from "../../../domain/cargas-casadas/constants.js";
 import { ConflictError, NotFoundError } from "../../../domain/load-claims/errors.js";
 import { auditPacoteEvent, bumpPacoteVersion, selectPacoteForUpdate } from "./_shared.js";
+import { invalidatePendingClaimsForPacote } from "./invalidate-pending-claims.js";
 
 /**
  * Remove uma carga do pacote — UPDATE cargas SET viagem_id=NULL, ordem_viagem=NULL.
@@ -59,6 +60,8 @@ export async function removeCargaFromPacote({
     let novaVersion = pacote.version;
     if (pacote.status === PACOTE_STATUS.PUBLICADO) {
       novaVersion = await bumpPacoteVersion(client, pacoteId);
+      // D-06: invalida candidaturas pendentes apos mutacao em pacote publicado.
+      await invalidatePendingClaimsForPacote(client, pacoteId, "PACOTE_VERSION_BUMPED");
     }
 
     await auditPacoteEvent(client, {
