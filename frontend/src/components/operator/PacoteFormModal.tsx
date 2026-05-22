@@ -138,7 +138,6 @@ const PacoteFormModal = ({ open, mode, pacote = null, onClose, onSuccess }: Prop
         // Best-effort: add cargas sequencialmente. Se algum add falha, cancela o pacote.
         try {
           for (const item of items) {
-            // eslint-disable-next-line no-await-in-loop -- ordem importa
             await addCargaToPacote(pacoteId, { cargaId: item.cargaId, ordem: item.ordem });
           }
         } catch (innerErr) {
@@ -176,7 +175,6 @@ const PacoteFormModal = ({ open, mode, pacote = null, onClose, onSuccess }: Prop
       // Remove cargas que saíram
       for (const existingId of existingIds) {
         if (!newIds.has(existingId)) {
-          // eslint-disable-next-line no-await-in-loop
           await removeCargaFromPacote(pacoteId, existingId);
         }
       }
@@ -184,7 +182,6 @@ const PacoteFormModal = ({ open, mode, pacote = null, onClose, onSuccess }: Prop
       // Adiciona cargas novas
       for (const item of items) {
         if (!existingIds.has(item.cargaId)) {
-          // eslint-disable-next-line no-await-in-loop
           await addCargaToPacote(pacoteId, { cargaId: item.cargaId, ordem: item.ordem });
         }
       }
