@@ -80,6 +80,8 @@ const schemaSql = `
     sheet_carreta text,
     sheet_status text,
     sheet_synced_at timestamptz,
+    viagem_id uuid,
+    ordem_viagem integer,
     created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()

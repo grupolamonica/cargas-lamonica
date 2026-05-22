@@ -3,6 +3,7 @@ import { withPgClient, withPgTransaction } from "../../infrastructure/pg/postgre
 import { rehydrateStoredValidationSummary } from "./public-lead-validation.js";
 import { getLoadClaimConfig } from "../../domain/load-claims/config.js";
 import { hasPublicLeadWhatsAppRouting } from "./public-leads.js";
+import { createPacoteClaim } from "../cargas-casadas/use-cases/atomic-claim.js";
 import {
   ACTIVE_CLAIM_STATUSES,
   CLAIM_EVENT_TYPE,
@@ -812,6 +813,28 @@ async function persistResponseAndLog(client, { scope, driverId, loadId, idempote
 }
 
 export async function createLoadClaim({ loadId, driverId, idempotencyKey, correlationId, requestPayload = {} }) {
+  // Phase 10 (D-04): se a carga pertence a um pacote (cargas.viagem_id NOT NULL),
+  // o claim torna-se atomico sobre o pacote inteiro. Delega para createPacoteClaim,
+  // que reserva pacote + todas as cargas-irmas em uma unica transacao com lock
+  // pessimista em cargas_casadas + cargas + driver_profiles.
+  //
+  // O lookup do viagem_id e feito fora da transacao principal (cheap read; sem race
+  // com mudancas de viagem_id, que sao operacoes operator-admin protegidas por lock
+  // pessimista em cargas_casadas).
+  const loadHeaderResult = await withPgClient((c) =>
+    c.query(`SELECT viagem_id FROM public.cargas WHERE id = $1`, [loadId]),
+  );
+  const loadHeader = loadHeaderResult.rows[0] ?? null;
+  if (loadHeader?.viagem_id) {
+    return createPacoteClaim({
+      pacoteId: loadHeader.viagem_id,
+      driverId,
+      idempotencyKey,
+      requestPayload,
+      correlationId,
+    });
+  }
+
   const config = ensureClaimSystemEnabled();
   const normalizedIdempotencyKey = requireIdempotencyKey(idempotencyKey);
   const resolvedCorrelationId = correlationId || createCorrelationId();
