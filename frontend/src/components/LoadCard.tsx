@@ -6,11 +6,14 @@ import { toast } from "sonner";
 
 import ClientLogo from "@/components/ClientLogo";
 import DriverClaimPanel from "@/components/driver/DriverClaimPanel";
+import PacoteHeader from "@/components/load-card/PacoteHeader";
+import PacoteStopsList from "@/components/load-card/PacoteStopsList";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
+import type { PacoteMeta } from "@/services/readModels";
 
 interface LoadCardProps {
   id: string;
@@ -41,6 +44,13 @@ interface LoadCardProps {
   SecondaryIcon?: LucideIcon;
   clienteLogoUrlCard?: string | null;
   onInterestDialogOpenChange?: (isOpen: boolean) => void;
+  /**
+   * Meta do pacote (cargas casadas) — quando presente E `total_cargas > 1`, o card
+   * renderiza a vista "viagem casada" (header + lista vertical de paradas + valor
+   * do pacote). Caso ausente OU `total_cargas === 1`, render permanece idêntico
+   * ao card avulsa pre-existente (CARGAS-CASADAS-08 zero regressão).
+   */
+  pacoteMeta?: PacoteMeta | null;
 }
 
 const LoadCard = memo(({
@@ -69,7 +79,11 @@ const LoadCard = memo(({
   SecondaryIcon = Navigation,
   clienteLogoUrlCard,
   onInterestDialogOpenChange,
+  pacoteMeta,
 }: LoadCardProps) => {
+  // Pacote degenerado (total_cargas === 1) é funcionalmente equivalente a avulsa
+  // — renderiza como avulsa, sem header/lista de paradas. CARGAS-CASADAS-08.
+  const renderPacote = Boolean(pacoteMeta && pacoteMeta.total_cargas > 1);
   const safeOrigemCidade = fixBrokenPortugueseText(origemCidade);
   const safeDestinoCidade = fixBrokenPortugueseText(destinoCidade);
   const safeClienteNome = fixBrokenPortugueseText(clienteNome);
@@ -202,6 +216,58 @@ const LoadCard = memo(({
 
   return (
     <Dialog open={isInterestDialogOpen} onOpenChange={handleInterestDialogOpenChange}>
+      {renderPacote && pacoteMeta ? (
+        <div
+          className="group relative rounded-2xl border border-border/50 bg-card p-4 opacity-0 transition-shadow duration-300 ease-out premium-shadow hover:-translate-y-1 hover:transform-gpu hover:premium-shadow-hover sm:rounded-3xl sm:p-6 lg:rounded-[28px] lg:p-5 animate-fade-in-up"
+          style={{
+            animationDelay: `${index * 80}ms`,
+            contentVisibility: "auto",
+            containIntrinsicSize: "420px",
+            contain: "layout paint style",
+          }}
+          data-testid="load-card-pacote"
+        >
+          <div className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/[0.02] to-accent/[0.02] opacity-0 transition-opacity duration-500 group-hover:opacity-100 sm:rounded-3xl" />
+          <div className="pointer-events-none absolute inset-x-8 top-0 hidden h-px bg-gradient-to-r from-transparent via-primary/25 to-transparent lg:block" />
+
+          <div className="relative">
+            <PacoteHeader
+              totalCargas={pacoteMeta.total_cargas}
+              valorTotal={pacoteMeta.valor_total}
+              status={pacoteMeta.status}
+            />
+            <PacoteStopsList pacoteId={pacoteMeta.id} version={pacoteMeta.version} />
+
+            <div className="mt-5 flex flex-col gap-2 border-t border-border/40 pt-4 sm:flex-row sm:items-center sm:gap-3">
+              <div className={cn(actionGridClassName, "flex-1")}>
+                {renderInterestDialogTrigger("group/btn h-12 w-full rounded-full px-6")}
+                {detailsHref ? (
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="lg"
+                    className="group/btn h-12 w-full rounded-full border-primary/30 px-6 text-primary hover:border-primary/50 hover:bg-primary/[0.06] hover:text-primary"
+                  >
+                    <Link to={detailsHref}>
+                      <span>Detalhes</span>
+                      <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover/btn:translate-x-1" />
+                    </Link>
+                  </Button>
+                ) : null}
+              </div>
+              {renderSharePopover(
+                <button
+                  type="button"
+                  aria-label="Compartilhar carga"
+                  className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-primary/30 text-primary transition-colors hover:border-primary/50 hover:bg-primary/[0.06]"
+                >
+                  <Share2 className="h-4 w-4" />
+                </button>,
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
       <div
         className="group relative rounded-2xl border border-border/50 bg-card p-4 opacity-0 transition-shadow duration-300 ease-out premium-shadow hover:-translate-y-1 hover:transform-gpu hover:premium-shadow-hover sm:rounded-3xl sm:p-6 lg:rounded-[28px] lg:p-5 animate-fade-in-up"
         style={{
@@ -210,6 +276,7 @@ const LoadCard = memo(({
           containIntrinsicSize: "420px",
           contain: "layout paint style",
         }}
+        data-testid="load-card-avulsa"
       >
       <div className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/[0.02] to-accent/[0.02] opacity-0 transition-opacity duration-500 group-hover:opacity-100 sm:rounded-3xl" />
       <div className="pointer-events-none absolute inset-x-8 top-0 hidden h-px bg-gradient-to-r from-transparent via-primary/25 to-transparent lg:block" />
@@ -609,6 +676,7 @@ const LoadCard = memo(({
         </div>
       </div>
       </div>
+      )}
       {isInterestDialogOpen && loadId ? (
         <DialogContent
           overlayClassName="bg-[hsl(223_56%_12%/0.72)] backdrop-blur-[4px]"
