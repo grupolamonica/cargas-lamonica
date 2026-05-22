@@ -547,8 +547,13 @@ async def ocr_comprovante_residencia(req: ComprovanteRequest):
                 )
             return await infosimples.ocr(service, req.imagem)
 
+        # Bug #4 — PDF comprovante: GPT-4o Vision nao aceita PDFs diretamente.
+        # Rasteriza pagina 1 para JPEG antes de enviar ao Vision API (mesma
+        # logica aplicada em ocr_rntrc).
+        imagem_para_vision = await asyncio.to_thread(_pdf_to_jpeg_base64, req.imagem)
+
         async def _vision_extract() -> dict:
-            return await gpt4o_vision.extract("comprovante", req.imagem)
+            return await gpt4o_vision.extract("comprovante", imagem_para_vision)
 
         return await ocr_router.route(
             "comprovante",
@@ -583,8 +588,12 @@ async def ocr_cartao_cnpj(req: CartaoCNPJRequest):
             # Fase 3 (2026-05-21): EasyOCR removido. Legacy = Infosimples generico.
             return await infosimples.ocr("ocr/cnpj", req.imagem)
 
+        # Bug #5 — PDF cartao CNPJ: GPT-4o Vision nao aceita PDFs diretamente.
+        # Rasteriza pagina 1 para JPEG antes de enviar ao Vision API.
+        imagem_para_vision = await asyncio.to_thread(_pdf_to_jpeg_base64, req.imagem)
+
         async def _vision_extract() -> dict:
-            return await gpt4o_vision.extract("cartao_cnpj", req.imagem)
+            return await gpt4o_vision.extract("cartao_cnpj", imagem_para_vision)
 
         return await ocr_router.route(
             "cartao_cnpj",

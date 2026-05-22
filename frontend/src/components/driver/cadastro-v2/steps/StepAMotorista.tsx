@@ -139,12 +139,19 @@ function StepAMotoristaImpl({
         setA3Data(value.a3);
       }
     }
-    setValidity({
-      a1: Boolean(value.a1?.cpf && value.a1.nome),
-      a1b: Boolean(value.a1b?.fileName),
-      a2: Boolean(value.a2?.telefone_primario),
-      a3: Boolean(value.a3?.cep && value.a3.numero && value.a3.cidade),
-    });
+    // Hidratação STICKY: só promove validity de false→true (quando o draft
+    // restaurado traz dados). Nunca rebaixa true→false: se o sub-step interno
+    // já reportou onValid(true) via callback do filho, não devemos zerar por
+    // causa de uma re-passada de `value` que ainda não inclui o upload recém-feito
+    // (race: setA1bData async vs useEffect dispatch de value).
+    setValidity((current) => ({
+      a1: current.a1 || Boolean(value.a1?.cpf && value.a1.nome),
+      a1b: current.a1b || Boolean(value.a1b?.fileName),
+      a2: current.a2 || Boolean(value.a2?.telefone_primario),
+      a3:
+        current.a3 ||
+        Boolean(value.a3?.cep && value.a3.numero && value.a3.cidade),
+    }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
