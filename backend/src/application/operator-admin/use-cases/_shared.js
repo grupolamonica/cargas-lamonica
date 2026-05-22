@@ -395,7 +395,8 @@ export async function findSheetClientId(client) {
 export async function findCargoById(client, cargoId, { lock = false } = {}) {
   const suffix = lock ? "FOR UPDATE" : "";
   const { rows } = await client.query(
-    `SELECT id, status, cliente_id, sheet_lh, created_by, valor, bonus FROM public.cargas WHERE id = $1 ${suffix}`,
+    `SELECT id, status, cliente_id, sheet_lh, created_by, valor, bonus, viagem_id
+       FROM public.cargas WHERE id = $1 ${suffix}`,
     [cargoId],
   );
   return rows[0] || null;

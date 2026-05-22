@@ -83,6 +83,8 @@ const schemaSql = `
     reserved_until timestamptz,
     booked_driver_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
     booked_at timestamptz,
+    viagem_id uuid,
+    ordem_viagem integer,
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT cargas_status_check CHECK (
       status IN ('DRAFT', 'OPEN', 'RESERVED', 'BOOKED', 'EXPIRED', 'CANCELLED', 'COMPLETED', 'FAILED')
