@@ -107,9 +107,62 @@ const schemaSql = `
     status text NOT NULL,
     queue_position integer,
     rejected_reason text,
+    idempotency_key text,
+    request_fingerprint text,
+    request_payload_json jsonb,
+    correlation_id text,
+    server_sequence integer,
+    promoted_at timestamptz,
+    confirmed_at timestamptz,
+    expired_at timestamptz,
+    cancelled_at timestamptz,
+    reservation_expires_at timestamptz,
+    reserved_until timestamptz,
+    booked_at timestamptz,
+    metadata jsonb,
     claimed_at timestamptz NOT NULL DEFAULT now(),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.driver_profiles (
+    user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    full_name text,
+    vehicle_profile text,
+    active boolean NOT NULL DEFAULT true,
+    operational_blocked boolean NOT NULL DEFAULT false,
+    documents_valid boolean NOT NULL DEFAULT true,
+    allowed_regions jsonb,
+    antt_valid boolean NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.idempotency_records (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    scope text NOT NULL,
+    driver_id uuid NOT NULL,
+    load_id uuid NOT NULL,
+    idempotency_key text NOT NULL,
+    request_hash text NOT NULL,
+    correlation_id text,
+    response_status integer,
+    response_body_json jsonb,
+    expires_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (scope, driver_id, load_id, idempotency_key)
+  );
+
+  CREATE TABLE public.load_claim_events (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    load_id uuid NOT NULL,
+    claim_id uuid,
+    driver_id uuid,
+    event_type text NOT NULL,
+    event_payload_json jsonb,
+    actor_type text,
+    actor_id text,
+    correlation_id text,
+    created_at timestamptz NOT NULL DEFAULT now()
   );
 `;
 
@@ -251,4 +304,33 @@ export async function seedLoadClaim(overrides = {}) {
     ],
   );
   return { id };
+}
+
+export async function seedDriverProfile(overrides = {}) {
+  const userId = overrides.user_id ?? crypto.randomUUID();
+  // Garante auth.users existe para o FK.
+  const { rows: existing } = await query(`SELECT id FROM auth.users WHERE id=$1`, [userId]);
+  if (existing.length === 0) {
+    await query(
+      `INSERT INTO auth.users (id, email) VALUES ($1, $2)`,
+      [userId, overrides.email ?? `${crypto.randomUUID()}@test.local`],
+    );
+  }
+  await query(
+    `INSERT INTO public.driver_profiles (
+       user_id, full_name, vehicle_profile, active, operational_blocked,
+       documents_valid, allowed_regions, antt_valid
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      userId,
+      overrides.full_name ?? "Driver Teste",
+      overrides.vehicle_profile ?? null,
+      overrides.active ?? true,
+      overrides.operational_blocked ?? false,
+      overrides.documents_valid ?? true,
+      overrides.allowed_regions ?? null,
+      overrides.antt_valid ?? true,
+    ],
+  );
+  return { userId, id: userId };
 }
