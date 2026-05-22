@@ -34,6 +34,9 @@ export async function invalidatePendingClaimsForPacote(client, pacoteId, reason 
     return { invalidatedClaimIds: [], freedCargaIds: [] };
   }
   const cargaIds = cargas.map((c) => c.id);
+  // Placeholders dinamicos: WHERE load_id IN ($2,$3,...) — necessario para compat
+  // com pg-mem (que nao implementa ANY($arg::uuid[]) corretamente em UPDATE).
+  const cargaIdPlaceholders = cargaIds.map((_, i) => `$${i + 2}`).join(", ");
 
   // 2. Reject active claims (WON_RESERVATION/WAITLISTED/PROMOTED).
   //    CONFIRMED nao e tocado (motorista ja confirmou; cancel exige outro fluxo D-05).
@@ -43,10 +46,10 @@ export async function invalidatePendingClaimsForPacote(client, pacoteId, reason 
             rejected_reason = $1,
             queue_position = NULL,
             updated_at = now()
-      WHERE load_id = ANY($2::uuid[])
+      WHERE load_id IN (${cargaIdPlaceholders})
         AND status IN ('WON_RESERVATION', 'WAITLISTED', 'PROMOTED')
       RETURNING id, load_id, driver_id`,
-    [reason, cargaIds],
+    [reason, ...cargaIds],
   );
 
   // 3. Audit cada rejection.
@@ -62,30 +65,52 @@ export async function invalidatePendingClaimsForPacote(client, pacoteId, reason 
   }
 
   // 4. Libera reservas em cargas (sai de RESERVED -> OPEN, reseta reserved_*).
-  //    Tambem aplica em cargas que ja estavam OPEN com reserved_driver_id (estado transitorio).
+  //    Aplica em cargas RESERVED ou em estado transitorio (reserved_driver_id NOT NULL).
+  //    Em duas queries para evitar dependencia em CASE WHEN dentro de UPDATE (compat
+  //    com pg-mem em testes — Postgres avalia CASE normalmente, mas pg-mem nao).
+  const releasePlaceholders = cargaIds.map((_, i) => `$${i + 1}`).join(", ");
   await client.query(
     `UPDATE public.cargas
-        SET status = CASE WHEN status = 'RESERVED' THEN 'OPEN' ELSE status END,
+        SET status = 'OPEN',
             reserved_driver_id = NULL,
             reserved_claim_id = NULL,
             reserved_at = NULL,
             reserved_until = NULL,
             version = version + 1,
             updated_at = now()
-      WHERE id = ANY($1::uuid[])
-        AND (status = 'RESERVED' OR reserved_driver_id IS NOT NULL)`,
-    [cargaIds],
+      WHERE id IN (${releasePlaceholders})
+        AND status = 'RESERVED'`,
+    cargaIds,
+  );
+  // Limpa reserved_* tambem em cargas OPEN que tinham reserved_driver_id (estado transitorio).
+  await client.query(
+    `UPDATE public.cargas
+        SET reserved_driver_id = NULL,
+            reserved_claim_id = NULL,
+            reserved_at = NULL,
+            reserved_until = NULL,
+            updated_at = now()
+      WHERE id IN (${releasePlaceholders})
+        AND status = 'OPEN'
+        AND reserved_driver_id IS NOT NULL`,
+    cargaIds,
   );
 
   // 5. Reset pacote — se estava 'reservado' por causa de um claim que foi invalidado,
   //    volta para 'publicado' (motoristas podem candidatar de novo apos ver a nova versao).
+  //    Em duas queries para evitar CASE WHEN em pg-mem.
   await client.query(
     `UPDATE public.cargas_casadas
         SET reserved_driver_id = NULL,
             reserved_claim_id = NULL,
-            status = CASE WHEN status = 'reservado' THEN 'publicado' ELSE status END,
             updated_at = now()
       WHERE id = $1`,
+    [pacoteId],
+  );
+  await client.query(
+    `UPDATE public.cargas_casadas
+        SET status = 'publicado', updated_at = now()
+      WHERE id = $1 AND status = 'reservado'`,
     [pacoteId],
   );
 

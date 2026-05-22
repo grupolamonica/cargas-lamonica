@@ -24,9 +24,13 @@ export async function updatePacote({ operatorId, pacoteId, payload, requestIp, c
     }
 
     const novoValor = payload.valor_total;
-    const isPublicado = pacote.status === PACOTE_STATUS.PUBLICADO;
+    // D-06: invalida candidaturas em pacotes 'publicado' OU 'reservado'.
+    // Pacote 'reservado' tem um motorista candidato; editar invalida o claim
+    // (a viagem mudou debaixo dele) e devolve o pacote para 'publicado'.
+    const shouldInvalidate =
+      pacote.status === PACOTE_STATUS.PUBLICADO || pacote.status === PACOTE_STATUS.RESERVADO;
 
-    if (isPublicado) {
+    if (shouldInvalidate) {
       await client.query(
         `UPDATE public.cargas_casadas
             SET valor_total = $2, version = version + 1, updated_at = now()
@@ -62,7 +66,8 @@ export async function updatePacote({ operatorId, pacoteId, payload, requestIp, c
       metadata: {
         valor_total_antes: pacote.valor_total !== null ? Number(pacote.valor_total) : null,
         valor_total_depois: novoValor,
-        version_bumped: isPublicado,
+        version_bumped: shouldInvalidate,
+        status_antes: pacote.status,
       },
     });
 
