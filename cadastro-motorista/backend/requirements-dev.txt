@@ -1,0 +1,6 @@
+# Dependencias de desenvolvimento (NAO instaladas no Docker prod).
+# Rodar: pip install -r requirements-dev.txt
+
+# Testes
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

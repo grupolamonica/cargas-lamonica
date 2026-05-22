@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, ArrowRight, Ban, CheckCircle2, Loader2, ShieldCheck, Truck } from "lucide-react";
+import { AlertCircle, AlertTriangle, ArrowRight, Ban, CheckCircle2, ClipboardList, Loader2, ShieldCheck, Truck } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
+import { Label } from "@/components/ui/label";
 import { publicSupabase } from "@/integrations/supabase/public-client";
 import { buildCargoPublicPath } from "@/lib/cargoLinks";
 import { buildDisplayDateTime, formatShortDateTime } from "@/lib/dateDisplay";
@@ -31,11 +32,62 @@ import {
   fetchLoadClaimStatus,
   type PublicLoadLeadPayload,
 } from "@/services/loadClaims";
+import { requestCandidaturaPreCheck, type PreCheckResponse } from "@/api/candidaturaApi";
+
+/**
+ * Modo de operacao do DriverClaimPanel.
+ *
+ * - "public-form" (default): comportamento legado v1 — driver NAO autenticado preenche
+ *   CPF/telefone/placas e pre-registra um lead publico.
+ * - "authenticated-claim": driver autenticado caiu aqui via fallback (wizard v2 nao
+ *   interceptou). Por enquanto e o mesmo runtime — a prop apenas torna explicito o
+ *   contexto na call site (DriverCargoDetails) para guiar refactors futuros.
+ */
+export type DriverClaimPanelMode = "public-form" | "authenticated-claim";
+
+/**
+ * Decisão devolvida pelo interceptor de pre-check v2 (Phase 7).
+ * - 'continue': segue o submit normal v1 (createPublicLoadLeadPreRegistration).
+ * - 'abort':    interceptor já tomou o controle (ex.: abriu wizard v2);
+ *               DriverClaimPanel não submete nem mostra toast.
+ */
+export type PreSubmitInterceptorDecision = "continue" | "abort";
+
+export type PreSubmitInterceptor = (form: {
+  cpf: string;
+  phone: string;
+  horsePlate: string;
+  trailerPlate: string;
+  trailerPlate2: string;
+  vehicleType: VehicleProfileValue;
+}) => Promise<PreSubmitInterceptorDecision>;
 
 interface DriverClaimPanelProps {
   loadId: string;
   panelId?: string;
   className?: string;
+  mode?: DriverClaimPanelMode;
+  /**
+   * Interceptor opcional Phase 7. Quando setado, é chamado APÓS validar o form
+   * mas ANTES de chamar createPublicLoadLeadPreRegistration. Retorno:
+   * - 'continue': segue submit v1 normal.
+   * - 'abort':    interceptor já agiu (ex.: abriu wizard v2 com pendências);
+   *               DriverClaimPanel não faz POST nem toast de sucesso/erro.
+   * Em qualquer erro do interceptor, fallback é seguir como 'continue' para não
+   * bloquear o motorista — o backend re-valida tudo no submit final.
+   */
+  onPreSubmitInterceptor?: PreSubmitInterceptor;
+  /**
+   * Callback disparado quando motorista clica em "Completar/Atualizar cadastro"
+   * na view de candidatura salva (queued). Recebe o resultado do pre-check já
+   * executado + dados do form para o caller abrir o wizard sem um segundo round-trip.
+   */
+  onCompleteRegistration?: (params: {
+    preCheckResponse: PreCheckResponse;
+    cpf: string;
+    horsePlate: string;
+    trailerPlates: string[];
+  }) => void;
 }
 
 type PreRegistrationView = "form" | "saved";
@@ -246,7 +298,14 @@ function buildAlternativeEtaLabel({
 const summaryCardClassName =
   "admin-card-surface rounded-[20px] border px-3.5 py-3 shadow-[0_14px_26px_-22px_hsl(223_56%_12%/0.18)] sm:rounded-2xl sm:px-4";
 
-const DriverClaimPanel = ({ loadId, panelId = "driver-dispute-panel", className }: DriverClaimPanelProps) => {
+const DriverClaimPanel = ({
+  loadId,
+  panelId = "driver-dispute-panel",
+  className,
+  mode: _mode = "public-form",
+  onPreSubmitInterceptor,
+  onCompleteRegistration,
+}: DriverClaimPanelProps) => {
   const queryClient = useQueryClient();
   const initialStoredLeadState = readStoredLeadState(loadId);
 
@@ -257,11 +316,81 @@ const DriverClaimPanel = ({ loadId, panelId = "driver-dispute-panel", className 
   );
   const [actionLoading, setActionLoading] = useState<"pre-register" | null>(null);
 
+  /**
+   * Erros de validação por campo (Bug fix UI-9/11/13).
+   * Mantém o modal aberto e mostra mensagens inline em linguagem motorista.
+   * Limpado automaticamente quando o motorista edita o respectivo campo.
+   */
+  type FieldKey = "cpf" | "phone" | "horsePlate" | "trailerPlate" | "trailerPlate2";
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldKey, string>>>({});
+
+  const cpfInputRef = useRef<HTMLInputElement | null>(null);
+  const phoneInputRef = useRef<HTMLInputElement | null>(null);
+  const horsePlateInputRef = useRef<HTMLInputElement | null>(null);
+  const trailerPlateInputRef = useRef<HTMLInputElement | null>(null);
+  const trailerPlate2InputRef = useRef<HTMLInputElement | null>(null);
+
+  const fieldRefs: Record<FieldKey, React.MutableRefObject<HTMLInputElement | null>> = {
+    cpf: cpfInputRef,
+    phone: phoneInputRef,
+    horsePlate: horsePlateInputRef,
+    trailerPlate: trailerPlateInputRef,
+    trailerPlate2: trailerPlate2InputRef,
+  };
+
+  const focusFirstInvalid = (errors: Partial<Record<FieldKey, string>>) => {
+    const order: FieldKey[] = ["cpf", "phone", "horsePlate", "trailerPlate", "trailerPlate2"];
+    for (const key of order) {
+      if (errors[key]) {
+        const node = fieldRefs[key].current;
+        if (node) {
+          // setTimeout para permitir re-render com aria-invalid antes de focar.
+          setTimeout(() => node.focus(), 0);
+        }
+        return;
+      }
+    }
+  };
+
+  const clearFieldError = (field: FieldKey) => {
+    setFieldErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+  };
+
+  /** Estado do pre-check em background exibido na view de candidatura salva (queued). */
+  const [regStatus, setRegStatus] = useState<{
+    loading: boolean;
+    response: PreCheckResponse | null;
+    error: boolean;
+  }>({ loading: false, response: null, error: false });
+
   useEffect(() => {
     const nextStoredLeadState = readStoredLeadState(loadId);
     setStoredLeadState(nextStoredLeadState);
     setForm(hydrateLeadForm(nextStoredLeadState?.form));
     setPreRegistrationView(getInitialPreRegistrationView(nextStoredLeadState));
+  }, [loadId]);
+
+  // Pre-check em background para mostrar status de cadastro na view "queued".
+  // Roda quando a candidatura já foi enviada (isLeadQueued) e há dados salvos.
+  useEffect(() => {
+    const stored = readStoredLeadState(loadId);
+    if (!stored || stored.stage !== "QUEUED") return;
+
+    const cpfDigits = (stored.form.cpf || "").replace(/\D/g, "");
+    if (cpfDigits.length !== 11) return;
+
+    const trailerPlates = [stored.form.trailerPlate, stored.form.trailerPlate2].filter(Boolean);
+
+    setRegStatus({ loading: true, response: null, error: false });
+    requestCandidaturaPreCheck({ cpf: cpfDigits, horsePlate: stored.form.horsePlate, trailerPlates })
+      .then((res) => setRegStatus({ loading: false, response: res, error: false }))
+      .catch(() => setRegStatus({ loading: false, response: null, error: true }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadId]);
 
   const statusQuery = useQuery({
@@ -481,34 +610,97 @@ const DriverClaimPanel = ({ loadId, panelId = "driver-dispute-panel", className 
       return;
     }
 
+    // Bug fix UI-9/11/13: coleta TODOS os erros (não pára no primeiro), exibe
+    // inline (modal não fecha), foca primeiro inválido e mantém toast como reforço.
     if (missingRequiredLeadFields.length > 0) {
+      // Mantém compat: toast resumido + erros inline campo a campo.
+      const nextErrors: Partial<Record<FieldKey, string>> = {};
+      const aligned = formForSubmission;
+      if (!aligned.cpf.trim()) nextErrors.cpf = "Falta o CPF. Digite os 11 números.";
+      if (!aligned.phone.trim()) nextErrors.phone = "Falta o telefone. Coloca DDD + número.";
+      if (!aligned.horsePlate.trim()) nextErrors.horsePlate = "Falta a placa do cavalo.";
+      if (requiresFirstTrailerPlate && !aligned.trailerPlate.trim()) {
+        nextErrors.trailerPlate = requiresSecondTrailerPlate
+          ? "Falta a 1ª placa da carreta."
+          : "Falta a placa da carreta.";
+      }
+      if (requiresSecondTrailerPlate && !aligned.trailerPlate2.trim()) {
+        nextErrors.trailerPlate2 = "Falta a 2ª placa da carreta.";
+      }
+      setFieldErrors(nextErrors);
+      focusFirstInvalid(nextErrors);
       toast.error(formatMissingRequiredLeadFieldsMessage(missingRequiredLeadFields));
       return;
     }
 
+    // Validação de formato — coleta múltiplos erros antes de retornar.
+    const nextErrors: Partial<Record<FieldKey, string>> = {};
     if (!isValidCpf(formForSubmission.cpf)) {
-      toast.error("CPF inválido. Confira os 11 dígitos.");
-      return;
+      nextErrors.cpf = "CPF tá incompleto ou errado. Digite os 11 números.";
     }
     if (!isValidBrazilianPhone(formForSubmission.phone)) {
-      toast.error("Telefone inválido. Use DDD + número (10 ou 11 dígitos).");
-      return;
+      nextErrors.phone = "Telefone tá incompleto. Coloca DDD + número (11 dígitos).";
     }
     if (!isValidPlate(formForSubmission.horsePlate)) {
-      toast.error("Placa do cavalo fora do padrão (ex.: ABC1234 ou ABC1D23).");
-      return;
+      nextErrors.horsePlate = "Placa do cavalo tá errada. Confere e digita de novo.";
     }
     if (requiresFirstTrailerPlate && !isValidPlate(formForSubmission.trailerPlate)) {
-      toast.error("Placa da carreta fora do padrão (ex.: ABC1234 ou ABC1D23).");
-      return;
+      nextErrors.trailerPlate = requiresSecondTrailerPlate
+        ? "1ª placa da carreta tá errada. Confere e digita de novo."
+        : "Placa da carreta tá errada. Confere e digita de novo.";
     }
     if (requiresSecondTrailerPlate && !isValidPlate(formForSubmission.trailerPlate2)) {
-      toast.error("Segunda placa da carreta fora do padrão (ex.: ABC1234 ou ABC1D23).");
+      nextErrors.trailerPlate2 = "2ª placa da carreta tá errada. Confere e digita de novo.";
+    }
+
+    if (Object.keys(nextErrors).length > 0) {
+      setFieldErrors(nextErrors);
+      focusFirstInvalid(nextErrors);
+      // Toast resumido para reforço (e compat com testes existentes).
+      const firstError = Object.values(nextErrors)[0]!;
+      toast.error(firstError);
       return;
     }
 
+    // Sucesso na validação — limpa erros antes do submit.
+    setFieldErrors({});
+
     try {
       setActionLoading("pre-register");
+
+      // Phase 7: interceptor v2 — pre-check antes do submit v1.
+      // Quando 'abort', o interceptor já agiu (ex.: abriu wizard); paramos aqui sem submit/toast.
+      if (onPreSubmitInterceptor) {
+        let interceptorDecision: PreSubmitInterceptorDecision = "continue";
+        try {
+          interceptorDecision = await onPreSubmitInterceptor(formForSubmission);
+        } catch (interceptorError) {
+          // Falha do interceptor não bloqueia o submit — backend re-valida tudo.
+          console.warn("[DriverClaimPanel] pre-submit interceptor failed; continuing to v1 submit", interceptorError);
+        }
+        if (interceptorDecision === "abort") {
+          // Bug fix 15/05/2026: interceptor já persistiu o lead via
+          // createPublicLoadLeadPreRegistration ANTES de abrir o wizard
+          // (vide DriverPortal.buildPreSubmitInterceptor commit 0fbf33a +
+          // DriverCargoDetails.handlePreSubmitInterceptor commit ede3f2c).
+          //
+          // Sem este sync, o painel ficava em modo "form" mesmo após o lead
+          // ter sido salvo — motorista achava que candidatura não foi enviada
+          // até fechar e reabrir o card. Fluxo agora atualiza in-place.
+          const stored = readStoredLeadState(loadId);
+          if (stored) {
+            syncLocalState(stored);
+            setPreRegistrationView("saved");
+          }
+          await queryClient.invalidateQueries({
+            queryKey: ["driver", "claim-status", loadId],
+            exact: false,
+          });
+          setActionLoading(null);
+          return;
+        }
+      }
+
       const response = await createPublicLoadLeadPreRegistration(loadId, formForSubmission);
       const nextState: StoredLeadState = {
         loadId,
@@ -783,6 +975,7 @@ const DriverClaimPanel = ({ loadId, panelId = "driver-dispute-panel", className 
         </div>
       ) : isLeadQueued && !showEditableForm ? (
         <div className="mt-5 space-y-4">
+          {/* Confirmação de candidatura enviada */}
           <div className="admin-tint-success rounded-[22px] border p-3.5 shadow-[0_20px_36px_-28px_hsl(145_60%_28%/0.32)] sm:rounded-3xl sm:p-4">
             <div className="flex items-start gap-2.5 sm:gap-3">
               <CheckCircle2 className="mt-0.5 h-4.5 w-4.5 shrink-0 text-emerald-700 sm:h-5 sm:w-5" />
@@ -795,6 +988,39 @@ const DriverClaimPanel = ({ loadId, panelId = "driver-dispute-panel", className 
               </div>
             </div>
           </div>
+
+          {/* Banner de status de cadastro (resultado do pre-check em background) */}
+          {regStatus.loading ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              Verificando status do cadastro…
+            </div>
+          ) : regStatus.response && regStatus.response.pendencias.length > 0 ? (
+            <div className="rounded-[20px] border border-amber-200 bg-amber-50 p-3.5 sm:rounded-[22px] sm:p-4">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="mt-0.5 h-4.5 w-4.5 shrink-0 text-amber-700" aria-hidden="true" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-foreground">
+                    {regStatus.response.pendencias.length === 1
+                      ? "1 item do cadastro precisa de atenção"
+                      : `${regStatus.response.pendencias.length} itens do cadastro precisam de atenção`}
+                  </p>
+                  <ul className="mt-1.5 space-y-0.5">
+                    {regStatus.response.pendencias.map((p, i) => (
+                      <li key={i} className="text-[13px] leading-5 text-amber-800">
+                        • {p.label}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          ) : regStatus.response && regStatus.response.pendencias.length === 0 ? (
+            <div className="flex items-center gap-2 text-xs font-medium text-emerald-700">
+              <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+              Cadastro em dia — todos os documentos estão válidos
+            </div>
+          ) : null}
 
           {preRegistrationSummary ? (
             <div className="grid gap-3 sm:grid-cols-2">
@@ -811,6 +1037,30 @@ const DriverClaimPanel = ({ loadId, panelId = "driver-dispute-panel", className 
           ) : null}
 
           <div className="flex flex-wrap gap-2">
+            {/* Botão primário: Completar cadastro (quando há pendências e callback disponível) */}
+            {regStatus.response && regStatus.response.pendencias.length > 0 && onCompleteRegistration ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const stored = readStoredLeadState(loadId);
+                  if (!stored || !regStatus.response) return;
+                  const cpfDigits = stored.form.cpf.replace(/\D/g, "");
+                  const trailerPlates = [stored.form.trailerPlate, stored.form.trailerPlate2].filter(Boolean);
+                  onCompleteRegistration({
+                    preCheckResponse: regStatus.response,
+                    cpf: cpfDigits,
+                    horsePlate: stored.form.horsePlate,
+                    trailerPlates,
+                  });
+                }}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-amber-500 px-5 py-3 text-sm font-semibold text-white shadow-[0_14px_24px_-18px_hsl(36_100%_50%/0.5)] transition-colors hover:bg-amber-600 sm:w-auto"
+              >
+                <ClipboardList className="h-4 w-4" />
+                Completar cadastro
+              </button>
+            ) : null}
+
+            {/* Botão secundário: atualizar dados de candidatura (form v1) */}
             <button
               type="button"
               onClick={handleEditPreRegistration}
@@ -826,44 +1076,170 @@ const DriverClaimPanel = ({ loadId, panelId = "driver-dispute-panel", className 
           {showEditableForm ? (
             <>
               <div className="grid gap-3 md:grid-cols-2">
-                <input
-                  type="text"
-                  value={form.cpf}
-                  onChange={(event) => setForm((current) => ({ ...current, cpf: formatCpf(event.target.value) }))}
-                  placeholder="CPF do motorista"
-                  className="admin-input-surface rounded-2xl border border-border/80 px-4 py-3 text-sm text-foreground outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
-                />
-                <input
-                  type="text"
-                  value={form.phone}
-                  onChange={(event) => setForm((current) => ({ ...current, phone: formatPhone(event.target.value) }))}
-                  placeholder="Telefone"
-                  className="admin-input-surface rounded-2xl border border-border/80 px-4 py-3 text-sm text-foreground outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
-                />
-                <input
-                  type="text"
-                  value={form.horsePlate}
-                  onChange={(event) => setForm((current) => ({ ...current, horsePlate: formatPlate(event.target.value) }))}
-                  placeholder="Placa do cavalo"
-                  className="rounded-2xl border border-border/80 bg-white px-4 py-3 text-sm uppercase text-foreground outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
-                />
-                {requiresFirstTrailerPlate ? (
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="claim-cpf" className="px-1 text-xs font-semibold text-foreground">
+                    CPF do motorista
+                  </Label>
                   <input
+                    ref={cpfInputRef}
+                    id="claim-cpf"
                     type="text"
-                    value={form.trailerPlate}
-                    onChange={(event) => setForm((current) => ({ ...current, trailerPlate: formatPlate(event.target.value) }))}
-                    placeholder={requiresSecondTrailerPlate ? "1ª placa da carreta" : "Placa da carreta"}
-                    className="admin-input-surface rounded-2xl border border-border/80 px-4 py-3 text-sm uppercase text-foreground outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    value={form.cpf}
+                    onChange={(event) => {
+                      clearFieldError("cpf");
+                      setForm((current) => ({ ...current, cpf: formatCpf(event.target.value) }));
+                    }}
+                    placeholder="CPF do motorista"
+                    aria-invalid={Boolean(fieldErrors.cpf)}
+                    aria-describedby={fieldErrors.cpf ? "claim-error-cpf" : undefined}
+                    className={cn(
+                      "admin-input-surface rounded-2xl border px-4 py-3 text-sm text-foreground outline-none focus:ring-4",
+                      fieldErrors.cpf
+                        ? "border-red-400 focus:border-red-500 focus:ring-red-200"
+                        : "border-border/80 focus:border-primary/30 focus:ring-primary/10",
+                    )}
                   />
+                  {fieldErrors.cpf ? (
+                    <p id="claim-error-cpf" role="alert" className="px-1 text-xs font-medium text-red-700">
+                      {fieldErrors.cpf}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="claim-phone" className="px-1 text-xs font-semibold text-foreground">
+                    Telefone
+                  </Label>
+                  <input
+                    ref={phoneInputRef}
+                    id="claim-phone"
+                    type="tel"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    value={form.phone}
+                    onChange={(event) => {
+                      clearFieldError("phone");
+                      setForm((current) => ({ ...current, phone: formatPhone(event.target.value) }));
+                    }}
+                    placeholder="Telefone"
+                    aria-invalid={Boolean(fieldErrors.phone)}
+                    aria-describedby={fieldErrors.phone ? "claim-error-phone" : undefined}
+                    className={cn(
+                      "admin-input-surface rounded-2xl border px-4 py-3 text-sm text-foreground outline-none focus:ring-4",
+                      fieldErrors.phone
+                        ? "border-red-400 focus:border-red-500 focus:ring-red-200"
+                        : "border-border/80 focus:border-primary/30 focus:ring-primary/10",
+                    )}
+                  />
+                  {fieldErrors.phone ? (
+                    <p id="claim-error-phone" role="alert" className="px-1 text-xs font-medium text-red-700">
+                      {fieldErrors.phone}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="claim-horse-plate" className="px-1 text-xs font-semibold text-foreground">
+                    Placa do cavalo
+                  </Label>
+                  <input
+                    ref={horsePlateInputRef}
+                    id="claim-horse-plate"
+                    type="text"
+                    inputMode="text"
+                    autoComplete="off"
+                    autoCapitalize="characters"
+                    spellCheck={false}
+                    value={form.horsePlate}
+                    onChange={(event) => {
+                      clearFieldError("horsePlate");
+                      setForm((current) => ({ ...current, horsePlate: formatPlate(event.target.value) }));
+                    }}
+                    placeholder="Placa do cavalo"
+                    aria-invalid={Boolean(fieldErrors.horsePlate)}
+                    aria-describedby={fieldErrors.horsePlate ? "claim-error-horsePlate" : undefined}
+                    className={cn(
+                      "rounded-2xl border bg-white px-4 py-3 text-sm uppercase text-foreground outline-none focus:ring-4",
+                      fieldErrors.horsePlate
+                        ? "border-red-400 focus:border-red-500 focus:ring-red-200"
+                        : "border-border/80 focus:border-primary/30 focus:ring-primary/10",
+                    )}
+                  />
+                  {fieldErrors.horsePlate ? (
+                    <p id="claim-error-horsePlate" role="alert" className="px-1 text-xs font-medium text-red-700">
+                      {fieldErrors.horsePlate}
+                    </p>
+                  ) : null}
+                </div>
+                {requiresFirstTrailerPlate ? (
+                  <div className="flex flex-col gap-1">
+                    <Label htmlFor="claim-trailer-plate" className="px-1 text-xs font-semibold text-foreground">
+                      {requiresSecondTrailerPlate ? "1ª placa da carreta" : "Placa da carreta"}
+                    </Label>
+                    <input
+                      ref={trailerPlateInputRef}
+                      id="claim-trailer-plate"
+                      type="text"
+                      inputMode="text"
+                      autoComplete="off"
+                      autoCapitalize="characters"
+                      spellCheck={false}
+                      value={form.trailerPlate}
+                      onChange={(event) => {
+                        clearFieldError("trailerPlate");
+                        setForm((current) => ({ ...current, trailerPlate: formatPlate(event.target.value) }));
+                      }}
+                      placeholder={requiresSecondTrailerPlate ? "1ª placa da carreta" : "Placa da carreta"}
+                      aria-invalid={Boolean(fieldErrors.trailerPlate)}
+                      aria-describedby={fieldErrors.trailerPlate ? "claim-error-trailerPlate" : undefined}
+                      className={cn(
+                        "admin-input-surface rounded-2xl border px-4 py-3 text-sm uppercase text-foreground outline-none focus:ring-4",
+                        fieldErrors.trailerPlate
+                          ? "border-red-400 focus:border-red-500 focus:ring-red-200"
+                          : "border-border/80 focus:border-primary/30 focus:ring-primary/10",
+                      )}
+                    />
+                    {fieldErrors.trailerPlate ? (
+                      <p id="claim-error-trailerPlate" role="alert" className="px-1 text-xs font-medium text-red-700">
+                        {fieldErrors.trailerPlate}
+                      </p>
+                    ) : null}
+                  </div>
                 ) : null}
                 {requiresSecondTrailerPlate ? (
-                  <input
-                    type="text"
-                    value={form.trailerPlate2}
-                    onChange={(event) => setForm((current) => ({ ...current, trailerPlate2: formatPlate(event.target.value) }))}
-                    placeholder="2ª placa da carreta"
-                    className="rounded-2xl border border-border/80 bg-white px-4 py-3 text-sm uppercase text-foreground outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 md:col-span-2"
-                  />
+                  <div className="flex flex-col gap-1 md:col-span-2">
+                    <Label htmlFor="claim-trailer-plate-2" className="px-1 text-xs font-semibold text-foreground">
+                      2ª placa da carreta
+                    </Label>
+                    <input
+                      ref={trailerPlate2InputRef}
+                      id="claim-trailer-plate-2"
+                      type="text"
+                      inputMode="text"
+                      autoComplete="off"
+                      autoCapitalize="characters"
+                      spellCheck={false}
+                      value={form.trailerPlate2}
+                      onChange={(event) => {
+                        clearFieldError("trailerPlate2");
+                        setForm((current) => ({ ...current, trailerPlate2: formatPlate(event.target.value) }));
+                      }}
+                      placeholder="2ª placa da carreta"
+                      aria-invalid={Boolean(fieldErrors.trailerPlate2)}
+                      aria-describedby={fieldErrors.trailerPlate2 ? "claim-error-trailerPlate2" : undefined}
+                      className={cn(
+                        "rounded-2xl border bg-white px-4 py-3 text-sm uppercase text-foreground outline-none focus:ring-4",
+                        fieldErrors.trailerPlate2
+                          ? "border-red-400 focus:border-red-500 focus:ring-red-200"
+                          : "border-border/80 focus:border-primary/30 focus:ring-primary/10",
+                      )}
+                    />
+                    {fieldErrors.trailerPlate2 ? (
+                      <p id="claim-error-trailerPlate2" role="alert" className="px-1 text-xs font-medium text-red-700">
+                        {fieldErrors.trailerPlate2}
+                      </p>
+                    ) : null}
+                  </div>
                 ) : null}
                 <div className="admin-tint-success rounded-2xl border px-4 py-3 shadow-[0_16px_28px_-24px_hsl(145_60%_28%/0.18)] md:col-span-2">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700/80">Importante</p>
@@ -906,7 +1282,17 @@ const DriverClaimPanel = ({ loadId, panelId = "driver-dispute-panel", className 
                 type="button"
                 onClick={() => void handlePreRegistration()}
                 disabled={isPreRegistrationBlocked || actionLoading === "pre-register"}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-accent to-[hsl(155_70%_44%)] px-5 py-3 text-sm font-bold text-accent-foreground shadow-[0_4px_14px_hsl(155_70%_38%/0.3)] transition-all hover:-translate-y-0.5 hover:shadow-[0_6px_20px_hsl(155_70%_38%/0.4)] active:translate-y-0 active:shadow-[0_2px_8px_hsl(155_70%_38%/0.3)] disabled:pointer-events-none disabled:opacity-60 sm:w-auto"
+                aria-disabled={
+                  isPreRegistrationBlocked ||
+                  actionLoading === "pre-register" ||
+                  missingRequiredLeadFields.length > 0
+                }
+                className={cn(
+                  "inline-flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-accent to-[hsl(155_70%_44%)] px-5 py-3 text-sm font-bold text-accent-foreground shadow-[0_4px_14px_hsl(155_70%_38%/0.3)] transition-all hover:-translate-y-0.5 hover:shadow-[0_6px_20px_hsl(155_70%_38%/0.4)] active:translate-y-0 active:shadow-[0_2px_8px_hsl(155_70%_38%/0.3)] disabled:pointer-events-none disabled:opacity-60 sm:w-auto",
+                  missingRequiredLeadFields.length > 0 && !isPreRegistrationBlocked && actionLoading !== "pre-register"
+                    ? "opacity-70"
+                    : "",
+                )}
               >
                 {actionLoading === "pre-register" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Truck className="h-4 w-4" />}
                 {hasSavedPreRegistration ? "Atualizar candidatura" : "Candidatar-se"}

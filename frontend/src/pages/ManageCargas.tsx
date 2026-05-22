@@ -18,7 +18,7 @@ import { resolveCargoPublicationReadiness } from "@/lib/loadPublication";
 import { normalizeOperatorCargoDate, normalizeOperatorCargoTime } from "@/lib/operatorCargoSchedule";
 import { useAuth } from "@/hooks/useAuth";
 import { canWriteMonetaryValues } from "@/lib/operatorAccess";
-import { VEHICLE_PROFILE_OPTIONS } from "@/lib/vehicleProfiles";
+import { VEHICLE_PROFILE_OPTIONS, normalizeVehicleProfile } from "@/lib/vehicleProfiles";
 import {
   createOperatorCargo,
   deleteOperatorCargo,
@@ -330,16 +330,18 @@ const ManageCargas = () => {
   const cargas = useMemo(() => {
     const origem = deferredOrigemFilter.trim().toLowerCase();
     const destino = deferredDestinoFilter.trim().toLowerCase();
-    const perfil = deferredPerfilFilter === "todos" ? null : deferredPerfilFilter.toUpperCase();
+    // Usa normalizeVehicleProfile para que aliases (BITRUCK<->BITREM,
+    // CARRETA EXPRESSA<->CARRETA_EXPRESSA) batam corretamente entre filtro e cargo.
+    const perfilCanonical = deferredPerfilFilter === "todos" ? null : normalizeVehicleProfile(deferredPerfilFilter);
 
-    if (!origem && !destino && !perfil) {
+    if (!origem && !destino && !perfilCanonical) {
       return rawCargas;
     }
 
     return rawCargas.filter((cargo) => {
       if (origem && !(cargo.origem || "").toLowerCase().includes(origem)) return false;
       if (destino && !(cargo.destino || "").toLowerCase().includes(destino)) return false;
-      if (perfil && (cargo.perfil || "").toUpperCase() !== perfil) return false;
+      if (perfilCanonical && normalizeVehicleProfile(cargo.perfil) !== perfilCanonical) return false;
       return true;
     });
   }, [

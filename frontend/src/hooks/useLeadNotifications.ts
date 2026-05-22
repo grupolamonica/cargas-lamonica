@@ -76,8 +76,11 @@ export function useLeadNotifications() {
       ),
     staleTime: 10_000,
     gcTime: 10 * 60_000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    // N-01: refetch ao voltar para a aba — motorista vê aprovação assim que abre o app.
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    // Pausa polling em background para economizar bateria mobile.
+    refetchIntervalInBackground: false,
     refetchInterval: (query) => {
       // Derive hasQueued from live query data instead of the closed-over memo value.
       // The refetchInterval callback is cached by TanStack Query at registration time;
@@ -86,8 +89,14 @@ export function useLeadNotifications() {
       const currentEntries = query.state.data as DriverLeadNotificationStatusEntry[] | undefined;
       if (!currentEntries?.length) return false;
       const hasQueued = currentEntries.some((e) => e.state.stage === "QUEUED");
-      if (!hasQueued) return false;
-      return currentEntries.some(shouldContinuePollingDriverLeadStatus) ? 30_000 : false;
+      // N-01: poll mais agressivo (15s) quando há QUEUED — motorista esperando aprovação;
+      // 60s quando só há PRE_REGISTERED (mudança rara).
+      // TODO: substituir polling por Supabase realtime channel em `public_load_leads`
+      // para notificação imediata em vez de até 15s de espera.
+      if (!hasQueued) {
+        return currentEntries.some(shouldContinuePollingDriverLeadStatus) ? 60_000 : false;
+      }
+      return currentEntries.some(shouldContinuePollingDriverLeadStatus) ? 15_000 : false;
     },
   });
 

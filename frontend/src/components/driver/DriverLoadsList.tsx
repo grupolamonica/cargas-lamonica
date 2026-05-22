@@ -2,6 +2,11 @@ import { useDeferredValue, useMemo } from "react";
 import { Navigation, PackageX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import LoadCard from "@/components/LoadCard";
+import type {
+  DriverClaimPanelMode,
+  PreSubmitInterceptor,
+} from "@/components/driver/DriverClaimPanel";
+import type { PreCheckResponse } from "@/api/candidaturaApi";
 import { formatCurrency, buildTotalPayment } from "@/lib/currency";
 import { buildOperationalDateLabel, buildRouteEstimatedDurationLabel } from "@/lib/estimatedTime";
 import { buildLoadingDateTime } from "@/lib/estimatedTime";
@@ -42,6 +47,25 @@ interface DriverLoadsListProps {
   hasActiveFilters: boolean;
   onClearFilters: () => void;
   onInterestDialogOpenChange: (open: boolean) => void;
+  /**
+   * Wiring opcional cadastro v2 (Phase 8 — fix entry-point "Candidatar-se").
+   * Encaminhado para cada LoadCard / DriverClaimPanel renderizado, espelhando
+   * o comportamento de DriverCargoDetails.
+   *
+   * `buildDriverClaimPreSubmit` é uma factory: recebe o loadId do card e devolve
+   * o interceptor já com o loadId capturado no closure. Isso permite que o consumer
+   * (DriverPortal) saiba qual carga disparou o pre-check sem mudar a assinatura
+   * do interceptor compartilhada com DriverCargoDetails.
+   */
+  driverClaimMode?: DriverClaimPanelMode;
+  buildDriverClaimPreSubmit?: (loadId: string) => PreSubmitInterceptor;
+  onDriverClaimCompleteRegistration?: (params: {
+    preCheckResponse: PreCheckResponse;
+    cpf: string;
+    horsePlate: string;
+    trailerPlates: string[];
+    loadId: string;
+  }) => void;
 }
 
 export function DriverLoadsList({
@@ -50,6 +74,9 @@ export function DriverLoadsList({
   hasActiveFilters,
   onClearFilters,
   onInterestDialogOpenChange,
+  driverClaimMode,
+  buildDriverClaimPreSubmit,
+  onDriverClaimCompleteRegistration,
 }: DriverLoadsListProps) {
   const deferredCargas = useDeferredValue(cargas);
 
@@ -111,10 +138,26 @@ export function DriverLoadsList({
           index={index}
           onInterestDialogOpenChange={onInterestDialogOpenChange}
           pacoteMeta={cargo.pacote_meta ?? null}
+          driverClaimMode={driverClaimMode}
+          onDriverClaimPreSubmit={
+            buildDriverClaimPreSubmit ? buildDriverClaimPreSubmit(cargo.id) : undefined
+          }
+          onDriverClaimCompleteRegistration={
+            onDriverClaimCompleteRegistration
+              ? (params) =>
+                  onDriverClaimCompleteRegistration({ ...params, loadId: cargo.id })
+              : undefined
+          }
         />
       );
     });
-  }, [deferredCargas, onInterestDialogOpenChange]);
+  }, [
+    deferredCargas,
+    onInterestDialogOpenChange,
+    driverClaimMode,
+    buildDriverClaimPreSubmit,
+    onDriverClaimCompleteRegistration,
+  ]);
 
   if (loading) {
     return (

@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 
 import AdminPagination from "@/components/AdminPagination";
+import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 import { AspxSyncCard } from "@/components/AspxSyncCard";
 import DashboardHeader from "@/components/DashboardHeader";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
@@ -213,6 +214,7 @@ const PENDENTES_QUERY_KEY = ["operator", "cadastros-pendentes"] as const;
 
 const Motoristas = () => {
   const queryClient = useQueryClient();
+  const permissions = useOperatorPermissions();
   const [mainTab, setMainTab] = useState<"motoristas" | "pendentes">("motoristas");
   const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState("todos");
@@ -339,7 +341,7 @@ const Motoristas = () => {
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
 
-  const { data: pendentesData, isLoading: pendentesLoading, error: pendentesError } = useQuery({
+  const { data: pendentesData, isLoading: pendentesLoading, isFetching: pendentesFetching, error: pendentesError } = useQuery({
     queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, pendentesPage],
     queryFn: () =>
       fetchCadastrosPendentes({
@@ -357,6 +359,7 @@ const Motoristas = () => {
       toast.success("Motorista aprovado. Conta criada com sucesso.");
       if (selectedPendente?.id === id) setSelectedPendente(null);
       queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: MOTORISTAS_QUERY_KEY });
     },
     onError: (error: Error) => {
       toast.error(error.message || "Erro ao aprovar cadastro.");
@@ -372,6 +375,7 @@ const Motoristas = () => {
       setRejectObs("");
       setRejectTarget(null);
       queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: MOTORISTAS_QUERY_KEY });
     },
     onError: (error: Error) => {
       toast.error(error.message || "Erro ao rejeitar cadastro.");
@@ -510,7 +514,12 @@ const Motoristas = () => {
                       <AdminPagination
                         page={pendentesPage}
                         totalPages={pendentesMeta.totalPages}
-                        onPageChange={setPendentesPage}
+                        totalCount={pendentesMeta.totalCount}
+                        pageSize={20}
+                        itemLabel="cadastro(s)"
+                        isFetching={pendentesFetching}
+                        onPrevious={() => setPendentesPage((p) => Math.max(1, p - 1))}
+                        onNext={() => setPendentesPage((p) => Math.min(pendentesMeta.totalPages, p + 1))}
                       />
                     </div>
                   )}
@@ -556,24 +565,33 @@ const Motoristas = () => {
 
                     {(selectedPendente.status === "pendente" || selectedPendente.status === "em_revisao") && (
                       <div className="mt-5 flex gap-3">
-                        <button
-                          type="button"
-                          disabled={aprovarMutation.isPending}
-                          onClick={() => aprovarMutation.mutate(selectedPendente.id)}
-                          className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60 transition-colors"
-                        >
-                          {aprovarMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                          Aprovar
-                        </button>
-                        <button
-                          type="button"
-                          disabled={rejeitarMutation.isPending}
-                          onClick={() => { setRejectTarget(selectedPendente.id); setRejectObs(""); setShowRejectModal(true); }}
-                          className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 transition-colors"
-                        >
-                          <X className="h-4 w-4" />
-                          Rejeitar
-                        </button>
+                        {permissions.canApproveMotoristas ? (
+                          <button
+                            type="button"
+                            disabled={aprovarMutation.isPending}
+                            onClick={() => aprovarMutation.mutate(selectedPendente.id)}
+                            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+                          >
+                            {aprovarMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                            Aprovar
+                          </button>
+                        ) : null}
+                        {permissions.canRejectMotoristas ? (
+                          <button
+                            type="button"
+                            disabled={rejeitarMutation.isPending}
+                            onClick={() => { setRejectTarget(selectedPendente.id); setRejectObs(""); setShowRejectModal(true); }}
+                            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 transition-colors"
+                          >
+                            <X className="h-4 w-4" />
+                            Rejeitar
+                          </button>
+                        ) : null}
+                        {!permissions.canApproveMotoristas && !permissions.canRejectMotoristas ? (
+                          <p className="flex-1 rounded-xl border border-dashed border-border bg-muted/40 px-4 py-2.5 text-center text-xs text-muted-foreground">
+                            Você não tem permissão para aprovar ou rejeitar cadastros.
+                          </p>
+                        ) : null}
                       </div>
                     )}
                   </section>
@@ -805,7 +823,7 @@ const Motoristas = () => {
                         <span className={cn("inline-flex rounded-full border px-2.5 py-0.5 text-[0.68rem] font-semibold", getDriverBadgeTone(driver))}>
                           {getDriverBadgeLabel(driver)}
                         </span>
-                        {driver.registrationStatus === "REGISTERED" ? (
+                        {driver.registrationStatus === "REGISTERED" && permissions.canEditMotoristas ? (
                           <button
                             type="button"
                             onClick={() => handleEditDriver(driver)}

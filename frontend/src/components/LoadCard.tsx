@@ -5,9 +5,13 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
 import ClientLogo from "@/components/ClientLogo";
-import DriverClaimPanel from "@/components/driver/DriverClaimPanel";
+import DriverClaimPanel, {
+  type DriverClaimPanelMode,
+  type PreSubmitInterceptor,
+} from "@/components/driver/DriverClaimPanel";
 import PacoteHeader from "@/components/load-card/PacoteHeader";
 import PacoteStopsList from "@/components/load-card/PacoteStopsList";
+import type { PreCheckResponse } from "@/api/candidaturaApi";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -46,11 +50,20 @@ interface LoadCardProps {
   onInterestDialogOpenChange?: (isOpen: boolean) => void;
   /**
    * Meta do pacote (cargas casadas) — quando presente E `total_cargas > 1`, o card
-   * renderiza a vista "viagem casada" (header + lista vertical de paradas + valor
-   * do pacote). Caso ausente OU `total_cargas === 1`, render permanece idêntico
-   * ao card avulsa pre-existente (CARGAS-CASADAS-08 zero regressão).
+   * renderiza a vista "viagem casada". Caso ausente OU `total_cargas === 1`, render avulsa.
    */
   pacoteMeta?: PacoteMeta | null;
+  /**
+   * Wiring opcional do fluxo de cadastro v2 (Phase 7/8).
+   */
+  driverClaimMode?: DriverClaimPanelMode;
+  onDriverClaimPreSubmit?: PreSubmitInterceptor;
+  onDriverClaimCompleteRegistration?: (params: {
+    preCheckResponse: PreCheckResponse;
+    cpf: string;
+    horsePlate: string;
+    trailerPlates: string[];
+  }) => void;
 }
 
 const LoadCard = memo(({
@@ -80,6 +93,9 @@ const LoadCard = memo(({
   clienteLogoUrlCard,
   onInterestDialogOpenChange,
   pacoteMeta,
+  driverClaimMode,
+  onDriverClaimPreSubmit,
+  onDriverClaimCompleteRegistration,
 }: LoadCardProps) => {
   // Pacote degenerado (total_cargas === 1) é funcionalmente equivalente a avulsa
   // — renderiza como avulsa, sem header/lista de paradas. CARGAS-CASADAS-08.
@@ -691,6 +707,17 @@ const LoadCard = memo(({
           <DriverClaimPanel
             loadId={loadId}
             panelId={`driver-claim-dialog-${loadId}`}
+            mode={driverClaimMode}
+            onPreSubmitInterceptor={onDriverClaimPreSubmit}
+            onCompleteRegistration={
+              onDriverClaimCompleteRegistration
+                ? (params) => {
+                    // Fecha o dialog do card antes do consumidor abrir o wizard.
+                    handleInterestDialogOpenChange(false);
+                    onDriverClaimCompleteRegistration(params);
+                  }
+                : undefined
+            }
             className="admin-dialog-surface rounded-[28px] border shadow-[0_32px_64px_-38px_hsl(223_56%_10%/0.38)] sm:rounded-[32px]"
           />
         </DialogContent>
