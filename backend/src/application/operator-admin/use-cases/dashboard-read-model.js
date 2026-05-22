@@ -11,6 +11,7 @@ import {
   mapDriverLoadReadModelItem,
   normalizeOptionalText,
   isMissingDriverVisibilityColumnError,
+  isMissingPacoteColumnsError,
 } from "./_shared.js";
 
 export async function fetchOperatorDashboardReadModel({ query, correlationId }) {
@@ -181,21 +182,66 @@ export async function fetchOperatorDashboardReadModel({ query, correlationId }) 
 
 export async function fetchDriverLoadsReadModel({ query, correlationId }) {
   return withPgClient(async (client) => {
-    let filterContext = buildDriverLoadFilters(query);
+    // Phase 10: includePacoteVisibilityFilter ativa a clausula composta
+    //  (avulsa PUBLIC) OR (pacote em status visivel) — necessario para nao filtrar
+    // cargas PREMIUM dentro de pacote publicado.
+    //
+    // Fallback strategy:
+    //  - DB nova (com cargas_casadas + viagem_id):           pacote-aware (JOIN + DISTINCT ON)
+    //  - DB legada (sem cargas_casadas/viagem_id):            cai p/ comportamento pre-Phase 10
+    //  - DB legada SEM driver_visibility:                     cai mais um nivel (legado-2)
+    // Cada fallback regera o whereSql sem as clausulas que dependem das colunas ausentes,
+    // garantindo que cc.status / cargas.viagem_id nunca apareca no SQL fallback.
+    const buildFilters = (overrides = {}) =>
+      buildDriverLoadFilters(query, {
+        includeDriverVisibilityFilter: true,
+        includePacoteVisibilityFilter: true,
+        ...overrides,
+      });
+
+    let filterContext = buildFilters();
     let parsedQuery = filterContext.parsedQuery;
     let whereSql = filterContext.whereSql;
     let values = filterContext.values;
     let itemRows;
+    let usePacoteJoin = true;
+
+    const runQuery = async () =>
+      queryDriverLoadCandidateRows(client, {
+        whereSql,
+        values,
+        withPacoteJoin: usePacoteJoin,
+      });
 
     try {
-      itemRows = await queryDriverLoadCandidateRows(client, { whereSql, values });
+      itemRows = await runQuery();
     } catch (error) {
-      if (isMissingDriverVisibilityColumnError(error)) {
-        filterContext = buildDriverLoadFilters(query, { includeDriverVisibilityFilter: false });
+      if (isMissingPacoteColumnsError(error)) {
+        // DB pre-Phase 10: desliga JOIN e remove filtro de pacote do WHERE.
+        usePacoteJoin = false;
+        filterContext = buildFilters({ includePacoteVisibilityFilter: false });
         parsedQuery = filterContext.parsedQuery;
         whereSql = filterContext.whereSql;
         values = filterContext.values;
-        itemRows = await queryDriverLoadCandidateRows(client, { whereSql, values });
+        try {
+          itemRows = await runQuery();
+        } catch (retryError) {
+          if (!isMissingDriverVisibilityColumnError(retryError)) throw retryError;
+          filterContext = buildFilters({
+            includeDriverVisibilityFilter: false,
+            includePacoteVisibilityFilter: false,
+          });
+          parsedQuery = filterContext.parsedQuery;
+          whereSql = filterContext.whereSql;
+          values = filterContext.values;
+          itemRows = await runQuery();
+        }
+      } else if (isMissingDriverVisibilityColumnError(error)) {
+        filterContext = buildFilters({ includeDriverVisibilityFilter: false });
+        parsedQuery = filterContext.parsedQuery;
+        whereSql = filterContext.whereSql;
+        values = filterContext.values;
+        itemRows = await runQuery();
       } else {
         throw error;
       }
