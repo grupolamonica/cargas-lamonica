@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Clock3,
@@ -9,11 +9,15 @@ import {
   ShieldCheck,
   Truck,
 } from "lucide-react";
+import { toast } from "sonner";
 import type { CustomBadgeItem } from "@/services/operatorAdmin";
 import { getBadgeIcon } from "@/lib/badgeIcons";
 import { Link, useParams } from "react-router-dom";
 
 import DriverClaimPanel from "@/components/driver/DriverClaimPanel";
+import PacotePanel from "@/components/driver/PacotePanel";
+import { usePacoteRealtime, type PacoteRealtimeRow } from "@/hooks/usePacoteRealtime";
+import type { PacoteFull } from "@/services/readModels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -72,10 +76,14 @@ interface CargoDetailsRow {
   sheet_data_carregamento: string | null;
   sheet_data_descarga: string | null;
   cliente: CargoClientRow | null;
+  /** Pacote (cargas_casadas) ao qual a carga pertence — null = carga avulsa. Plan 10-04/10-06. */
+  viagem_id?: string | null;
+  /** Posição da carga dentro do pacote (1..N) — null quando avulsa. */
+  ordem_viagem?: number | null;
 }
 
 const CARGO_DETAILS_SELECT =
-  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, bonus_exigencias, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
+  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, bonus_exigencias, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, viagem_id, ordem_viagem, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
 const LEGACY_CARGO_DETAILS_SELECT =
   "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
 
@@ -418,8 +426,41 @@ const DriverCargoDetails = () => {
         throw new Error("Carga não encontrada");
       }
 
-      return resolveCargoDecorations(data as CargoDetailsRow);
+      // viagem_id / ordem_viagem foram adicionados em plan 10-04 mas os tipos
+      // gerados do Supabase ainda não foram regenerados — cast via unknown.
+      return resolveCargoDecorations(data as unknown as CargoDetailsRow);
     },
+  });
+
+  // ─── Pacote (cargas casadas) realtime — plan 10-06 ──────────────────────
+  // Quando a carga aberta pertence a um pacote (viagem_id NOT NULL), assina
+  // UPDATE em cargas_casadas e dispara toast + invalida queries quando o
+  // operador edita (version-bump). Carga avulsa: viagemId=null → hook é
+  // no-op (não subscreve). Hooks chamados aqui ficam ANTES dos early returns
+  // para satisfazer Rules of Hooks.
+  const queryClient = useQueryClient();
+  const viagemId = cargoQuery.data?.cargo.viagem_id ?? null;
+  const pacoteCached = queryClient.getQueryData<PacoteFull>(["pacote", viagemId]);
+  const currentPacoteVersion = pacoteCached?.version ?? 0;
+  const currentCargoIdForBump = cargoQuery.data?.cargo.id ?? null;
+
+  const handlePacoteVersionBump = useCallback(
+    (next: PacoteRealtimeRow) => {
+      toast.info(`Pacote atualizado pelo operador (v${next.version}). Recarregando…`);
+      // Refresca o detalhe do pacote (PacotePanel re-renderiza com cargas novas)
+      queryClient.invalidateQueries({ queryKey: ["pacote", viagemId] });
+      // Refresca a carga atual — version-bump pode ter re-aberto reserva
+      if (currentCargoIdForBump) {
+        queryClient.invalidateQueries({ queryKey: ["driver", "cargo", currentCargoIdForBump] });
+      }
+    },
+    [queryClient, viagemId, currentCargoIdForBump],
+  );
+
+  usePacoteRealtime({
+    pacoteId: viagemId,
+    currentVersion: currentPacoteVersion,
+    onVersionBump: handlePacoteVersionBump,
   });
 
   if (!normalizedCargoId) {
@@ -472,6 +513,9 @@ const DriverCargoDetails = () => {
   return (
     <div className="driver-theme min-h-screen bg-[radial-gradient(circle_at_top_left,hsl(224_100%_96%),transparent_40%),linear-gradient(180deg,hsl(220_30%_97%),hsl(220_22%_94%))] px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
       <div className="mx-auto max-w-6xl space-y-5 sm:space-y-6">
+        {viagemId ? (
+          <PacotePanel pacoteId={viagemId} currentCargaId={cargo.id} />
+        ) : null}
         <section className="relative overflow-hidden rounded-[32px] border border-white/70 bg-[linear-gradient(135deg,hsl(223_56%_12%),hsl(223_55%_22%))] p-5 text-white shadow-[0_30px_70px_-30px_hsl(215_25%_12%/0.55)] sm:p-8">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(225_100%_65%/0.18),transparent_36%),radial-gradient(circle_at_bottom_left,hsl(200_100%_55%/0.14),transparent_30%)]" />
           <div className="relative space-y-6">
