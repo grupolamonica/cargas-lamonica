@@ -9,6 +9,26 @@ interface ApiRequestOptions {
   method?: string;
   accessToken?: string;
   body?: unknown;
+  /** Extra headers (merged with defaults). Útil para Idempotency-Key. */
+  headers?: Record<string, string>;
+}
+
+/**
+ * Erro estruturado lançado por `requestJson` quando a API responde com erro JSON.
+ * Expõe `status`, `code` (HTTP-shape, ex.: "VALIDATION_ERROR") e `details.code`
+ * (código de domínio, ex.: "limite_cargas_excedido") para mapeamento em pt-BR.
+ */
+export class ApiError extends Error {
+  status: number;
+  code: string | null;
+  details: { code?: string; [k: string]: unknown } | null;
+  constructor(message: string, opts: { status: number; code?: string | null; details?: ApiError["details"] }) {
+    super(message);
+    this.name = "ApiError";
+    this.status = opts.status;
+    this.code = opts.code ?? null;
+    this.details = opts.details ?? null;
+  }
 }
 
 function createCorrelationId() {
@@ -80,6 +100,12 @@ export async function requestJson<T>(url: string, options: ApiRequestOptions = {
     headers.set("Authorization", `Bearer ${options.accessToken}`);
   }
 
+  if (options.headers) {
+    for (const [k, v] of Object.entries(options.headers)) {
+      if (typeof v === "string" && v.length > 0) headers.set(k, v);
+    }
+  }
+
   const resolvedUrl = API_BASE ? `${API_BASE.replace(/\/$/, '')}${url.startsWith('/') ? url : `/${url}`}` : url;
   const requestUrl = resolveCanonicalApiRequestUrl(resolvedUrl);
 
@@ -97,7 +123,20 @@ export async function requestJson<T>(url: string, options: ApiRequestOptions = {
         ? payload.message
         : fallbackMessage;
 
-    throw new Error(message || "Erro ao executar a operacao solicitada.");
+    const code =
+      payload && typeof payload === "object" && "code" in payload && typeof (payload as { code?: unknown }).code === "string"
+        ? ((payload as { code?: string }).code ?? null)
+        : null;
+    const details =
+      payload && typeof payload === "object" && "details" in payload && (payload as { details?: unknown }).details && typeof (payload as { details?: unknown }).details === "object"
+        ? ((payload as { details: Record<string, unknown> }).details)
+        : null;
+
+    throw new ApiError(message || "Erro ao executar a operacao solicitada.", {
+      status: response.status,
+      code,
+      details,
+    });
   }
 
   if (payload === null) {
