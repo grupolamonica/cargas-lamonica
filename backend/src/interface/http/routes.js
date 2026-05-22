@@ -73,6 +73,18 @@ import {
   resolveDriverSponsorClickResponse,
 } from "./public-loads/handlers.js";
 
+import {
+  resolveAddCargaPacoteResponse,
+  resolveCancelPacoteResponse,
+  resolveCreatePacoteResponse,
+  resolveGetPacoteResponse,
+  resolveListPacotesResponse,
+  resolvePublishPacoteResponse,
+  resolveRemoveCargaPacoteResponse,
+  resolveReorderCargasPacoteResponse,
+  resolveUpdatePacoteResponse,
+} from "./cargas-casadas/handlers.js";
+
 import { resolveFinalizarCadastroResponse } from "./cadastro/handlers.js";
 
 import { resolveRouteInfoResponse } from "./route-info.handler.js";
@@ -235,6 +247,34 @@ export function registerRoutes(app) {
   router.get("/api/operator/routes", wrap(resolveOperatorRoutesListReadModelResponse));
   router.post("/api/operator/routes", wrap(resolveCreateOperatorRouteResponse));
   router.patch("/api/operator/routes/:routeId", wrap(resolveUpdateOperatorRouteResponse));
+
+  // Cargas casadas (pacote de cargas) — Phase 10
+  // CRITICAL T-02-07: rotas com sub-segmentos fixos (reorder/cargas/publish/cancel)
+  // ANTES das parametrizadas, para o Express nao interpretar segmento como :pacoteId.
+  router.get("/api/operator/cargas-casadas", wrap(resolveListPacotesResponse));
+  router.post("/api/operator/cargas-casadas", wrap(resolveCreatePacoteResponse));
+  router.put(
+    "/api/operator/cargas-casadas/:pacoteId/cargas/reorder",
+    wrap(resolveReorderCargasPacoteResponse),
+  );
+  router.post(
+    "/api/operator/cargas-casadas/:pacoteId/cargas",
+    wrap(resolveAddCargaPacoteResponse),
+  );
+  router.delete(
+    "/api/operator/cargas-casadas/:pacoteId/cargas/:cargaId",
+    wrap(resolveRemoveCargaPacoteResponse),
+  );
+  router.post(
+    "/api/operator/cargas-casadas/:pacoteId/publish",
+    wrap(resolvePublishPacoteResponse),
+  );
+  router.post(
+    "/api/operator/cargas-casadas/:pacoteId/cancel",
+    wrap(resolveCancelPacoteResponse),
+  );
+  router.get("/api/operator/cargas-casadas/:pacoteId", wrap(resolveGetPacoteResponse));
+  router.put("/api/operator/cargas-casadas/:pacoteId", wrap(resolveUpdatePacoteResponse));
 
   app.use(router);
 }
