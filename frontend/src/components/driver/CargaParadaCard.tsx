@@ -1,6 +1,5 @@
 import { CalendarClock, Clock3, MapPinned, Package, Truck } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   buildLoadingDateTime,
@@ -57,19 +56,15 @@ const CargaParadaCard = ({ carga, isCurrent, index }: CargaParadaCardProps) => {
         <CardTitle className="text-2xl tracking-tight text-foreground">
           Coleta, entrega e percurso
         </CardTitle>
-        {/* Sub-header com "Carga {N}: origem -> destino" + badge "Voce esta aqui". */}
-        <div className="mt-2 flex items-start justify-between gap-3">
+        {/* Sub-header com "Carga {N}: origem -> destino". Badge "Voce esta aqui"
+            removido (iter #4) — `isCurrent` permanece apenas para data-testid. */}
+        <div className="mt-2">
           <p className="min-w-0 text-sm text-muted-foreground">
             <strong className="font-semibold text-foreground">Carga {index}:</strong>{" "}
             <span className="break-words">{fixBrokenPortugueseText(carga.origem)}</span>
             {" "}{"→"}{" "}
             <span className="break-words">{fixBrokenPortugueseText(carga.destino)}</span>
           </p>
-          {isCurrent ? (
-            <Badge className="shrink-0 border-accent/40 bg-accent/15 px-3 py-1 text-accent">
-              Você está aqui
-            </Badge>
-          ) : null}
         </div>
       </CardHeader>
       {/* Grid 2-col em TODOS os breakpoints (iter #3) — espelha exatamente

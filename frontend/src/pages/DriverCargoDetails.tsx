@@ -755,11 +755,11 @@ const DriverCargoDetails = () => {
                       ? formatCurrency(totalPayment)
                       : "A combinar"}
                 </p>
-                <p className="mt-2 text-sm leading-relaxed text-white/72">
-                  {isPacote
-                    ? "Valor definido pelo operador"
-                    : buildDriverPaymentDetails(cargo.valor, cargo.bonus)}
-                </p>
+                {!isPacote ? (
+                  <p className="mt-2 text-sm leading-relaxed text-white/72">
+                    {buildDriverPaymentDetails(cargo.valor, cargo.bonus)}
+                  </p>
+                ) : null}
                 {!isPacote ? (
                   <div className="mt-5 space-y-2 text-sm text-white/82">
                     <p className="hidden sm:block">Cliente: {formatMaybeText(cliente?.nome?.trim(), "Cliente não informado")}</p>
