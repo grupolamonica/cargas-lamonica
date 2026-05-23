@@ -559,16 +559,17 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
           clauses.push("COALESCE(cargas.is_template, false) = true");
         } else if (status === "ativas") {
           // `ativas` = rascunhos + abertas. Default da tela de Cargas do
-          // operador: s\u00f3 mostra cargas no ciclo operacional (sem reservadas,
-          // fechadas, expiradas, etc) para n\u00e3o inflar o contador.
+          // operador: so mostra cargas no ciclo operacional (sem reservadas,
+          // fechadas, expiradas, etc) para nao inflar o contador.
           //
-          // Cross-check com sheet_motorista/sheet_status: defense-in-depth.
-          // Se o sync da planilha atrasou e ainda n\u00e3o flippou status='OPEN'
-          // para 'BOOKED', filtramos manualmente aqui. Sem isso o operador
-          // v\u00ea cargas j\u00e1 alocadas no Google Sheets como "ativas".
+          // Cross-check com sheet_motorista: defense-in-depth. Se o sync da
+          // planilha atrasou e ainda nao flippou status='OPEN' para 'BOOKED',
+          // filtramos manualmente aqui pelo sinal real de aloca\u00e7\u00e3o (motorista
+          // atribu\u00eddo no sheet). Filtro de sheet_status removido (era over-broad
+          // \u2014 bloqueava pipeline statuses como 'AGUARDANDO CARREGAMENTO' que
+          // significam carga aberta na planilha).
           clauses.push("cargas.status IN ('DRAFT', 'OPEN')");
           clauses.push("COALESCE(cargas.sheet_motorista, '') = ''");
-          clauses.push("COALESCE(cargas.sheet_status, '') = ''");
         } else {
           values.push(status);
           clauses.push(`cargas.status = $${index}`);

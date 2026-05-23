@@ -689,14 +689,19 @@ export function buildDriverLoadFilters(query, {
   const clauses = [
     "cargas.status = 'OPEN'",
     "COALESCE(cargas.is_template, false) = false",
-    // Defense-in-depth: a planilha (Google Sheets/Shopee) é a fonte de verdade.
-    // Se o sync atrasar ou falhar, cargas já marcadas como alocadas no sheet
-    // continuariam visíveis no painel do motorista por dependerem só de
-    // `status='OPEN'`. Cruzar com sheet_motorista/sheet_status barra isso.
-    // O sync persiste NULL para vazios (google-sheet-loads.js: `load.motoristas || null`),
-    // então `COALESCE(..., '') = ''` cobre NULL + string vazia em produção.
+    // Defense-in-depth: a planilha (Google Sheets/Shopee) é a fonte de verdade
+    // para alocação de motorista. Se o sync atrasar/falhar, cargas com motorista
+    // já atribuído no sheet (sheet_motorista preenchido) continuariam visíveis
+    // no painel por dependerem só de `cargas.status='OPEN'`. Bloquear por
+    // sheet_motorista impede esse vazamento.
+    //
+    // NOTA: filtro de `sheet_status` foi removido (era over-broad). Statuses
+    // como 'AGUARDANDO CARREGAMENTO' / 'AGUARDANDO CHEGAR NO CLIENTE' indicam
+    // pipeline aberto na planilha, não alocação — bloquear escondia cargas
+    // legítimas dos motoristas. Para estados terminais (DESCARREGADO, CTE
+    // ENVIADO, CANCELADO, etc.), o `cargas.status` já transita para BOOKED
+    // /EXPIRED via sync, então o filtro principal `cargas.status='OPEN'` cobre.
     "COALESCE(cargas.sheet_motorista, '') = ''",
-    "COALESCE(cargas.sheet_status, '') = ''",
   ];
   const values = [];
   let index = 1;
