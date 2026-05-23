@@ -186,8 +186,12 @@ describe("PacotePanel", () => {
 // ─── CargaParadaCard — smoke tests (plan revisao 2026-05-23) ───────────────
 //
 // Cobre o sub-card que substitui a antiga card unica "Coleta, entrega e
-// percurso" quando a carga aberta pertence a um pacote. D5 explicito:
-// SEM Tempo estimado e SEM Percurso recomendado.
+// percurso" quando a carga aberta pertence a um pacote.
+//
+// iter #2 (2026-05-23 D9): CargaParadaCard agora ESPELHA exatamente o JSX
+// do bloco "Coleta, entrega e percurso" do avulsa. Tempo estimado +
+// Percurso recomendado VOLTAM (5 DetailMetrics no total). D5 mantido so
+// para o LoadCard listing.
 
 function buildPacoteCargaFixture(overrides: Partial<PacoteCarga> = {}): PacoteCarga {
   return {
@@ -213,7 +217,7 @@ function buildPacoteCargaFixture(overrides: Partial<PacoteCarga> = {}): PacoteCa
 describe("CargaParadaCard", () => {
   it("renderiza header 'Carga N — origem -> destino' + badge 'Voce esta aqui' quando isCurrent=true", () => {
     renderWithProviders(
-      <CargaParadaCard carga={buildPacoteCargaFixture()} isCurrent />,
+      <CargaParadaCard carga={buildPacoteCargaFixture()} isCurrent index={2} />,
     );
 
     expect(screen.getByTestId("carga-parada-current")).toBeInTheDocument();
@@ -226,29 +230,33 @@ describe("CargaParadaCard", () => {
 
   it("omite badge 'Voce esta aqui' quando isCurrent=false", () => {
     renderWithProviders(
-      <CargaParadaCard carga={buildPacoteCargaFixture()} isCurrent={false} />,
+      <CargaParadaCard carga={buildPacoteCargaFixture()} isCurrent={false} index={2} />,
     );
 
     expect(screen.getByTestId("carga-parada-other")).toBeInTheDocument();
     expect(screen.queryByText(/voc[eê] est[áa] aqui/i)).not.toBeInTheDocument();
   });
 
-  it("expoe Carregamento + Descarga + Tipo de veículo (D5: SEM Tempo estimado nem Percurso)", () => {
+  it("espelha o card avulsa: header 'Informações da carga / Coleta, entrega e percurso' + 5 DetailMetrics (iter #2 D9)", () => {
     renderWithProviders(
-      <CargaParadaCard carga={buildPacoteCargaFixture()} isCurrent />,
+      <CargaParadaCard carga={buildPacoteCargaFixture()} isCurrent index={2} />,
     );
 
-    // 3 DetailMetrics presentes
+    // Header idêntico ao avulsa (D9)
+    expect(screen.getByText(/informações da carga/i)).toBeInTheDocument();
+    expect(screen.getByText(/coleta, entrega e percurso/i)).toBeInTheDocument();
+
+    // 5 DetailMetrics presentes (espelha avulsa)
     expect(screen.getByText(/carregamento/i)).toBeInTheDocument();
     expect(screen.getByText(/descarga/i)).toBeInTheDocument();
+    expect(screen.getByText(/tempo estimado/i)).toBeInTheDocument();
     expect(screen.getByText(/tipo de ve[íi]culo/i)).toBeInTheDocument();
-
-    // D5: AUSENCIA estrita de Tempo estimado e Percurso recomendado
-    expect(screen.queryByText(/tempo estimado/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/percurso recomendado/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/percurso recomendado/i)).toBeInTheDocument();
 
     // Valor do perfil (CARRETA) renderizado
     expect(screen.getByText(/carreta/i)).toBeInTheDocument();
+    // Distancia formatada para Percurso
+    expect(screen.getByText(/800 km/i)).toBeInTheDocument();
   });
 });
 
