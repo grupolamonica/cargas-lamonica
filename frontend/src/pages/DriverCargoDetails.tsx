@@ -15,9 +15,8 @@ import { getBadgeIcon } from "@/lib/badgeIcons";
 import { Link, useParams } from "react-router-dom";
 
 import DriverClaimPanel from "@/components/driver/DriverClaimPanel";
-import PacotePanel from "@/components/driver/PacotePanel";
 import { usePacoteRealtime, type PacoteRealtimeRow } from "@/hooks/usePacoteRealtime";
-import type { PacoteFull } from "@/services/readModels";
+import { fetchPacote, type PacoteFull } from "@/services/readModels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -463,6 +462,17 @@ const DriverCargoDetails = () => {
     onVersionBump: handlePacoteVersionBump,
   });
 
+  // Carrega o pacote completo (todas as cargas + valor_total) quando a carga
+  // aberta pertence a uma viagem casada. Compartilha queryKey ["pacote", id]
+  // com PacoteStopsList do listing — o hook usePacoteRealtime invalida essa
+  // mesma chave em version-bump.
+  const pacoteQuery = useQuery<PacoteFull>({
+    queryKey: ["pacote", viagemId],
+    queryFn: () => fetchPacote(viagemId!),
+    enabled: Boolean(viagemId),
+    staleTime: 30_000,
+  });
+
   if (!normalizedCargoId) {
     return (
       <ErrorState
@@ -510,12 +520,21 @@ const DriverCargoDetails = () => {
   const visibleRequirementLabels = getVisibleDriverCargoRequirementLabels(cliente);
   const hasClientNotes = hasVisibleDriverCargoClientNotes(cliente?.observacoes);
 
+  // Flag central — quando a carga pertence a um pacote, varias secoes sao
+  // ocultadas (bonus/cliente/exigencias/reputacao) e o header da rota muda
+  // para "VIAGEM CASADA — N paradas". `pacoteData` so resolve depois do fetch
+  // do pacote; usamos boolean(viagemId) para ja iniciar o ramo, exibindo
+  // placeholders enquanto carrega.
+  const pacoteData = pacoteQuery.data ?? null;
+  const isPacote = Boolean(viagemId);
+  const pacoteTotalCargas = pacoteData?.total_cargas ?? pacoteData?.cargas.length ?? null;
+  const pacoteValorTotalLabel = pacoteData
+    ? formatCurrency(pacoteData.valor_total)
+    : "Carregando…";
+
   return (
     <div className="driver-theme min-h-screen bg-[radial-gradient(circle_at_top_left,hsl(224_100%_96%),transparent_40%),linear-gradient(180deg,hsl(220_30%_97%),hsl(220_22%_94%))] px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
       <div className="mx-auto max-w-6xl space-y-5 sm:space-y-6">
-        {viagemId ? (
-          <PacotePanel pacoteId={viagemId} currentCargaId={cargo.id} />
-        ) : null}
         <section className="relative overflow-hidden rounded-[32px] border border-white/70 bg-[linear-gradient(135deg,hsl(223_56%_12%),hsl(223_55%_22%))] p-5 text-white shadow-[0_30px_70px_-30px_hsl(215_25%_12%/0.55)] sm:p-8">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(225_100%_65%/0.18),transparent_36%),radial-gradient(circle_at_bottom_left,hsl(200_100%_55%/0.14),transparent_30%)]" />
           <div className="relative space-y-6">
@@ -549,37 +568,53 @@ const DriverCargoDetails = () => {
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_320px]">
               <div className="space-y-4">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/70">Rota disponível</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/70">
+                    {isPacote ? "Viagem casada" : "Rota disponível"}
+                  </p>
                   <h1 className="mt-3 break-words text-2xl font-black tracking-tight text-white sm:text-4xl">
-                    {fixBrokenPortugueseText(cargo.origem)} {"\u2192"} {fixBrokenPortugueseText(cargo.destino)}
+                    {isPacote ? (
+                      <>VIAGEM CASADA {"—"} {pacoteTotalCargas ?? "…"} paradas</>
+                    ) : (
+                      <>{fixBrokenPortugueseText(cargo.origem)} {"\u2192"} {fixBrokenPortugueseText(cargo.destino)}</>
+                    )}
                   </h1>
                 </div>
 
                 <p className="hidden max-w-2xl text-sm leading-relaxed text-white/82 sm:block sm:text-base">
-                  {cliente?.descricao?.trim()
-                    ? cliente.descricao
-                    : "Aqui você vê os principais dados da carga e do cliente antes de demonstrar interesse."}
+                  {isPacote
+                    ? `Pacote com ${pacoteTotalCargas ?? "várias"} cargas — confira as paradas abaixo antes de demonstrar interesse.`
+                    : cliente?.descricao?.trim()
+                      ? cliente.descricao
+                      : "Aqui você vê os principais dados da carga e do cliente antes de demonstrar interesse."}
                 </p>
               </div>
 
               <div className="rounded-[28px] border border-white/12 bg-white/10 p-4 backdrop-blur sm:p-5">
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/60">Pagamento total</p>
                 <p className="mt-3 text-3xl font-black tracking-tight text-white">
-                  {totalPayment !== null ? formatCurrency(totalPayment) : "A combinar"}
+                  {isPacote
+                    ? pacoteValorTotalLabel
+                    : totalPayment !== null
+                      ? formatCurrency(totalPayment)
+                      : "A combinar"}
                 </p>
                 <p className="mt-2 text-sm leading-relaxed text-white/72">
-                  {buildDriverPaymentDetails(cargo.valor, cargo.bonus)}
+                  {isPacote
+                    ? "Valor definido pelo operador"
+                    : buildDriverPaymentDetails(cargo.valor, cargo.bonus)}
                 </p>
-                <div className="mt-5 space-y-2 text-sm text-white/82">
-                  <p className="hidden sm:block">Cliente: {formatMaybeText(cliente?.nome?.trim(), "Cliente não informado")}</p>
-                  <p>Janela estimada: {estimatedTime}</p>
-                </div>
+                {!isPacote ? (
+                  <div className="mt-5 space-y-2 text-sm text-white/82">
+                    <p className="hidden sm:block">Cliente: {formatMaybeText(cliente?.nome?.trim(), "Cliente não informado")}</p>
+                    <p>Janela estimada: {estimatedTime}</p>
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
         </section>
 
-        {hasBonusHighlight ? (
+        {!isPacote && hasBonusHighlight ? (
           <section className="admin-accent-tint relative overflow-hidden rounded-[32px] border p-5 shadow-[0_28px_58px_-34px_hsl(223_56%_12%/0.26)] sm:p-7">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(152_67%_43%/0.14),transparent_34%),radial-gradient(circle_at_bottom_left,hsl(224_94%_37%/0.14),transparent_42%)]" />
             <div className="relative grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_260px] xl:items-start">
@@ -640,37 +675,40 @@ const DriverCargoDetails = () => {
             </CardContent>
           </Card>
 
-          <Card className="admin-panel hidden overflow-hidden lg:block">
-            <CardHeader>
-              <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
-                Cliente da carga
-              </CardDescription>
-              <CardTitle className="text-2xl tracking-tight text-foreground">
-                {formatMaybeText(cliente?.nome?.trim(), "Cliente não informado")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <DetailMetric icon={CreditCard} label="Forma de pagamento" value={formatMaybeText(cliente?.forma_pagamento)} />
-                <DetailMetric icon={Clock3} label="Prazo de pagamento" value={formatMaybeText(cliente?.prazo_pagamento)} />
-              </div>
-
-              {hasClientNotes ? (
-                <div className="rounded-[24px] border border-border/60 bg-muted/20 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Recados do cliente</p>
-                  <p className="mt-3 text-sm leading-relaxed text-foreground">{cliente?.observacoes?.trim()}</p>
+          {!isPacote ? (
+            <Card className="admin-panel hidden overflow-hidden lg:block">
+              <CardHeader>
+                <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
+                  Cliente da carga
+                </CardDescription>
+                <CardTitle className="text-2xl tracking-tight text-foreground">
+                  {formatMaybeText(cliente?.nome?.trim(), "Cliente não informado")}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <DetailMetric icon={CreditCard} label="Forma de pagamento" value={formatMaybeText(cliente?.forma_pagamento)} />
+                  <DetailMetric icon={Clock3} label="Prazo de pagamento" value={formatMaybeText(cliente?.prazo_pagamento)} />
                 </div>
-              ) : null}
 
-              {cliente ? (
-                <Button asChild variant="outline" className="w-full rounded-full font-semibold">
-                  <Link to={`/motorista/cliente/${cliente.id}`}>Abrir ficha completa do cliente</Link>
-                </Button>
-              ) : null}
-            </CardContent>
-          </Card>
+                {hasClientNotes ? (
+                  <div className="rounded-[24px] border border-border/60 bg-muted/20 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Recados do cliente</p>
+                    <p className="mt-3 text-sm leading-relaxed text-foreground">{cliente?.observacoes?.trim()}</p>
+                  </div>
+                ) : null}
+
+                {cliente ? (
+                  <Button asChild variant="outline" className="w-full rounded-full font-semibold">
+                    <Link to={`/motorista/cliente/${cliente.id}`}>Abrir ficha completa do cliente</Link>
+                  </Button>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
         </section>
 
+        {!isPacote ? (
         <section className="grid gap-6 xl:grid-cols-2">
           {(visibleRequirementLabels.length > 0 || ((cliente?.custom_exigencias ?? []) as CustomBadgeItem[]).some((b) => b.active)) ? (
             <Card className="admin-panel overflow-hidden">
@@ -741,6 +779,7 @@ const DriverCargoDetails = () => {
             </CardContent>
           </Card>
         </section>
+        ) : null}
       </div>
 
       <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 sm:bottom-6 sm:justify-end sm:px-6 lg:px-8">
