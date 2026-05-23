@@ -288,9 +288,10 @@ export async function resolveDriverLoadsDigestResponse(request) {
 
   try {
     const digest = await withPgClient(async (client) => {
-      // Cruza com a planilha (sheet_motorista/sheet_status) para que o digest
-      // não conte cargas já alocadas no Google Sheets — caso o sync atrase,
-      // o frontend não dispara invalidação para cargas que já estão fechadas.
+      // Cruza com a planilha (sheet_motorista) para que o digest nao conte
+      // cargas ja alocadas no Google Sheets — caso o sync atrase, o frontend
+      // nao dispara invalidacao para cargas que ja estao fechadas. Filtro de
+      // sheet_status removido (era over-broad).
       const { rows } = await client.query(`
         SELECT
           COALESCE(EXTRACT(EPOCH FROM MAX(updated_at))::bigint, 0) AS ts,
@@ -300,7 +301,6 @@ export async function resolveDriverLoadsDigestResponse(request) {
           AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'
           AND COALESCE(is_template, false) = false
           AND COALESCE(sheet_motorista, '') = ''
-          AND COALESCE(sheet_status, '') = ''
       `);
       const r = rows[0] || {};
       return `${r.ts}:${r.cnt}`;

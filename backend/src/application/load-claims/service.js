@@ -884,12 +884,17 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
     });
 
     // Defense-in-depth contra sync atrasado da planilha (Google Sheets/Shopee):
-    // mesmo se `cargas.status` ainda é OPEN/RESERVED no DB, o sheet já pode ter
-    // alocado a carga (sheet_motorista/sheet_status preenchidos). Nesse caso,
-    // não criar reserva nem waitlist — cair direto na trilha LOAD_UNAVAILABLE.
+    // mesmo se `cargas.status` ainda e OPEN/RESERVED no DB, o sheet pode ter
+    // alocado a carga. O sinal real de alocacao e `sheet_motorista` preenchido
+    // (driver atribuido na planilha) — nesse caso, nao criar reserva nem
+    // waitlist e cair direto na trilha LOAD_UNAVAILABLE.
+    //
+    // `sheet_status` e mantido apenas no audit log (para forensics), nao no
+    // gate. Statuses como 'AGUARDANDO CARREGAMENTO' indicam pipeline aberto
+    // na planilha, nao alocacao.
     const sheetMotoristaLocked = String(loadRow.sheet_motorista ?? "").trim() !== "";
     const sheetStatusLocked = String(loadRow.sheet_status ?? "").trim() !== "";
-    const sheetLocked = sheetMotoristaLocked || sheetStatusLocked;
+    const sheetLocked = sheetMotoristaLocked;
 
     const driverProfile = await getDriverProfile(client, driverId, { lock: true });
     const existingClaim = await findLatestClaimForDriver(client, {

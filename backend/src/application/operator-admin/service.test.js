@@ -178,7 +178,7 @@ describe("operator-admin service", () => {
     });
   });
 
-  it("oculta cargas com motorista alocado na planilha (sheet_motorista preenchido) do painel do motorista", async () => {
+  it("oculta cargas com motorista alocado na planilha (sheet_motorista preenchido), mas mantem cargas com sheet_status de pipeline aberto", async () => {
     const cliente = await seedCliente({ nome: "Cliente Sheet Lock Motorista" });
 
     // Carga "limpa" — deve aparecer no painel
@@ -192,7 +192,7 @@ describe("operator-admin service", () => {
       data: "2026-04-08",
       driver_visibility: "PUBLIC",
     });
-    // Carga com motorista já alocado na planilha — NÃO deve aparecer mesmo
+    // Carga com motorista ja alocado na planilha — NAO deve aparecer mesmo
     // que status='OPEN' (caso o sync atrase em refletir BOOKED no DB)
     const lockedByMotorista = await seedCargo({
       cliente_id: cliente.id,
@@ -208,8 +208,10 @@ describe("operator-admin service", () => {
       lockedByMotorista.id,
       "JOAO SILVA",
     ]);
-    // Carga com sheet_status preenchido (ex.: DESCARREGADO) — também não deve aparecer
-    const lockedByStatus = await seedCargo({
+    // Regressao: carga com sheet_status='AGUARDANDO CARREGAMENTO' representa
+    // pipeline aberto na planilha (nao alocada). Deve APARECER no painel.
+    // Antes do fix do filtro over-broad, o COALESCE(sheet_status,'')='' escondia.
+    const pipelineOpenStatus = await seedCargo({
       cliente_id: cliente.id,
       origem: "Camacari / BA",
       destino: "Simoes Filho / BA",
@@ -220,8 +222,8 @@ describe("operator-admin service", () => {
       driver_visibility: "PUBLIC",
     });
     await query(`UPDATE public.cargas SET sheet_status = $2 WHERE id = $1`, [
-      lockedByStatus.id,
-      "DESCARREGADO",
+      pipelineOpenStatus.id,
+      "AGUARDANDO CARREGAMENTO",
     ]);
     // Carga com sheet_motorista = '' explicitamente (caso o sync persista string vazia em vez de NULL)
     const emptyStringSheetMotorista = await seedCargo({
@@ -245,9 +247,13 @@ describe("operator-admin service", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.payload.items).toHaveLength(2);
+    expect(response.payload.items).toHaveLength(3);
     const origens = response.payload.items.map((item) => item.origem).sort();
-    expect(origens).toEqual(["Lauro de Freitas / BA", "Salvador / BA"]);
+    expect(origens).toEqual([
+      "Camacari / BA",
+      "Lauro de Freitas / BA",
+      "Salvador / BA",
+    ]);
   });
 
   it("permite ajustar a visibilidade de uma carga reservada sem invalidar o status operacional", async () => {

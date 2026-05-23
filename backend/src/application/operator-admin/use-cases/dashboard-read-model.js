@@ -129,17 +129,17 @@ export async function fetchOperatorDashboardReadModel({ query, correlationId }) 
       `SELECT COUNT(*)::int AS total_count FROM public.cargas LEFT JOIN public.clientes ON clientes.id = cargas.cliente_id WHERE ${filterContext.whereSql}`,
       filterContext.values,
     );
-    // active_count: cargas OPEN não-template AINDA disponíveis na planilha.
-    // O cross-check com sheet_motorista/sheet_status alinha o tile do dashboard
-    // com a listagem "Ativas" (read-models.js), evitando contar cargas que a
-    // planilha já alocou mas o sync ainda não flippou para BOOKED.
+    // active_count: cargas OPEN nao-template AINDA disponiveis na planilha.
+    // O cross-check com sheet_motorista alinha o tile do dashboard com a
+    // listagem "Ativas" (read-models.js), evitando contar cargas que a
+    // planilha ja alocou mas o sync ainda nao flippou para BOOKED. Filtro
+    // de sheet_status removido (era over-broad).
     const { rows: summaryRows } = await client.query(`
       SELECT
         COALESCE(SUM(CASE
           WHEN status = 'OPEN'
             AND NOT COALESCE(is_template, false)
             AND COALESCE(sheet_motorista, '') = ''
-            AND COALESCE(sheet_status, '') = ''
           THEN 1 ELSE 0 END), 0)::int AS active_count,
         COALESCE(SUM(CASE WHEN status = 'DRAFT' THEN 1 ELSE 0 END), 0)::int AS draft_count,
         COALESCE(SUM(CASE WHEN COALESCE(is_template, false) THEN 1 ELSE 0 END), 0)::int AS template_count
@@ -301,12 +301,12 @@ export async function fetchDriverLoadsReadModel({ query, correlationId }) {
 
 export async function fetchDriverLoadFacets({ correlationId }) {
   return withPgClient(async (client) => {
-    // Defense-in-depth: também cruza com a planilha (sheet_motorista/sheet_status)
-    // para que cargas já alocadas no Google Sheets não vazem nas facets do driver
-    // mesmo que o sync demore para refletir status='BOOKED' no DB.
-    const sheetUnallocatedSql =
-      "COALESCE(sheet_motorista, '') = '' "
-      + "AND COALESCE(sheet_status, '') = ''";
+    // Defense-in-depth: tambem cruza com a planilha (sheet_motorista) para que
+    // cargas ja alocadas no Google Sheets nao vazem nas facets do driver mesmo
+    // que o sync demore para refletir status='BOOKED' no DB. Filtro de
+    // sheet_status removido (era over-broad — bloqueava statuses de pipeline
+    // aberto como 'AGUARDANDO CARREGAMENTO').
+    const sheetUnallocatedSql = "COALESCE(sheet_motorista, '') = ''";
 
     const buildFacetWhereSql = (includeDriverVisibilityFilter) =>
       includeDriverVisibilityFilter
