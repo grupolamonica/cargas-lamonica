@@ -1,33 +1,49 @@
-import { ArrowRight, Clock3, Truck } from "lucide-react";
+import { CalendarClock, Clock3, MapPinned, Package, Truck } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { DetailMetric } from "@/pages/DriverCargoDetails";
+import {
+  buildLoadingDateTime,
+  buildOperationalDateLabel,
+  formatEstimatedTime,
+} from "@/lib/estimatedTime";
 import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
+import { DetailMetric, formatRouteMetric } from "@/pages/DriverCargoDetails";
 import type { PacoteCarga } from "@/services/readModels";
 
 interface CargaParadaCardProps {
   carga: PacoteCarga;
   isCurrent: boolean;
+  index: number;
 }
 
 /**
  * Sub-card de uma parada (carga) dentro de uma viagem casada — renderizado
- * por DriverCargoDetails quando `isPacote=true`. Plan revisao 2026-05-23.
+ * por DriverCargoDetails quando `isPacote=true`.
  *
- * Anatomia:
- *  - Header: "Carga {N} — origem -> destino" (N = ordem_viagem) + badge
- *    "Voce esta aqui" quando isCurrent=true (i.e. carga.id === cargo.id atual)
- *  - Body: DetailMetric grid 2-col com Carregamento, Descarga, Tipo veiculo.
- *    D5: NAO mostrar Tempo estimado nem Percurso recomendado.
+ * iter #2 (2026-05-23): espelha EXATAMENTE o JSX do bloco "Coleta, entrega
+ * e percurso" do AVULSA (DriverCargoDetails.tsx:866-881):
+ *  - Card admin-panel
+ *  - CardHeader "INFORMACOES DA CARGA" + CardTitle "Coleta, entrega e percurso"
+ *  - 5 DetailMetrics: Carregamento, Descarga, Tempo estimado, Tipo veiculo,
+ *    Percurso recomendado
+ *  - Sub-header adicional com "Carga {N}: origem -> destino" + badge
+ *    "Voce esta aqui" quando isCurrent=true (delta vs avulsa para acomodar
+ *    multi-carga)
  *
- * Sem botao "Ver detalhes" — apenas dados; o motorista navega via grid
- * (todas as cargas estao acessiveis a partir da carga atual ja aberta).
+ * D9 (iter #2): TEMPO + PERCURSO voltam por carga so no details page
+ * (D5 permanece para o LoadCard listing).
+ *
+ * PacoteCarga nao expoe sheet_data_carregamento/sheet_data_descarga; usamos
+ * apenas `data` + `horario` para buildOperationalDateLabel.
  */
-const CargaParadaCard = ({ carga, isCurrent }: CargaParadaCardProps) => {
-  const carregamentoLabel = formatScheduleLabel(carga.data, carga.horario);
-  const descargaLabel = "A confirmar";
+const CargaParadaCard = ({ carga, isCurrent, index }: CargaParadaCardProps) => {
+  const loadingDate = buildLoadingDateTime(null, carga.data, carga.horario);
+  const loadingLabel = buildOperationalDateLabel(null, carga.data, carga.horario);
+  const unloadingLabel = buildOperationalDateLabel(null);
+  const estimatedTime = formatEstimatedTime(loadingDate, null);
   const veiculoLabel = carga.perfil || "A confirmar";
+  const percursoLabel = formatRouteMetric(carga.distancia_km, "km");
 
   return (
     <Card
@@ -35,17 +51,20 @@ const CargaParadaCard = ({ carga, isCurrent }: CargaParadaCardProps) => {
       data-testid={isCurrent ? "carga-parada-current" : "carga-parada-other"}
     >
       <CardHeader>
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
-              Carga {carga.ordem_viagem}
-            </CardDescription>
-            <CardTitle className="mt-1 flex flex-wrap items-center gap-2 text-lg tracking-tight text-foreground sm:text-xl">
-              <span className="break-words">{fixBrokenPortugueseText(carga.origem)}</span>
-              <ArrowRight className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-              <span className="break-words">{fixBrokenPortugueseText(carga.destino)}</span>
-            </CardTitle>
-          </div>
+        <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
+          Informações da carga
+        </CardDescription>
+        <CardTitle className="text-2xl tracking-tight text-foreground">
+          Coleta, entrega e percurso
+        </CardTitle>
+        {/* Sub-header com "Carga {N}: origem -> destino" + badge "Voce esta aqui". */}
+        <div className="mt-2 flex items-start justify-between gap-3">
+          <p className="min-w-0 text-sm text-muted-foreground">
+            <strong className="font-semibold text-foreground">Carga {index}:</strong>{" "}
+            <span className="break-words">{fixBrokenPortugueseText(carga.origem)}</span>
+            {" "}{"→"}{" "}
+            <span className="break-words">{fixBrokenPortugueseText(carga.destino)}</span>
+          </p>
           {isCurrent ? (
             <Badge className="shrink-0 border-accent/40 bg-accent/15 px-3 py-1 text-accent">
               Você está aqui
@@ -54,18 +73,14 @@ const CargaParadaCard = ({ carga, isCurrent }: CargaParadaCardProps) => {
         </div>
       </CardHeader>
       <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <DetailMetric icon={Clock3} label="Carregamento" value={carregamentoLabel} />
-        <DetailMetric icon={Clock3} label="Descarga" value={descargaLabel} />
+        <DetailMetric icon={CalendarClock} label="Carregamento" value={loadingLabel} />
+        <DetailMetric icon={Clock3} label="Descarga" value={unloadingLabel} />
+        <DetailMetric icon={Package} label="Tempo estimado" value={estimatedTime} />
         <DetailMetric icon={Truck} label="Tipo de veículo" value={veiculoLabel} />
+        <DetailMetric icon={MapPinned} label="Percurso recomendado" value={percursoLabel} />
       </CardContent>
     </Card>
   );
 };
-
-function formatScheduleLabel(data: string | null, horario: string | null): string {
-  if (!data) return "A confirmar";
-  const horarioPart = horario ? ` às ${horario}` : "";
-  return `${data}${horarioPart}`;
-}
 
 export default CargaParadaCard;

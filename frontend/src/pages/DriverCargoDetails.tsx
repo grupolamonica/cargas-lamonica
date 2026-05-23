@@ -164,7 +164,7 @@ function formatCargoStatus(status?: string | null) {
   }
 }
 
-function formatRouteMetric(value: number | null, unit: string) {
+export function formatRouteMetric(value: number | null, unit: string) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "A confirmar";
   }
@@ -857,6 +857,7 @@ const DriverCargoDetails = () => {
                       key={c.id}
                       carga={c}
                       isCurrent={c.id === cargo.id}
+                      index={c.ordem_viagem}
                     />
                   ))}
               </div>
