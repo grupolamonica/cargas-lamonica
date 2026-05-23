@@ -72,7 +72,9 @@ const CargaParadaCard = ({ carga, isCurrent, index }: CargaParadaCardProps) => {
           ) : null}
         </div>
       </CardHeader>
-      <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {/* Grid 2-col em TODOS os breakpoints (iter #3) — espelha exatamente
+          o avulsa "Coleta, entrega e percurso" (DriverCargoDetails.tsx). */}
+      <CardContent className="grid grid-cols-2 gap-3">
         <DetailMetric icon={CalendarClock} label="Carregamento" value={loadingLabel} />
         <DetailMetric icon={Clock3} label="Descarga" value={unloadingLabel} />
         <DetailMetric icon={Package} label="Tempo estimado" value={estimatedTime} />
