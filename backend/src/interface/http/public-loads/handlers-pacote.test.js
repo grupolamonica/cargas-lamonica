@@ -137,6 +137,9 @@ describe("public-loads handlers — Phase 10 pacote support", () => {
       expect(entry.pacote_meta.total_km).toBe(800);
       expect(entry.pacote_meta.total_duration_horas).toBe(12);
       expect(entry.pacote_meta.earliest_carga_date).toBeTruthy();
+      // iter #2 (2026-05-23): MIN(horario) tambem populado quando carga tem horario.
+      // seedCarga default = "08:00:00".
+      expect(entry.pacote_meta.earliest_carga_horario).toBeTruthy();
     });
 
     it("agrega derivados (km/horas/earliest_date) com cliente_uniforme e perfil_uniforme para pacote multi-carga", async () => {
@@ -198,6 +201,9 @@ describe("public-loads handlers — Phase 10 pacote support", () => {
       // Date instance pode estar em TZ local (Jun 9 23h em America/Sao_Paulo ===
       // Jun 10 02h UTC). Aceitar +/- 1 dia para nao ser flaky em CI multi-TZ.
       expect(["2026-06-09", "2026-06-10", "2026-06-11"]).toContain(earliestIso);
+      // iter #2 (2026-05-23): MIN(horario) tambem deve estar presente quando
+      // todas cargas tem horario.
+      expect(entry.pacote_meta.earliest_carga_horario).toBeTruthy();
     });
 
     it("retorna cliente_uniforme=null e perfil_uniforme=null quando cargas do pacote sao heterogeneas", async () => {

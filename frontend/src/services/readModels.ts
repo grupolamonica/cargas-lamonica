@@ -26,6 +26,12 @@ export interface PacoteMeta {
    */
   /** Menor `data` (YYYY-MM-DD) entre as cargas do pacote. */
   earliest_carga_date?: string | null;
+  /**
+   * Horário (HH:MM:SS) da carga com menor data — usado pelo PacoteHeader badge
+   * "Coleta DD/MM às HH:MM" (iter #2 2026-05-23). Null quando todas cargas
+   * estão sem horário definido.
+   */
+  earliest_carga_horario?: string | null;
   /** Soma das `distancia_km` das cargas. */
   total_km?: number | null;
   /** Soma das `duracao_horas` das cargas. */

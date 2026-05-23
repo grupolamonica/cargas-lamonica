@@ -273,6 +273,8 @@ export function buildRouteLabelMap(loadRows) {
  *
  * Campos derivados (plan revisao 2026-05-23):
  *  - earliest_carga_date: data (YYYY-MM-DD) da carga com menor data dentro do pacote
+ *  - earliest_carga_horario: horario (HH:MM:SS) da carga com menor data — usado
+ *    pelo PacoteHeader badge "Coleta DD/MM as HH:MM" (iter #2)
  *  - total_km: soma das distancia_km das cargas do pacote (null quando todas null)
  *  - total_duration_horas: soma das duracao_horas (null quando todas null)
  *  - cliente_uniforme: { id, nome, logo_url } quando todas as cargas tem o mesmo
@@ -281,8 +283,9 @@ export function buildRouteLabelMap(loadRows) {
  *    null caso contrario
  *
  * Os agregados vem da query principal via cc_aggregates subquery — campos
- * row.pacoteEarliestDate, row.pacoteTotalKm, row.pacoteTotalDuracaoHoras,
- * row.pacoteClienteUniformeId, row.pacoteClienteUniformeNome, etc.
+ * row.pacoteEarliestDate, row.pacoteEarliestHorario, row.pacoteTotalKm,
+ * row.pacoteTotalDuracaoHoras, row.pacoteClienteUniformeId,
+ * row.pacoteClienteUniformeNome, etc.
  */
 export function buildPacoteMeta(row) {
   if (!row?.viagemId) return null;
@@ -321,6 +324,7 @@ export function buildPacoteMeta(row) {
         : Number.parseInt(row.pacoteTotalCargas ?? "0", 10) || 0,
     ordem_propria: row.ordemViagem ?? null,
     earliest_carga_date: row.pacoteEarliestDate ?? null,
+    earliest_carga_horario: row.pacoteEarliestHorario ?? null,
     total_km: parseNullableNumber(row.pacoteTotalKm),
     total_duration_horas: parseNullableNumber(row.pacoteTotalDuracaoHoras),
     cliente_uniforme,
@@ -454,6 +458,7 @@ export async function queryDriverLoadCandidateRows(
             cc.published_at AS "pacotePublishedAt",
             cc_counts.total_cargas AS "pacoteTotalCargas",
             cc_aggregates.earliest_date AS "pacoteEarliestDate",
+            cc_aggregates.earliest_horario AS "pacoteEarliestHorario",
             cc_aggregates.total_km AS "pacoteTotalKm",
             cc_aggregates.total_duracao_horas AS "pacoteTotalDuracaoHoras",
             cc_aggregates.perfil_min AS "pacotePerfilMin",
@@ -483,6 +488,10 @@ export async function queryDriverLoadCandidateRows(
             SELECT
               viagem_id,
               MIN(data) AS earliest_date,
+              -- iter #2 (2026-05-23): MIN(horario) — usado pelo PacoteHeader
+              -- badge "Coleta DD/MM as HH:MM". Nullable quando todas cargas
+              -- nao tem horario (raro mas possivel em rascunho).
+              MIN(horario) AS earliest_horario,
               SUM(distancia_km) AS total_km,
               SUM(duracao_horas) AS total_duracao_horas,
               MIN(perfil) AS perfil_min,
