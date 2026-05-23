@@ -15,6 +15,7 @@ import { getBadgeIcon } from "@/lib/badgeIcons";
 import { Link, useParams } from "react-router-dom";
 
 import DriverClaimPanel from "@/components/driver/DriverClaimPanel";
+import CargaParadaCard from "@/components/driver/CargaParadaCard";
 import { usePacoteRealtime, type PacoteRealtimeRow } from "@/hooks/usePacoteRealtime";
 import { fetchPacote, type PacoteFull } from "@/services/readModels";
 import { Badge } from "@/components/ui/badge";
@@ -235,7 +236,7 @@ async function resolveDriverCargoDistanceKm(cargo: Pick<CargoDetailsRow, "origem
     : null;
 }
 
-function DetailMetric({
+export function DetailMetric({
   label,
   value,
   icon: Icon,
@@ -658,6 +659,55 @@ const DriverCargoDetails = () => {
           </section>
         ) : null}
 
+        {isPacote ? (
+          /*
+           * Plan revisao 2026-05-23: quando a carga aberta pertence a um pacote,
+           * substitui a card unica "Coleta, entrega e percurso" por um grid
+           * com uma sub-card por carga (CargaParadaCard). Loading -> 3 skeleton
+           * cards. Error -> ErrorState inline com retry.
+           */
+          <section className="space-y-4">
+            <h2 className="text-xl font-bold">Informações das cargas</h2>
+            {pacoteQuery.isLoading ? (
+              <div className="grid gap-4 xl:grid-cols-2" data-testid="pacote-paradas-loading">
+                <Skeleton className="h-[180px] rounded-[24px]" />
+                <Skeleton className="h-[180px] rounded-[24px]" />
+                <Skeleton className="h-[180px] rounded-[24px]" />
+              </div>
+            ) : pacoteQuery.isError || !pacoteData ? (
+              <div
+                role="alert"
+                data-testid="pacote-paradas-error"
+                className="admin-panel rounded-[24px] border border-destructive/30 bg-destructive/5 p-5"
+              >
+                <p className="text-sm text-muted-foreground">
+                  Falha ao carregar as paradas desta viagem casada.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="mt-3 rounded-full"
+                  onClick={() => void pacoteQuery.refetch()}
+                  disabled={pacoteQuery.isFetching}
+                >
+                  Tentar novamente
+                </Button>
+              </div>
+            ) : (
+              <div className="grid gap-4 xl:grid-cols-2" data-testid="pacote-paradas-grid">
+                {[...pacoteData.cargas]
+                  .sort((a, b) => a.ordem_viagem - b.ordem_viagem)
+                  .map((c) => (
+                    <CargaParadaCard
+                      key={c.id}
+                      carga={c}
+                      isCurrent={c.id === cargo.id}
+                    />
+                  ))}
+              </div>
+            )}
+          </section>
+        ) : (
         <section className="grid gap-6 xl:grid-cols-2">
           <Card className="admin-panel overflow-hidden">
             <CardHeader>
@@ -675,38 +725,37 @@ const DriverCargoDetails = () => {
             </CardContent>
           </Card>
 
-          {!isPacote ? (
-            <Card className="admin-panel hidden overflow-hidden lg:block">
-              <CardHeader>
-                <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
-                  Cliente da carga
-                </CardDescription>
-                <CardTitle className="text-2xl tracking-tight text-foreground">
-                  {formatMaybeText(cliente?.nome?.trim(), "Cliente não informado")}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <DetailMetric icon={CreditCard} label="Forma de pagamento" value={formatMaybeText(cliente?.forma_pagamento)} />
-                  <DetailMetric icon={Clock3} label="Prazo de pagamento" value={formatMaybeText(cliente?.prazo_pagamento)} />
+          <Card className="admin-panel hidden overflow-hidden lg:block">
+            <CardHeader>
+              <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
+                Cliente da carga
+              </CardDescription>
+              <CardTitle className="text-2xl tracking-tight text-foreground">
+                {formatMaybeText(cliente?.nome?.trim(), "Cliente não informado")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <DetailMetric icon={CreditCard} label="Forma de pagamento" value={formatMaybeText(cliente?.forma_pagamento)} />
+                <DetailMetric icon={Clock3} label="Prazo de pagamento" value={formatMaybeText(cliente?.prazo_pagamento)} />
+              </div>
+
+              {hasClientNotes ? (
+                <div className="rounded-[24px] border border-border/60 bg-muted/20 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Recados do cliente</p>
+                  <p className="mt-3 text-sm leading-relaxed text-foreground">{cliente?.observacoes?.trim()}</p>
                 </div>
+              ) : null}
 
-                {hasClientNotes ? (
-                  <div className="rounded-[24px] border border-border/60 bg-muted/20 p-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Recados do cliente</p>
-                    <p className="mt-3 text-sm leading-relaxed text-foreground">{cliente?.observacoes?.trim()}</p>
-                  </div>
-                ) : null}
-
-                {cliente ? (
-                  <Button asChild variant="outline" className="w-full rounded-full font-semibold">
-                    <Link to={`/motorista/cliente/${cliente.id}`}>Abrir ficha completa do cliente</Link>
-                  </Button>
-                ) : null}
-              </CardContent>
-            </Card>
-          ) : null}
+              {cliente ? (
+                <Button asChild variant="outline" className="w-full rounded-full font-semibold">
+                  <Link to={`/motorista/cliente/${cliente.id}`}>Abrir ficha completa do cliente</Link>
+                </Button>
+              ) : null}
+            </CardContent>
+          </Card>
         </section>
+        )}
 
         {!isPacote ? (
         <section className="grid gap-6 xl:grid-cols-2">
