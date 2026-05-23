@@ -166,6 +166,8 @@ describe("LoadCard — pacote_meta branch", () => {
     published_at: null,
     // Plan revisao 2026-05-23 — campos derivados que o novo layout consome.
     earliest_carga_date: "2026-06-10",
+    // iter #2 (2026-05-23): MIN(horario) usado pelo date badge "Coleta DD/MM as HH:MM".
+    earliest_carga_horario: "08:30:00",
     total_km: 1600,
     total_duration_horas: 25,
     cliente_uniforme: null,
@@ -184,8 +186,9 @@ describe("LoadCard — pacote_meta branch", () => {
     // Header (sr-only "Viagem casada — N paradas" mantido)
     expect(screen.getByText(/viagem casada — 3 paradas/i)).toBeInTheDocument();
 
-    // Date badge usando earliest_carga_date (10/06)
-    expect(screen.getAllByText(/coleta 10\/06/i).length).toBeGreaterThan(0);
+    // Date badge usando earliest_carga_date + earliest_carga_horario
+    // (iter #2 2026-05-23: badge inclui horario, espelhando o avulsa).
+    expect(screen.getAllByText(/coleta 10\/06 às 08:30/i).length).toBeGreaterThan(0);
 
     // Lista de paradas — 3 linhas (uma por carga, coleta + entrega lado a lado, D4)
     await waitFor(() => {
