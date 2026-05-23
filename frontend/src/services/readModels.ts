@@ -20,6 +20,24 @@ export interface PacoteMeta {
   /** Posição (1..N) desta carga específica dentro do pacote. */
   ordem_propria: number;
   published_at?: string | null;
+  /**
+   * Campos derivados (plan revisão 2026-05-23) — agregados sobre as cargas do
+   * pacote. Opcionais para backward-compat com clientes antigos do read model.
+   */
+  /** Menor `data` (YYYY-MM-DD) entre as cargas do pacote. */
+  earliest_carga_date?: string | null;
+  /** Soma das `distancia_km` das cargas. */
+  total_km?: number | null;
+  /** Soma das `duracao_horas` das cargas. */
+  total_duration_horas?: number | null;
+  /** Cliente único (igual em todas as cargas) — null quando multi-cliente. */
+  cliente_uniforme?: {
+    id: string;
+    nome: string | null;
+    logo_url: string | null;
+  } | null;
+  /** Perfil de veículo único (igual em todas as cargas) — null quando heterogêneo. */
+  perfil_uniforme?: string | null;
 }
 
 /** Carga individual dentro do payload `PacoteFull` (detalhe completo do pacote). */

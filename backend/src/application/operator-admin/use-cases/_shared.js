@@ -270,9 +270,45 @@ export function buildRouteLabelMap(loadRows) {
  *
  * Implementado em JS em vez de SQL (jsonb_build_object) porque pg-mem nao suporta
  * jsonb_build_object e o codebase precisa rodar testes locais sem postgres real.
+ *
+ * Campos derivados (plan revisao 2026-05-23):
+ *  - earliest_carga_date: data (YYYY-MM-DD) da carga com menor data dentro do pacote
+ *  - total_km: soma das distancia_km das cargas do pacote (null quando todas null)
+ *  - total_duration_horas: soma das duracao_horas (null quando todas null)
+ *  - cliente_uniforme: { id, nome, logo_url } quando todas as cargas tem o mesmo
+ *    cliente_id; null quando ha clientes distintos ou cargas sem cliente
+ *  - perfil_uniforme: string do perfil quando todas as cargas tem o mesmo perfil;
+ *    null caso contrario
+ *
+ * Os agregados vem da query principal via cc_aggregates subquery — campos
+ * row.pacoteEarliestDate, row.pacoteTotalKm, row.pacoteTotalDuracaoHoras,
+ * row.pacoteClienteUniformeId, row.pacoteClienteUniformeNome, etc.
  */
 export function buildPacoteMeta(row) {
   if (!row?.viagemId) return null;
+
+  // Plan revisao 2026-05-23 — derivar uniformidade a partir dos primos
+  // (MIN + COUNT(DISTINCT)) que vem do cc_aggregates subquery. Quando o
+  // count distinto e 1, o MIN representa o valor uniforme. Quando > 1 ou
+  // 0, retorna null (heterogeneo ou sem dados).
+  const clienteDistinctCount = Number(row.pacoteClienteDistinctCount ?? 0);
+  const clienteIdMin = row.pacoteClienteIdMin ?? null;
+  const cliente_uniforme =
+    clienteDistinctCount === 1 && clienteIdMin
+      ? {
+          id: clienteIdMin,
+          nome: row.pacoteClienteUniformeNome ?? null,
+          logo_url: row.pacoteClienteUniformeLogoUrl ?? null,
+        }
+      : null;
+
+  const perfilDistinctCount = Number(row.pacotePerfilDistinctCount ?? 0);
+  const perfilMin =
+    typeof row.pacotePerfilMin === "string" && row.pacotePerfilMin.trim() !== ""
+      ? row.pacotePerfilMin
+      : null;
+  const perfil_uniforme = perfilDistinctCount === 1 ? perfilMin : null;
+
   return {
     id: row.viagemId,
     status: row.pacoteStatus ?? null,
@@ -284,6 +320,11 @@ export function buildPacoteMeta(row) {
         ? row.pacoteTotalCargas
         : Number.parseInt(row.pacoteTotalCargas ?? "0", 10) || 0,
     ordem_propria: row.ordemViagem ?? null,
+    earliest_carga_date: row.pacoteEarliestDate ?? null,
+    total_km: parseNullableNumber(row.pacoteTotalKm),
+    total_duration_horas: parseNullableNumber(row.pacoteTotalDuracaoHoras),
+    cliente_uniforme,
+    perfil_uniforme,
   };
 }
 
@@ -411,7 +452,16 @@ export async function queryDriverLoadCandidateRows(
             cc.valor_total AS "pacoteValorTotal",
             cc.version AS "pacoteVersion",
             cc.published_at AS "pacotePublishedAt",
-            cc_counts.total_cargas AS "pacoteTotalCargas"
+            cc_counts.total_cargas AS "pacoteTotalCargas",
+            cc_aggregates.earliest_date AS "pacoteEarliestDate",
+            cc_aggregates.total_km AS "pacoteTotalKm",
+            cc_aggregates.total_duracao_horas AS "pacoteTotalDuracaoHoras",
+            cc_aggregates.perfil_min AS "pacotePerfilMin",
+            cc_aggregates.perfil_distinct_count AS "pacotePerfilDistinctCount",
+            cc_aggregates.cliente_id_min AS "pacoteClienteIdMin",
+            cc_aggregates.cliente_distinct_count AS "pacoteClienteDistinctCount",
+            cc_cliente_uniforme.nome AS "pacoteClienteUniformeNome",
+            cc_cliente_uniforme.logo_url AS "pacoteClienteUniformeLogoUrl"
             ` : ""}
           FROM public.cargas
           LEFT JOIN public.clientes
@@ -425,6 +475,28 @@ export async function queryDriverLoadCandidateRows(
              WHERE viagem_id IS NOT NULL
              GROUP BY viagem_id
           ) cc_counts ON cc_counts.viagem_id = cargas.viagem_id
+          LEFT JOIN (
+            -- Agregados por pacote (plan revisao 2026-05-23): date, km, horas,
+            -- e os elementos primos (MIN + COUNT DISTINCT) que o JS combina em
+            -- perfil_uniforme/cliente_uniforme via buildPacoteMeta. Evita
+            -- CASE WHEN COUNT(DISTINCT) IN subquery (pg-mem instavel).
+            SELECT
+              viagem_id,
+              MIN(data) AS earliest_date,
+              SUM(distancia_km) AS total_km,
+              SUM(duracao_horas) AS total_duracao_horas,
+              MIN(perfil) AS perfil_min,
+              COUNT(DISTINCT perfil)::int AS perfil_distinct_count,
+              -- pg-mem nao implementa MIN(uuid); cast pra text e devolve string
+              -- (UUID-shaped) — buildPacoteMeta nao re-parsea, so usa como identifier.
+              MIN(cliente_id::text) AS cliente_id_min,
+              COUNT(DISTINCT cliente_id)::int AS cliente_distinct_count
+              FROM public.cargas
+             WHERE viagem_id IS NOT NULL
+             GROUP BY viagem_id
+          ) cc_aggregates ON cc_aggregates.viagem_id = cargas.viagem_id
+          LEFT JOIN public.clientes cc_cliente_uniforme
+            ON cc_cliente_uniforme.id::text = cc_aggregates.cliente_id_min
           ` : ""}
           WHERE ${whereSql}
           ${includePacoteJoin

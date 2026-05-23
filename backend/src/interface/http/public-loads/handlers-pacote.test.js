@@ -126,6 +126,110 @@ describe("public-loads handlers — Phase 10 pacote support", () => {
         total_cargas: 1,
         ordem_propria: 1,
       });
+      // Plan revisao 2026-05-23: campos derivados.
+      // Cliente unico -> cliente_uniforme nao-nulo; pacote single-carga -> perfil_uniforme presente.
+      expect(entry.pacote_meta.cliente_uniforme).toMatchObject({
+        id: cliente.id,
+        nome: "Cliente Pacote",
+      });
+      expect(entry.pacote_meta.perfil_uniforme).toBe("CARRETA");
+      // Soma 800km + 12h para 1 carga.
+      expect(entry.pacote_meta.total_km).toBe(800);
+      expect(entry.pacote_meta.total_duration_horas).toBe(12);
+      expect(entry.pacote_meta.earliest_carga_date).toBeTruthy();
+    });
+
+    it("agrega derivados (km/horas/earliest_date) com cliente_uniforme e perfil_uniforme para pacote multi-carga", async () => {
+      const cliente = await seedCliente({ nome: "Cliente Uniforme" });
+      const { id: pacoteId } = await seedPacote({
+        status: "publicado",
+        valor_total: 21000,
+        version: 1,
+      });
+      // 3 cargas mesmo cliente + mesmo perfil + datas escaladas.
+      await seedPublishableCarga({
+        cliente_id: cliente.id,
+        driver_visibility: "PREMIUM",
+        viagem_id: pacoteId,
+        ordem_viagem: 1,
+        data: "2026-06-10",
+        distancia_km: 800,
+        duracao_horas: 12,
+        perfil: "CARRETA",
+      });
+      await seedPublishableCarga({
+        cliente_id: cliente.id,
+        driver_visibility: "PREMIUM",
+        viagem_id: pacoteId,
+        ordem_viagem: 2,
+        data: "2026-06-12",
+        distancia_km: 500,
+        duracao_horas: 8,
+        perfil: "CARRETA",
+      });
+      await seedPublishableCarga({
+        cliente_id: cliente.id,
+        driver_visibility: "PREMIUM",
+        viagem_id: pacoteId,
+        ordem_viagem: 3,
+        data: "2026-06-15",
+        distancia_km: 300,
+        duracao_horas: 5,
+        perfil: "CARRETA",
+      });
+
+      const res = await resolveDriverLoadsReadModelResponse(mockRequest());
+
+      expect(res.statusCode).toBe(200);
+      const entry = res.payload.items.find((it) => it.viagem_id === pacoteId);
+      expect(entry).toBeDefined();
+      expect(entry.pacote_meta.total_cargas).toBe(3);
+      expect(entry.pacote_meta.total_km).toBe(1600);
+      expect(entry.pacote_meta.total_duration_horas).toBe(25);
+      expect(entry.pacote_meta.perfil_uniforme).toBe("CARRETA");
+      expect(entry.pacote_meta.cliente_uniforme).toMatchObject({
+        id: cliente.id,
+        nome: "Cliente Uniforme",
+      });
+      // earliest_date pode vir como string YYYY-MM-DD (postgres real) ou Date
+      // (pg-mem em ambiente local — tipa DATE como Date). Aceitar ambos.
+      const earliest = entry.pacote_meta.earliest_carga_date;
+      const earliestIso = earliest instanceof Date ? earliest.toISOString().slice(0, 10) : String(earliest);
+      // Date instance pode estar em TZ local (Jun 9 23h em America/Sao_Paulo ===
+      // Jun 10 02h UTC). Aceitar +/- 1 dia para nao ser flaky em CI multi-TZ.
+      expect(["2026-06-09", "2026-06-10", "2026-06-11"]).toContain(earliestIso);
+    });
+
+    it("retorna cliente_uniforme=null e perfil_uniforme=null quando cargas do pacote sao heterogeneas", async () => {
+      const clienteA = await seedCliente({ nome: "Cliente A" });
+      const clienteB = await seedCliente({ nome: "Cliente B" });
+      const { id: pacoteId } = await seedPacote({
+        status: "publicado",
+        valor_total: 9000,
+        version: 1,
+      });
+      await seedPublishableCarga({
+        cliente_id: clienteA.id,
+        driver_visibility: "PREMIUM",
+        viagem_id: pacoteId,
+        ordem_viagem: 1,
+        perfil: "CARRETA",
+      });
+      await seedPublishableCarga({
+        cliente_id: clienteB.id,
+        driver_visibility: "PREMIUM",
+        viagem_id: pacoteId,
+        ordem_viagem: 2,
+        perfil: "TRUCK",
+      });
+
+      const res = await resolveDriverLoadsReadModelResponse(mockRequest());
+
+      expect(res.statusCode).toBe(200);
+      const entry = res.payload.items.find((it) => it.viagem_id === pacoteId);
+      expect(entry).toBeDefined();
+      expect(entry.pacote_meta.cliente_uniforme).toBeNull();
+      expect(entry.pacote_meta.perfil_uniforme).toBeNull();
     });
 
     it("colapsa pacote com 3 cargas a UMA entry no listing (DISTINCT ON)", async () => {
