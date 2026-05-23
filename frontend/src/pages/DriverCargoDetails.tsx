@@ -690,7 +690,8 @@ const DriverCargoDetails = () => {
 
   return (
     <div className="driver-theme min-h-screen bg-[radial-gradient(circle_at_top_left,hsl(224_100%_96%),transparent_40%),linear-gradient(180deg,hsl(220_30%_97%),hsl(220_22%_94%))] px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
-      <div className="mx-auto max-w-6xl space-y-5 sm:space-y-6">
+      {/* pb-28+ mobile/tablet para evitar sobreposição com sticky CTA "Candidatar-se" (iter #2 D11) */}
+      <div className="mx-auto max-w-6xl space-y-5 pb-28 sm:space-y-6 sm:pb-32 lg:pb-12">
         <section className="relative overflow-hidden rounded-[32px] border border-white/70 bg-[linear-gradient(135deg,hsl(223_56%_12%),hsl(223_55%_22%))] p-5 text-white shadow-[0_30px_70px_-30px_hsl(215_25%_12%/0.55)] sm:p-8">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(225_100%_65%/0.18),transparent_36%),radial-gradient(circle_at_bottom_left,hsl(200_100%_55%/0.14),transparent_30%)]" />
           <div className="relative space-y-6">
