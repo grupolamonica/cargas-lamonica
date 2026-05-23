@@ -231,15 +231,7 @@ const LoadCard = memo(({
           <div className="pointer-events-none absolute inset-x-8 top-0 hidden h-px bg-gradient-to-r from-transparent via-primary/25 to-transparent lg:block" />
 
           <div className="relative">
-            <PacoteHeader
-              totalCargas={pacoteMeta.total_cargas}
-              valorTotal={pacoteMeta.valor_total}
-              status={pacoteMeta.status}
-            />
-
-            <div className="mt-4 rounded-2xl border border-border/30 bg-muted/30 p-3 sm:mt-5 sm:p-4">
-              <PacoteStopsList pacoteId={pacoteMeta.id} version={pacoteMeta.version} />
-            </div>
+            <PacoteHeader pacoteMeta={pacoteMeta} />
 
             <div className="mt-6 flex items-center gap-2">
               <div className={cn(actionGridClassName, "flex-1")}>
