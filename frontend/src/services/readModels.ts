@@ -63,7 +63,7 @@ export interface PacoteFull {
  * (publicado/reservado/em_andamento), garantindo que rascunhos não vazem.
  */
 export async function fetchPacote(pacoteId: string): Promise<PacoteFull> {
-  const res = await fetch(`/api/public-loads/pacotes/${pacoteId}`, {
+  const res = await fetch(`/api/driver/pacotes/${pacoteId}`, {
     method: "GET",
     headers: { Accept: "application/json" },
   });

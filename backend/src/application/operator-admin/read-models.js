@@ -660,6 +660,8 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
             cargas.sheet_lh,
             ${nextSupportsOptionalColumns ? 'cargas.sheet_data_carregamento' : "NULL::text AS sheet_data_carregamento"},
             ${nextSupportsOptionalColumns ? 'cargas.sheet_data_descarga' : "NULL::text AS sheet_data_descarga"},
+            cargas.viagem_id,
+            cargas.ordem_viagem,
             clientes.nome AS cliente_nome
           FROM public.cargas
           LEFT JOIN public.clientes
@@ -748,6 +750,8 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
           sheet_lh: row.sheet_lh,
           sheet_data_carregamento: row.sheet_data_carregamento ?? null,
           sheet_data_descarga: row.sheet_data_descarga ?? null,
+          viagem_id: row.viagem_id ?? null,
+          ordem_viagem: row.ordem_viagem ?? null,
           clientes: row.cliente_nome
             ? {
                 nome: row.cliente_nome,
