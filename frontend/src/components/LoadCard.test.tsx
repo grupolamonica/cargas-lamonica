@@ -164,10 +164,16 @@ describe("LoadCard — pacote_meta branch", () => {
     total_cargas: 3,
     ordem_propria: 1,
     published_at: null,
+    // Plan revisao 2026-05-23 — campos derivados que o novo layout consome.
+    earliest_carga_date: "2026-06-10",
+    total_km: 1600,
+    total_duration_horas: 25,
+    cliente_uniforme: null,
+    perfil_uniforme: "CARRETA",
     ...overrides,
   });
 
-  it("renderiza viagem casada com header 'N paradas' + 6 stops para 3 cargas", async () => {
+  it("renderiza viagem casada com header 'N paradas' + 3 linhas coleta->entrega (D4) + payment + vehicle (D7/perfil_uniforme)", async () => {
     vi.spyOn(readModels, "fetchPacote").mockResolvedValue(fakePacoteFull);
 
     renderLoadCard(<LoadCard {...baseProps} pacoteMeta={buildPacoteMeta()} />);
@@ -175,32 +181,47 @@ describe("LoadCard — pacote_meta branch", () => {
     expect(screen.getByTestId("load-card-pacote")).toBeInTheDocument();
     expect(screen.queryByTestId("load-card-avulsa")).not.toBeInTheDocument();
 
-    // Header
+    // Header (sr-only "Viagem casada — N paradas" mantido)
     expect(screen.getByText(/viagem casada — 3 paradas/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/valor total/i)).toHaveTextContent(/R\$\s*5\.000,00/);
 
-    // Lista de stops
+    // Date badge usando earliest_carga_date (10/06)
+    expect(screen.getAllByText(/coleta 10\/06/i).length).toBeGreaterThan(0);
+
+    // Lista de paradas — 3 linhas (uma por carga, coleta + entrega lado a lado, D4)
     await waitFor(() => {
       expect(
         screen.getByRole("list", { name: /viagem com 3 paradas/i }),
       ).toBeInTheDocument();
     });
     const items = screen.getAllByRole("listitem");
-    expect(items).toHaveLength(6);
+    expect(items).toHaveLength(3);
 
-    // Sequência intercalada coleta/entrega
+    // Cada linha tem coleta E entrega juntas
     expect(items[0]).toHaveTextContent(/coleta 1.*são paulo/i);
-    expect(items[1]).toHaveTextContent(/entrega 1.*salvador/i);
-    expect(items[2]).toHaveTextContent(/coleta 2.*salvador/i);
-    expect(items[3]).toHaveTextContent(/entrega 2.*recife/i);
-    expect(items[4]).toHaveTextContent(/coleta 3.*recife/i);
-    expect(items[5]).toHaveTextContent(/entrega 3.*fortaleza/i);
+    expect(items[0]).toHaveTextContent(/entrega 1.*salvador/i);
+    expect(items[1]).toHaveTextContent(/coleta 2.*salvador/i);
+    expect(items[1]).toHaveTextContent(/entrega 2.*recife/i);
+    expect(items[2]).toHaveTextContent(/coleta 3.*recife/i);
+    expect(items[2]).toHaveTextContent(/entrega 3.*fortaleza/i);
+
+    // Payment panel — usa pacoteMeta.valor_total + caption (D7)
+    expect(screen.getAllByText(/pagamento total/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/R\$\s*5\.000,00/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/valor definido pelo operador/i).length).toBeGreaterThan(0);
+
+    // Vehicle box — perfil_uniforme "CARRETA"
+    expect(screen.getAllByText(/CARRETA/i).length).toBeGreaterThan(0);
+
+    // D5 estrito: SEM Percurso recomendado e SEM Tempo estimado no card pacote.
+    // (Avulsa tem essas labels; pacote nao deve mais ter.)
+    expect(screen.queryByText(/percurso recomendado/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/tempo estimado/i)).not.toBeInTheDocument();
 
     // Botão candidatar-se ainda presente (claim flow reusado)
     expect(screen.getAllByRole("button", { name: /candidatar-se/i }).length).toBeGreaterThan(0);
   });
 
-  it("renderiza apenas 4 stops para pacote com 2 cargas", async () => {
+  it("renderiza apenas 2 linhas (1 por carga) para pacote com 2 cargas", async () => {
     vi.spyOn(readModels, "fetchPacote").mockResolvedValue({
       ...fakePacoteFull,
       total_cargas: 2,
@@ -219,7 +240,46 @@ describe("LoadCard — pacote_meta branch", () => {
     await waitFor(() => {
       expect(screen.getByRole("list", { name: /viagem com 2 paradas/i })).toBeInTheDocument();
     });
-    expect(screen.getAllByRole("listitem")).toHaveLength(4);
+    // D4: 1 linha por carga (coleta + entrega side-by-side)
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("omite vehicle box quando perfil_uniforme=null (multi-perfil)", async () => {
+    vi.spyOn(readModels, "fetchPacote").mockResolvedValue(fakePacoteFull);
+
+    renderLoadCard(
+      <LoadCard
+        {...baseProps}
+        pacoteMeta={buildPacoteMeta({ perfil_uniforme: null })}
+      />,
+    );
+
+    // Vehicle box (mobile + desktop testids) ausentes
+    expect(screen.queryByTestId("pacote-vehicle")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("pacote-vehicle-lg")).not.toBeInTheDocument();
+  });
+
+  it("nao exibe logo nem texto cliente na area superior (D6)", async () => {
+    vi.spyOn(readModels, "fetchPacote").mockResolvedValue(fakePacoteFull);
+
+    renderLoadCard(
+      <LoadCard
+        {...baseProps}
+        pacoteMeta={buildPacoteMeta({
+          cliente_uniforme: {
+            id: "cli-x",
+            nome: "Shopee Logistics",
+            logo_url: "https://example.com/logo.png",
+          },
+        })}
+      />,
+    );
+
+    // Mesmo com cliente_uniforme presente, header NAO renderiza logo nem texto
+    // "Shopee Logistics" / "Multi-cliente" (D6 — area direita vazia).
+    expect(screen.queryByText(/shopee logistics/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/multi-cliente/i)).not.toBeInTheDocument();
+    expect(screen.queryByAltText(/shopee/i)).not.toBeInTheDocument();
   });
 
   it("mostra skeletons de loading enquanto fetchPacote não resolveu", () => {

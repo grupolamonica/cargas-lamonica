@@ -18,7 +18,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 
 import PacotePanel from "@/components/driver/PacotePanel";
-import type { PacoteFull } from "@/services/readModels";
+import CargaParadaCard from "@/components/driver/CargaParadaCard";
+import type { PacoteCarga, PacoteFull } from "@/services/readModels";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -182,14 +183,86 @@ describe("PacotePanel", () => {
   });
 });
 
+// ─── CargaParadaCard — smoke tests (plan revisao 2026-05-23) ───────────────
+//
+// Cobre o sub-card que substitui a antiga card unica "Coleta, entrega e
+// percurso" quando a carga aberta pertence a um pacote. D5 explicito:
+// SEM Tempo estimado e SEM Percurso recomendado.
+
+function buildPacoteCargaFixture(overrides: Partial<PacoteCarga> = {}): PacoteCarga {
+  return {
+    id: "carga-x",
+    ordem_viagem: 2,
+    status: "OPEN",
+    origem: "Salvador / BA",
+    destino: "Recife / PE",
+    perfil: "CARRETA",
+    valor: 4_500,
+    bonus: 200,
+    bonus_exigencias: null,
+    data: "2026-06-12",
+    horario: "08:30",
+    distancia_km: 800,
+    duracao_horas: 12,
+    driver_visibility: "PREMIUM",
+    cliente: null,
+    ...overrides,
+  };
+}
+
+describe("CargaParadaCard", () => {
+  it("renderiza header 'Carga N — origem -> destino' + badge 'Voce esta aqui' quando isCurrent=true", () => {
+    renderWithProviders(
+      <CargaParadaCard carga={buildPacoteCargaFixture()} isCurrent />,
+    );
+
+    expect(screen.getByTestId("carga-parada-current")).toBeInTheDocument();
+    expect(screen.queryByTestId("carga-parada-other")).not.toBeInTheDocument();
+    expect(screen.getByText(/carga 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/salvador \/ ba/i)).toBeInTheDocument();
+    expect(screen.getByText(/recife \/ pe/i)).toBeInTheDocument();
+    expect(screen.getByText(/voc[eê] est[áa] aqui/i)).toBeInTheDocument();
+  });
+
+  it("omite badge 'Voce esta aqui' quando isCurrent=false", () => {
+    renderWithProviders(
+      <CargaParadaCard carga={buildPacoteCargaFixture()} isCurrent={false} />,
+    );
+
+    expect(screen.getByTestId("carga-parada-other")).toBeInTheDocument();
+    expect(screen.queryByText(/voc[eê] est[áa] aqui/i)).not.toBeInTheDocument();
+  });
+
+  it("expoe Carregamento + Descarga + Tipo de veículo (D5: SEM Tempo estimado nem Percurso)", () => {
+    renderWithProviders(
+      <CargaParadaCard carga={buildPacoteCargaFixture()} isCurrent />,
+    );
+
+    // 3 DetailMetrics presentes
+    expect(screen.getByText(/carregamento/i)).toBeInTheDocument();
+    expect(screen.getByText(/descarga/i)).toBeInTheDocument();
+    expect(screen.getByText(/tipo de ve[íi]culo/i)).toBeInTheDocument();
+
+    // D5: AUSENCIA estrita de Tempo estimado e Percurso recomendado
+    expect(screen.queryByText(/tempo estimado/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/percurso recomendado/i)).not.toBeInTheDocument();
+
+    // Valor do perfil (CARRETA) renderizado
+    expect(screen.getByText(/carreta/i)).toBeInTheDocument();
+  });
+});
+
 // ─── DriverCargoDetails — branch completo ──────────────────────────────────
 // Cobertura via E2E no plan 10-08 (Playwright). RTL mocks completos exigem
 // fixture de useQuery principal + fetchDriverClientsByIds + route fallback +
-// publicSupabase.channel — extrapola budget de F-6.
+// publicSupabase.channel — extrapola budget de F-6. Cargas individuais e
+// CargaParadaCard ja sao cobertos acima.
 
 describe("DriverCargoDetails — pacote branch", () => {
-  it.skip("renderiza PacotePanel quando cargo.viagem_id está presente", () => {
+  it.skip("renderiza grid 'Informações das cargas' quando cargo.viagem_id está presente", () => {
     // TODO: cobertura E2E no plan 10-08 (visual full-page + realtime emit).
+    // Verificar AUSENCIA de BÔNUS, CLIENTE, EXIGÊNCIAS, REPUTAÇÃO + presença
+    // de N CargaParadaCard + badge "Você está aqui" no current.
   });
 
   it.skip("backward-compat: cargo.viagem_id null renderiza idêntico ao snapshot atual", () => {
