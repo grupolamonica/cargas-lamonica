@@ -1,84 +1,141 @@
-import { Badge } from "@/components/ui/badge";
-import { formatCurrency } from "@/lib/currency";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowRight } from "lucide-react";
+import { format, isToday, parseISO } from "date-fns";
+import { ptBR } from "date-fns/locale";
+
+import { Skeleton } from "@/components/ui/skeleton";
+import { fetchPacote, type PacoteCarga, type PacoteMeta } from "@/services/readModels";
 
 interface PacoteHeaderProps {
-  totalCargas: number;
-  valorTotal: number;
-  status: "publicado" | "reservado" | "em_andamento";
+  pacoteMeta: PacoteMeta;
 }
 
-const STATUS_LABEL: Record<PacoteHeaderProps["status"], string> = {
-  publicado: "Disponível",
-  reservado: "Reservada",
-  em_andamento: "Em andamento",
-};
-
-const STATUS_VARIANT: Record<
-  PacoteHeaderProps["status"],
-  "default" | "secondary" | "destructive" | "outline"
-> = {
-  publicado: "default",
-  reservado: "secondary",
-  em_andamento: "outline",
-};
-
 /**
- * Cabeçalho do card "viagem casada" no LoadCard — painel dark gradient
- * paralelo ao header da carga avulsa (LoadCard.tsx). À esquerda exibe
- * subtitle "VIAGEM CASADA", título "{N} paradas" e badge de status.
- * À direita, painel "PAGAMENTO TOTAL" com `valor_total` e legenda
- * "Valor definido pelo operador".
+ * Header do LoadCard pacote — espelha a anatomia do AVULSA listing card
+ * (LoadCard.tsx:304–398). Plan revisao 2026-05-23:
  *
- * Plan 10-05 (CARGAS-CASADAS-06) — redesign alinhando visual à carga avulsa.
+ *  Row 1 (mobile / lg:hidden): date badge "Coleta DD/MM as HH:MM" usando
+ *    pacoteMeta.earliest_carga_date. Area direita (onde o avulsa exibe
+ *    ClientLogo) fica VAZIA por design — D6 explicito: sem "Multi-cliente"
+ *    badge, sem logo, mas preserva o layout/posicionamento.
+ *
+ *  Trecho box: wrapper IDENTICO ao avulsa (border-border/40 bg-muted/25
+ *    rounded-2xl p-3) com label "{N} paradas" + uma linha por carga, no
+ *    formato `Coleta X: city -> Entrega X: city` lado a lado (D4).
+ *
+ *  Tablet+ (sm:hidden inverso): adapta layout horizontal, mantendo o trecho
+ *    box como conteudo principal.
+ *
+ *  NAO inclui mais o dark gradient (descartado) nem PAGAMENTO TOTAL embed —
+ *  esses migraram para o LoadCard branch pacote em outros painels.
+ *
+ *  Mantem data-testid="pacote-header" para compat com tests.
  */
-const PacoteHeader = ({ totalCargas, valorTotal, status }: PacoteHeaderProps) => {
-  const valorLabel = formatCurrency(valorTotal);
-  const statusLabel = STATUS_LABEL[status] ?? status;
-  const paradasLabel = totalCargas === 1 ? "parada" : "paradas";
+const PacoteHeader = ({ pacoteMeta }: PacoteHeaderProps) => {
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+    queryKey: ["pacote", pacoteMeta.id, pacoteMeta.version],
+    queryFn: () => fetchPacote(pacoteMeta.id),
+    staleTime: 30_000,
+    enabled: Boolean(pacoteMeta.id),
+  });
+
+  const paradasLabel = pacoteMeta.total_cargas === 1 ? "parada" : "paradas";
+  const dateBadgeLabel = formatDateBadge(pacoteMeta.earliest_carga_date ?? null);
 
   return (
-    <section
-      className="relative mb-4 overflow-hidden rounded-[28px] border border-white/70 bg-[linear-gradient(135deg,hsl(223_56%_12%),hsl(223_55%_22%))] p-5 text-white shadow-[0_30px_70px_-30px_hsl(215_25%_12%/0.55)] sm:p-6"
-      data-testid="pacote-header"
-    >
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(225_100%_65%/0.18),transparent_36%),radial-gradient(circle_at_bottom_left,hsl(200_100%_55%/0.14),transparent_30%)]" />
-      <div className="relative grid grid-cols-1 gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
-        <div className="min-w-0 space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/70">
-            Viagem casada
-          </p>
-          <h2 className="text-2xl font-black tracking-tight text-white sm:text-3xl">
-            {totalCargas} {paradasLabel}
-          </h2>
-          <Badge
-            variant={STATUS_VARIANT[status]}
-            className="border-white/30 bg-white/10 text-white hover:bg-white/15"
-          >
-            {statusLabel}
-          </Badge>
-        </div>
-        <div
-          className="rounded-[22px] border border-white/12 bg-white/10 p-4 backdrop-blur sm:min-w-[220px]"
-          aria-label={`Valor total ${valorLabel}`}
-        >
-          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/60">
-            Pagamento total
-          </p>
-          <p className="mt-2 text-2xl font-black tracking-tight text-white sm:text-3xl">
-            {valorLabel}
-          </p>
-          <p className="mt-1 text-[0.72rem] font-medium leading-relaxed text-white/65">
-            Valor definido pelo operador
-          </p>
-        </div>
+    <section data-testid="pacote-header" className="relative">
+      {/* Row 1 (mobile + tablet, lg:hidden) — Date badge + area direita VAZIA (D6) */}
+      <div className="relative mb-3 flex items-center sm:mb-5 lg:hidden">
+        <span className="inline-flex items-center gap-1.5 rounded-lg bg-badge px-2.5 py-1 text-[11px] font-bold tracking-wide text-badge-text sm:gap-2 sm:rounded-xl sm:px-3.5 sm:py-1.5 sm:text-xs">
+          <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse-glow" />
+          {dateBadgeLabel}
+        </span>
+        {/* Area direita preservada vazia (sem ClientLogo, sem texto cliente). D6. */}
       </div>
+
+      {/* Trecho box — wrapper IDENTICO ao avulsa (border-border/40 bg-muted/25) */}
+      <div className="relative mb-4 rounded-2xl border border-border/40 bg-muted/25 p-3">
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground">
+          {pacoteMeta.total_cargas} {paradasLabel}
+        </p>
+        {isLoading ? (
+          <div className="space-y-2" data-testid="pacote-stops-loading" aria-busy="true">
+            <Skeleton className="h-5 w-full" />
+            <Skeleton className="h-5 w-5/6" />
+            <Skeleton className="h-5 w-3/4" />
+          </div>
+        ) : isError || !data ? (
+          <div
+            role="alert"
+            data-testid="pacote-stops-error"
+            className="rounded-lg border border-destructive/30 bg-destructive/5 p-2 text-sm text-muted-foreground"
+          >
+            Não foi possível carregar as paradas desta viagem.
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              className="ml-2 font-semibold text-primary underline-offset-2 hover:underline disabled:opacity-50"
+            >
+              Tentar novamente
+            </button>
+          </div>
+        ) : (
+          <ol
+            role="list"
+            aria-label={`Viagem com ${data.cargas.length} paradas`}
+            data-testid="pacote-stops-list"
+            className="space-y-1.5"
+          >
+            {orderedCargas(data.cargas).map((carga, idx) => {
+              const cargaIndex = idx + 1;
+              return (
+                <li
+                  key={carga.id}
+                  role="listitem"
+                  className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-sm leading-snug"
+                >
+                  <span className="min-w-0 truncate">
+                    <strong className="font-semibold">Coleta {cargaIndex}:</strong>{" "}
+                    <span className="text-card-foreground">{carga.origem}</span>
+                  </span>
+                  <ArrowRight className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
+                  <span className="min-w-0 truncate text-right">
+                    <strong className="font-semibold">Entrega {cargaIndex}:</strong>{" "}
+                    <span className="text-card-foreground">{carga.destino}</span>
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </div>
+
       {/* Mantém o label "Viagem casada — N paradas" no DOM como sr-only para
-          preservar matchers existentes em tests (PacoteHeader.test, LoadCard.test). */}
+          preservar matchers existentes em tests (LoadCard.test, PacoteHeader). */}
       <span className="sr-only" aria-hidden="true">
-        Viagem casada — {totalCargas} {paradasLabel}
+        Viagem casada — {pacoteMeta.total_cargas} {paradasLabel}
       </span>
     </section>
   );
 };
+
+function orderedCargas(cargas: PacoteCarga[]): PacoteCarga[] {
+  // Backend ja devolve ordenado, defesa em profundidade.
+  return [...cargas].sort((a, b) => a.ordem_viagem - b.ordem_viagem);
+}
+
+function formatDateBadge(earliest: string | Date | null): string {
+  if (!earliest) return "Coleta a confirmar";
+  let date: Date;
+  try {
+    date = typeof earliest === "string" ? parseISO(earliest) : earliest;
+  } catch {
+    return "Coleta a confirmar";
+  }
+  if (Number.isNaN(date.getTime())) return "Coleta a confirmar";
+  const baseDate = isToday(date) ? "hoje" : format(date, "dd/MM", { locale: ptBR });
+  return `Coleta ${baseDate}`;
+}
 
 export default PacoteHeader;
