@@ -327,7 +327,13 @@ const LoadCard = memo(({
               </div>
             </div>
 
-            <div className="mt-6 flex items-center gap-2">
+            {/* Action bar — espelha o padrão responsivo do avulsa (lines 670-726).
+                Desktop (lg:) usa icon-only share; mobile (sm:hidden) usa botão
+                texto "Compartilhar carga" full-width; tablet usa icon-only inline.
+                iter #3 (2026-05-23) — corrige bug do share button mobile parecendo desktop. */}
+
+            {/* Desktop (lg:) — actions inline + icon share */}
+            <div className="mt-6 hidden items-center gap-2 lg:flex">
               <div className={cn(actionGridClassName, "flex-1")}>
                 {renderInterestDialogTrigger("group/btn h-12 w-full rounded-full px-6")}
                 {detailsHref ? (
@@ -353,6 +359,66 @@ const LoadCard = memo(({
                   <Share2 className="h-4 w-4" />
                 </button>,
               )}
+            </div>
+
+            {/* Mobile/Tablet (lg:hidden) — mobile stacked com botão texto "Compartilhar carga",
+                tablet inline com icon share (idêntico ao avulsa). */}
+            <div className="relative mt-6 flex flex-col gap-3 border-t border-border/40 pt-4 sm:flex-row sm:items-center sm:justify-end sm:gap-2 sm:pt-5 lg:hidden">
+              {/* Mobile only — stacked + text share */}
+              <div className="sm:hidden">
+                <div className={actionGridClassName}>
+                  {renderInterestDialogTrigger("group/btn w-full rounded-xl px-5")}
+                  {detailsHref ? (
+                    <Button
+                      asChild
+                      variant="outline"
+                      size="lg"
+                      className="group/btn w-full rounded-xl border-primary/30 px-5 text-primary hover:border-primary/50 hover:bg-primary/[0.06] hover:text-primary"
+                    >
+                      <Link to={detailsHref}>
+                        <span>Detalhes</span>
+                        <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover/btn:translate-x-1" />
+                      </Link>
+                    </Button>
+                  ) : null}
+                </div>
+                {renderSharePopover(
+                  <button
+                    type="button"
+                    className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-xl border border-border/60 bg-muted/30 py-2.5 text-sm font-semibold text-muted-foreground transition-colors hover:border-border hover:bg-muted/60 hover:text-foreground active:scale-[0.98]"
+                  >
+                    <Share2 className="h-4 w-4" />
+                    Compartilhar carga
+                  </button>,
+                )}
+              </div>
+
+              {/* Tablet only (sm:flex lg:hidden) — horizontal inline + icon share */}
+              <div className="hidden items-center gap-2 sm:flex lg:hidden">
+                {renderInterestDialogTrigger("group/btn sm:w-auto sm:rounded-2xl sm:px-7")}
+                {detailsHref ? (
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="lg"
+                    className="group/btn border-primary/30 px-5 text-primary hover:border-primary/50 hover:bg-primary/[0.06] hover:text-primary sm:w-auto sm:rounded-2xl sm:px-7"
+                  >
+                    <Link to={detailsHref}>
+                      <span>Detalhes</span>
+                      <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover/btn:translate-x-1" />
+                    </Link>
+                  </Button>
+                ) : null}
+                {renderSharePopover(
+                  <button
+                    type="button"
+                    aria-label="Compartilhar carga"
+                    className="inline-flex items-center justify-center rounded-2xl border border-border/40 p-3 text-muted-foreground transition-colors hover:border-border/70 hover:text-foreground"
+                  >
+                    <Share2 className="h-4 w-4" />
+                  </button>,
+                )}
+              </div>
             </div>
           </div>
         </div>
