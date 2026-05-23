@@ -207,10 +207,11 @@ describe("LoadCard — pacote_meta branch", () => {
     expect(items[2]).toHaveTextContent(/coleta 3.*recife/i);
     expect(items[2]).toHaveTextContent(/entrega 3.*fortaleza/i);
 
-    // Payment panel — usa pacoteMeta.valor_total + caption (D7)
+    // Payment panel — usa pacoteMeta.valor_total (D7); caption "Valor definido
+    // pelo operador" removida no iter #4.
     expect(screen.getAllByText(/pagamento total/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/R\$\s*5\.000,00/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/valor definido pelo operador/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/valor definido pelo operador/i)).not.toBeInTheDocument();
 
     // Vehicle box — perfil_uniforme "CARRETA"
     expect(screen.getAllByText(/CARRETA/i).length).toBeGreaterThan(0);

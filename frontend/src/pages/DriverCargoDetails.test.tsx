@@ -215,7 +215,7 @@ function buildPacoteCargaFixture(overrides: Partial<PacoteCarga> = {}): PacoteCa
 }
 
 describe("CargaParadaCard", () => {
-  it("renderiza header 'Carga N — origem -> destino' + badge 'Voce esta aqui' quando isCurrent=true", () => {
+  it("renderiza header 'Carga N — origem -> destino' com data-testid 'current' quando isCurrent=true", () => {
     renderWithProviders(
       <CargaParadaCard carga={buildPacoteCargaFixture()} isCurrent index={2} />,
     );
@@ -225,10 +225,11 @@ describe("CargaParadaCard", () => {
     expect(screen.getByText(/carga 2/i)).toBeInTheDocument();
     expect(screen.getByText(/salvador \/ ba/i)).toBeInTheDocument();
     expect(screen.getByText(/recife \/ pe/i)).toBeInTheDocument();
-    expect(screen.getByText(/voc[eê] est[áa] aqui/i)).toBeInTheDocument();
+    // Badge "Voce esta aqui" removido (iter #4) — apenas testid muda entre variantes.
+    expect(screen.queryByText(/voc[eê] est[áa] aqui/i)).not.toBeInTheDocument();
   });
 
-  it("omite badge 'Voce esta aqui' quando isCurrent=false", () => {
+  it("usa data-testid 'other' quando isCurrent=false", () => {
     renderWithProviders(
       <CargaParadaCard carga={buildPacoteCargaFixture()} isCurrent={false} index={2} />,
     );

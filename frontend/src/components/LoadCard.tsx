@@ -265,9 +265,6 @@ const LoadCard = memo(({
                 <p className="text-lg font-extrabold tracking-tight text-gradient-primary">
                   {formatPacoteValor(pacoteMeta.valor_total)}
                 </p>
-                <p className="mt-1 text-[0.68rem] font-medium leading-relaxed text-muted-foreground/85">
-                  Valor definido pelo operador
-                </p>
               </div>
 
               {pacoteMeta.perfil_uniforme ? (
@@ -294,9 +291,6 @@ const LoadCard = memo(({
                   </p>
                   <p className="mt-2 text-[1.7rem] font-bold tracking-tight text-gradient-primary">
                     {formatPacoteValor(pacoteMeta.valor_total)}
-                  </p>
-                  <p className="mt-2 max-w-[28rem] text-[0.78rem] font-medium leading-relaxed text-muted-foreground/82">
-                    Valor definido pelo operador
                   </p>
                 </div>
                 {pacoteMeta.perfil_uniforme ? (
