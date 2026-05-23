@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
-import { format, isToday, parseISO } from "date-fns";
+import { format, isToday } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
 import { Skeleton } from "@/components/ui/skeleton";
+import { buildLoadingDateTime } from "@/lib/estimatedTime";
 import { fetchPacote, type PacoteCarga, type PacoteMeta } from "@/services/readModels";
 
 interface PacoteHeaderProps {
@@ -40,7 +41,10 @@ const PacoteHeader = ({ pacoteMeta }: PacoteHeaderProps) => {
   });
 
   const paradasLabel = pacoteMeta.total_cargas === 1 ? "parada" : "paradas";
-  const dateBadgeLabel = formatDateBadge(pacoteMeta.earliest_carga_date ?? null);
+  const dateBadgeLabel = formatDateBadge(
+    pacoteMeta.earliest_carga_date ?? null,
+    pacoteMeta.earliest_carga_horario ?? null,
+  );
 
   return (
     <section data-testid="pacote-header" className="relative">
@@ -125,17 +129,27 @@ function orderedCargas(cargas: PacoteCarga[]): PacoteCarga[] {
   return [...cargas].sort((a, b) => a.ordem_viagem - b.ordem_viagem);
 }
 
-function formatDateBadge(earliest: string | Date | null): string {
-  if (!earliest) return "Coleta a confirmar";
-  let date: Date;
-  try {
-    date = typeof earliest === "string" ? parseISO(earliest) : earliest;
-  } catch {
-    return "Coleta a confirmar";
+/**
+ * Formata o badge "Coleta DD/MM as HH:MM" — espelha exatamente buildDateLabel
+ * do branch avulsa (frontend/src/components/driver/DriverLoadsList.tsx:37-42).
+ * iter #2 (2026-05-23): badge ganha horario para virar identico ao avulsa.
+ *
+ *  - quando earliest+horario presentes: "Coleta hoje as 08:00" ou "Coleta 10/06 as 08:00"
+ *  - quando so earliest: "Coleta hoje" ou "Coleta 10/06"
+ *  - quando ambos null: "Coleta a confirmar"
+ */
+function formatDateBadge(
+  earliestDate: string | null,
+  earliestHorario: string | null,
+): string {
+  const loadingDate = buildLoadingDateTime(null, earliestDate, earliestHorario);
+  if (!loadingDate) return "Coleta a confirmar";
+  const baseDate = isToday(loadingDate) ? "hoje" : format(loadingDate, "dd/MM", { locale: ptBR });
+  const hasTimeComponent = Boolean(earliestHorario && earliestHorario.trim() !== "");
+  if (!hasTimeComponent) {
+    return `Coleta ${baseDate}`;
   }
-  if (Number.isNaN(date.getTime())) return "Coleta a confirmar";
-  const baseDate = isToday(date) ? "hoje" : format(date, "dd/MM", { locale: ptBR });
-  return `Coleta ${baseDate}`;
+  return `Coleta ${baseDate} às ${format(loadingDate, "HH:mm")}`;
 }
 
 export default PacoteHeader;
