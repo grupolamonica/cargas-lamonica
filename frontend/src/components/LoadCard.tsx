@@ -236,9 +236,12 @@ const LoadCard = memo(({
               valorTotal={pacoteMeta.valor_total}
               status={pacoteMeta.status}
             />
-            <PacoteStopsList pacoteId={pacoteMeta.id} version={pacoteMeta.version} />
 
-            <div className="mt-5 flex flex-col gap-2 border-t border-border/40 pt-4 sm:flex-row sm:items-center sm:gap-3">
+            <div className="mt-4 rounded-2xl border border-border/30 bg-muted/30 p-3 sm:mt-5 sm:p-4">
+              <PacoteStopsList pacoteId={pacoteMeta.id} version={pacoteMeta.version} />
+            </div>
+
+            <div className="mt-6 flex items-center gap-2">
               <div className={cn(actionGridClassName, "flex-1")}>
                 {renderInterestDialogTrigger("group/btn h-12 w-full rounded-full px-6")}
                 {detailsHref ? (
