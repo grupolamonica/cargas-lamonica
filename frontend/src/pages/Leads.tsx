@@ -889,6 +889,41 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                     cancellingLeadId={cancellingLeadId}
                     onApprove={(loadId, leadId, val) => void handleApprove(loadId, leadId, val)}
                     onCancel={(loadId, leadId, cpf) => void handleCancel(loadId, leadId, cpf)}
+                    onApprovePacote={(cand) => {
+                      // Iter #9: reserva o pacote inteiro para um motorista.
+                      // Sequencia handleApprove por lead QUEUED — aproveita o
+                      // atomic-claim do iter #3 que ja garante a transicao
+                      // PACOTE.publicado -> reservado quando a primeira parada
+                      // eh aprovada e replica via cascade nas demais.
+                      void (async () => {
+                        const queuedItems = cand.items.filter((it) => it.lead.status === "QUEUED");
+                        for (const it of queuedItems) {
+                          await handleApprove(it.group.load.id, it.lead.id, it.lead.validation);
+                        }
+                      })();
+                    }}
+                    onCancelPacote={(cand) => {
+                      // Cancela todas as candidaturas (1 por parada) deste motorista.
+                      const cpfSuffix = cand.cpf?.trim() ? cand.cpf.trim().slice(-2).padStart(2, "*") : null;
+                      const tail = cpfSuffix ? ` (final ${cpfSuffix})` : "";
+                      if (
+                        !confirmAction(
+                          `Cancelar a candidatura${tail} em todas as paradas do pacote? O motorista sera notificado.`,
+                        )
+                      ) {
+                        return;
+                      }
+                      void (async () => {
+                        for (const it of cand.items) {
+                          // Pula leads ja em estado terminal.
+                          if (it.lead.status === "QUEUED" || it.lead.status === "APPROVED") {
+                            await cancelOperatorLoadLead(it.group.load.id, it.lead.id).catch(() => undefined);
+                          }
+                        }
+                        toast.success("Candidaturas do pacote canceladas.");
+                        await queryClient.invalidateQueries({ queryKey: LEADS_QUERY_KEY });
+                      })();
+                    }}
                     onOpenDriverDetail={(lead) =>
                       setSelectedDriver({
                         name: lead.validation?.driver.angelira.displayName || null,

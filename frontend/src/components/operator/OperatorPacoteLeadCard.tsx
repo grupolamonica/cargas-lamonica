@@ -2,8 +2,44 @@ import { Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Layers, Loader2,
 
 import ClientLogo from "@/components/ClientLogo";
 import { cn } from "@/lib/utils";
-import { buildDisplayDateTime, formatShortDateTime } from "@/lib/dateDisplay";
+import { buildDisplayDateTime, formatFullDateTime, formatShortDateTime } from "@/lib/dateDisplay";
 import type { OperatorLeadGroup, OperatorLeadPacoteMeta, PublicLeadValidationSummary } from "@/services/loadClaims";
+
+function maskCpfSuffix(cpf: string | null | undefined) {
+  const digits = (cpf ?? "").replace(/\D/g, "");
+  if (!digits) return null;
+  return `*${digits.slice(-2)}`;
+}
+
+function formatPhoneDisplay(phone: string | null | undefined) {
+  const digits = (phone ?? "").replace(/\D/g, "");
+  if (digits.length === 11) return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+  if (digits.length === 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+  return phone ?? "";
+}
+
+/**
+ * Aggrega o status dos N leads de um motorista no pacote: APPROVED se ALGUMA
+ * parada ja foi reservada (entao o motorista ja venceu o pacote no operador),
+ * QUEUED se todas estao na fila ainda, mixed caso contrario.
+ */
+function aggregateCandidaturaStatus(items: PacoteLeadItem[]) {
+  if (items.some((it) => it.lead.status === "APPROVED")) return "APPROVED";
+  if (items.every((it) => it.lead.status === "QUEUED")) return "QUEUED";
+  return "MIXED";
+}
+
+/**
+ * Driver name de um motorista no pacote: usa driverName (resolvido pelo
+ * backend) do primeiro lead. Como cada candidatura replica para todas as
+ * paradas com o mesmo CPF, o nome eh consistente entre items.
+ */
+function pickDriverName(items: PacoteLeadItem[]) {
+  for (const it of items) {
+    if (it.lead.driverName?.trim()) return it.lead.driverName.trim();
+  }
+  return null;
+}
 
 /**
  * pacoteStatusStyle: mapeia o status do pacote para o mesmo vocabulario visual
@@ -86,22 +122,6 @@ function CargaStatusBadge({ status }: { status: string }) {
   );
 }
 
-function LeadStatusBadge({ status }: { status: string }) {
-  const isApproved = status === "APPROVED";
-  return (
-    <span
-      className={cn(
-        "inline-flex rounded-full px-2.5 py-0.5 text-[0.65rem] font-semibold",
-        isApproved
-          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200"
-          : "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-200",
-      )}
-    >
-      {isApproved ? "Reservado" : "Na fila"}
-    </span>
-  );
-}
-
 function formatCurrency(value: number | null) {
   if (value == null || !Number.isFinite(value)) return null;
   return value.toLocaleString("pt-BR", {
@@ -138,6 +158,14 @@ interface Props {
   cancellingLeadId: string | null;
   onApprove: (loadId: string, leadId: string, validation: PublicLeadValidationSummary | null | undefined) => void;
   onCancel: (loadId: string, leadId: string, cpf: string | null) => void;
+  /**
+   * Aprova um motorista para o pacote inteiro (todas as paradas com leads
+   * QUEUED daquele driver). Reaproveita createPacoteClaim do iter #3 via
+   * sequenciamento de approveOperatorLoadLead por lead.
+   */
+  onApprovePacote?: (candidatura: DriverCandidatura) => void;
+  /** Cancela todas as candidaturas (uma por parada) de um motorista no pacote. */
+  onCancelPacote?: (candidatura: DriverCandidatura) => void;
   /** Permite chamar driver-detail modal (mesmo contrato do componente avulso). */
   onOpenDriverDetail: (lead: OperatorLeadGroup["leads"][number]) => void;
 }
@@ -165,6 +193,8 @@ const OperatorPacoteLeadCard = ({
   cancellingLeadId,
   onApprove,
   onCancel,
+  onApprovePacote,
+  onCancelPacote,
   onOpenDriverDetail,
 }: Props) => {
   // Paradas unicas do pacote — dedup por load.id (varias candidaturas geram items repetidos).
@@ -189,10 +219,25 @@ const OperatorPacoteLeadCard = ({
     0,
   );
 
+  // Trajeto consolidado: cidade1 -> cidade2 -> cidade3 (uma vez cada).
+  const trajeto = (() => {
+    const cidades: string[] = [];
+    paradas.forEach((p, i) => {
+      const o = p.group.load.origem;
+      const d = p.group.load.destino;
+      if (i === 0) cidades.push(o, d);
+      else if (cidades[cidades.length - 1] !== o) cidades.push(o, d);
+      else cidades.push(d);
+    });
+    return cidades.join(" -> ");
+  })();
+  const firstParadaPerfil = paradas[0]?.group.load.perfil ?? "";
+
   return (
     <article
       className={cn(
-        "admin-panel overflow-hidden relative transition-all outline outline-[3px] -outline-offset-1",
+        // iter #9: overflow-visible permite badge top-right respirar.
+        "admin-panel relative transition-all outline outline-[3px] -outline-offset-1",
         pacoteStatusStyle.ring,
         pacoteStatusStyle.shadow,
       )}
@@ -201,7 +246,7 @@ const OperatorPacoteLeadCard = ({
       {/* Status badge top-right (espelha avulsa) — usa cor do status do pacote. */}
       <span
         className={cn(
-          "absolute right-4 top-4 z-10 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[0.65rem] font-bold uppercase tracking-[0.16em] shadow-sm",
+          "absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[0.6rem] font-bold uppercase tracking-[0.14em] shadow-sm",
           pacoteStatusStyle.badge,
         )}
       >
@@ -209,63 +254,67 @@ const OperatorPacoteLeadCard = ({
         Viagem casada
       </span>
 
-      {/* Header (espelha avulsa linhas 906-936). */}
-      <div className="border-b border-border/70 px-5 py-5 lg:px-6">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
-                Pacote {pacoteMeta.id.slice(0, 8)}
-              </p>
-              {/*
-                Decisao UX: os LH de cada parada aparecem na secao "Paradas do pacote".
-                O header so identifica o pacote (ID + versao) — manter LH aqui geraria
-                duplicacao visual quando o pacote tem 2+ paradas.
-              */}
-              {pacoteMeta.version != null ? (
-                <span className="inline-flex rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[0.6rem] font-mono text-muted-foreground">
-                  v{pacoteMeta.version}
-                </span>
-              ) : null}
-            </div>
-            <h3 className="mt-2 flex items-center gap-2 text-xl font-semibold tracking-tight text-foreground">
-              {firstClienteLogoUrl ? (
-                <ClientLogo logoUrl={firstClienteLogoUrl} name={firstClienteNome ?? ""} className="h-6 w-6" />
-              ) : null}
-              Viagem casada — {totalParadas}{isComplete ? "" : `/${totalCargas}`} paradas
-            </h3>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              {/* Status pill (espelha LoadStatusBadge do avulsa). */}
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.68rem] font-semibold",
-                  pacoteStatusStyle.pill,
-                )}
-              >
-                {pacoteStatusStyle.label}
-              </span>
-              {valorTotalLabel ? (
-                <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[0.68rem] font-semibold text-emerald-700 dark:text-emerald-200">
-                  Valor total {valorTotalLabel}
-                </span>
-              ) : null}
-              <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/30 px-2.5 py-0.5 text-[0.68rem] font-semibold text-muted-foreground">
-                {candidaturas.length} {candidaturas.length === 1 ? "candidato" : "candidatos"}
-              </span>
-            </div>
-          </div>
+      {/* Header consolidado iter #9 — 3 linhas espelhando o avulsa: chips
+          identificadores + valor + candidato count na linha 1, "Viagem casada
+          — N paradas" + status + perfil na linha 2, trajeto na linha 3. */}
+      <div className="border-b border-border/70 px-5 py-3 lg:px-6">
+        <div className="flex flex-wrap items-center gap-2 pr-32">
+          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-primary/60">
+            Pacote {pacoteMeta.id.slice(0, 8)}
+          </p>
+          {pacoteMeta.version != null ? (
+            <span className="inline-flex rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[0.6rem] font-mono text-muted-foreground">
+              v{pacoteMeta.version}
+            </span>
+          ) : null}
+          <span
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[0.6rem] font-semibold",
+              pacoteStatusStyle.pill,
+            )}
+          >
+            {pacoteStatusStyle.label}
+          </span>
+          {firstParadaPerfil ? (
+            <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[0.6rem] font-semibold text-muted-foreground">
+              {firstParadaPerfil}
+            </span>
+          ) : null}
+          {valorTotalLabel ? (
+            <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[0.6rem] font-semibold text-emerald-700 dark:text-emerald-200">
+              {valorTotalLabel}
+            </span>
+          ) : null}
+          <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[0.6rem] font-semibold text-muted-foreground">
+            {candidaturas.length} {candidaturas.length === 1 ? "candidato" : "candidatos"}
+          </span>
+        </div>
 
-          {/* Action row — toggle (espelha "Expandir disputa" do avulsa). */}
-          <div className="flex flex-wrap gap-2">
+        <h3 className="mt-1.5 flex items-center gap-2 text-base font-semibold tracking-tight text-foreground">
+          {firstClienteLogoUrl ? (
+            <ClientLogo logoUrl={firstClienteLogoUrl} name={firstClienteNome ?? ""} className="h-5 w-5 shrink-0" />
+          ) : null}
+          <span className="truncate">
+            Viagem casada — {totalParadas}{isComplete ? "" : `/${totalCargas}`} paradas
+          </span>
+        </h3>
+
+        {/* Linha 3: trajeto + toggle */}
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="inline-flex max-w-2xl items-center gap-1.5 rounded-full border border-border/70 bg-muted/20 px-2.5 py-1 text-[0.65rem] font-semibold text-muted-foreground" title={trajeto}>
+            <Route className="h-3 w-3" />
+            <span className="truncate">{trajeto}</span>
+          </span>
+          <div className="ml-auto">
             <button
               type="button"
               onClick={onToggleCollapse}
-              className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-white px-3 py-1.5 text-xs font-semibold text-foreground transition-colors duration-200 hover:bg-muted dark:bg-muted/40"
+              className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-white px-2.5 py-1 text-[0.65rem] font-semibold text-foreground transition-colors duration-200 hover:bg-muted dark:bg-muted/40"
               aria-expanded={!isCollapsed}
               aria-controls={`pacote-lead-${pacoteMeta.id}`}
             >
-              {isCollapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
-              {isCollapsed ? "Expandir paradas" : "Minimizar paradas"}
+              {isCollapsed ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
+              {isCollapsed ? "Expandir pacote" : "Minimizar pacote"}
             </button>
           </div>
         </div>
@@ -273,180 +322,218 @@ const OperatorPacoteLeadCard = ({
 
       {!isCollapsed ? (
         <div id={`pacote-lead-${pacoteMeta.id}`}>
-          {/* Paradas do pacote. */}
-          <div className="border-b border-border/70 px-5 py-4 lg:px-6">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
-              Paradas do pacote
+          {/* Paradas em lista compacta 1-linha cada (iter #9 — antes era card grande). */}
+          <div className="border-b border-border/70 px-5 py-3 lg:px-6">
+            <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              Paradas
             </p>
-            <div className="mt-3 space-y-2">
+            <ul className="mt-2 space-y-1">
               {paradas.map((item, index) => {
                 const { group } = item;
                 const ordem = group.load.ordemViagem ?? index + 1;
                 const coletaLabel =
                   group.load.sheetDataCarregamento ||
                   formatShortDateTime(buildDisplayDateTime(group.load.data, group.load.horario), "A confirmar");
-                const descargaLabel = group.load.sheetDataDescarga || null;
-
                 return (
-                  <div
+                  <li
                     key={group.load.id}
-                    className="rounded-lg border border-border/50 bg-muted/20 p-3"
+                    className="flex flex-wrap items-center gap-2 rounded-md border border-border/40 bg-muted/15 px-2.5 py-1.5 text-xs"
                     data-testid={`pacote-parada-${ordem}`}
                   >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="inline-flex h-7 min-w-[2rem] items-center justify-center rounded-full bg-primary px-2 text-xs font-bold text-primary-foreground">
-                        #{ordem}
+                    <span className="inline-flex h-5 min-w-[1.5rem] items-center justify-center rounded-full bg-primary px-1.5 text-[0.6rem] font-bold text-primary-foreground">
+                      #{ordem}
+                    </span>
+                    {group.load.sheetLh ? (
+                      <span className="inline-flex rounded-full border border-primary/15 bg-primary/8 px-2 py-0.5 text-[0.6rem] font-bold font-mono text-primary">
+                        LH {group.load.sheetLh}
                       </span>
-                      {group.load.sheetLh ? (
-                        <span className="inline-flex rounded-full border border-primary/15 bg-primary/8 px-2.5 py-0.5 text-[0.68rem] font-bold font-mono text-primary">
-                          LH {group.load.sheetLh}
-                        </span>
-                      ) : null}
-                      <CargaStatusBadge status={group.load.status} />
-                    </div>
-                    <div className="mt-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-                      <Route className="h-4 w-4 text-primary" />
+                    ) : null}
+                    <CargaStatusBadge status={group.load.status} />
+                    <span className="font-semibold text-foreground truncate max-w-xs">
                       {group.load.origem} -&gt; {group.load.destino}
-                    </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/20 px-2.5 py-0.5 font-semibold">
-                        <Truck className="h-3 w-3" />
-                        Coleta: {coletaLabel}
-                      </span>
-                      {descargaLabel ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/20 px-2.5 py-0.5 font-semibold">
-                          <Route className="h-3 w-3" />
-                          Entrega: {descargaLabel}
-                        </span>
-                      ) : null}
-                      {group.load.sheetMotorista ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/20 px-2.5 py-0.5 font-semibold">
-                          <User className="h-3 w-3" />
-                          {group.load.sheetMotorista}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
+                    </span>
+                    <span className="ml-auto inline-flex items-center gap-1 text-[0.65rem] text-muted-foreground">
+                      <Truck className="h-3 w-3" />
+                      <span className="truncate max-w-[12rem]">{coletaLabel}</span>
+                    </span>
+                  </li>
                 );
               })}
-            </div>
+            </ul>
           </div>
 
-          {/* Candidaturas — N motoristas no mesmo pacote, cada um com seus N leads (1 por parada). */}
-          <div className="space-y-3 border-b border-border/70 px-5 py-4 lg:px-6">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
-              Candidaturas ({candidaturas.length})
-            </p>
-            {candidaturas.map((cand) => {
-              const firstLead = cand.items[0]?.lead;
-              const whatsappUrl = firstLead?.whatsappUrl ?? "";
-              const validation = firstLead?.validation ?? null;
-              return (
-                <div
-                  key={`${cand.cpf}|${cand.phone}`}
-                  className="rounded-xl border border-border/60 bg-card p-3"
-                  data-testid={`pacote-candidatura-${cand.cpf}-${cand.phone}`}
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 text-sm">
-                      <Phone className="h-3.5 w-3.5 text-primary" />
-                      <span className="font-semibold text-foreground">{cand.phone || "Sem telefone"}</span>
-                      {cand.cpf ? (
-                        <span className="font-mono text-[0.65rem] text-muted-foreground">
-                          CPF final {cand.cpf.trim().slice(-2)}
-                        </span>
-                      ) : null}
-                    </div>
-                    {whatsappUrl ? (
-                      <button
-                        type="button"
-                        onClick={() => window.open(whatsappUrl, "_blank", "noopener,noreferrer")}
-                        className="inline-flex items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#23b26b,#25D366)] px-3 py-1 text-[0.65rem] font-semibold text-white shadow-[0_10px_22px_rgba(37,211,102,0.24)]"
-                      >
-                        <MessageCircle className="h-3 w-3" />
-                        WhatsApp
-                      </button>
-                    ) : null}
-                  </div>
-
-                  <div className="mt-2 space-y-1.5">
-                    {cand.items.map((it) => {
-                      const { group, lead } = it;
-                      const isApproved = lead.status === "APPROVED";
-                      const canApprove = group.load.status === "OPEN" && lead.status === "QUEUED";
-                      const isApproving = approvingLeadId === lead.id;
-                      const isCancelling = cancellingLeadId === lead.id;
-                      const ordem = group.load.ordemViagem ?? 0;
-                      return (
-                        <div
-                          key={`${group.load.id}-${lead.id}`}
-                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/20 px-2.5 py-1.5 cursor-pointer"
-                          onClick={() => onOpenDriverDetail(lead)}
-                        >
-                          <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                            <span className="inline-flex h-5 items-center justify-center rounded-full bg-primary/20 px-1.5 text-[0.6rem] font-bold text-primary">
-                              Parada #{ordem}
-                            </span>
-                            <LeadStatusBadge status={lead.status} />
-                          </div>
-                          <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              type="button"
-                              onClick={() => onApprove(group.load.id, lead.id, validation)}
-                              disabled={!canApprove || isApproving}
-                              className="inline-flex items-center gap-1.5 rounded-full border border-border/80 px-2.5 py-1 text-[0.65rem] font-semibold text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {isApproving ? <Loader2 className="h-3 w-3 animate-spin" /> : isApproved ? <BadgeCheck className="h-3 w-3 text-emerald-600" /> : <CheckCircle2 className="h-3 w-3" />}
-                              {isApproved ? "Já reservada" : "Reservar parada"}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => onCancel(group.load.id, lead.id, lead.cpf)}
-                              disabled={isCancelling}
-                              className="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[0.65rem] font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-400/40 dark:bg-red-500/15 dark:text-red-200"
-                            >
-                              {isCancelling ? <Loader2 className="h-3 w-3 animate-spin" /> : <Ban className="h-3 w-3" />}
-                              Cancelar
-                            </button>
+          {/* Candidaturas em TABELA igual avulsa: 1 row por motorista (cpf|phone),
+              colunas Fila / Entrada / Motorista / Status / Acoes. Acoes operam
+              no PACOTE inteiro (reservar todos / cancelar todos os leads do
+              driver). Iter #9 — substituiu o card-por-candidatura + lista nested
+              de paradas que duplicava informacao. */}
+          <div className="border-b border-border/70 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-primary/[0.045]">
+                <tr className="border-b border-border/70">
+                  <th className="px-4 py-3 text-left text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Fila</th>
+                  <th className="px-4 py-3 text-left text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Entrada</th>
+                  <th className="px-4 py-3 text-left text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Motorista</th>
+                  <th className="px-4 py-3 text-left text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Status</th>
+                  <th className="px-4 py-3 text-right text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Acoes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {candidaturas.map((cand, idx) => {
+                  const firstLead = cand.items[0]?.lead;
+                  const validation = firstLead?.validation ?? null;
+                  const whatsappUrl = firstLead?.whatsappUrl ?? "";
+                  const driverName = pickDriverName(cand.items);
+                  const aggregateStatus = aggregateCandidaturaStatus(cand.items);
+                  const cpfMask = maskCpfSuffix(cand.cpf);
+                  const phoneFormatted = formatPhoneDisplay(cand.phone);
+                  const subLabel = driverName
+                    ? [cpfMask ? `CPF ${cpfMask}` : null, phoneFormatted].filter(Boolean).join(" · ")
+                    : cpfMask
+                      ? `CPF ${cpfMask} · sem cadastro`
+                      : "sem cadastro";
+                  // Acoes em batch: aprova / cancela TODAS as paradas QUEUED do motorista.
+                  const hasQueuedItems = cand.items.some((it) => it.lead.status === "QUEUED");
+                  const isApprovingAny = cand.items.some((it) => approvingLeadId === it.lead.id);
+                  const isCancellingAny = cand.items.some((it) => cancellingLeadId === it.lead.id);
+                  const queuedAt =
+                    cand.items[0]?.lead.queuedAt || cand.items[0]?.lead.preRegisteredAt || null;
+                  return (
+                    <tr
+                      key={`${cand.cpf}|${cand.phone}`}
+                      className="border-b border-border/70 last:border-0 transition-colors duration-200 hover:bg-primary/[0.03] cursor-pointer"
+                      data-testid={`pacote-candidatura-${cand.cpf}-${cand.phone}`}
+                      onClick={() => firstLead && onOpenDriverDetail(firstLead)}
+                    >
+                      <td className="px-4 py-3 font-semibold text-foreground">#{idx + 1}</td>
+                      <td className="px-4 py-3 text-foreground text-xs">{formatFullDateTime(queuedAt)}</td>
+                      <td className="px-4 py-3 text-foreground">
+                        <div className="flex items-start gap-2 font-medium">
+                          {driverName ? (
+                            <User className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                          ) : (
+                            <Phone className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                          )}
+                          <div className="min-w-0 leading-tight">
+                            <div className="truncate">{driverName ?? phoneFormatted}</div>
+                            <div className="mt-0.5 truncate text-[0.65rem] font-normal text-muted-foreground">
+                              {subLabel}
+                            </div>
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={cn(
+                            "inline-flex rounded-full px-2.5 py-0.5 text-[0.65rem] font-semibold",
+                            aggregateStatus === "APPROVED"
+                              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200"
+                              : aggregateStatus === "QUEUED"
+                                ? "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-200"
+                                : "bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-200",
+                          )}
+                        >
+                          {aggregateStatus === "APPROVED"
+                            ? "Reservado"
+                            : aggregateStatus === "QUEUED"
+                              ? "Na fila"
+                              : "Parcial"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex flex-wrap justify-end gap-1.5">
+                          {whatsappUrl ? (
+                            <button
+                              type="button"
+                              onClick={() => window.open(whatsappUrl, "_blank", "noopener,noreferrer")}
+                              className="inline-flex items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#23b26b,#25D366)] px-3 py-1 text-[0.65rem] font-semibold text-white shadow-[0_10px_22px_rgba(37,211,102,0.24)]"
+                            >
+                              <MessageCircle className="h-3 w-3" />
+                              WhatsApp
+                            </button>
+                          ) : null}
+                          {onApprovePacote ? (
+                            <button
+                              type="button"
+                              onClick={() => onApprovePacote(cand)}
+                              disabled={!hasQueuedItems || isApprovingAny}
+                              title="Reserva o pacote inteiro para este motorista (todas as paradas QUEUED de uma vez)"
+                              className="inline-flex items-center gap-1.5 rounded-full border border-border/80 px-2.5 py-1 text-[0.65rem] font-semibold text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {isApprovingAny ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : aggregateStatus === "APPROVED" ? (
+                                <BadgeCheck className="h-3 w-3 text-emerald-600" />
+                              ) : (
+                                <CheckCircle2 className="h-3 w-3" />
+                              )}
+                              {aggregateStatus === "APPROVED" ? "Reservado" : "Reservar pacote"}
+                            </button>
+                          ) : (
+                            // Fallback: aprova a primeira parada QUEUED se nao tem onApprovePacote.
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = cand.items.find((it) => it.lead.status === "QUEUED");
+                                if (next) onApprove(next.group.load.id, next.lead.id, validation);
+                              }}
+                              disabled={!hasQueuedItems || isApprovingAny}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-border/80 px-2.5 py-1 text-[0.65rem] font-semibold text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {isApprovingAny ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                              Reservar parada
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (onCancelPacote) onCancelPacote(cand);
+                              else cand.items.forEach((it) => onCancel(it.group.load.id, it.lead.id, it.lead.cpf));
+                            }}
+                            disabled={isCancellingAny}
+                            className="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[0.65rem] font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-400/40 dark:bg-red-500/15 dark:text-red-200 dark:hover:bg-red-500/25"
+                          >
+                            {isCancellingAny ? <Loader2 className="h-3 w-3 animate-spin" /> : <Ban className="h-3 w-3" />}
+                            Cancelar
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
 
           {/* Footer 3-metric row (espelha avulsa 1118-1133). */}
-          <div className="grid gap-3 px-5 py-4 text-sm lg:grid-cols-3 lg:px-6">
+          <div className="grid gap-3 px-5 py-3 text-sm lg:grid-cols-3 lg:px-6">
             <div className="admin-soft-panel px-4 py-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Paradas</p>
-              <p className="mt-2 text-lg font-semibold text-foreground">{totalParadas}</p>
+              <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Paradas</p>
+              <p className="mt-2 text-base font-semibold text-foreground">{totalParadas}</p>
             </div>
             <div className="admin-soft-panel px-4 py-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Candidatos</p>
-              <p className="mt-2 text-lg font-semibold text-foreground">{candidaturas.length}</p>
+              <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Candidatos</p>
+              <p className="mt-2 text-base font-semibold text-foreground">{candidaturas.length}</p>
             </div>
             <div className="admin-soft-panel px-4 py-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Reservados</p>
-              <p className="mt-2 text-lg font-semibold text-foreground">{approvedCount}</p>
+              <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Reservados</p>
+              <p className="mt-2 text-base font-semibold text-foreground">{approvedCount}</p>
             </div>
           </div>
         </div>
       ) : (
-        <div id={`pacote-lead-${pacoteMeta.id}`} className="grid gap-3 px-5 py-4 text-sm lg:grid-cols-3 lg:px-6">
+        <div id={`pacote-lead-${pacoteMeta.id}`} className="grid gap-3 px-5 py-3 text-sm lg:grid-cols-3 lg:px-6">
           <div className="admin-soft-panel px-4 py-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Paradas</p>
-            <p className="mt-2 text-lg font-semibold text-foreground">{totalParadas}</p>
+            <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Paradas</p>
+            <p className="mt-2 text-base font-semibold text-foreground">{totalParadas}</p>
           </div>
           <div className="admin-soft-panel px-4 py-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Candidatos</p>
-            <p className="mt-2 text-lg font-semibold text-foreground">{candidaturas.length}</p>
+            <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Candidatos</p>
+            <p className="mt-2 text-base font-semibold text-foreground">{candidaturas.length}</p>
           </div>
           <div className="admin-soft-panel px-4 py-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Reservados</p>
-            <p className="mt-2 text-lg font-semibold text-foreground">{approvedCount}</p>
+            <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Reservados</p>
+            <p className="mt-2 text-base font-semibold text-foreground">{approvedCount}</p>
           </div>
         </div>
       )}
