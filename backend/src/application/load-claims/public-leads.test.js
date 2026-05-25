@@ -520,6 +520,115 @@ describe.sequential("public load leads", () => {
     });
   });
 
+  it("resolve driverName via fallback chain (Angellira -> ASPx -> pending registration)", async () => {
+    const { id: loadId } = await harness.seedLoad();
+
+    // Lead 1: tem nome no Angellira (validation_summary_json).
+    // Lead 2: nao tem Angellira mas existe em aspx_drivers.
+    // Lead 3: nao tem Angellira nem ASPx mas tem cadastro pendente.
+    // Lead 4: nenhum dos tres — driverName deve ser null.
+    mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+      summary: {
+        schemaVersion: 1,
+        checkedAt: "2026-05-25T10:00:00.000Z",
+        candidateSubmittedAt: "2026-05-25T09:00:00.000Z",
+        overallStatus: "VALID",
+        missingFields: [],
+        warnings: [],
+        driver: {
+          angelira: { status: "FOUND", found: true, displayName: "Joao Silva Angellira", validUntil: "2026-12-31" },
+          aspx: { status: "FOUND", found: true },
+        },
+        plates: [],
+        vigency: { status: "VALID", validUntil: "2026-12-31", daysUntilExpiry: 200, source: "ANGELLIRA_DRIVER" },
+        support: { whatsappNumber: "5571999999999", whatsappUrl: "https://wa.me/5571999999999" },
+        sources: { angelira: { status: "OK" }, aspx: { status: "OK" } },
+      },
+      storedSummary: {
+        schemaVersion: 1,
+        checkedAt: "2026-05-25T10:00:00.000Z",
+        candidateSubmittedAt: "2026-05-25T09:00:00.000Z",
+        overallStatus: "VALID",
+        missingFields: [],
+        warnings: [],
+        driver: {
+          angelira: { status: "FOUND", found: true, displayName: "Joao Silva Angellira", validUntil: "2026-12-31" },
+          aspx: { status: "FOUND", found: true },
+        },
+        plates: [],
+        vigency: { status: "VALID", validUntil: "2026-12-31", daysUntilExpiry: 200, source: "ANGELLIRA_DRIVER" },
+        support: { whatsappNumber: "5571999999999", whatsappUrl: "https://wa.me/5571999999999" },
+        sources: { angelira: { status: "OK" }, aspx: { status: "OK" } },
+      },
+    });
+
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload({
+        cpf: "111.111.111-11",
+        phone: "(71) 91111-1111",
+        horsePlate: "AAA1B11",
+        trailerPlate: "BBB2C22",
+      }),
+      correlationId: "corr-name-angellira",
+    });
+
+    // Lead 2 — ASPx fallback (sem displayName Angellira)
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload({
+        cpf: "222.222.222-22",
+        phone: "(71) 92222-2222",
+        horsePlate: "AAA2B22",
+        trailerPlate: "BBB3C33",
+      }),
+      correlationId: "corr-name-aspx",
+    });
+    await harness.seedAspxDriver({ cpf: "22222222222", displayName: "Maria Santos ASPx" });
+
+    // Lead 3 — pending registration fallback
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload({
+        cpf: "333.333.333-33",
+        phone: "(71) 93333-3333",
+        horsePlate: "AAA3B33",
+        trailerPlate: "BBB4C44",
+      }),
+      correlationId: "corr-name-pdr",
+    });
+    await harness.seedPendingDriverRegistration({
+      cpf: "33333333333",
+      nomeMotorista: "Pedro Souza Cadastro",
+      status: "pendente",
+    });
+
+    // Lead 4 — phone-only (sem nada)
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload({
+        cpf: "444.444.444-44",
+        phone: "(71) 94444-4444",
+        horsePlate: "AAA4B44",
+        trailerPlate: "BBB5C55",
+      }),
+      correlationId: "corr-name-nothing",
+    });
+
+    const listing = await service.listOperatorPublicLoadLeads({
+      correlationId: "corr-name-list",
+    });
+
+    expect(listing.statusCode).toBe(200);
+    const leads = listing.payload.groups[0].leads;
+    const leadsByPhone = new Map(leads.map((l) => [l.phone, l]));
+
+    expect(leadsByPhone.get("71911111111")?.driverName).toBe("Joao Silva Angellira");
+    expect(leadsByPhone.get("71922222222")?.driverName).toBe("Maria Santos ASPx");
+    expect(leadsByPhone.get("71933333333")?.driverName).toBe("Pedro Souza Cadastro");
+    expect(leadsByPhone.get("71944444444")?.driverName).toBeNull();
+  });
+
   it("expoe 503 SCHEMA_DRIFT quando a coluna cargas.sheet_status nao existe", async () => {
     const { id: loadId } = await harness.seedLoad();
 
