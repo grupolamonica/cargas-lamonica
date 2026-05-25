@@ -16,6 +16,7 @@ import { ApiError, approveOperatorLoadLead, cancelOperatorLoadLead, createDirect
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { VEHICLE_PROFILE_OPTIONS } from "@/lib/vehicleProfiles";
 import { fetchOperatorClientes, fetchSheetMonitor, type SheetMonitorRow } from "@/services/readModels";
+import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 
 interface SheetAllocation {
   driverName: string;
@@ -139,6 +140,7 @@ function buildDriverSubLabel(lead: OperatorLeadGroup["leads"][number]) {
 
 const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   const queryClient = useQueryClient();
+  const permissions = useOperatorPermissions();
   const [approvingLeadId, setApprovingLeadId] = useState<string | null>(null);
   const [cancellingLeadId, setCancellingLeadId] = useState<string | null>(null);
   const [revalidating, setRevalidating] = useState(false);
