@@ -66,6 +66,10 @@ jobs:
         working-directory: frontend
         env:
           TZ: America/Sao_Paulo
+          # Vitest carrega modulos reais via vi.importActual — supabase client exige URL/KEY em module init.
+          VITE_SUPABASE_URL: https://ci.placeholder.invalid
+          VITE_SUPABASE_PUBLISHABLE_KEY: ci-placeholder
+          VITE_API_BASE_URL: https://ci.placeholder.invalid
 
       - name: Test backend
         run: npm test --if-present
