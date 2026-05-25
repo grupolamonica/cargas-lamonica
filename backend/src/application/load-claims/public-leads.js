@@ -258,6 +258,84 @@ function isMissingPublicLeadValidationColumnError(error) {
   );
 }
 
+/**
+ * Detecta drift de schema na coluna `cargas.sheet_status` ou `cargas.viagem_id`.
+ * Cenarios: migracao 029_cargas_sheet_status nao aplicada (sheet_status), ou
+ * cargas_casadas em rollout incompleto (viagem_id).
+ *
+ * Compatibilidade: aceita codigo Postgres SQLSTATE (`42703` undefined_column,
+ * `42P01` undefined_table) **ou** o nome de classe usado pelo pg-mem em
+ * ambiente de teste (`ColumnNotFound`, `RelationNotFound`).
+ */
+function isUndefinedColumnError(error) {
+  if (error?.code === "42703") return true;
+  return error?.name === "ColumnNotFound" || error?.constructor?.name === "ColumnNotFound";
+}
+
+function isUndefinedTableError(error) {
+  if (error?.code === "42P01") return true;
+  return error?.name === "RelationNotFound" || error?.constructor?.name === "RelationNotFound";
+}
+
+/**
+ * Verifica se a coluna citada no erro (extraida do padrao `column "x.y" does
+ * not exist`) bate com o alvo. Evita falsos positivos quando a SQL faz
+ * referencia a varias colunas (ex.: erro em `pii_redacted_at` mas SELECT cita
+ * `viagem_id` ou `sheet_status` no projection).
+ */
+function extractMissingColumnName(error) {
+  const message = `${error?.message || ""} ${error?.detail || ""}`;
+  // pg: `column "foo" does not exist` / pg-mem: `column "alias.foo" does not exist`
+  const match = message.match(/column\s+"([^"]+)"\s+does not exist/i);
+  if (!match) return null;
+  // Strip alias prefix if present.
+  const raw = match[1];
+  return raw.includes(".") ? raw.split(".").pop().toLowerCase() : raw.toLowerCase();
+}
+
+function extractMissingTableName(error) {
+  const message = `${error?.message || ""} ${error?.detail || ""}`;
+  // pg: `relation "foo" does not exist`
+  const match = message.match(/relation\s+"([^"]+)"\s+does not exist/i);
+  if (!match) return null;
+  const raw = match[1];
+  return raw.includes(".") ? raw.split(".").pop().toLowerCase() : raw.toLowerCase();
+}
+
+function isMissingSheetStatusColumn(error) {
+  if (!isUndefinedColumnError(error)) return false;
+  return extractMissingColumnName(error) === "sheet_status";
+}
+
+function isMissingCargasCasadasTable(error) {
+  if (!isUndefinedTableError(error)) return false;
+  return extractMissingTableName(error) === "cargas_casadas";
+}
+
+function isMissingViagemIdColumn(error) {
+  if (!isUndefinedColumnError(error)) return false;
+  const col = extractMissingColumnName(error);
+  return col === "viagem_id" || col === "ordem_viagem";
+}
+
+/**
+ * Erro fatal de schema drift na fila do operador. Mapeado para 503 +
+ * Retry-After pelo handler HTTP. Mantem operador informado sem mascarar o bug
+ * (log estruturado capta o `code` PG original).
+ */
+function createOperatorLeadsSchemaDriftError(originalError) {
+  const error = new LoadClaimServiceError(
+    "A fila do operador esta temporariamente indisponivel devido a uma atualizacao de schema. Tente novamente em alguns instantes.",
+    {
+      code: "SCHEMA_DRIFT",
+      statusCode: 503,
+    },
+  );
+  error.originalCode = originalError?.code || null;
+  error.originalMessage = originalError?.message || null;
+  return error;
+}
+
 function createPublicLeadSchemaUpdateError() {
   return new LoadClaimServiceError(
     "O pre-cadastro desta carga esta passando por uma atualizacao. Tente novamente em alguns instantes.",
@@ -1652,6 +1730,23 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
       );
       rows = result.rows;
     } catch (error) {
+      // Schema-drift fatal: sheet_status / cargas_casadas / viagem_id ausentes.
+      // Em vez de propagar 500 (que quebra o polling do operador), retorna 503
+      // com `Retry-After` para o cliente refazer a consulta apos a migracao.
+      if (
+        isMissingSheetStatusColumn(error) ||
+        isMissingCargasCasadasTable(error) ||
+        isMissingViagemIdColumn(error)
+      ) {
+        logLoadClaimEvent("error", "operator-leads.schema_drift", {
+          correlation_id: resolvedCorrelationId,
+          pg_code: error?.code || null,
+          pg_message: error?.message || null,
+          pg_detail: error?.detail || null,
+        });
+        throw createOperatorLeadsSchemaDriftError(error);
+      }
+
       if (!isMissingPublicLeadRedactionColumnError(error)) {
         throw error;
       }
@@ -1708,53 +1803,73 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
     // Include OPEN/RESERVED cargas that have no active leads — they should remain
     // visible in the fila after their last lead is cancelled.
     const activeLoadIds = new Set(rows.map(r => r.load_id));
-    const { rows: emptyLoadRows } = await client.query(
-      `
-        SELECT
-          c.id AS load_id,
-          c.status AS load_status,
-          c.origem AS load_origem,
-          c.destino AS load_destino,
-          c.perfil AS load_perfil,
-          c.data AS load_data,
-          c.horario AS load_horario,
-          c.reserved_public_lead_id AS load_reserved_public_lead_id,
-          c.sheet_lh AS load_sheet_lh,
-          c.sheet_data_carregamento AS load_sheet_data_carregamento,
-          c.sheet_data_descarga AS load_sheet_data_descarga,
-          c.sheet_motorista AS load_sheet_motorista,
-          c.sheet_cavalo AS load_sheet_cavalo,
-          c.sheet_carreta AS load_sheet_carreta,
-          c.sheet_status AS load_sheet_status,
-          c.cliente_id AS load_cliente_id,
-          c.viagem_id AS load_viagem_id,
-          c.ordem_viagem AS load_ordem_viagem,
-          clientes.nome AS load_cliente_nome,
-          clientes.logo_url AS load_cliente_logo_url,
-          cc.status AS pacote_status,
-          cc.valor_total AS pacote_valor_total,
-          cc.version AS pacote_version,
-          pacote_counts.total AS pacote_total_cargas
-        FROM public.cargas AS c
-        LEFT JOIN public.clientes
-          ON clientes.id = c.cliente_id
-        LEFT JOIN public.cargas_casadas AS cc
-          ON cc.id = c.viagem_id
-        LEFT JOIN (
-          SELECT viagem_id, COUNT(*)::int AS total
-          FROM public.cargas
-          WHERE viagem_id IS NOT NULL
-          GROUP BY viagem_id
-        ) AS pacote_counts
-          ON pacote_counts.viagem_id = c.viagem_id
-        LEFT JOIN public.load_public_leads AS active_leads
-          ON active_leads.load_id = c.id
-          AND active_leads.status = ANY($2::text[])
-        WHERE c.status = ANY($1::text[])
-          AND active_leads.id IS NULL
-      `,
-      [["OPEN", "RESERVED"], [PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED]],
-    );
+    let emptyLoadRows;
+    try {
+      const emptyResult = await client.query(
+        `
+          SELECT
+            c.id AS load_id,
+            c.status AS load_status,
+            c.origem AS load_origem,
+            c.destino AS load_destino,
+            c.perfil AS load_perfil,
+            c.data AS load_data,
+            c.horario AS load_horario,
+            c.reserved_public_lead_id AS load_reserved_public_lead_id,
+            c.sheet_lh AS load_sheet_lh,
+            c.sheet_data_carregamento AS load_sheet_data_carregamento,
+            c.sheet_data_descarga AS load_sheet_data_descarga,
+            c.sheet_motorista AS load_sheet_motorista,
+            c.sheet_cavalo AS load_sheet_cavalo,
+            c.sheet_carreta AS load_sheet_carreta,
+            c.sheet_status AS load_sheet_status,
+            c.cliente_id AS load_cliente_id,
+            c.viagem_id AS load_viagem_id,
+            c.ordem_viagem AS load_ordem_viagem,
+            clientes.nome AS load_cliente_nome,
+            clientes.logo_url AS load_cliente_logo_url,
+            cc.status AS pacote_status,
+            cc.valor_total AS pacote_valor_total,
+            cc.version AS pacote_version,
+            pacote_counts.total AS pacote_total_cargas
+          FROM public.cargas AS c
+          LEFT JOIN public.clientes
+            ON clientes.id = c.cliente_id
+          LEFT JOIN public.cargas_casadas AS cc
+            ON cc.id = c.viagem_id
+          LEFT JOIN (
+            SELECT viagem_id, COUNT(*)::int AS total
+            FROM public.cargas
+            WHERE viagem_id IS NOT NULL
+            GROUP BY viagem_id
+          ) AS pacote_counts
+            ON pacote_counts.viagem_id = c.viagem_id
+          LEFT JOIN public.load_public_leads AS active_leads
+            ON active_leads.load_id = c.id
+            AND active_leads.status = ANY($2::text[])
+          WHERE c.status = ANY($1::text[])
+            AND active_leads.id IS NULL
+        `,
+        [["OPEN", "RESERVED"], [PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED]],
+      );
+      emptyLoadRows = emptyResult.rows;
+    } catch (error) {
+      if (
+        isMissingSheetStatusColumn(error) ||
+        isMissingCargasCasadasTable(error) ||
+        isMissingViagemIdColumn(error)
+      ) {
+        logLoadClaimEvent("error", "operator-leads.schema_drift", {
+          correlation_id: resolvedCorrelationId,
+          stage: "empty-loads",
+          pg_code: error?.code || null,
+          pg_message: error?.message || null,
+          pg_detail: error?.detail || null,
+        });
+        throw createOperatorLeadsSchemaDriftError(error);
+      }
+      throw error;
+    }
 
     const emptyGroups = emptyLoadRows
       .filter(r => !activeLoadIds.has(r.load_id))
