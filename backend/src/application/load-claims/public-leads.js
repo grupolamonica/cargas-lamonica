@@ -1500,6 +1500,31 @@ export async function queuePublicLoadLeadViaWhatsApp({ loadId, leadId, correlati
   });
 }
 
+function buildPacoteMeta(row) {
+  if (!row.load_viagem_id) {
+    return null;
+  }
+
+  // Pacote meta vem do JOIN com cargas_casadas. Quando o JOIN nao traz dados
+  // (ex.: pacote excluido em concorrencia), expoe apenas o id para que o
+  // frontend ainda agrupe pela viagem_id.
+  const valorTotalRaw = row.pacote_valor_total;
+  const valorTotal =
+    valorTotalRaw === null || valorTotalRaw === undefined
+      ? null
+      : Number(valorTotalRaw);
+
+  return {
+    id: row.load_viagem_id,
+    status: row.pacote_status || null,
+    valorTotal: Number.isFinite(valorTotal) ? valorTotal : null,
+    version: row.pacote_version ?? null,
+    totalCargas:
+      row.pacote_total_cargas != null ? Number(row.pacote_total_cargas) : null,
+    ordemPropria: row.load_ordem_viagem ?? null,
+  };
+}
+
 function groupLeadsForOperator(rows) {
   const groupsMap = new Map();
 
@@ -1524,6 +1549,9 @@ function groupLeadsForOperator(rows) {
         clienteId: row.load_cliente_id || null,
         clienteNome: row.load_cliente_nome || null,
         clienteLogoUrl: row.load_cliente_logo_url || null,
+        viagemId: row.load_viagem_id || null,
+        ordemViagem: row.load_ordem_viagem ?? null,
+        pacoteMeta: buildPacoteMeta(row),
       },
       queueCount: 0,
       totalLeads: 0,
@@ -1593,13 +1621,28 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
               cargas.sheet_carreta AS load_sheet_carreta,
               cargas.sheet_status AS load_sheet_status,
               cargas.cliente_id AS load_cliente_id,
+              cargas.viagem_id AS load_viagem_id,
+              cargas.ordem_viagem AS load_ordem_viagem,
               clientes.nome AS load_cliente_nome,
-              clientes.logo_url AS load_cliente_logo_url
+              clientes.logo_url AS load_cliente_logo_url,
+              cc.status AS pacote_status,
+              cc.valor_total AS pacote_valor_total,
+              cc.version AS pacote_version,
+              pacote_counts.total AS pacote_total_cargas
             FROM public.load_public_leads AS leads
             INNER JOIN public.cargas
               ON cargas.id = leads.load_id
             LEFT JOIN public.clientes
               ON clientes.id = cargas.cliente_id
+            LEFT JOIN public.cargas_casadas AS cc
+              ON cc.id = cargas.viagem_id
+            LEFT JOIN (
+              SELECT viagem_id, COUNT(*)::int AS total
+              FROM public.cargas
+              WHERE viagem_id IS NOT NULL
+              GROUP BY viagem_id
+            ) AS pacote_counts
+              ON pacote_counts.viagem_id = cargas.viagem_id
             WHERE leads.status = ANY($1::text[])
               AND (leads.status = 'QUEUED' OR leads.pii_redacted_at IS NULL)
             ORDER BY COALESCE(leads.queued_at, leads.created_at) ASC, leads.created_at ASC, leads.id ASC
@@ -1632,13 +1675,28 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
             cargas.sheet_cavalo AS load_sheet_cavalo,
             cargas.sheet_carreta AS load_sheet_carreta,
             cargas.cliente_id AS load_cliente_id,
+            cargas.viagem_id AS load_viagem_id,
+            cargas.ordem_viagem AS load_ordem_viagem,
             clientes.nome AS load_cliente_nome,
-            clientes.logo_url AS load_cliente_logo_url
+            clientes.logo_url AS load_cliente_logo_url,
+            cc.status AS pacote_status,
+            cc.valor_total AS pacote_valor_total,
+            cc.version AS pacote_version,
+            pacote_counts.total AS pacote_total_cargas
           FROM public.load_public_leads AS leads
           INNER JOIN public.cargas
             ON cargas.id = leads.load_id
           LEFT JOIN public.clientes
             ON clientes.id = cargas.cliente_id
+          LEFT JOIN public.cargas_casadas AS cc
+            ON cc.id = cargas.viagem_id
+          LEFT JOIN (
+            SELECT viagem_id, COUNT(*)::int AS total
+            FROM public.cargas
+            WHERE viagem_id IS NOT NULL
+            GROUP BY viagem_id
+          ) AS pacote_counts
+            ON pacote_counts.viagem_id = cargas.viagem_id
           WHERE leads.status = ANY($1::text[])
           ORDER BY COALESCE(leads.queued_at, leads.created_at) ASC, leads.created_at ASC, leads.id ASC
         `,
@@ -1669,11 +1727,26 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
           c.sheet_carreta AS load_sheet_carreta,
           c.sheet_status AS load_sheet_status,
           c.cliente_id AS load_cliente_id,
+          c.viagem_id AS load_viagem_id,
+          c.ordem_viagem AS load_ordem_viagem,
           clientes.nome AS load_cliente_nome,
-          clientes.logo_url AS load_cliente_logo_url
+          clientes.logo_url AS load_cliente_logo_url,
+          cc.status AS pacote_status,
+          cc.valor_total AS pacote_valor_total,
+          cc.version AS pacote_version,
+          pacote_counts.total AS pacote_total_cargas
         FROM public.cargas AS c
         LEFT JOIN public.clientes
           ON clientes.id = c.cliente_id
+        LEFT JOIN public.cargas_casadas AS cc
+          ON cc.id = c.viagem_id
+        LEFT JOIN (
+          SELECT viagem_id, COUNT(*)::int AS total
+          FROM public.cargas
+          WHERE viagem_id IS NOT NULL
+          GROUP BY viagem_id
+        ) AS pacote_counts
+          ON pacote_counts.viagem_id = c.viagem_id
         LEFT JOIN public.load_public_leads AS active_leads
           ON active_leads.load_id = c.id
           AND active_leads.status = ANY($2::text[])
@@ -1705,6 +1778,9 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
           clienteId: r.load_cliente_id || null,
           clienteNome: r.load_cliente_nome || null,
           clienteLogoUrl: r.load_cliente_logo_url || null,
+          viagemId: r.load_viagem_id || null,
+          ordemViagem: r.load_ordem_viagem ?? null,
+          pacoteMeta: buildPacoteMeta(r),
         },
         queueCount: 0,
         totalLeads: 0,
