@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User, UserPlus } from "lucide-react";
+import { AlertTriangle, Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User, UserPlus } from "lucide-react";
 import { differenceInDays } from "date-fns";
 import { toast } from "sonner";
 
@@ -14,7 +14,7 @@ import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 import { buildDisplayDateTime, formatFullDateTime, formatShortDateTime } from "@/lib/dateDisplay";
 import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
-import { approveOperatorLoadLead, cancelOperatorLoadLead, createDirectAllocation, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type DirectAllocationPayload, type OperatorLeadGroup, type OperatorLeadPacoteMeta, type PublicLeadValidationSummary } from "@/services/loadClaims";
+import { ApiError, approveOperatorLoadLead, cancelOperatorLoadLead, createDirectAllocation, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type DirectAllocationPayload, type OperatorLeadGroup, type OperatorLeadPacoteMeta, type PublicLeadValidationSummary } from "@/services/loadClaims";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { VEHICLE_PROFILE_OPTIONS } from "@/lib/vehicleProfiles";
 import { fetchOperatorClientes, fetchSheetMonitor, type SheetMonitorRow } from "@/services/readModels";
@@ -142,8 +142,19 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     staleTime: 15_000,
-    retry: false,
+    // Retry transient errors (5xx) with exponential backoff. 4xx errors
+    // (auth, validation) sao terminais e nao devem ser retentados.
+    retry: (failureCount, err) => {
+      if (failureCount >= 2) return false;
+      const status = (err as ApiError)?.status;
+      return status === undefined || status >= 500;
+    },
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10_000),
   });
+
+  // Detecta erro transient (503 schema-drift) para banner amarelo
+  // nao-bloqueante — dados antigos continuam visiveis enquanto retenta.
+  const isTransientError = (error as ApiError | null | undefined)?.status === 503;
 
   // Snapshot da planilha para detectar aloca\u00e7\u00e3o externa (motorista preenchido no Google Sheets)
   const { data: sheetData } = useQuery({
@@ -781,6 +792,21 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
           ) : null}
         </section>
 
+        {/* Banner gracioso para 503 transient: mostra alerta, mantem polling rodando
+            e preserva os dados anteriores ja renderizados (nao bloqueia a UI). */}
+        {isTransientError && groups.length > 0 ? (
+          <section className="admin-panel flex items-center gap-3 border-l-4 border-amber-500 bg-amber-50/70 px-5 py-3 text-sm text-amber-900 dark:border-amber-400 dark:bg-amber-500/15 dark:text-amber-100">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-300" />
+            <div className="flex-1">
+              <p className="font-semibold">Sincronizacao temporariamente indisponivel</p>
+              <p className="mt-0.5 text-xs leading-relaxed text-amber-900/85 dark:text-amber-100/80">
+                Reconectando automaticamente. Os dados exibidos podem estar desatualizados em alguns instantes.
+              </p>
+            </div>
+            {isFetching ? <Loader2 className="h-4 w-4 animate-spin text-amber-600 dark:text-amber-300" /> : null}
+          </section>
+        ) : null}
+
         {isLoading ? (
           <section className="admin-panel flex min-h-[260px] items-center justify-center">
             <div className="flex items-center gap-3 text-sm text-muted-foreground">
@@ -788,7 +814,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
               Carregando a fila de leads...
             </div>
           </section>
-        ) : error ? (
+        ) : error && !isTransientError ? (
           <section className="admin-panel flex min-h-[260px] flex-col items-center justify-center gap-4 p-10 text-center">
             <ShieldCheck className="h-14 w-14 text-amber-600/70" />
             <div className="space-y-1">
