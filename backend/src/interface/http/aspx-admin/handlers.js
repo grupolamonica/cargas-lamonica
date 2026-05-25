@@ -2,7 +2,11 @@ import { requireOperatorSession } from "../../../application/load-claims/auth.js
 import { createCorrelationId } from "../../../application/load-claims/helpers.js";
 import { ForbiddenError, UnauthorizedError } from "../../../domain/load-claims/errors.js";
 import { assertOperatorPermission } from "../../../application/load-claims/operator-access.js";
-import { getAspxSyncStatus, triggerAspxSync } from "../../../application/aspx/aspx-admin.js";
+import {
+  getAspxSyncHealth,
+  getAspxSyncStatus,
+  triggerAspxSync,
+} from "../../../application/aspx/aspx-admin.js";
 import { buildHttpErrorResponse } from "../error-mapping.js";
 import { getAuthorizationHeader, getHeaderValue } from "../http-utils.js";
 
@@ -43,6 +47,21 @@ export async function resolveAspxSyncStatusResponse(request) {
       "Somente operadores autorizados podem consultar o status do ASPx.",
     );
     return await getAspxSyncStatus();
+  } catch (error) {
+    return toErrorResponse(error, correlationId);
+  }
+}
+
+export async function resolveAspxSyncHealthResponse(request) {
+  const correlationId = getCorrelationId(request);
+  try {
+    const { user } = await requireOperatorSession(getAuthorizationHeader(request));
+    assertOperatorPermission(
+      user,
+      "operator:read",
+      "Somente operadores autorizados podem consultar a saude do sync ASPx.",
+    );
+    return await getAspxSyncHealth();
   } catch (error) {
     return toErrorResponse(error, correlationId);
   }
