@@ -371,7 +371,9 @@ async function getLoadById(client, loadId, { lock = false } = {}) {
         reserved_driver_id,
         reserved_claim_id,
         reserved_public_lead_id,
-        version
+        version,
+        viagem_id,
+        ordem_viagem
       FROM public.cargas
       WHERE id = $1
       ${lockingClause}
@@ -380,6 +382,34 @@ async function getLoadById(client, loadId, { lock = false } = {}) {
   );
 
   return rows[0] ?? null;
+}
+
+/**
+ * Quando o motorista se candidata a uma carga que faz parte de um pacote
+ * (viagem_id != null), a candidatura deve criar um lead em CADA carga do pacote.
+ * O operador precisa ver o pacote como unidade agrupada na fila — e a aprovacao
+ * via atomic claim (cargas_casadas/atomic-claim) consome o pacote inteiro.
+ *
+ * Retorna a lista de cargas do pacote ordenada por ordem_viagem ASC. Se a carga
+ * nao faz parte de um pacote, retorna lista vazia (o caller deve fazer o single
+ * insert padrao).
+ */
+async function listPacoteCargas(client, viagemId) {
+  if (!viagemId) {
+    return [];
+  }
+
+  const { rows } = await client.query(
+    `
+      SELECT id, ordem_viagem
+      FROM public.cargas
+      WHERE viagem_id = $1
+      ORDER BY ordem_viagem ASC NULLS LAST, id ASC
+    `,
+    [viagemId],
+  );
+
+  return rows;
 }
 
 async function getPublicLeadByIdentity(
@@ -1071,6 +1101,14 @@ export async function createPublicLoadLeadPreRegistration({ loadId, payload, cor
       correlationId: resolvedCorrelationId,
     });
 
+    // Se a carga pertence a um pacote (cargas_casadas), a candidatura tem que
+    // gerar um lead em CADA carga do pacote — o operador precisa ver as N paradas
+    // como uma "viagem casada" agrupada na fila, e a aprovacao acontece via
+    // atomic claim do pacote (todas RESERVED em conjunto).
+    const pacoteCargas = await listPacoteCargas(client, loadRow.viagem_id);
+    const isPacote = pacoteCargas.length > 1;
+    const pacoteViagemId = isPacote ? loadRow.viagem_id : null;
+
     let leadRow = await getPublicLeadByIdentity(client, {
       loadId,
       cpf: normalizedPayload.cpf,
@@ -1080,6 +1118,7 @@ export async function createPublicLoadLeadPreRegistration({ loadId, payload, cor
       trailerPlate2: normalizedPayload.trailerPlate2,
     });
     let reused = Boolean(leadRow);
+    let pacoteLeadsCount = 0;
 
     if (!leadRow) {
       leadRow = await insertPreRegisteredLead(client, {
@@ -1094,6 +1133,7 @@ export async function createPublicLoadLeadPreRegistration({ loadId, payload, cor
         payload: {
           correlation_id: resolvedCorrelationId,
           vehicle_type: normalizedPayload.vehicleType,
+          pacote_viagem_id: pacoteViagemId,
         },
         actorType: "public-driver",
         actorId: normalizedPayload.cpf,
@@ -1106,10 +1146,74 @@ export async function createPublicLoadLeadPreRegistration({ loadId, payload, cor
         payload: {
           correlation_id: resolvedCorrelationId,
           source: "PRE_REGISTRATION",
+          pacote_viagem_id: pacoteViagemId,
         },
         actorType: "public-driver",
         actorId: normalizedPayload.cpf,
       });
+
+      pacoteLeadsCount = 1;
+
+      // Pacote: replicar a candidatura nas demais paradas do mesmo viagem_id.
+      // A transacao do withPgTransaction garante atomicidade — se qualquer insert
+      // falhar, todos os leads (incluindo o primario) sao desfeitos.
+      if (isPacote) {
+        for (const sibling of pacoteCargas) {
+          if (sibling.id === loadId) {
+            continue;
+          }
+
+          // Reusa o mesmo identity-lookup; se outro processo ja criou um lead
+          // identico para essa carga irmã, nao duplicamos.
+          const existingSibling = await getPublicLeadByIdentity(client, {
+            loadId: sibling.id,
+            cpf: normalizedPayload.cpf,
+            phone: normalizedPayload.phone,
+            horsePlate: normalizedPayload.horsePlate,
+            trailerPlate: normalizedPayload.trailerPlate,
+            trailerPlate2: normalizedPayload.trailerPlate2,
+          });
+
+          if (existingSibling) {
+            continue;
+          }
+
+          const siblingLead = await insertPreRegisteredLead(client, {
+            loadId: sibling.id,
+            normalizedPayload,
+          });
+
+          await insertPublicLeadEvent(client, {
+            loadId: sibling.id,
+            leadId: siblingLead.id,
+            eventType: PUBLIC_LEAD_EVENT_TYPE.PRE_REGISTERED,
+            payload: {
+              correlation_id: resolvedCorrelationId,
+              vehicle_type: normalizedPayload.vehicleType,
+              pacote_viagem_id: pacoteViagemId,
+              pacote_sibling_of: leadRow.id,
+            },
+            actorType: "public-driver",
+            actorId: normalizedPayload.cpf,
+          });
+
+          await insertPublicLeadEvent(client, {
+            loadId: sibling.id,
+            leadId: siblingLead.id,
+            eventType: PUBLIC_LEAD_EVENT_TYPE.QUEUED,
+            payload: {
+              correlation_id: resolvedCorrelationId,
+              source: "PRE_REGISTRATION_PACOTE_SIBLING",
+              pacote_viagem_id: pacoteViagemId,
+              pacote_sibling_of: leadRow.id,
+            },
+            actorType: "public-driver",
+            actorId: normalizedPayload.cpf,
+          });
+
+          pacoteLeadsCount += 1;
+        }
+      }
     } else if (leadRow.status === PUBLIC_LEAD_STATUS.APPROVED) {
       throw new ConflictError("Essa tentativa ja foi aprovada e a carga nao aceita um novo pre-cadastro ativo.", {
         code: "LEAD_ALREADY_APPROVED",
@@ -1223,6 +1327,11 @@ export async function createPublicLoadLeadPreRegistration({ loadId, payload, cor
         correlationId: resolvedCorrelationId,
         reused,
         validationPending,
+        pacoteViagemId,
+        // pacoteLeadsCount = numero de cargas em que esta candidatura foi
+        // replicada (>=2 quando a carga faz parte de um pacote, 1 quando avulsa
+        // ou quando foi reaproveitada via identity match).
+        pacoteLeadsCount: reused ? null : pacoteLeadsCount,
       },
     };
 
@@ -1232,6 +1341,8 @@ export async function createPublicLoadLeadPreRegistration({ loadId, payload, cor
       lead_id: leadRow.id,
       reused,
       lead_status: leadRow.status,
+      pacote_viagem_id: pacoteViagemId,
+      pacote_leads_count: pacoteLeadsCount || null,
     });
 
     return {
