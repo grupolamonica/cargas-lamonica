@@ -669,6 +669,8 @@ export default function SheetMonitor() {
     mutationFn: () => fetchSheetMonitor({ refresh: true }),
     onSuccess: (freshData) => {
       queryClient.setQueryData([...SHEET_MONITOR_QUERY_KEY], freshData);
+      // Fila operacional usa status da planilha — invalidar para refletir status novo apos sync.
+      queryClient.invalidateQueries({ queryKey: ["operator", "public-load-leads"] });
       handleStartEnrich(true);
     },
   });
