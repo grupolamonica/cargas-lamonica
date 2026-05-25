@@ -292,7 +292,13 @@ export async function resolveDriverLoadsDigestResponse(request) {
       // cargas ja alocadas no Google Sheets — caso o sync atrase, o frontend
       // nao dispara invalidacao para cargas que ja estao fechadas. Filtro de
       // sheet_status removido (era over-broad).
-      const { rows } = await client.query(`
+      // Iter #8: filtra cargas expiradas (data + horario passados) — pg-mem nao
+      // suporta CURRENT_DATE/CURRENT_TIME, entao parameterizamos.
+      const nowDate = new Date();
+      const todayIso = nowDate.toISOString().slice(0, 10);
+      const nowTimeIso = nowDate.toTimeString().slice(0, 8);
+      const { rows } = await client.query(
+        `
         SELECT
           COALESCE(EXTRACT(EPOCH FROM MAX(updated_at))::bigint, 0) AS ts,
           COUNT(*)::bigint                                          AS cnt
@@ -301,7 +307,10 @@ export async function resolveDriverLoadsDigestResponse(request) {
           AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'
           AND COALESCE(is_template, false) = false
           AND COALESCE(sheet_motorista, '') = ''
-      `);
+          AND (data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))
+      `,
+        [todayIso, todayIso, nowTimeIso],
+      );
       const r = rows[0] || {};
       return `${r.ts}:${r.cnt}`;
     });

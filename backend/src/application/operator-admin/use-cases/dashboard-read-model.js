@@ -307,15 +307,24 @@ export async function fetchDriverLoadFacets({ correlationId }) {
     // sheet_status removido (era over-broad — bloqueava statuses de pipeline
     // aberto como 'AGUARDANDO CARREGAMENTO').
     const sheetUnallocatedSql = "COALESCE(sheet_motorista, '') = ''";
+    // Iter #8: filtra cargas expiradas (data + horario passados) tambem nos
+    // facets — para que filtros e contadores nao mostrem cargas que nem
+    // aparecem no listing. Parameterizado pq pg-mem nao suporta CURRENT_DATE.
+    const nowDate = new Date();
+    const todayIso = nowDate.toISOString().slice(0, 10);
+    const nowTimeIso = nowDate.toTimeString().slice(0, 8);
+    const notExpiredSql =
+      "(data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))";
 
     const buildFacetWhereSql = (includeDriverVisibilityFilter) =>
       includeDriverVisibilityFilter
-        ? `status = 'OPEN' AND COALESCE(is_template, false) = false AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC' AND ${sheetUnallocatedSql}`
-        : `status = 'OPEN' AND COALESCE(is_template, false) = false AND ${sheetUnallocatedSql}`;
+        ? `status = 'OPEN' AND COALESCE(is_template, false) = false AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC' AND ${sheetUnallocatedSql} AND ${notExpiredSql}`
+        : `status = 'OPEN' AND COALESCE(is_template, false) = false AND ${sheetUnallocatedSql} AND ${notExpiredSql}`;
+    const facetParams = [todayIso, todayIso, nowTimeIso];
 
     const queryFacetRows = async (includeDriverVisibilityFilter) => {
       const whereSql = buildFacetWhereSql(includeDriverVisibilityFilter);
-      const rows = await queryDriverLoadCandidateRows(client, { whereSql, values: [] });
+      const rows = await queryDriverLoadCandidateRows(client, { whereSql, values: facetParams });
       const routeCatalogMetricsByLoadId = await fetchRouteCatalogMetricsByLoadId(client, rows);
       const routeLabelByLoadId = buildRouteLabelMap(rows);
       return rows

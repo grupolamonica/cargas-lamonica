@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Package } from "lucide-react";
 import { format, isToday } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -48,13 +48,28 @@ const PacoteHeader = ({ pacoteMeta }: PacoteHeaderProps) => {
 
   return (
     <section data-testid="pacote-header" className="relative">
-      {/* Row 1 (mobile + tablet, lg:hidden) — Date badge + area direita VAZIA (D6) */}
-      <div className="relative mb-3 flex items-center sm:mb-5 lg:hidden">
+      {/* Row 1 (mobile + tablet, lg:hidden) — Date badge esquerda + "Carga casada" badge direita.
+          iter #8 (2026-05-25): area direita ganha indicador intuitivo do tipo de carga.
+          Substitui o vazio anterior (D6 do iter #2) — necessario deixar claro pro motorista
+          que e uma viagem multi-paradas, nao avulsa. */}
+      <div className="relative mb-3 flex items-start justify-between gap-2 sm:mb-5 lg:hidden">
         <span className="inline-flex items-center gap-1.5 rounded-lg bg-badge px-2.5 py-1 text-[11px] font-bold tracking-wide text-badge-text sm:gap-2 sm:rounded-xl sm:px-3.5 sm:py-1.5 sm:text-xs">
           <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse-glow" />
           {dateBadgeLabel}
         </span>
-        {/* Area direita preservada vazia (sem ClientLogo, sem texto cliente). D6. */}
+        <span
+          className="inline-flex items-center gap-1.5 rounded-xl border border-primary/30 bg-primary/[0.08] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-primary shadow-sm sm:gap-2 sm:px-3 sm:py-1.5 sm:text-[11px]"
+          aria-label="Esta carga e uma viagem casada com multiplas paradas"
+          data-testid="pacote-badge-carga-casada"
+        >
+          <Package className="h-3 w-3 shrink-0" aria-hidden="true" />
+          <span className="flex flex-col leading-tight">
+            <span>Carga casada</span>
+            <span className="text-[8px] font-medium normal-case tracking-normal text-primary/75 sm:text-[9px]">
+              {pacoteMeta.total_cargas} {paradasLabel} no trajeto
+            </span>
+          </span>
+        </span>
       </div>
 
       {/* Trecho box — wrapper IDENTICO ao avulsa (border-border/40 bg-muted/25) */}

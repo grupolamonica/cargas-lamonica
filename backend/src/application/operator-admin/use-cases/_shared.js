@@ -787,6 +787,22 @@ export function buildDriverLoadFilters(query, {
   const values = [];
   let index = 1;
 
+  // Iter #8 (2026-05-25): cargas com (data + horário) anterior ao momento atual
+  // NÃO devem aparecer para o motorista — viraram rascunho implicitamente até
+  // o operator transitar status formalmente (script expire-past-cargas.mjs).
+  // Mantemos cargas com data NULL como visíveis (operator pode estar
+  // cadastrando ainda). Quando horario for NULL, comparamos só pela data.
+  //
+  // Parameterizado pq pg-mem nao suporta CURRENT_DATE/CURRENT_TIME nativos.
+  const nowDate = new Date();
+  const todayIso = nowDate.toISOString().slice(0, 10); // YYYY-MM-DD
+  const nowTimeIso = nowDate.toTimeString().slice(0, 8); // HH:MM:SS (local TZ)
+  clauses.push(
+    `(cargas.data IS NULL OR cargas.data > $${index} OR (cargas.data = $${index + 1} AND (cargas.horario IS NULL OR cargas.horario >= $${index + 2})))`,
+  );
+  values.push(todayIso, todayIso, nowTimeIso);
+  index += 3;
+
   // Phase 10: regra de visibilidade combina driver_visibility (avulsa) com status do pacote
   // (premium em pacote publicado).
   //  - Carga avulsa (viagem_id IS NULL):  driver_visibility='PUBLIC' (comportamento legado)
