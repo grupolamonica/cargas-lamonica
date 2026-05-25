@@ -520,6 +520,54 @@ describe.sequential("public load leads", () => {
     });
   });
 
+  it("expoe 503 SCHEMA_DRIFT quando a coluna cargas.sheet_status nao existe", async () => {
+    const { id: loadId } = await harness.seedLoad();
+
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-schema-drift-prereg",
+    });
+
+    // Simula migracao nao aplicada: sheet_status nao existe em producao.
+    await harness.query(`ALTER TABLE public.cargas DROP COLUMN sheet_status`);
+
+    const driftError = await service
+      .listOperatorPublicLoadLeads({
+        correlationId: "corr-schema-drift-list",
+      })
+      .catch((error) => error);
+
+    expect(driftError).toMatchObject({
+      code: "SCHEMA_DRIFT",
+      statusCode: 503,
+    });
+  });
+
+  it("expoe 503 SCHEMA_DRIFT quando a tabela cargas_casadas nao existe", async () => {
+    const { id: loadId } = await harness.seedLoad();
+
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-cargas-casadas-prereg",
+    });
+
+    // Simula rollout incompleto: cargas_casadas nao foi criada.
+    await harness.query(`DROP TABLE public.cargas_casadas CASCADE`);
+
+    const driftError = await service
+      .listOperatorPublicLoadLeads({
+        correlationId: "corr-cargas-casadas-list",
+      })
+      .catch((error) => error);
+
+    expect(driftError).toMatchObject({
+      code: "SCHEMA_DRIFT",
+      statusCode: 503,
+    });
+  });
+
   it("mantem o pre-cadastro funcionando quando a coluna da segunda placa ainda nao existe", async () => {
     const { id: loadId } = await harness.seedLoad();
 

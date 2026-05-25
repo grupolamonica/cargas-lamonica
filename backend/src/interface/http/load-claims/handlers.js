@@ -421,6 +421,22 @@ export async function resolveOperatorPublicLoadLeadsResponse(request) {
       correlationId,
     });
   } catch (error) {
+    // Schema-drift 503: inclui Retry-After para polling do operador re-tentar
+    // sem virar dor de cabeca (banner amarelo, dados antigos seguem visiveis).
+    if (
+      error instanceof LoadClaimServiceError &&
+      error.statusCode === 503 &&
+      error.code === "SCHEMA_DRIFT"
+    ) {
+      const response = buildServiceErrorResponse(error, correlationId, { includeDetails: true });
+      return {
+        ...response,
+        headers: {
+          ...(response.headers || {}),
+          "Retry-After": "30",
+        },
+      };
+    }
     return toErrorResponse(error, correlationId);
   }
 }
