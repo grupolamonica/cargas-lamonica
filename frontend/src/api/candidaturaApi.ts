@@ -26,6 +26,15 @@ export interface CandidaturaPendency {
    * candidatura e bloqueada e o motorista e instruido a corrigir.
    */
   actualType?: VehicleClassification;
+  /**
+   * Iter #7 — Reason=DUPLICATE_PENDING_REGISTRATION: o motorista ja submeteu
+   * cadastro com mesma (cpf, horsePlate) nos ultimos 30 dias. Wizard pode
+   * pular pulando o cadastro e disparar apenas o lead/claim na carga atual.
+   */
+  allowSkipWizard?: boolean;
+  pendingRegistrationId?: string;
+  submittedAt?: string;
+  status?: string;
 }
 
 export interface CandidaturaCompleto {

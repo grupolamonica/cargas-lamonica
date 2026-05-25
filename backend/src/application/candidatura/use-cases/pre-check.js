@@ -1,4 +1,11 @@
 import { validatePublicLeadPreRegistration } from "../../load-claims/public-lead-validation.js";
+import { withPgClient } from "../../../infrastructure/pg/postgres.js";
+
+// Iter #7 — janela de busca para duplicate detection no pre-check.
+// Cadastros enviados ha menos de 30 dias na mesma (CPF, horsePlate) sao
+// surfaceados como pendencia DUPLICATE_PENDING_REGISTRATION pra evitar que
+// o motorista refaca o wizard inteiro quando ja submeteu a mesma combinacao.
+const DUPLICATE_LOOKBACK_DAYS = 30;
 
 // Janela de vigencia em dias para considerar uma pendencia de renovacao (D-11).
 // Veiculos com daysUntilExpiry <= 20 entram em `pendencias` para renovacao.
@@ -283,5 +290,68 @@ export async function candidaturaPreCheck({
     }
   }
 
+  // ── Iter #7: Duplicate detection ────────────────────────────────────────
+  // Checa se ja existe cadastro com mesmo (cpf, horsePlate) em status pendente/
+  // em_revisao/em_analise nos ultimos 30d. Se sim, retorna pendencia informativa
+  // (allowSkipWizard=true) — NAO bloqueia, apenas informa o motorista que ele
+  // pode reaproveitar o cadastro existente.
+  const normalizedCpf = String(driverCpf || "").replace(/\D/g, "");
+  const normalizedHorsePlate = String(horsePlate || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (normalizedCpf.length === 11 && normalizedHorsePlate.length >= 7) {
+    try {
+      const duplicate = await findDuplicatePendingRegistration({
+        cpf: normalizedCpf,
+        horsePlate: normalizedHorsePlate,
+      });
+      if (duplicate) {
+        pendencias.push({
+          step: "A",
+          reason: "DUPLICATE_PENDING_REGISTRATION",
+          allowSkipWizard: true,
+          pendingRegistrationId: duplicate.id,
+          submittedAt: duplicate.created_at instanceof Date
+            ? duplicate.created_at.toISOString()
+            : new Date(duplicate.created_at).toISOString(),
+          status: duplicate.status,
+          label: "Cadastro em analise — voce pode enviar a candidatura sem refazer.",
+        });
+      }
+    } catch (err) {
+      // Falha de DB no duplicate-check NAO bloqueia o pre-check: apenas loga.
+      console.warn("[candidatura.pre-check.duplicate-check]", {
+        correlationId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return { pendencias, completos };
+}
+
+/**
+ * Iter #7 — consulta no Postgres por cadastros com mesmo (CPF, placa cavalo) ja
+ * submetidos nos ultimos 30 dias e ainda em analise/pendentes.
+ *
+ * Status considerados: pendente | em_revisao | em_analise. Status 'rejeitado'/
+ * 'aprovado' nao bloqueiam — motorista ja teve resolucao.
+ *
+ * @returns {Promise<{ id, status, created_at, carga_id } | null>}
+ */
+async function findDuplicatePendingRegistration({ cpf, horsePlate }) {
+  return withPgClient(async (client) => {
+    const result = await client.query(
+      `
+        SELECT id, status, created_at, carga_id
+        FROM public.pending_driver_registrations
+        WHERE dados->'motorista'->>'cpf' = $1
+          AND dados->'cavalo'->>'placa' = $2
+          AND status IN ('pendente', 'em_revisao', 'em_analise')
+          AND created_at > now() - ($3 || ' days')::interval
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      [cpf, horsePlate, String(DUPLICATE_LOOKBACK_DAYS)],
+    );
+    return result.rows[0] || null;
+  });
 }

@@ -155,6 +155,11 @@ const fakeClient = {
       return { rows: [], rowCount: 1 };
     }
 
+    // Iter #7 — duplicate detection (skip por padrao no test legacy).
+    if (/SELECT id, status, dados->>'protocolo' AS protocolo\s+FROM public\.pending_driver_registrations\s+WHERE dados->'motorista'->>'cpf' = \$1\s+AND dados->'cavalo'->>'placa' = \$2/i.test(norm)) {
+      return { rows: [], rowCount: 0 };
+    }
+
     throw new Error(`[fakeClient] query nao mockada: ${norm.slice(0, 140)}...`);
   },
 };

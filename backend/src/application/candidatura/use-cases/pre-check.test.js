@@ -1,11 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockValidatePublicLeadPreRegistration } = vi.hoisted(() => ({
-  mockValidatePublicLeadPreRegistration: vi.fn(),
-}));
+const { mockValidatePublicLeadPreRegistration, mockPgClient } = vi.hoisted(() => {
+  const mockPgClient = { query: vi.fn() };
+  return {
+    mockValidatePublicLeadPreRegistration: vi.fn(),
+    mockPgClient,
+  };
+});
 
 vi.mock("../../load-claims/public-lead-validation.js", () => ({
   validatePublicLeadPreRegistration: mockValidatePublicLeadPreRegistration,
+}));
+
+// Iter #7 — pre-check.js agora consulta o DB para duplicate detection.
+// Default: nao retorna duplicates. Testes especificos override.
+vi.mock("../../../infrastructure/pg/postgres.js", () => ({
+  withPgClient: async (cb) => cb(mockPgClient),
 }));
 
 import { candidaturaPreCheck } from "./pre-check.js";
@@ -14,6 +24,8 @@ import { candidaturaPreCheckSchema } from "../../../interface/http/schemas/candi
 describe("candidaturaPreCheck", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: duplicate-check query retorna 0 rows.
+    mockPgClient.query.mockResolvedValue({ rows: [], rowCount: 0 });
   });
 
   it("retorna pendencias vazias e 3 completos quando motorista + cavalo + 2 carretas estao validos com vigencia > 20 dias", async () => {
@@ -307,5 +319,90 @@ describe("candidaturaPreCheck", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // ── Iter #7 — Duplicate detection ─────────────────────────────────────────
+
+  describe("duplicate detection (iter #7)", () => {
+    it("retorna pendencia DUPLICATE_PENDING_REGISTRATION quando ja existe cadastro pendente <30d com mesma (cpf, horsePlate)", async () => {
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: {
+          driver: { angelira: { found: true }, aspx: { found: true } },
+          plates: [
+            { field: "horsePlate", status: "UNAVAILABLE" },
+          ],
+        },
+      });
+
+      const dupCreated = new Date(Date.now() - 5 * 24 * 3600 * 1000);
+      mockPgClient.query.mockResolvedValueOnce({
+        rows: [
+          {
+            id: "existing-row-1",
+            status: "em_analise",
+            created_at: dupCreated,
+            carga_id: "carga-X",
+          },
+        ],
+        rowCount: 1,
+      });
+
+      const result = await candidaturaPreCheck({
+        driverCpf: "12345678901",
+        horsePlate: "ABC1D23",
+        trailerPlates: [],
+        correlationId: "dup-1",
+      });
+
+      const dup = result.pendencias.find((p) => p.reason === "DUPLICATE_PENDING_REGISTRATION");
+      expect(dup).toBeDefined();
+      expect(dup.allowSkipWizard).toBe(true);
+      expect(dup.pendingRegistrationId).toBe("existing-row-1");
+      expect(dup.status).toBe("em_analise");
+      expect(dup.submittedAt).toBe(dupCreated.toISOString());
+    });
+
+    it("NAO emite pendencia quando duplicate-check retorna 0 rows", async () => {
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: {
+          driver: { angelira: { found: true }, aspx: { found: true } },
+          plates: [],
+        },
+      });
+      mockPgClient.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+      const result = await candidaturaPreCheck({
+        driverCpf: "12345678901",
+        horsePlate: "ABC1D23",
+        trailerPlates: [],
+        correlationId: "dup-2",
+      });
+
+      const dup = result.pendencias.find((p) => p.reason === "DUPLICATE_PENDING_REGISTRATION");
+      expect(dup).toBeUndefined();
+    });
+
+    it("falha de DB no duplicate-check NAO bloqueia o pre-check (log + ausencia da pendencia)", async () => {
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: {
+          driver: { angelira: { found: true }, aspx: { found: true } },
+          plates: [],
+        },
+      });
+      mockPgClient.query.mockRejectedValueOnce(new Error("pg down"));
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await candidaturaPreCheck({
+        driverCpf: "12345678901",
+        horsePlate: "ABC1D23",
+        trailerPlates: [],
+        correlationId: "dup-3",
+      });
+
+      expect(result.pendencias.find((p) => p.reason === "DUPLICATE_PENDING_REGISTRATION")).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
   });
 });

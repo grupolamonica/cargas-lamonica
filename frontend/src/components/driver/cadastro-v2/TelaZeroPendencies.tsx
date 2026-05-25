@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { AlertCircle, CheckCircle2, Clock3, ShieldAlert } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock3, FastForward, ShieldAlert } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { CandidaturaCompleto, CandidaturaPendency } from "@/api/candidaturaApi";
@@ -9,6 +9,12 @@ export interface TelaZeroPendenciesProps {
   completos: CandidaturaCompleto[];
   onConfirm: () => void;
   onDismiss: () => void;
+  /**
+   * Iter #7 — Callback quando o motorista clica em "Enviar candidatura agora"
+   * a partir do card DUPLICATE_PENDING_REGISTRATION. Dispara apenas o lead/
+   * claim na carga atual SEM reabrir o wizard.
+   */
+  onSkipWizardAndClaim?: () => void;
 }
 
 /**
@@ -32,8 +38,11 @@ function TelaZeroPendenciesImpl({
   completos,
   onConfirm,
   onDismiss,
+  onSkipWizardAndClaim,
 }: TelaZeroPendenciesProps) {
   const blocked = hasBlockingMismatch(pendencias);
+  // Iter #7: detecta duplicate pra surfaceaer card especial com skip-wizard CTA.
+  const duplicate = pendencias.find((p) => p.reason === "DUPLICATE_PENDING_REGISTRATION");
 
   return (
     <section className="space-y-5">
@@ -48,9 +57,36 @@ function TelaZeroPendenciesImpl({
         </p>
       </header>
 
+      {/* Iter #7 — Duplicate card (sticky no topo, com CTA skip-wizard). */}
+      {duplicate && onSkipWizardAndClaim ? (
+        <div className="rounded-[22px] border border-amber-300 bg-amber-50 p-4 sm:rounded-3xl sm:p-5">
+          <div className="flex items-start gap-3">
+            <FastForward className="mt-0.5 size-6 shrink-0 text-amber-700" />
+            <div className="flex-1 space-y-2">
+              <p className="text-base font-semibold text-foreground">
+                Cadastro em analise
+              </p>
+              <p className="text-sm leading-relaxed text-foreground/80">
+                {duplicate.label}
+              </p>
+              <button
+                type="button"
+                onClick={onSkipWizardAndClaim}
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-amber-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-amber-700"
+              >
+                Enviar candidatura agora
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {pendencias.length > 0 ? (
         <ul className="space-y-2.5" aria-label="Pendências cadastrais">
           {pendencias.map((pendencia, index) => {
+            if (pendencia.reason === "DUPLICATE_PENDING_REGISTRATION") {
+              return null; // ja renderizado no card especial acima
+            }
             const isMismatch = pendencia.reason === "VEHICLE_TYPE_MISMATCH";
             return (
               <li

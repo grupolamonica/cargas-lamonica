@@ -302,6 +302,62 @@ export async function submitCandidaturaFinal({
       };
     }
 
+    // ── 2b) Iter #7: Duplicate detection por (cpf, horsePlate) ────────────
+    // Antes de criar nova row, checa se ja existe cadastro pendente para a
+    // MESMA combinacao (cpf, placa cavalo) nos ultimos 30 dias. Se sim,
+    // reaproveita: cria APENAS o lead/claim na carga atual (caller faz isso
+    // separadamente), mas NAO duplica a row em pending_driver_registrations.
+    const cpfDigits = String(driverCpf || "").replace(/\D/g, "");
+    const horsePlate = String(dados?.cavalo?.placa || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (cpfDigits.length === 11 && horsePlate.length >= 7) {
+      const dup = await client.query(
+        `
+          SELECT id, status, dados->>'protocolo' AS protocolo
+          FROM public.pending_driver_registrations
+          WHERE dados->'motorista'->>'cpf' = $1
+            AND dados->'cavalo'->>'placa' = $2
+            AND status IN ('pendente', 'em_revisao', 'em_analise')
+            AND created_at > now() - interval '30 days'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [cpfDigits, horsePlate],
+      );
+      if (dup.rows.length > 0) {
+        const existingRow = dup.rows[0];
+        // Audit do reuse — actor pode ser null (publico) ou driver autenticado.
+        await insertSecurityAuditEvent(client, {
+          eventType: "driver.candidatura.reused_existing_pending",
+          actorUserId: driverUserId,
+          actorRole: driverUserId ? "driver" : "anonymous_driver",
+          resourceType: "pending_driver_registration",
+          resourceId: existingRow.id,
+          action: "reuse",
+          outcome: "success",
+          requestIp,
+          correlationId,
+          metadata: {
+            existing_id: existingRow.id,
+            existing_status: existingRow.status,
+            carga_id: cargaId,
+            cpf_masked: `${cpfDigits.slice(0, 3)}***`,
+          },
+        });
+        return {
+          statusCode: 200,
+          payload: {
+            id: existingRow.id,
+            protocolo: existingRow.protocolo || null,
+            reusedExisting: true,
+            existingStatus: existingRow.status,
+            message:
+              "Cadastro existente reaproveitado — voce nao precisa enviar tudo de novo.",
+            meta: { correlationId },
+          },
+        };
+      }
+    }
+
     // ── 3) Owner reuse + ANTT cascade ────────────────────────────────────
     // TODO A4 (P1) — applyOwnerReuseAndCascade roda fetch HTTP ao sidecar ANTT
     // DENTRO da transacao (segura pool/locks por ate ~180s). Refactor sugerido:
