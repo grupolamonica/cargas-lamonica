@@ -169,7 +169,7 @@ export function CcDadosPessoaisPropPF({
 
         <fieldset className="space-y-2 rounded-md border border-border p-3">
           <legend className="px-1 text-sm font-medium">
-            CNH do proprietário (opcional)
+            CNH do proprietário <span className="text-destructive">*</span>
           </legend>
 
           <label className="flex items-center gap-2 text-sm">
