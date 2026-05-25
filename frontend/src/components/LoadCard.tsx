@@ -14,6 +14,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/currency";
 import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
+import type { PacoteMeta } from "@/services/readModels";
 
 /**
  * Plan revisao 2026-05-23: formata pacote.valor_total como BRL. Defesa para
@@ -24,7 +25,6 @@ function formatPacoteValor(value: number | null | undefined): string {
     ? formatCurrency(value)
     : "A combinar";
 }
-import type { PacoteMeta } from "@/services/readModels";
 
 interface LoadCardProps {
   id: string;
