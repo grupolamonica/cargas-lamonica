@@ -105,8 +105,71 @@ describe("candidaturaPreCheck", () => {
       plate: "ZZZ9Z99",
       reason: "NOT_FOUND",
     });
+    // Iter #10: label foca no CTA (cadastre veiculo), description traz
+    // contexto da etapa "Cavalo" porque step B = cavalo.
     expect(result.pendencias[0].label).toContain("ZZZ9Z99");
+    expect(result.pendencias[0].label.toLowerCase()).toContain("cadastre");
+    expect(result.pendencias[0].description).toContain("cavalo");
+    expect(result.pendencias[0].description).toContain("Cavalo");
     expect(result.completos).toEqual([]);
+  });
+
+  it("Iter #10 — NOT_FOUND no step D rotula como 'carreta' na descricao", async () => {
+    mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+      summary: {
+        driver: {
+          angelira: { status: "FOUND", found: true },
+          aspx: { status: "FOUND", found: true },
+        },
+        plates: [
+          { field: "horsePlate", status: "FOUND", found: true, validUntil: "2027-01-01" },
+          { field: "trailerPlate", status: "NOT_FOUND", found: false, validUntil: null },
+        ],
+      },
+    });
+
+    const result = await candidaturaPreCheck({
+      driverCpf: "12345678901",
+      driverPhone: "71999999999",
+      horsePlate: "ABC1D23",
+      trailerPlates: ["DEF4G56"],
+      correlationId: "test-step-d",
+    });
+
+    const carretaPendency = result.pendencias.find((p) => p.plate === "DEF4G56");
+    expect(carretaPendency).toMatchObject({
+      step: "D",
+      reason: "NOT_FOUND",
+    });
+    expect(carretaPendency.description).toContain("carreta");
+    expect(carretaPendency.description).toContain("Carreta");
+  });
+
+  it("Iter #10 — DRIVER_NOT_FOUND retorna label + description orientando etapa A", async () => {
+    mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+      summary: {
+        driver: {
+          angelira: { status: "NOT_FOUND", found: false },
+          aspx: { status: "NOT_FOUND", found: false },
+        },
+        plates: [],
+      },
+    });
+
+    const result = await candidaturaPreCheck({
+      driverCpf: "99988877766",
+      driverPhone: "71988888888",
+      horsePlate: "ABC1D23",
+      trailerPlates: [],
+      correlationId: "test-driver-pending",
+    });
+
+    const driverPendency = result.pendencias.find((p) => p.reason === "DRIVER_NOT_FOUND");
+    expect(driverPendency).toBeDefined();
+    expect(driverPendency.step).toBe("A");
+    expect(driverPendency.label).toMatch(/CPF/);
+    expect(driverPendency.description).toContain("Dados do motorista");
+    expect(driverPendency.description).toContain("ASPX");
   });
 
   it("gera pendencia step D com daysUntilExpiry=12 quando a carreta esta com CRLV vencendo", async () => {

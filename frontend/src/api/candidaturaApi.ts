@@ -15,6 +15,13 @@ export interface CandidaturaPendency {
   daysUntilExpiry?: number;
   label: string;
   /**
+   * Iter #10 — texto explicativo opcional (linha secundaria) que orienta o
+   * motorista para a etapa correta do wizard (ex: "Vá para a etapa 'Cavalo'").
+   * Pendencies legados (reason=EXPIRING/EXPIRED/VEHICLE_TYPE_MISMATCH/...) nao
+   * carregam description; reason=NOT_FOUND/DRIVER_NOT_FOUND carregam.
+   */
+  description?: string;
+  /**
    * Reason=VEHICLE_TYPE_MISMATCH — tipo esperado pelo slot do payload
    * (`horsePlate` => "cavalo", `trailerPlate*` => "carreta"). Usado pelo
    * frontend para construir mensagem amigavel.

@@ -1,5 +1,13 @@
 import { memo } from "react";
-import { AlertCircle, CheckCircle2, Clock3, FastForward, ShieldAlert } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Clock3,
+  FastForward,
+  ShieldAlert,
+  Truck,
+  UserCircle,
+} from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { CandidaturaCompleto, CandidaturaPendency } from "@/api/candidaturaApi";
@@ -88,6 +96,17 @@ function TelaZeroPendenciesImpl({
               return null; // ja renderizado no card especial acima
             }
             const isMismatch = pendencia.reason === "VEHICLE_TYPE_MISMATCH";
+            // Iter #10: icone diferenciado por step. Step A = motorista (CPF),
+            // Step B/D = veiculo. Mismatch e bloqueador (ShieldAlert vermelho).
+            const isDriverStep = pendencia.step === "A";
+            const Icon = isMismatch
+              ? ShieldAlert
+              : isDriverStep
+                ? UserCircle
+                : Truck;
+            const iconColorClass = isMismatch
+              ? "text-destructive"
+              : "text-amber-700";
             return (
               <li
                 key={`${pendencia.step}-${pendencia.plate ?? ""}-${index}`}
@@ -97,16 +116,32 @@ function TelaZeroPendenciesImpl({
                     ? "border-destructive/40 bg-destructive/5"
                     : "admin-tint-warning",
                 )}
+                data-testid={`pendency-step-${pendencia.step}`}
               >
                 <div className="flex items-start gap-2.5 sm:gap-3">
-                  {isMismatch ? (
-                    <ShieldAlert className="mt-0.5 size-5 shrink-0 text-destructive" />
+                  {/* Fallback p/ pendencies sem step canonico (defensive). */}
+                  {Icon ? (
+                    <Icon
+                      className={cn(
+                        "mt-0.5 size-5 shrink-0",
+                        iconColorClass,
+                      )}
+                    />
                   ) : (
                     <AlertCircle className="mt-0.5 size-5 shrink-0 text-amber-700" />
                   )}
-                  <p className="text-base font-medium text-foreground">
-                    {pendencia.label}
-                  </p>
+                  <div className="flex-1 space-y-0.5">
+                    <p className="text-base font-medium text-foreground">
+                      {pendencia.label}
+                    </p>
+                    {/* Iter #10: descricao opcional orienta o motorista para a
+                        etapa correta do wizard. */}
+                    {pendencia.description ? (
+                      <p className="text-sm leading-relaxed text-muted-foreground">
+                        {pendencia.description}
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
               </li>
             );

@@ -29,6 +29,11 @@ function resolveVehicleTypeFromTrailerCount(trailerCount) {
 /**
  * Mapeia o resultado de driverLookup do summary do public-lead-validation
  * para uma pendencia de Step A, se aplicavel.
+ *
+ * Iter #10: labels diferenciadas para Step A (motorista) vs Step B/D (veiculo)
+ * com `description` mais especifica que orienta o motorista a abrir o wizard
+ * na etapa correta. CPF nao encontrado nas bases ASPX/Angellira (sync parou
+ * ou motorista realmente novo) e cadastrado via etapa "Dados do motorista".
  */
 function buildDriverPendency(driverSummary) {
   const angellira = driverSummary?.angelira || {};
@@ -39,7 +44,9 @@ function buildDriverPendency(driverSummary) {
     return {
       step: "A",
       reason: "DRIVER_NOT_FOUND",
-      label: "Seus dados de motorista ainda nao foram cadastrados",
+      label: "Cadastre seu CPF para candidatar-se",
+      description:
+        "Nao encontramos seu CPF nas bases ASPX e Angellira. Preencha a etapa 'Dados do motorista' do cadastro.",
     };
   }
 
@@ -114,12 +121,17 @@ function buildPlateExpiryLabel({ plate, daysUntilExpiry, validUntil }) {
  */
 function classifyPlate({ plateResult, plate, step, candidateSubmittedAt }) {
   if (plateResult.status === "NOT_FOUND") {
+    // Iter #10: Step B = cavalo, Step D = carreta. Descricao orienta o
+    // motorista para a etapa correta do wizard ("Cavalo" vs "Carreta") em
+    // vez de deixar ambiguo se e cadastro de motorista ou veiculo.
+    const vehicleKind = step === "B" ? "cavalo" : "carreta";
     return {
       pendencia: {
         step,
         plate,
         reason: "NOT_FOUND",
-        label: `Documento do veiculo ${plate} ainda nao foi cadastrado`,
+        label: `Cadastre o veiculo (placa ${plate})`,
+        description: `A placa ${plate} (${vehicleKind}) ainda nao esta no nosso sistema. Va para a etapa '${vehicleKind === "cavalo" ? "Cavalo" : "Carreta"}' do cadastro.`,
       },
     };
   }
