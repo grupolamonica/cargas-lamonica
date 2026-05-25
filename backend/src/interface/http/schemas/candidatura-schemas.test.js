@@ -47,6 +47,13 @@ const BASE_OWNER_PF = {
     conta: "5678",
     tipo: "corrente",
   },
+  // Iter #7 — comprovante de residencia obrigatorio para owner PF.
+  endereco: {
+    cep: "01310-100",
+    numero: "1000",
+    logradouro: "Av Paulista",
+    comprovante_storage_path: "cadastro-drafts/owner-cavalo/comprov.jpg",
+  },
 };
 
 const BASE_OWNER_PJ = {
@@ -253,6 +260,59 @@ describe("candidatura-schemas — paridade /cadastro (PLAN-CADASTRO-PARITY)", ()
       },
     };
 
+    const result = candidaturaSubmitSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+  });
+
+  // ── Iter #7 — comprovante de residencia obrigatorio para owner PF ─────
+  it("[iter#7] owner PF sem comprovante_storage_path REJEITA (cavalo)", () => {
+    const { endereco: _endereco, ...ownerSemComprov } = BASE_OWNER_PF;
+    const payload = {
+      cargaId: "carga-1",
+      dados: {
+        motorista: BASE_MOTORISTA,
+        cavalo: BASE_CAVALO,
+        cavalo_owner: ownerSemComprov,
+        carretas: [],
+      },
+    };
+    const result = candidaturaSubmitSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join(" | ");
+      expect(messages).toMatch(/comprovante de residencia/i);
+    }
+  });
+
+  it("[iter#7] owner PF sem comprovante_storage_path REJEITA (carreta)", () => {
+    const { endereco: _endereco, ...ownerSemComprov } = BASE_OWNER_PF;
+    const payload = {
+      cargaId: "carga-1",
+      dados: {
+        motorista: BASE_MOTORISTA,
+        cavalo: BASE_CAVALO,
+        carretas: [{ placa: "DEF4G56", owner_doc: "98765432100", owner_doc_type: "cpf" }],
+        carreta_owners: [{ ...ownerSemComprov, doc: "98765432100" }],
+      },
+    };
+    const result = candidaturaSubmitSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+  });
+
+  it("[iter#7] owner PJ continua sem exigencia de comprovante", () => {
+    const { endereco: _endereco, ...ownerPJSemEndereco } = {
+      ...BASE_OWNER_PJ,
+      endereco: undefined,
+    };
+    const payload = {
+      cargaId: "carga-1",
+      dados: {
+        motorista: BASE_MOTORISTA,
+        cavalo: { ...BASE_CAVALO, owner_doc: "12345678000100", owner_doc_type: "cnpj" },
+        cavalo_owner: ownerPJSemEndereco,
+        carretas: [],
+      },
+    };
     const result = candidaturaSubmitSchema.safeParse(payload);
     expect(result.success).toBe(true);
   });

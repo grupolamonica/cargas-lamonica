@@ -143,21 +143,33 @@ describe("isValidOwnerPFData / describeOwnerPFFieldIssues", () => {
     expect(isValidOwnerPFData(buildEmptyOwnerPFData())).toBe(false);
   });
 
-  it("isValidOwnerPFData true com telefone + CEP + numero validos", () => {
+  it("isValidOwnerPFData true com telefone + CEP + numero + comprovante validos (iter #7)", () => {
+    expect(
+      isValidOwnerPFData({
+        telefone: "(11) 99999-8888",
+        cep: "01310-100",
+        numero: "100",
+        comprovanteFileName: "comprov.jpg",
+      }),
+    ).toBe(true);
+  });
+
+  it("[iter#7] isValidOwnerPFData FALSE sem comprovante mesmo com demais validos", () => {
     expect(
       isValidOwnerPFData({
         telefone: "(11) 99999-8888",
         cep: "01310-100",
         numero: "100",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("describeOwnerPFFieldIssues lista campos faltantes", () => {
+  it("describeOwnerPFFieldIssues lista campos faltantes (incluindo comprovante - iter #7)", () => {
     const { missing } = describeOwnerPFFieldIssues(buildEmptyOwnerPFData());
     expect(missing).toContain("Telefone");
     expect(missing).toContain("CEP");
     expect(missing).toContain("Número");
+    expect(missing).toContain("Comprovante de residência");
   });
 
   it("describeOwnerPFFieldIssues nao referencia campos removidos (PIS, banco, etc)", () => {

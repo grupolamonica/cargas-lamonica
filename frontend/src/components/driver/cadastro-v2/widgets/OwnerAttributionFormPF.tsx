@@ -196,8 +196,10 @@ export function OwnerAttributionFormPF({
     if (!isValidBrazilianPhone(value.telefone)) invalid.push("telefone");
     if (onlyDigits(value.cep).length !== 8) invalid.push("cep");
     if (!value.numero.trim()) invalid.push("numero");
+    // Iter #7: comprovante obrigatorio.
+    if (!value.comprovanteFileName) invalid.push("comprovante");
     return invalid;
-  }, [value.telefone, value.cep, value.numero]);
+  }, [value.telefone, value.cep, value.numero, value.comprovanteFileName]);
 
   const hiddenErrorCount = hiddenSectionInvalid.length;
   const hasHiddenError =
@@ -295,7 +297,7 @@ export function OwnerAttributionFormPF({
         </div>
         <div className="space-y-1.5">
           <Label htmlFor={`${idPrefix}-comprovante`}>
-            Comprovante de residência (opcional) — foto ou arquivo
+            Comprovante de residência <span className="text-destructive">*</span> — foto ou arquivo
           </Label>
           <Input
             id={`${idPrefix}-comprovante`}
@@ -352,6 +354,7 @@ const PF_FIELD_LABELS: Record<string, string> = {
   telefone: "Telefone",
   cep: "CEP",
   numero: "Número",
+  comprovante: "Comprovante de residência",
 };
 
 export function describeOwnerPFFieldIssues(data: OwnerPFData): OwnerPFFieldIssues {
@@ -364,6 +367,8 @@ export function describeOwnerPFFieldIssues(data: OwnerPFData): OwnerPFFieldIssue
   if (cepDigits.length === 0) missing.push(PF_FIELD_LABELS.cep);
   else if (cepDigits.length !== 8) invalid.push(PF_FIELD_LABELS.cep);
   if (!data.numero.trim()) missing.push(PF_FIELD_LABELS.numero);
+  // Iter #7: comprovante obrigatorio (PF cavalo + carreta).
+  if (!data.comprovanteFileName) missing.push(PF_FIELD_LABELS.comprovante);
   return { missing, invalid };
 }
 
@@ -372,6 +377,8 @@ export function isValidOwnerPFData(data: OwnerPFData): boolean {
   return Boolean(
     isValidBrazilianPhone(data.telefone) &&
       onlyDigits(data.cep).length === 8 &&
-      data.numero.trim().length > 0,
+      data.numero.trim().length > 0 &&
+      // Iter #7: comprovante obrigatorio.
+      data.comprovanteFileName,
   );
 }

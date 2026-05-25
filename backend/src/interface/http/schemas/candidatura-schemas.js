@@ -323,7 +323,37 @@ const dadosSchema = z
     carreta_owners: z.array(ownerSchema).max(2).optional(),
     protocolo: z.string().trim().optional(), // pode existir em re-submit idempotente.
   })
-  .strict();
+  .strict()
+  // Iter #7 — comprovante de residencia obrigatorio para proprietario PF
+  // (cavalo + carreta). Aplica-se quando o owner foi enviado (nao reused do
+  // motorista). Owners PJ continuam sem essa exigencia.
+  .superRefine((data, ctx) => {
+    const cavaloOwner = data.cavalo_owner;
+    if (cavaloOwner && cavaloOwner.tipo === "pf") {
+      if (!cavaloOwner.endereco?.comprovante_storage_path) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["cavalo_owner", "endereco", "comprovante_storage_path"],
+          message:
+            "Comprovante de residencia obrigatorio para proprietario pessoa fisica do cavalo.",
+        });
+      }
+    }
+    if (Array.isArray(data.carreta_owners)) {
+      data.carreta_owners.forEach((owner, idx) => {
+        if (owner && owner.tipo === "pf") {
+          if (!owner.endereco?.comprovante_storage_path) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["carreta_owners", idx, "endereco", "comprovante_storage_path"],
+              message:
+                "Comprovante de residencia obrigatorio para proprietario pessoa fisica da carreta.",
+            });
+          }
+        }
+      });
+    }
+  });
 
 /**
  * Schema do POST /api/candidatura/submit (plan 07-04).
