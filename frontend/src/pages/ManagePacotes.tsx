@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Package, Plus, RefreshCw } from "lucide-react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Ban, Eye, Package, Plus, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 import AdminPagination from "@/components/AdminPagination";
@@ -18,15 +18,22 @@ import {
 import PacoteFormModal from "@/components/operator/PacoteFormModal";
 
 import {
+  cancelPacote,
   fetchOperatorPacotes,
+  translatePacoteError,
   type OperatorPacoteListItem,
   type PacoteStatus,
 } from "@/services/operatorAdmin";
 import { formatCurrency } from "@/lib/currency";
+import { confirmAction } from "@/lib/confirm";
 import {
   PACOTE_STATUS_BADGE,
   PACOTE_STATUS_LABELS,
 } from "@/lib/pacoteConstants";
+
+// Status terminais (nao podem ser cancelados — botao fica oculto).
+// Alinhado com TERMINAL_STATUSES em PacoteDetails.tsx.
+const TERMINAL_STATUSES: ReadonlyArray<PacoteStatus> = ["concluido", "cancelado"];
 
 const PACOTES_QUERY_KEY = ["operator", "pacotes"] as const;
 const PAGE_SIZE = 20;
@@ -80,6 +87,7 @@ const StatusBadge = ({ status }: StatusBadgeProps) => {
 
 const ManagePacotes = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<"todos" | PacoteStatus>("todos");
   const [page, setPage] = useState(1);
   const [modalOpen, setModalOpen] = useState(false);
@@ -104,6 +112,20 @@ const ManagePacotes = () => {
     ...PACOTES_QUERY_OPTIONS,
   });
 
+  // Mutation de cancelamento usada pelo botao da coluna AÇÕES.
+  // Invalida a listagem + o detalhe do pacote (caso o operador abra apos cancelar).
+  const cancelMutation = useMutation({
+    mutationFn: (pacoteId: string) => cancelPacote(pacoteId),
+    onSuccess: (_, pacoteId) => {
+      toast.success("Pacote cancelado.");
+      queryClient.invalidateQueries({ queryKey: PACOTES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ["operator", "pacote", pacoteId] });
+    },
+    onError: (err) => {
+      toast.error(translatePacoteError(err, "Erro ao cancelar pacote."));
+    },
+  });
+
   useEffect(() => {
     if (error) toast.error("Erro ao carregar pacotes.");
   }, [error]);
@@ -114,6 +136,25 @@ const ManagePacotes = () => {
 
   const handleRowClick = (id: string) => {
     navigate(`/pacotes/${id}`);
+  };
+
+  const handleViewClick = (event: React.MouseEvent, id: string) => {
+    event.stopPropagation();
+    navigate(`/pacotes/${id}`);
+  };
+
+  const handleCancelClick = (event: React.MouseEvent, pacote: OperatorPacoteListItem) => {
+    event.stopPropagation();
+    if (cancelMutation.isPending) return;
+    if (
+      !confirmAction(
+        `Cancelar o pacote ${formatShortId(pacote.id)}?`,
+        "A acao e permanente e rejeita reservas pendentes.",
+      )
+    ) {
+      return;
+    }
+    cancelMutation.mutate(pacote.id);
   };
 
   const handleCreateSuccess = (pacoteId: string) => {
@@ -182,20 +223,21 @@ const ManagePacotes = () => {
                 <th className="px-4 py-3">Cargas</th>
                 <th className="px-4 py-3">Versão</th>
                 <th className="px-4 py-3">Criado em</th>
+                <th className="px-4 py-3 text-right">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {isLoading ? (
                 Array.from({ length: 4 }).map((_, i) => (
                   <tr key={i}>
-                    <td colSpan={6} className="px-4 py-4">
+                    <td colSpan={7} className="px-4 py-4">
                       <div className="h-5 w-full animate-pulse rounded bg-muted" />
                     </td>
                   </tr>
                 ))
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center">
+                  <td colSpan={7} className="px-4 py-12 text-center">
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <Package className="h-8 w-8" />
                       <p className="text-sm font-medium">Nenhum pacote encontrado</p>
@@ -208,32 +250,73 @@ const ManagePacotes = () => {
                   </td>
                 </tr>
               ) : (
-                items.map((pacote) => (
-                  <tr
-                    key={pacote.id}
-                    className="cursor-pointer transition-colors hover:bg-muted/30"
-                    onClick={() => handleRowClick(pacote.id)}
-                  >
-                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                      {formatShortId(pacote.id)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={pacote.status} />
-                    </td>
-                    <td className="px-4 py-3 font-medium">
-                      {pacote.valor_total != null ? formatCurrency(pacote.valor_total) : "—"}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge variant="outline" className="font-mono">
-                        {pacote.cargas?.length ?? 0}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">v{pacote.version}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">
-                      {formatDateBr(pacote.created_at)}
-                    </td>
-                  </tr>
-                ))
+                items.map((pacote) => {
+                  const canCancel = !TERMINAL_STATUSES.includes(pacote.status);
+                  const isCancelingThisRow =
+                    cancelMutation.isPending && cancelMutation.variables === pacote.id;
+                  return (
+                    <tr
+                      key={pacote.id}
+                      className="cursor-pointer transition-colors hover:bg-muted/30"
+                      onClick={() => handleRowClick(pacote.id)}
+                    >
+                      <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+                        {formatShortId(pacote.id)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={pacote.status} />
+                      </td>
+                      <td className="px-4 py-3 font-medium">
+                        {pacote.valor_total != null ? formatCurrency(pacote.valor_total) : "—"}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge variant="outline" className="font-mono">
+                          {pacote.cargas?.length ?? 0}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">v{pacote.version}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">
+                        {formatDateBr(pacote.created_at)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {/*
+                          Coluna AÇÕES: botoes Ver/Cancelar. O click-row continua
+                          funcionando como atalho (navega para detalhe), mas os
+                          botoes explicitos resolvem a queixa do operador que nao
+                          identificava que a linha era clicavel.
+                          stopPropagation evita disparar handleRowClick em conjunto.
+                        */}
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={(event) => handleViewClick(event, pacote.id)}
+                            title="Ver detalhes do pacote"
+                            aria-label={`Ver pacote ${formatShortId(pacote.id)}`}
+                            className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/10 bg-primary/5 text-primary transition-all duration-150 hover:bg-primary/12 hover:scale-105 cursor-pointer"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                          </button>
+                          {canCancel && (
+                            <button
+                              type="button"
+                              onClick={(event) => handleCancelClick(event, pacote)}
+                              disabled={isCancelingThisRow}
+                              title="Cancelar pacote (rejeita reservas pendentes)"
+                              aria-label={`Cancelar pacote ${formatShortId(pacote.id)}`}
+                              className="flex h-8 w-8 items-center justify-center rounded-lg border border-destructive/15 bg-destructive/5 text-destructive transition-all duration-150 hover:bg-destructive/10 hover:scale-105 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {isCancelingThisRow ? (
+                                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Ban className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
