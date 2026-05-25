@@ -11,7 +11,9 @@ import {
   writeDraft,
 } from "@/lib/registrationDraftStorage";
 
-const AUTOSAVE_DEBOUNCE_MS = 500;
+// Iter #7 — reduzido de 500ms -> 200ms pra minimizar a janela de perda em
+// cenarios mobile (motorista alterna apps logo apos upload de documento).
+const AUTOSAVE_DEBOUNCE_MS = 200;
 const RESTORE_SAFETY_TIMEOUT_MS = 1500;
 const DEFAULT_STEP = "tela0";
 
@@ -34,6 +36,13 @@ export interface UseDriverRegistrationDraftReturn {
   setCurrentStep: (step: string) => void;
   isRestoring: boolean;
   flushAndClose: () => Promise<void>;
+  /**
+   * Iter #7 — Flush sincrono do draft (debounce cancelado, save imediato).
+   * Chamado apos upload de documento (CNH/comprovante) para garantir que o
+   * path persistido nao se perca se o motorista alterna app/aba antes do
+   * debounce padrao disparar.
+   */
+  flushDraftImmediate: () => Promise<void>;
   clearAndReset: () => void;
 }
 
@@ -292,6 +301,92 @@ export function useDriverRegistrationDraft({
     hasReconciledRef.current = true;
   }, [driverUserId]);
 
+  /**
+   * Iter #7 — Flush sincrono: cancela debounce, dispara save imediato.
+   * Usado apos upload de documento pra garantir persistencia.
+   */
+  const flushDraftImmediate = useCallback(async () => {
+    if (debounceTimer.current) {
+      clearTimeout(debounceTimer.current);
+      debounceTimer.current = null;
+    }
+    if (!cargaId) return;
+    if (isAnonymous && !cpf) {
+      // Sem chave server-side, localStorage ja foi atualizado em setData.
+      return;
+    }
+    try {
+      await saveMutation.mutateAsync({
+        cargaId,
+        dados: data,
+        ...(isAnonymous && cpf ? { cpf } : {}),
+      });
+    } catch {
+      // Erro de rede aqui nao bloqueia o flow — localStorage ainda tem o draft.
+    }
+  }, [cargaId, cpf, data, isAnonymous, saveMutation]);
+
+  // Iter #7 — beforeunload + visibilitychange: flush antes de fechar/trocar
+  // de aba garante que uploads recem-feitos nao se percam no debounce.
+  // sendBeacon via fetch nao funciona com tokens Bearer — entao usamos
+  // fetch sincrono (keepalive: true) que sobrevive ao unload.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!cargaId) return;
+    if (isAnonymous && !cpf) return; // sem chave server-side, sem flush
+
+    const flushSync = () => {
+      try {
+        const url = "/api/candidatura/draft";
+        const body = JSON.stringify({
+          cargaId,
+          dados: data,
+          ...(isAnonymous && cpf ? { cpf } : {}),
+        });
+        // keepalive=true permite que a request termine apos o unload.
+        // Bearer token nao esta em scope aqui pois saveMutation o injeta —
+        // usamos o cookie de sessao do navegador (fluxo anonimo) ou o token
+        // ja salvo pelo client (auth flow). Best-effort: silent fail.
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+        // Tenta capturar access token do localStorage Supabase (driver session).
+        try {
+          const sessionRaw =
+            window.localStorage.getItem("lamonica-driver-auth");
+          if (sessionRaw) {
+            const parsed = JSON.parse(sessionRaw);
+            const token = parsed?.currentSession?.access_token;
+            if (token) headers.Authorization = `Bearer ${token}`;
+          }
+        } catch {
+          // ignore
+        }
+        void fetch(url, {
+          method: "POST",
+          headers,
+          body,
+          keepalive: true,
+        }).catch(() => {});
+      } catch {
+        // ignore
+      }
+    };
+
+    const handleBeforeUnload = () => {
+      flushSync();
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) flushSync();
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [cargaId, cpf, data, isAnonymous]);
+
   return {
     data,
     currentStep,
@@ -299,6 +394,7 @@ export function useDriverRegistrationDraft({
     setCurrentStep,
     isRestoring,
     flushAndClose,
+    flushDraftImmediate,
     clearAndReset,
   };
 }

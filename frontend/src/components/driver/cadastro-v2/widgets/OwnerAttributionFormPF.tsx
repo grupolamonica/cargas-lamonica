@@ -72,6 +72,12 @@ export interface OwnerAttributionFormPFProps {
   cargaId?: string;
   cpf?: string;
   accessToken?: string | null;
+  /**
+   * Iter #7 — Callback invocado apos upload bem-sucedido do comprovante
+   * (Supabase Storage). Wizard pode usar pra disparar `flushDraftImmediate`
+   * e persistir o file path no draft sem aguardar o debounce.
+   */
+  onUploadComplete?: (storagePath: string) => void;
 }
 
 export function buildEmptyOwnerPFData(): OwnerPFData {
@@ -123,6 +129,7 @@ export function OwnerAttributionFormPF({
   cargaId,
   cpf,
   accessToken,
+  onUploadComplete,
 }: OwnerAttributionFormPFProps) {
   const ownerDocDigits = useMemo(() => onlyDigits(ownerDoc), [ownerDoc]);
   const driverCpfDigits = useMemo(
@@ -310,20 +317,29 @@ export function OwnerAttributionFormPF({
               // Best-effort persistência draft. Falha silenciosa — apenas log
               // em DEV. Não bloqueia o submit (comprovante é opcional).
               if (comprovanteSlot && cargaId) {
+                // Iter #7 — apos upload bem-sucedido, dispara onUploadComplete
+                // pra que o wizard chame flushDraftImmediate e persista o
+                // storage_path imediatamente (nao espera debounce 200ms).
                 void uploadDraftFile(file, comprovanteSlot, cargaId, {
                   cpf,
                   accessToken,
-                }).catch((err) => {
-                  if (import.meta.env.DEV) {
-                    console.warn(
-                      `[OwnerAttributionFormPF/${comprovanteSlot}] upload failed`,
-                      err,
+                })
+                  .then((result) => {
+                    if (onUploadComplete && result?.storage_path) {
+                      onUploadComplete(result.storage_path);
+                    }
+                  })
+                  .catch((err) => {
+                    if (import.meta.env.DEV) {
+                      console.warn(
+                        `[OwnerAttributionFormPF/${comprovanteSlot}] upload failed`,
+                        err,
+                      );
+                    }
+                    toast.message(
+                      "Não conseguimos guardar esse arquivo agora — refaça depois se precisar.",
                     );
-                  }
-                  toast.message(
-                    "Não conseguimos guardar esse arquivo agora — refaça depois se precisar.",
-                  );
-                });
+                  });
               }
             }}
             disabled={readOnly}

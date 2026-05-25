@@ -68,6 +68,23 @@ const fakeClient = {
       return { rows: [], rowCount: 0 };
     }
 
+    // Iter #7 — duplicate detection (cpf, horsePlate). Sem matches por padrao.
+    if (
+      /SELECT id, status, dados->>'protocolo' AS protocolo\s+FROM public\.pending_driver_registrations\s+WHERE dados->'motorista'->>'cpf' = \$1\s+AND dados->'cavalo'->>'placa' = \$2/i.test(
+        norm,
+      )
+    ) {
+      return { rows: [], rowCount: 0 };
+    }
+    // Iter #7 — duplicate detection do pre-check (mesmo prefixo + status).
+    if (
+      /SELECT id, status, created_at, carga_id\s+FROM public\.pending_driver_registrations\s+WHERE dados->'motorista'->>'cpf' = \$1\s+AND dados->'cavalo'->>'placa' = \$2/i.test(
+        norm,
+      )
+    ) {
+      return { rows: [], rowCount: 0 };
+    }
+
     // Protocolo via sequence.
     if (
       /SELECT to_char\(now\(\),'YYYY'\)\|\|'-'\|\|LPAD\(nextval\('public\.cadastro_protocolo_seq'\)::text,5,'0'\) AS protocolo/i.test(
@@ -96,9 +113,28 @@ const fakeClient = {
       return { rows: matches.map((r) => ({ id: r.id })), rowCount: matches.length };
     }
 
-    // Save draft — FOR UPDATE com id_cadastro.
+    // Iter #7 — Save draft escopado por (driver, carga_id).
     if (
-      /SELECT id, id_cadastro\s+FROM public\.pending_driver_registrations\s+WHERE driver_user_id = \$1\s+AND status = 'draft'\s+AND versao_cadastro = 'v2'\s+FOR UPDATE/i.test(
+      /SELECT id, id_cadastro\s+FROM public\.pending_driver_registrations\s+WHERE driver_user_id = \$1\s+AND carga_id = \$2\s+AND status = 'draft'\s+AND versao_cadastro = 'v2'\s+FOR UPDATE/i.test(
+        norm,
+      )
+    ) {
+      const [driverUserId, cargaId] = params;
+      const matches = fakeDb.rows.filter(
+        (r) =>
+          r.driver_user_id === driverUserId &&
+          r.carga_id === cargaId &&
+          r.status === "draft" &&
+          r.versao_cadastro === "v2",
+      );
+      return {
+        rows: matches.map((r) => ({ id: r.id, id_cadastro: r.id_cadastro })),
+        rowCount: matches.length,
+      };
+    }
+    // Iter #7 — Save draft fallback legacy (carga_id IS NULL).
+    if (
+      /SELECT id, id_cadastro\s+FROM public\.pending_driver_registrations\s+WHERE driver_user_id = \$1\s+AND carga_id IS NULL\s+AND status = 'draft'\s+AND versao_cadastro = 'v2'\s+FOR UPDATE/i.test(
         norm,
       )
     ) {
@@ -106,6 +142,7 @@ const fakeClient = {
       const matches = fakeDb.rows.filter(
         (r) =>
           r.driver_user_id === driverUserId &&
+          r.carga_id == null &&
           r.status === "draft" &&
           r.versao_cadastro === "v2",
       );
@@ -153,9 +190,44 @@ const fakeClient = {
       return { rows: [{ id: row.id, updated_at: row.updated_at }], rowCount: 1 };
     }
 
-    // SELECT do get-draft com filtro de TTL.
+    // Iter #7 — get-draft escopado por cargaId (carga_id = $2 OR carga_id IS NULL).
     if (
-      /SELECT id, carga_id, dados, updated_at\s+FROM public\.pending_driver_registrations\s+WHERE driver_user_id = \$1\s+AND status = 'draft'\s+AND versao_cadastro = 'v2'\s+AND updated_at > now\(\) - interval '72 hours'/i.test(
+      /SELECT id, carga_id, dados, updated_at\s+FROM public\.pending_driver_registrations\s+WHERE driver_user_id = \$1\s+AND status = 'draft'\s+AND versao_cadastro = 'v2'\s+AND updated_at > now\(\) - interval '72 hours'\s+AND \(carga_id = \$2 OR carga_id IS NULL\)/i.test(
+        norm,
+      )
+    ) {
+      const [driverUserId, cargaId] = params;
+      const cutoff = Date.now() - 72 * 3600 * 1000;
+      const matches = fakeDb.rows
+        .filter(
+          (r) =>
+            r.driver_user_id === driverUserId &&
+            r.status === "draft" &&
+            r.versao_cadastro === "v2" &&
+            r.updated_at.getTime() > cutoff &&
+            (r.carga_id === cargaId || r.carga_id == null),
+        )
+        .sort((a, b) => {
+          const aMatch = a.carga_id === cargaId ? 1 : 0;
+          const bMatch = b.carga_id === cargaId ? 1 : 0;
+          if (aMatch !== bMatch) return bMatch - aMatch;
+          return b.updated_at.getTime() - a.updated_at.getTime();
+        })
+        .slice(0, 1);
+      return {
+        rows: matches.map((r) => ({
+          id: r.id,
+          carga_id: r.carga_id,
+          dados: r.dados,
+          updated_at: r.updated_at,
+        })),
+        rowCount: matches.length,
+      };
+    }
+
+    // SELECT do get-draft sem cargaId (legacy — mais recente do driver).
+    if (
+      /SELECT id, carga_id, dados, updated_at\s+FROM public\.pending_driver_registrations\s+WHERE driver_user_id = \$1\s+AND status = 'draft'\s+AND versao_cadastro = 'v2'\s+AND updated_at > now\(\) - interval '72 hours'\s+ORDER BY updated_at DESC\s+LIMIT 1/i.test(
         norm,
       )
     ) {
