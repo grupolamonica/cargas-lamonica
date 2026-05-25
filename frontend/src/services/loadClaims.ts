@@ -104,6 +104,23 @@ export interface PublicLoadLead {
   queuePosition: number | null;
 }
 
+export type OperatorPacoteStatus =
+  | "rascunho"
+  | "publicado"
+  | "reservado"
+  | "em_andamento"
+  | "concluido"
+  | "cancelado";
+
+export interface OperatorLeadPacoteMeta {
+  id: string;
+  status: OperatorPacoteStatus | string | null;
+  valorTotal: number | null;
+  version: number | null;
+  totalCargas: number | null;
+  ordemPropria: number | null;
+}
+
 export interface OperatorLeadGroup {
   load: {
     id: string;
@@ -124,6 +141,9 @@ export interface OperatorLeadGroup {
     clienteId?: string | null;
     clienteNome?: string | null;
     clienteLogoUrl?: string | null;
+    viagemId?: string | null;
+    ordemViagem?: number | null;
+    pacoteMeta?: OperatorLeadPacoteMeta | null;
   };
   queueCount: number;
   totalLeads: number;
