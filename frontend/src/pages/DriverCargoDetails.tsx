@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Clock3,
@@ -9,11 +9,15 @@ import {
   ShieldCheck,
   Truck,
 } from "lucide-react";
+import { toast } from "sonner";
 import type { CustomBadgeItem } from "@/services/operatorAdmin";
 import { getBadgeIcon } from "@/lib/badgeIcons";
 import { Link, useParams } from "react-router-dom";
 
 import DriverClaimPanel from "@/components/driver/DriverClaimPanel";
+import CargaParadaCard from "@/components/driver/CargaParadaCard";
+import { usePacoteRealtime, type PacoteRealtimeRow } from "@/hooks/usePacoteRealtime";
+import { fetchPacote, type PacoteFull } from "@/services/readModels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -72,10 +76,14 @@ interface CargoDetailsRow {
   sheet_data_carregamento: string | null;
   sheet_data_descarga: string | null;
   cliente: CargoClientRow | null;
+  /** Pacote (cargas_casadas) ao qual a carga pertence — null = carga avulsa. Plan 10-04/10-06. */
+  viagem_id?: string | null;
+  /** Posição da carga dentro do pacote (1..N) — null quando avulsa. */
+  ordem_viagem?: number | null;
 }
 
 const CARGO_DETAILS_SELECT =
-  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, bonus_exigencias, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
+  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, bonus_exigencias, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, viagem_id, ordem_viagem, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
 const LEGACY_CARGO_DETAILS_SELECT =
   "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
 
@@ -148,7 +156,7 @@ function formatCargoStatus(status?: string | null) {
   }
 }
 
-function formatRouteMetric(value: number | null, unit: string) {
+export function formatRouteMetric(value: number | null, unit: string) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "A confirmar";
   }
@@ -228,7 +236,7 @@ async function resolveDriverCargoDistanceKm(cargo: Pick<CargoDetailsRow, "origem
     : null;
 }
 
-function DetailMetric({
+export function DetailMetric({
   label,
   value,
   icon: Icon,
@@ -418,8 +426,52 @@ const DriverCargoDetails = () => {
         throw new Error("Carga não encontrada");
       }
 
-      return resolveCargoDecorations(data as CargoDetailsRow);
+      // viagem_id / ordem_viagem foram adicionados em plan 10-04 mas os tipos
+      // gerados do Supabase ainda não foram regenerados — cast via unknown.
+      return resolveCargoDecorations(data as unknown as CargoDetailsRow);
     },
+  });
+
+  // ─── Pacote (cargas casadas) realtime — plan 10-06 ──────────────────────
+  // Quando a carga aberta pertence a um pacote (viagem_id NOT NULL), assina
+  // UPDATE em cargas_casadas e dispara toast + invalida queries quando o
+  // operador edita (version-bump). Carga avulsa: viagemId=null → hook é
+  // no-op (não subscreve). Hooks chamados aqui ficam ANTES dos early returns
+  // para satisfazer Rules of Hooks.
+  const queryClient = useQueryClient();
+  const viagemId = cargoQuery.data?.cargo.viagem_id ?? null;
+  const pacoteCached = queryClient.getQueryData<PacoteFull>(["pacote", viagemId]);
+  const currentPacoteVersion = pacoteCached?.version ?? 0;
+  const currentCargoIdForBump = cargoQuery.data?.cargo.id ?? null;
+
+  const handlePacoteVersionBump = useCallback(
+    (next: PacoteRealtimeRow) => {
+      toast.info(`Pacote atualizado pelo operador (v${next.version}). Recarregando…`);
+      // Refresca o detalhe do pacote (PacotePanel re-renderiza com cargas novas)
+      queryClient.invalidateQueries({ queryKey: ["pacote", viagemId] });
+      // Refresca a carga atual — version-bump pode ter re-aberto reserva
+      if (currentCargoIdForBump) {
+        queryClient.invalidateQueries({ queryKey: ["driver", "cargo", currentCargoIdForBump] });
+      }
+    },
+    [queryClient, viagemId, currentCargoIdForBump],
+  );
+
+  usePacoteRealtime({
+    pacoteId: viagemId,
+    currentVersion: currentPacoteVersion,
+    onVersionBump: handlePacoteVersionBump,
+  });
+
+  // Carrega o pacote completo (todas as cargas + valor_total) quando a carga
+  // aberta pertence a uma viagem casada. Compartilha queryKey ["pacote", id]
+  // com PacoteStopsList do listing — o hook usePacoteRealtime invalida essa
+  // mesma chave em version-bump.
+  const pacoteQuery = useQuery<PacoteFull>({
+    queryKey: ["pacote", viagemId],
+    queryFn: () => fetchPacote(viagemId!),
+    enabled: Boolean(viagemId),
+    staleTime: 30_000,
   });
 
   if (!normalizedCargoId) {
@@ -469,9 +521,22 @@ const DriverCargoDetails = () => {
   const visibleRequirementLabels = getVisibleDriverCargoRequirementLabels(cliente);
   const hasClientNotes = hasVisibleDriverCargoClientNotes(cliente?.observacoes);
 
+  // Flag central — quando a carga pertence a um pacote, varias secoes sao
+  // ocultadas (bonus/cliente/exigencias/reputacao) e o header da rota muda
+  // para "VIAGEM CASADA — N paradas". `pacoteData` so resolve depois do fetch
+  // do pacote; usamos boolean(viagemId) para ja iniciar o ramo, exibindo
+  // placeholders enquanto carrega.
+  const pacoteData = pacoteQuery.data ?? null;
+  const isPacote = Boolean(viagemId);
+  const pacoteTotalCargas = pacoteData?.total_cargas ?? pacoteData?.cargas.length ?? null;
+  const pacoteValorTotalLabel = pacoteData
+    ? formatCurrency(pacoteData.valor_total)
+    : "Carregando…";
+
   return (
     <div className="driver-theme min-h-screen bg-[radial-gradient(circle_at_top_left,hsl(224_100%_96%),transparent_40%),linear-gradient(180deg,hsl(220_30%_97%),hsl(220_22%_94%))] px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
-      <div className="mx-auto max-w-6xl space-y-5 sm:space-y-6">
+      {/* pb-28+ mobile/tablet para evitar sobreposição com sticky CTA "Candidatar-se" (iter #2 D11) */}
+      <div className="mx-auto max-w-6xl space-y-5 pb-28 sm:space-y-6 sm:pb-32 lg:pb-12">
         <section className="relative overflow-hidden rounded-[32px] border border-white/70 bg-[linear-gradient(135deg,hsl(223_56%_12%),hsl(223_55%_22%))] p-5 text-white shadow-[0_30px_70px_-30px_hsl(215_25%_12%/0.55)] sm:p-8">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(225_100%_65%/0.18),transparent_36%),radial-gradient(circle_at_bottom_left,hsl(200_100%_55%/0.14),transparent_30%)]" />
           <div className="relative space-y-6">
@@ -505,37 +570,53 @@ const DriverCargoDetails = () => {
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_320px]">
               <div className="space-y-4">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/70">Rota disponível</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/70">
+                    {isPacote ? "Viagem casada" : "Rota disponível"}
+                  </p>
                   <h1 className="mt-3 break-words text-2xl font-black tracking-tight text-white sm:text-4xl">
-                    {fixBrokenPortugueseText(cargo.origem)} {"\u2192"} {fixBrokenPortugueseText(cargo.destino)}
+                    {isPacote ? (
+                      <>VIAGEM CASADA {"—"} {pacoteTotalCargas ?? "…"} paradas</>
+                    ) : (
+                      <>{fixBrokenPortugueseText(cargo.origem)} {"\u2192"} {fixBrokenPortugueseText(cargo.destino)}</>
+                    )}
                   </h1>
                 </div>
 
                 <p className="hidden max-w-2xl text-sm leading-relaxed text-white/82 sm:block sm:text-base">
-                  {cliente?.descricao?.trim()
-                    ? cliente.descricao
-                    : "Aqui você vê os principais dados da carga e do cliente antes de demonstrar interesse."}
+                  {isPacote
+                    ? `Pacote com ${pacoteTotalCargas ?? "várias"} cargas — confira as paradas abaixo antes de demonstrar interesse.`
+                    : cliente?.descricao?.trim()
+                      ? cliente.descricao
+                      : "Aqui você vê os principais dados da carga e do cliente antes de demonstrar interesse."}
                 </p>
               </div>
 
               <div className="rounded-[28px] border border-white/12 bg-white/10 p-4 backdrop-blur sm:p-5">
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/60">Pagamento total</p>
                 <p className="mt-3 text-3xl font-black tracking-tight text-white">
-                  {totalPayment !== null ? formatCurrency(totalPayment) : "A combinar"}
+                  {isPacote
+                    ? pacoteValorTotalLabel
+                    : totalPayment !== null
+                      ? formatCurrency(totalPayment)
+                      : "A combinar"}
                 </p>
-                <p className="mt-2 text-sm leading-relaxed text-white/72">
-                  {buildDriverPaymentDetails(cargo.valor, cargo.bonus)}
-                </p>
-                <div className="mt-5 space-y-2 text-sm text-white/82">
-                  <p className="hidden sm:block">Cliente: {formatMaybeText(cliente?.nome?.trim(), "Cliente não informado")}</p>
-                  <p>Janela estimada: {estimatedTime}</p>
-                </div>
+                {!isPacote ? (
+                  <p className="mt-2 text-sm leading-relaxed text-white/72">
+                    {buildDriverPaymentDetails(cargo.valor, cargo.bonus)}
+                  </p>
+                ) : null}
+                {!isPacote ? (
+                  <div className="mt-5 space-y-2 text-sm text-white/82">
+                    <p className="hidden sm:block">Cliente: {formatMaybeText(cliente?.nome?.trim(), "Cliente não informado")}</p>
+                    <p>Janela estimada: {estimatedTime}</p>
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
         </section>
 
-        {hasBonusHighlight ? (
+        {!isPacote && hasBonusHighlight ? (
           <section className="admin-accent-tint relative overflow-hidden rounded-[32px] border p-5 shadow-[0_28px_58px_-34px_hsl(223_56%_12%/0.26)] sm:p-7">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(152_67%_43%/0.14),transparent_34%),radial-gradient(circle_at_bottom_left,hsl(224_94%_37%/0.14),transparent_42%)]" />
             <div className="relative grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_260px] xl:items-start">
@@ -579,6 +660,56 @@ const DriverCargoDetails = () => {
           </section>
         ) : null}
 
+        {isPacote ? (
+          /*
+           * Plan revisao 2026-05-23: quando a carga aberta pertence a um pacote,
+           * substitui a card unica "Coleta, entrega e percurso" por um grid
+           * com uma sub-card por carga (CargaParadaCard). Loading -> 3 skeleton
+           * cards. Error -> ErrorState inline com retry.
+           */
+          <section className="space-y-4">
+            <h2 className="text-xl font-bold">Informações das cargas</h2>
+            {pacoteQuery.isLoading ? (
+              <div className="grid gap-4 xl:grid-cols-2" data-testid="pacote-paradas-loading">
+                <Skeleton className="h-[180px] rounded-[24px]" />
+                <Skeleton className="h-[180px] rounded-[24px]" />
+                <Skeleton className="h-[180px] rounded-[24px]" />
+              </div>
+            ) : pacoteQuery.isError || !pacoteData ? (
+              <div
+                role="alert"
+                data-testid="pacote-paradas-error"
+                className="admin-panel rounded-[24px] border border-destructive/30 bg-destructive/5 p-5"
+              >
+                <p className="text-sm text-muted-foreground">
+                  Falha ao carregar as paradas desta viagem casada.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="mt-3 rounded-full"
+                  onClick={() => void pacoteQuery.refetch()}
+                  disabled={pacoteQuery.isFetching}
+                >
+                  Tentar novamente
+                </Button>
+              </div>
+            ) : (
+              <div className="grid gap-4 xl:grid-cols-2" data-testid="pacote-paradas-grid">
+                {[...pacoteData.cargas]
+                  .sort((a, b) => a.ordem_viagem - b.ordem_viagem)
+                  .map((c) => (
+                    <CargaParadaCard
+                      key={c.id}
+                      carga={c}
+                      isCurrent={c.id === cargo.id}
+                      index={c.ordem_viagem}
+                    />
+                  ))}
+              </div>
+            )}
+          </section>
+        ) : (
         <section className="grid gap-6 xl:grid-cols-2">
           <Card className="admin-panel overflow-hidden">
             <CardHeader>
@@ -626,7 +757,9 @@ const DriverCargoDetails = () => {
             </CardContent>
           </Card>
         </section>
+        )}
 
+        {!isPacote ? (
         <section className="grid gap-6 xl:grid-cols-2">
           {(visibleRequirementLabels.length > 0 || ((cliente?.custom_exigencias ?? []) as CustomBadgeItem[]).some((b) => b.active)) ? (
             <Card className="admin-panel overflow-hidden">
@@ -697,6 +830,7 @@ const DriverCargoDetails = () => {
             </CardContent>
           </Card>
         </section>
+        ) : null}
       </div>
 
       <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 sm:bottom-6 sm:justify-end sm:px-6 lg:px-8">

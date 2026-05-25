@@ -11,6 +11,7 @@ import {
   mapDriverLoadReadModelItem,
   normalizeOptionalText,
   isMissingDriverVisibilityColumnError,
+  isMissingPacoteColumnsError,
 } from "./_shared.js";
 
 export async function fetchOperatorDashboardReadModel({ query, correlationId }) {
@@ -128,17 +129,17 @@ export async function fetchOperatorDashboardReadModel({ query, correlationId }) 
       `SELECT COUNT(*)::int AS total_count FROM public.cargas LEFT JOIN public.clientes ON clientes.id = cargas.cliente_id WHERE ${filterContext.whereSql}`,
       filterContext.values,
     );
-    // active_count: cargas OPEN não-template AINDA disponíveis na planilha.
-    // O cross-check com sheet_motorista/sheet_status alinha o tile do dashboard
-    // com a listagem "Ativas" (read-models.js), evitando contar cargas que a
-    // planilha já alocou mas o sync ainda não flippou para BOOKED.
+    // active_count: cargas OPEN nao-template AINDA disponiveis na planilha.
+    // O cross-check com sheet_motorista alinha o tile do dashboard com a
+    // listagem "Ativas" (read-models.js), evitando contar cargas que a
+    // planilha ja alocou mas o sync ainda nao flippou para BOOKED. Filtro
+    // de sheet_status removido (era over-broad).
     const { rows: summaryRows } = await client.query(`
       SELECT
         COALESCE(SUM(CASE
           WHEN status = 'OPEN'
             AND NOT COALESCE(is_template, false)
             AND COALESCE(sheet_motorista, '') = ''
-            AND COALESCE(sheet_status, '') = ''
           THEN 1 ELSE 0 END), 0)::int AS active_count,
         COALESCE(SUM(CASE WHEN status = 'DRAFT' THEN 1 ELSE 0 END), 0)::int AS draft_count,
         COALESCE(SUM(CASE WHEN COALESCE(is_template, false) THEN 1 ELSE 0 END), 0)::int AS template_count
@@ -181,21 +182,66 @@ export async function fetchOperatorDashboardReadModel({ query, correlationId }) 
 
 export async function fetchDriverLoadsReadModel({ query, correlationId }) {
   return withPgClient(async (client) => {
-    let filterContext = buildDriverLoadFilters(query);
+    // Phase 10: includePacoteVisibilityFilter ativa a clausula composta
+    //  (avulsa PUBLIC) OR (pacote em status visivel) — necessario para nao filtrar
+    // cargas PREMIUM dentro de pacote publicado.
+    //
+    // Fallback strategy:
+    //  - DB nova (com cargas_casadas + viagem_id):           pacote-aware (JOIN + DISTINCT ON)
+    //  - DB legada (sem cargas_casadas/viagem_id):            cai p/ comportamento pre-Phase 10
+    //  - DB legada SEM driver_visibility:                     cai mais um nivel (legado-2)
+    // Cada fallback regera o whereSql sem as clausulas que dependem das colunas ausentes,
+    // garantindo que cc.status / cargas.viagem_id nunca apareca no SQL fallback.
+    const buildFilters = (overrides = {}) =>
+      buildDriverLoadFilters(query, {
+        includeDriverVisibilityFilter: true,
+        includePacoteVisibilityFilter: true,
+        ...overrides,
+      });
+
+    let filterContext = buildFilters();
     let parsedQuery = filterContext.parsedQuery;
     let whereSql = filterContext.whereSql;
     let values = filterContext.values;
     let itemRows;
+    let usePacoteJoin = true;
+
+    const runQuery = async () =>
+      queryDriverLoadCandidateRows(client, {
+        whereSql,
+        values,
+        withPacoteJoin: usePacoteJoin,
+      });
 
     try {
-      itemRows = await queryDriverLoadCandidateRows(client, { whereSql, values });
+      itemRows = await runQuery();
     } catch (error) {
-      if (isMissingDriverVisibilityColumnError(error)) {
-        filterContext = buildDriverLoadFilters(query, { includeDriverVisibilityFilter: false });
+      if (isMissingPacoteColumnsError(error)) {
+        // DB pre-Phase 10: desliga JOIN e remove filtro de pacote do WHERE.
+        usePacoteJoin = false;
+        filterContext = buildFilters({ includePacoteVisibilityFilter: false });
         parsedQuery = filterContext.parsedQuery;
         whereSql = filterContext.whereSql;
         values = filterContext.values;
-        itemRows = await queryDriverLoadCandidateRows(client, { whereSql, values });
+        try {
+          itemRows = await runQuery();
+        } catch (retryError) {
+          if (!isMissingDriverVisibilityColumnError(retryError)) throw retryError;
+          filterContext = buildFilters({
+            includeDriverVisibilityFilter: false,
+            includePacoteVisibilityFilter: false,
+          });
+          parsedQuery = filterContext.parsedQuery;
+          whereSql = filterContext.whereSql;
+          values = filterContext.values;
+          itemRows = await runQuery();
+        }
+      } else if (isMissingDriverVisibilityColumnError(error)) {
+        filterContext = buildFilters({ includeDriverVisibilityFilter: false });
+        parsedQuery = filterContext.parsedQuery;
+        whereSql = filterContext.whereSql;
+        values = filterContext.values;
+        itemRows = await runQuery();
       } else {
         throw error;
       }
@@ -255,21 +301,30 @@ export async function fetchDriverLoadsReadModel({ query, correlationId }) {
 
 export async function fetchDriverLoadFacets({ correlationId }) {
   return withPgClient(async (client) => {
-    // Defense-in-depth: também cruza com a planilha (sheet_motorista/sheet_status)
-    // para que cargas já alocadas no Google Sheets não vazem nas facets do driver
-    // mesmo que o sync demore para refletir status='BOOKED' no DB.
-    const sheetUnallocatedSql =
-      "COALESCE(sheet_motorista, '') = '' "
-      + "AND COALESCE(sheet_status, '') = ''";
+    // Defense-in-depth: tambem cruza com a planilha (sheet_motorista) para que
+    // cargas ja alocadas no Google Sheets nao vazem nas facets do driver mesmo
+    // que o sync demore para refletir status='BOOKED' no DB. Filtro de
+    // sheet_status removido (era over-broad — bloqueava statuses de pipeline
+    // aberto como 'AGUARDANDO CARREGAMENTO').
+    const sheetUnallocatedSql = "COALESCE(sheet_motorista, '') = ''";
+    // Iter #8: filtra cargas expiradas (data + horario passados) tambem nos
+    // facets — para que filtros e contadores nao mostrem cargas que nem
+    // aparecem no listing. Parameterizado pq pg-mem nao suporta CURRENT_DATE.
+    const nowDate = new Date();
+    const todayIso = nowDate.toISOString().slice(0, 10);
+    const nowTimeIso = nowDate.toTimeString().slice(0, 8);
+    const notExpiredSql =
+      "(data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))";
 
     const buildFacetWhereSql = (includeDriverVisibilityFilter) =>
       includeDriverVisibilityFilter
-        ? `status = 'OPEN' AND COALESCE(is_template, false) = false AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC' AND ${sheetUnallocatedSql}`
-        : `status = 'OPEN' AND COALESCE(is_template, false) = false AND ${sheetUnallocatedSql}`;
+        ? `status = 'OPEN' AND COALESCE(is_template, false) = false AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC' AND ${sheetUnallocatedSql} AND ${notExpiredSql}`
+        : `status = 'OPEN' AND COALESCE(is_template, false) = false AND ${sheetUnallocatedSql} AND ${notExpiredSql}`;
+    const facetParams = [todayIso, todayIso, nowTimeIso];
 
     const queryFacetRows = async (includeDriverVisibilityFilter) => {
       const whereSql = buildFacetWhereSql(includeDriverVisibilityFilter);
-      const rows = await queryDriverLoadCandidateRows(client, { whereSql, values: [] });
+      const rows = await queryDriverLoadCandidateRows(client, { whereSql, values: facetParams });
       const routeCatalogMetricsByLoadId = await fetchRouteCatalogMetricsByLoadId(client, rows);
       const routeLabelByLoadId = buildRouteLabelMap(rows);
       return rows

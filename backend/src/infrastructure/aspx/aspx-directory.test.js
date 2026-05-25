@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { lookupAspxDriverByCpf, resetAspxDirectoryStateForTests } from "./aspx-directory.js";
+import * as securityLog from "../security-log.js";
 
 /**
  * Stub mínimo do supabase-js: expõe .from().select().range() e devolve
@@ -74,6 +75,60 @@ describe("aspx driver directory", () => {
       availability: "OK",
       displayName: null,
     });
+  });
+
+  it("emite warning estruturado quando o ultimo synced_at passa de 6h (sync container parou)", async () => {
+    const sevenHoursAgo = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString();
+
+    const logSpy = vi.spyOn(securityLog, "logStructuredEvent");
+
+    resetAspxDirectoryStateForTests({
+      supabaseClient: buildSupabaseStub({
+        rows: [
+          { cpf: "12345678901", display_name: "Motorista Velho", synced_at: sevenHoursAgo },
+          { cpf: "22345678901", display_name: "Motorista Velho 2", synced_at: sevenHoursAgo },
+        ],
+      }),
+    });
+
+    await lookupAspxDriverByCpf("12345678901", { correlationId: "corr-stale" });
+
+    const staleWarning = logSpy.mock.calls.find(
+      ([level, name]) => level === "warn" && name === "driver-validation.aspx.stale_cache",
+    );
+
+    expect(staleWarning).toBeDefined();
+    if (staleWarning) {
+      const payload = staleWarning[2];
+      expect(payload.ageSeconds).toBeGreaterThan(6 * 60 * 60);
+      expect(payload.driverCount).toBe(2);
+      expect(payload.thresholdSeconds).toBe(6 * 60 * 60);
+    }
+
+    logSpy.mockRestore();
+  });
+
+  it("NAO emite warning quando o synced_at e recente (< 6h)", async () => {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
+    const logSpy = vi.spyOn(securityLog, "logStructuredEvent");
+
+    resetAspxDirectoryStateForTests({
+      supabaseClient: buildSupabaseStub({
+        rows: [
+          { cpf: "12345678901", display_name: "Motorista Recente", synced_at: oneHourAgo },
+        ],
+      }),
+    });
+
+    await lookupAspxDriverByCpf("12345678901", { correlationId: "corr-fresh" });
+
+    const staleWarning = logSpy.mock.calls.find(
+      ([level, name]) => level === "warn" && name === "driver-validation.aspx.stale_cache",
+    );
+    expect(staleWarning).toBeUndefined();
+
+    logSpy.mockRestore();
   });
 
   it("returns UNAVAILABLE instead of throwing when the supabase fetch fails", async () => {

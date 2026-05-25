@@ -5,6 +5,7 @@
 import { Router } from "express";
 
 import {
+  resolveAspxSyncHealthResponse,
   resolveAspxSyncStatusResponse,
   resolveAspxSyncTriggerResponse,
 } from "./aspx-admin/handlers.js";
@@ -71,7 +72,20 @@ import {
   resolveDriverLoadsReadModelResponse,
   resolveDriverPortalVisitResponse,
   resolveDriverSponsorClickResponse,
+  resolveGetPublicPacoteResponse,
 } from "./public-loads/handlers.js";
+
+import {
+  resolveAddCargaPacoteResponse,
+  resolveCancelPacoteResponse,
+  resolveCreatePacoteResponse,
+  resolveGetPacoteResponse,
+  resolveListPacotesResponse,
+  resolvePublishPacoteResponse,
+  resolveRemoveCargaPacoteResponse,
+  resolveReorderCargasPacoteResponse,
+  resolveUpdatePacoteResponse,
+} from "./cargas-casadas/handlers.js";
 
 import { resolveFinalizarCadastroResponse } from "./cadastro/handlers.js";
 
@@ -148,6 +162,8 @@ export function registerRoutes(app) {
   router.get("/api/driver/loads/digest", wrap(resolveDriverLoadsDigestResponse));
   router.post("/api/driver/portal-view", wrap(resolveDriverPortalVisitResponse));
   router.post("/api/driver/sponsor-click", wrap(resolveDriverSponsorClickResponse));
+  // Phase 10 (cargas-casadas): driver-facing anonimo, espelha /api/driver/loads
+  router.get("/api/driver/pacotes/:pacoteId", wrap(resolveGetPublicPacoteResponse));
 
   // Driver registration & profile
   // resolveDriverProfileResponse despacha GET vs PUT via request.method internamente
@@ -187,6 +203,7 @@ export function registerRoutes(app) {
 
   // ASPX
   router.get("/api/operator/aspx/status", wrap(resolveAspxSyncStatusResponse));
+  router.get("/api/admin/aspx-sync-health", wrap(resolveAspxSyncHealthResponse));
   router.post("/api/operator/aspx/sync", wrap(resolveAspxSyncTriggerResponse));
 
   // Motoristas
@@ -235,6 +252,34 @@ export function registerRoutes(app) {
   router.get("/api/operator/routes", wrap(resolveOperatorRoutesListReadModelResponse));
   router.post("/api/operator/routes", wrap(resolveCreateOperatorRouteResponse));
   router.patch("/api/operator/routes/:routeId", wrap(resolveUpdateOperatorRouteResponse));
+
+  // Cargas casadas (pacote de cargas) — Phase 10
+  // CRITICAL T-02-07: rotas com sub-segmentos fixos (reorder/cargas/publish/cancel)
+  // ANTES das parametrizadas, para o Express nao interpretar segmento como :pacoteId.
+  router.get("/api/operator/cargas-casadas", wrap(resolveListPacotesResponse));
+  router.post("/api/operator/cargas-casadas", wrap(resolveCreatePacoteResponse));
+  router.put(
+    "/api/operator/cargas-casadas/:pacoteId/cargas/reorder",
+    wrap(resolveReorderCargasPacoteResponse),
+  );
+  router.post(
+    "/api/operator/cargas-casadas/:pacoteId/cargas",
+    wrap(resolveAddCargaPacoteResponse),
+  );
+  router.delete(
+    "/api/operator/cargas-casadas/:pacoteId/cargas/:cargaId",
+    wrap(resolveRemoveCargaPacoteResponse),
+  );
+  router.post(
+    "/api/operator/cargas-casadas/:pacoteId/publish",
+    wrap(resolvePublishPacoteResponse),
+  );
+  router.post(
+    "/api/operator/cargas-casadas/:pacoteId/cancel",
+    wrap(resolveCancelPacoteResponse),
+  );
+  router.get("/api/operator/cargas-casadas/:pacoteId", wrap(resolveGetPacoteResponse));
+  router.put("/api/operator/cargas-casadas/:pacoteId", wrap(resolveUpdatePacoteResponse));
 
   app.use(router);
 }

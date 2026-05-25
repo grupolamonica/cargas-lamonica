@@ -1104,6 +1104,9 @@ const DriverPortal = () => {
             </div>
           </div>
 
+          {/* Cada `cargo.pacote_meta` flui como `pacoteMeta={cargo.pacote_meta}` para LoadCard
+              dentro de DriverLoadsList — disparando branch de viagem casada quando aplicável.
+              Plan 10-05 (CARGAS-CASADAS-06/08). */}
           <DriverLoadsList
             cargas={cargas}
             loading={loading}
@@ -1140,6 +1143,9 @@ const DriverPortal = () => {
             <div className="h-px flex-1 bg-gradient-to-r from-border/60 to-transparent" />
           </div>
 
+          {/* Cada `cargo.pacote_meta` flui como `pacoteMeta={cargo.pacote_meta}` para LoadCard
+              dentro de DriverLoadsList — disparando branch de viagem casada quando aplicável.
+              Plan 10-05 (CARGAS-CASADAS-06/08). */}
           <DriverLoadsList
             cargas={cargas}
             loading={loading}

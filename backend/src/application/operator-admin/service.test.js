@@ -51,7 +51,7 @@ describe("operator-admin service", () => {
       requestIp: "203.0.113.5",
       correlationId: "corr-create-cargo",
       payload: {
-        data: "2026-04-08",
+        data: "2099-04-08",
         horario: "08:00:00",
         origem: "Salvador / BA",
         destino: "Campinas / SP",
@@ -105,7 +105,7 @@ describe("operator-admin service", () => {
       requestIp: "203.0.113.15",
       correlationId: "corr-create-cargo-legacy-bonus",
       payload: {
-        data: "2026-04-08",
+        data: "2099-04-08",
         horario: "08:00:00",
         origem: "Salvador / BA",
         destino: "Campinas / SP",
@@ -148,7 +148,7 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-08",
+      data: "2099-04-08",
       driver_visibility: "PUBLIC",
     });
     await seedCargo({
@@ -158,7 +158,7 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-09",
+      data: "2099-04-09",
       driver_visibility: "PREMIUM",
     });
 
@@ -178,7 +178,7 @@ describe("operator-admin service", () => {
     });
   });
 
-  it("oculta cargas com motorista alocado na planilha (sheet_motorista preenchido) do painel do motorista", async () => {
+  it("oculta cargas com motorista alocado na planilha (sheet_motorista preenchido), mas mantem cargas com sheet_status de pipeline aberto", async () => {
     const cliente = await seedCliente({ nome: "Cliente Sheet Lock Motorista" });
 
     // Carga "limpa" — deve aparecer no painel
@@ -189,10 +189,10 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-08",
+      data: "2099-04-08",
       driver_visibility: "PUBLIC",
     });
-    // Carga com motorista já alocado na planilha — NÃO deve aparecer mesmo
+    // Carga com motorista ja alocado na planilha — NAO deve aparecer mesmo
     // que status='OPEN' (caso o sync atrase em refletir BOOKED no DB)
     const lockedByMotorista = await seedCargo({
       cliente_id: cliente.id,
@@ -201,27 +201,29 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-09",
+      data: "2099-04-09",
       driver_visibility: "PUBLIC",
     });
     await query(`UPDATE public.cargas SET sheet_motorista = $2 WHERE id = $1`, [
       lockedByMotorista.id,
       "JOAO SILVA",
     ]);
-    // Carga com sheet_status preenchido (ex.: DESCARREGADO) — também não deve aparecer
-    const lockedByStatus = await seedCargo({
+    // Regressao: carga com sheet_status='AGUARDANDO CARREGAMENTO' representa
+    // pipeline aberto na planilha (nao alocada). Deve APARECER no painel.
+    // Antes do fix do filtro over-broad, o COALESCE(sheet_status,'')='' escondia.
+    const pipelineOpenStatus = await seedCargo({
       cliente_id: cliente.id,
       origem: "Camacari / BA",
       destino: "Simoes Filho / BA",
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-10",
+      data: "2099-04-10",
       driver_visibility: "PUBLIC",
     });
     await query(`UPDATE public.cargas SET sheet_status = $2 WHERE id = $1`, [
-      lockedByStatus.id,
-      "DESCARREGADO",
+      pipelineOpenStatus.id,
+      "AGUARDANDO CARREGAMENTO",
     ]);
     // Carga com sheet_motorista = '' explicitamente (caso o sync persista string vazia em vez de NULL)
     const emptyStringSheetMotorista = await seedCargo({
@@ -231,7 +233,7 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-11",
+      data: "2099-04-11",
       driver_visibility: "PUBLIC",
     });
     await query(`UPDATE public.cargas SET sheet_motorista = $2 WHERE id = $1`, [
@@ -245,9 +247,13 @@ describe("operator-admin service", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.payload.items).toHaveLength(2);
+    expect(response.payload.items).toHaveLength(3);
     const origens = response.payload.items.map((item) => item.origem).sort();
-    expect(origens).toEqual(["Lauro de Freitas / BA", "Salvador / BA"]);
+    expect(origens).toEqual([
+      "Camacari / BA",
+      "Lauro de Freitas / BA",
+      "Salvador / BA",
+    ]);
   });
 
   it("permite ajustar a visibilidade de uma carga reservada sem invalidar o status operacional", async () => {
@@ -260,7 +266,7 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "RESERVED",
       is_template: false,
-      data: "2026-04-09",
+      data: "2099-04-09",
       horario: "09:00:00",
       valor: 8100,
       bonus: 200,
@@ -273,7 +279,7 @@ describe("operator-admin service", () => {
       requestIp: "203.0.113.25",
       correlationId: "corr-update-cargo-reserved",
       payload: {
-        data: "2026-04-09",
+        data: "2099-04-09",
         horario: "09:00:00",
         origem: "Salvador / BA",
         destino: "Campinas / SP",
@@ -310,7 +316,7 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-09",
+      data: "2099-04-09",
       horario: "21:31:00",
       sheet_data_carregamento: "09/04/2026 21:31",
       sheet_data_descarga: "09/04/2026 23:30",
@@ -470,7 +476,7 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-08",
+      data: "2099-04-08",
     });
     await seedCargo({
       cliente_id: cliente.id,
@@ -479,7 +485,7 @@ describe("operator-admin service", () => {
       perfil: "TRUCK",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-09",
+      data: "2099-04-09",
     });
     await seedCargo({
       cliente_id: cliente.id,
@@ -488,15 +494,15 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "DRAFT",
       is_template: false,
-      data: "2026-04-08",
+      data: "2099-04-08",
     });
 
     const response = await service.fetchDriverLoadsReadModel({
       query: {
         origem: "Salvador",
         perfil: "CARRETA",
-        dateFrom: "2026-04-08",
-        dateTo: "2026-04-08",
+        dateFrom: "2099-04-08",
+        dateTo: "2099-04-08",
         page: "1",
         pageSize: "10",
       },
@@ -525,7 +531,7 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-08",
+      data: "2099-04-08",
       duracao_horas: 22,
     });
 
@@ -567,7 +573,7 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-08",
+      data: "2099-04-08",
       duracao_horas: 22,
     });
 
@@ -611,7 +617,7 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-08",
+      data: "2099-04-08",
       valor: 7200,
       bonus: 300,
       duracao_horas: 22,
@@ -676,7 +682,7 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-08",
+      data: "2099-04-08",
     });
 
     const incompleteCargo = await seedCargo({
@@ -686,7 +692,7 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-09",
+      data: "2099-04-09",
       valor: 7200,
       bonus: 300,
       duracao_horas: 20,
@@ -743,7 +749,7 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-08",
+      data: "2099-04-08",
     });
 
     // In-memory filter post D-02: filters match against routeLabel city names (not raw cargas.origem/destino)
@@ -813,7 +819,7 @@ describe("operator-admin service", () => {
       perfil: "CARRETA",
       status: "OPEN",
       is_template: false,
-      data: "2026-04-08",
+      data: "2099-04-08",
     });
 
     await query(`ALTER TABLE public.cargas DROP COLUMN sheet_data_carregamento`);

@@ -101,7 +101,32 @@ export interface PublicLoadLead {
   approvedAt: string | null;
   approvedBy: string | null;
   validation?: PublicLeadValidationSummary | null;
+  /**
+   * Nome resolvido pelo backend (iter #9) via fallback chain:
+   *   1. validation.driver.angelira.displayName
+   *   2. aspx_drivers.display_name
+   *   3. pending_driver_registrations.dados->motorista->nome
+   * `null` quando nenhuma fonte tem o nome → frontend cai no telefone.
+   */
+  driverName?: string | null;
   queuePosition: number | null;
+}
+
+export type OperatorPacoteStatus =
+  | "rascunho"
+  | "publicado"
+  | "reservado"
+  | "em_andamento"
+  | "concluido"
+  | "cancelado";
+
+export interface OperatorLeadPacoteMeta {
+  id: string;
+  status: OperatorPacoteStatus | string | null;
+  valorTotal: number | null;
+  version: number | null;
+  totalCargas: number | null;
+  ordemPropria: number | null;
 }
 
 export interface OperatorLeadGroup {
@@ -124,6 +149,9 @@ export interface OperatorLeadGroup {
     clienteId?: string | null;
     clienteNome?: string | null;
     clienteLogoUrl?: string | null;
+    viagemId?: string | null;
+    ordemViagem?: number | null;
+    pacoteMeta?: OperatorLeadPacoteMeta | null;
   };
   queueCount: number;
   totalLeads: number;
@@ -249,6 +277,22 @@ function createIdempotencyKey() {
   return `claim-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+/**
+ * Erro enriquecido com status HTTP + code para permitir que callers (e
+ * TanStack Query retry) distingam 5xx transient de 4xx terminal.
+ */
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, options: { status: number; code?: string }) {
+    super(message);
+    this.name = "ApiError";
+    this.status = options.status;
+    this.code = options.code;
+  }
+}
+
 async function requestJson<T>(url: string, options: ApiRequestOptions = {}): Promise<T> {
   const headers = new Headers({
     "Content-Type": "application/json",
@@ -274,16 +318,24 @@ async function requestJson<T>(url: string, options: ApiRequestOptions = {}): Pro
   const { payload, fallbackMessage } = await parseApiPayload(response, url);
 
   if (!response.ok) {
+    const isPayloadObject = payload && typeof payload === "object";
     const message =
-      payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string"
-        ? payload.message
+      isPayloadObject && "message" in payload && typeof (payload as { message: unknown }).message === "string"
+        ? (payload as { message: string }).message
         : fallbackMessage;
+    const code =
+      isPayloadObject && "code" in payload && typeof (payload as { code: unknown }).code === "string"
+        ? (payload as { code: string }).code
+        : undefined;
 
-    throw new Error(message || "Erro ao executar a operacao de aceite.");
+    throw new ApiError(message || "Erro ao executar a operacao de aceite.", {
+      status: response.status,
+      code,
+    });
   }
 
   if (payload === null) {
-    throw new Error(fallbackMessage);
+    throw new ApiError(fallbackMessage, { status: response.status });
   }
 
   return payload as T;

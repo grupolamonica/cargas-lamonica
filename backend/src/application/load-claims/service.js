@@ -3,6 +3,7 @@ import { withPgClient, withPgTransaction } from "../../infrastructure/pg/postgre
 import { rehydrateStoredValidationSummary } from "./public-lead-validation.js";
 import { getLoadClaimConfig } from "../../domain/load-claims/config.js";
 import { hasPublicLeadWhatsAppRouting } from "./public-leads.js";
+import { createPacoteClaim } from "../cargas-casadas/use-cases/atomic-claim.js";
 import {
   ACTIVE_CLAIM_STATUSES,
   CLAIM_EVENT_TYPE,
@@ -812,6 +813,28 @@ async function persistResponseAndLog(client, { scope, driverId, loadId, idempote
 }
 
 export async function createLoadClaim({ loadId, driverId, idempotencyKey, correlationId, requestPayload = {} }) {
+  // Phase 10 (D-04): se a carga pertence a um pacote (cargas.viagem_id NOT NULL),
+  // o claim torna-se atomico sobre o pacote inteiro. Delega para createPacoteClaim,
+  // que reserva pacote + todas as cargas-irmas em uma unica transacao com lock
+  // pessimista em cargas_casadas + cargas + driver_profiles.
+  //
+  // O lookup do viagem_id e feito fora da transacao principal (cheap read; sem race
+  // com mudancas de viagem_id, que sao operacoes operator-admin protegidas por lock
+  // pessimista em cargas_casadas).
+  const loadHeaderResult = await withPgClient((c) =>
+    c.query(`SELECT viagem_id FROM public.cargas WHERE id = $1`, [loadId]),
+  );
+  const loadHeader = loadHeaderResult.rows[0] ?? null;
+  if (loadHeader?.viagem_id) {
+    return createPacoteClaim({
+      pacoteId: loadHeader.viagem_id,
+      driverId,
+      idempotencyKey,
+      requestPayload,
+      correlationId,
+    });
+  }
+
   const config = ensureClaimSystemEnabled();
   const normalizedIdempotencyKey = requireIdempotencyKey(idempotencyKey);
   const resolvedCorrelationId = correlationId || createCorrelationId();
@@ -861,12 +884,17 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
     });
 
     // Defense-in-depth contra sync atrasado da planilha (Google Sheets/Shopee):
-    // mesmo se `cargas.status` ainda é OPEN/RESERVED no DB, o sheet já pode ter
-    // alocado a carga (sheet_motorista/sheet_status preenchidos). Nesse caso,
-    // não criar reserva nem waitlist — cair direto na trilha LOAD_UNAVAILABLE.
+    // mesmo se `cargas.status` ainda e OPEN/RESERVED no DB, o sheet pode ter
+    // alocado a carga. O sinal real de alocacao e `sheet_motorista` preenchido
+    // (driver atribuido na planilha) — nesse caso, nao criar reserva nem
+    // waitlist e cair direto na trilha LOAD_UNAVAILABLE.
+    //
+    // `sheet_status` e mantido apenas no audit log (para forensics), nao no
+    // gate. Statuses como 'AGUARDANDO CARREGAMENTO' indicam pipeline aberto
+    // na planilha, nao alocacao.
     const sheetMotoristaLocked = String(loadRow.sheet_motorista ?? "").trim() !== "";
     const sheetStatusLocked = String(loadRow.sheet_status ?? "").trim() !== "";
-    const sheetLocked = sheetMotoristaLocked || sheetStatusLocked;
+    const sheetLocked = sheetMotoristaLocked;
 
     const driverProfile = await getDriverProfile(client, driverId, { lock: true });
     const existingClaim = await findLatestClaimForDriver(client, {

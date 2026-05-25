@@ -53,6 +53,7 @@ const navigationItems: NavigationItem[] = [
   { icon: LayoutDashboard, label: "Painel", path: "/painel" },
   { icon: Building2, label: "Clientes", path: "/clientes" },
   { icon: Package, label: "Cargas", path: "/cargas" },
+  { icon: Package, label: "Pacotes", path: "/pacotes" },
   { icon: Route, label: "Rotas", path: "/rotas" },
   { icon: Link2, label: "Links", path: "/operador" },
   { icon: Bell, label: "Fila", path: "/leads" },

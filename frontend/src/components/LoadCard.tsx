@@ -6,11 +6,25 @@ import { toast } from "sonner";
 
 import ClientLogo from "@/components/ClientLogo";
 import DriverClaimPanel from "@/components/driver/DriverClaimPanel";
+import PacoteHeader from "@/components/load-card/PacoteHeader";
+import PacoteStopsList from "@/components/load-card/PacoteStopsList";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { formatCurrency } from "@/lib/currency";
 import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
+import type { PacoteMeta } from "@/services/readModels";
+
+/**
+ * Plan revisao 2026-05-23: formata pacote.valor_total como BRL. Defesa para
+ * valores nulls/NaN — renderiza "A combinar".
+ */
+function formatPacoteValor(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? formatCurrency(value)
+    : "A combinar";
+}
 
 interface LoadCardProps {
   id: string;
@@ -41,6 +55,13 @@ interface LoadCardProps {
   SecondaryIcon?: LucideIcon;
   clienteLogoUrlCard?: string | null;
   onInterestDialogOpenChange?: (isOpen: boolean) => void;
+  /**
+   * Meta do pacote (cargas casadas) — quando presente E `total_cargas > 1`, o card
+   * renderiza a vista "viagem casada" (header + lista vertical de paradas + valor
+   * do pacote). Caso ausente OU `total_cargas === 1`, render permanece idêntico
+   * ao card avulsa pre-existente (CARGAS-CASADAS-08 zero regressão).
+   */
+  pacoteMeta?: PacoteMeta | null;
 }
 
 const LoadCard = memo(({
@@ -69,7 +90,11 @@ const LoadCard = memo(({
   SecondaryIcon = Navigation,
   clienteLogoUrlCard,
   onInterestDialogOpenChange,
+  pacoteMeta,
 }: LoadCardProps) => {
+  // Pacote degenerado (total_cargas === 1) é funcionalmente equivalente a avulsa
+  // — renderiza como avulsa, sem header/lista de paradas. CARGAS-CASADAS-08.
+  const renderPacote = Boolean(pacoteMeta && pacoteMeta.total_cargas > 1);
   const safeOrigemCidade = fixBrokenPortugueseText(origemCidade);
   const safeDestinoCidade = fixBrokenPortugueseText(destinoCidade);
   const safeClienteNome = fixBrokenPortugueseText(clienteNome);
@@ -202,6 +227,181 @@ const LoadCard = memo(({
 
   return (
     <Dialog open={isInterestDialogOpen} onOpenChange={handleInterestDialogOpenChange}>
+      {renderPacote && pacoteMeta ? (
+        <div
+          className="group relative rounded-2xl border border-border/50 bg-card p-4 opacity-0 transition-shadow duration-300 ease-out premium-shadow hover:-translate-y-1 hover:transform-gpu hover:premium-shadow-hover sm:rounded-3xl sm:p-6 lg:rounded-[28px] lg:p-5 animate-fade-in-up"
+          style={{
+            animationDelay: `${index * 80}ms`,
+            contentVisibility: "auto",
+            containIntrinsicSize: "420px",
+            contain: "layout paint style",
+          }}
+          data-testid="load-card-pacote"
+        >
+          <div className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/[0.02] to-accent/[0.02] opacity-0 transition-opacity duration-500 group-hover:opacity-100 sm:rounded-3xl" />
+          <div className="pointer-events-none absolute inset-x-8 top-0 hidden h-px bg-gradient-to-r from-transparent via-primary/25 to-transparent lg:block" />
+
+          <div className="relative">
+            <PacoteHeader pacoteMeta={pacoteMeta} />
+
+            {/*
+             * Payment + Vehicle panels — espelham EXATAMENTE as classes do avulsa
+             * (LoadCard.tsx mobile lines ~400–447 + desktop ~575–598). D5 explicito:
+             * NAO mostrar Percurso recomendado nem Tempo estimado no pacote.
+             * D7: PAGAMENTO TOTAL usa pacote.valor_total + caption "Valor definido
+             * pelo operador". Vehicle box exibe pacoteMeta.perfil_uniforme (se nao
+             * null); omitido quando heterogeneo.
+             */}
+            <div className="mb-4 space-y-2 lg:hidden">
+              <div className="rounded-2xl border border-border/30 bg-muted/40 p-3" data-testid="pacote-payment">
+                <div className="mb-1 flex items-center gap-2">
+                  <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-primary/10">
+                    <span className="h-2 w-2 rounded-full bg-primary" />
+                  </div>
+                  <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground">
+                    Pagamento total
+                  </span>
+                </div>
+                <p className="text-lg font-extrabold tracking-tight text-gradient-primary">
+                  {formatPacoteValor(pacoteMeta.valor_total)}
+                </p>
+              </div>
+
+              {pacoteMeta.perfil_uniforme ? (
+                <div className="rounded-xl border border-border/30 bg-muted/40 p-2.5" data-testid="pacote-vehicle">
+                  <div className="mb-1 flex items-center gap-1.5">
+                    <div className="flex h-5 w-5 items-center justify-center rounded-md bg-primary/10">
+                      <Truck className="h-3 w-3 text-primary" />
+                    </div>
+                    <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-muted-foreground">
+                      Veículo
+                    </span>
+                  </div>
+                  <p className="text-xs font-extrabold text-card-foreground">{pacoteMeta.perfil_uniforme}</p>
+                </div>
+              ) : null}
+            </div>
+
+            {/* Desktop (lg:) — payment + vehicle lado a lado, espelhando avulsa */}
+            <div className="hidden lg:block">
+              <div className="mt-7 grid grid-cols-[minmax(0,1fr)_200px] gap-4 border-t border-border/50 pt-5">
+                <div data-testid="pacote-payment-lg">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground/80">
+                    Pagamento total
+                  </p>
+                  <p className="mt-2 text-[1.7rem] font-bold tracking-tight text-gradient-primary">
+                    {formatPacoteValor(pacoteMeta.valor_total)}
+                  </p>
+                </div>
+                {pacoteMeta.perfil_uniforme ? (
+                  <div className="admin-card-surface rounded-[22px] border border-border/50 px-4 py-4 text-right" data-testid="pacote-vehicle-lg">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground/80">
+                      Veículo
+                    </p>
+                    <p className="mt-2 text-[1.02rem] font-bold tracking-tight text-card-foreground">
+                      {pacoteMeta.perfil_uniforme}
+                    </p>
+                  </div>
+                ) : <div />}
+              </div>
+            </div>
+
+            {/* Action bar — espelha o padrão responsivo do avulsa (lines 670-726).
+                Desktop (lg:) usa icon-only share; mobile (sm:hidden) usa botão
+                texto "Compartilhar carga" full-width; tablet usa icon-only inline.
+                iter #3 (2026-05-23) — corrige bug do share button mobile parecendo desktop. */}
+
+            {/* Desktop (lg:) — actions inline + icon share */}
+            <div className="mt-6 hidden items-center gap-2 lg:flex">
+              <div className={cn(actionGridClassName, "flex-1")}>
+                {renderInterestDialogTrigger("group/btn h-12 w-full rounded-full px-6")}
+                {detailsHref ? (
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="lg"
+                    className="group/btn h-12 w-full rounded-full border-primary/30 px-6 text-primary hover:border-primary/50 hover:bg-primary/[0.06] hover:text-primary"
+                  >
+                    <Link to={detailsHref}>
+                      <span>Detalhes</span>
+                      <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover/btn:translate-x-1" />
+                    </Link>
+                  </Button>
+                ) : null}
+              </div>
+              {renderSharePopover(
+                <button
+                  type="button"
+                  aria-label="Compartilhar carga"
+                  className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-primary/30 text-primary transition-colors hover:border-primary/50 hover:bg-primary/[0.06]"
+                >
+                  <Share2 className="h-4 w-4" />
+                </button>,
+              )}
+            </div>
+
+            {/* Mobile/Tablet (lg:hidden) — mobile stacked com botão texto "Compartilhar carga",
+                tablet inline com icon share (idêntico ao avulsa). */}
+            <div className="relative mt-6 flex flex-col gap-3 border-t border-border/40 pt-4 sm:flex-row sm:items-center sm:justify-end sm:gap-2 sm:pt-5 lg:hidden">
+              {/* Mobile only — stacked + text share */}
+              <div className="sm:hidden">
+                <div className={actionGridClassName}>
+                  {renderInterestDialogTrigger("group/btn w-full rounded-xl px-5")}
+                  {detailsHref ? (
+                    <Button
+                      asChild
+                      variant="outline"
+                      size="lg"
+                      className="group/btn w-full rounded-xl border-primary/30 px-5 text-primary hover:border-primary/50 hover:bg-primary/[0.06] hover:text-primary"
+                    >
+                      <Link to={detailsHref}>
+                        <span>Detalhes</span>
+                        <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover/btn:translate-x-1" />
+                      </Link>
+                    </Button>
+                  ) : null}
+                </div>
+                {renderSharePopover(
+                  <button
+                    type="button"
+                    className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-xl border border-border/60 bg-muted/30 py-2.5 text-sm font-semibold text-muted-foreground transition-colors hover:border-border hover:bg-muted/60 hover:text-foreground active:scale-[0.98]"
+                  >
+                    <Share2 className="h-4 w-4" />
+                    Compartilhar carga
+                  </button>,
+                )}
+              </div>
+
+              {/* Tablet only (sm:flex lg:hidden) — horizontal inline + icon share */}
+              <div className="hidden items-center gap-2 sm:flex lg:hidden">
+                {renderInterestDialogTrigger("group/btn sm:w-auto sm:rounded-2xl sm:px-7")}
+                {detailsHref ? (
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="lg"
+                    className="group/btn border-primary/30 px-5 text-primary hover:border-primary/50 hover:bg-primary/[0.06] hover:text-primary sm:w-auto sm:rounded-2xl sm:px-7"
+                  >
+                    <Link to={detailsHref}>
+                      <span>Detalhes</span>
+                      <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover/btn:translate-x-1" />
+                    </Link>
+                  </Button>
+                ) : null}
+                {renderSharePopover(
+                  <button
+                    type="button"
+                    aria-label="Compartilhar carga"
+                    className="inline-flex items-center justify-center rounded-2xl border border-border/40 p-3 text-muted-foreground transition-colors hover:border-border/70 hover:text-foreground"
+                  >
+                    <Share2 className="h-4 w-4" />
+                  </button>,
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
       <div
         className="group relative rounded-2xl border border-border/50 bg-card p-4 opacity-0 transition-shadow duration-300 ease-out premium-shadow hover:-translate-y-1 hover:transform-gpu hover:premium-shadow-hover sm:rounded-3xl sm:p-6 lg:rounded-[28px] lg:p-5 animate-fade-in-up"
         style={{
@@ -210,6 +410,7 @@ const LoadCard = memo(({
           containIntrinsicSize: "420px",
           contain: "layout paint style",
         }}
+        data-testid="load-card-avulsa"
       >
       <div className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/[0.02] to-accent/[0.02] opacity-0 transition-opacity duration-500 group-hover:opacity-100 sm:rounded-3xl" />
       <div className="pointer-events-none absolute inset-x-8 top-0 hidden h-px bg-gradient-to-r from-transparent via-primary/25 to-transparent lg:block" />
@@ -609,6 +810,7 @@ const LoadCard = memo(({
         </div>
       </div>
       </div>
+      )}
       {isInterestDialogOpen && loadId ? (
         <DialogContent
           overlayClassName="bg-[hsl(223_56%_12%/0.72)] backdrop-blur-[4px]"

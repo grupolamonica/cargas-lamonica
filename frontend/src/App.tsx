@@ -13,6 +13,8 @@ import { DriverAuthProvider } from "./hooks/useDriverAuth";
 
 const Overview = lazy(() => import("./pages/Overview"));
 const ManageCargas = lazy(() => import("./pages/ManageCargas"));
+const ManagePacotes = lazy(() => import("./pages/ManagePacotes"));
+const PacoteDetails = lazy(() => import("./pages/PacoteDetails"));
 const ManageClientes = lazy(() => import("./pages/ManageClientes"));
 const ManageRoutes = lazy(() => import("./pages/ManageRoutes"));
 const Leads = lazy(() => import("./pages/Leads"));
@@ -89,8 +91,19 @@ const App = () => {
                   <Route path="/painel" element={<Overview />} />
                   <Route path="/clientes" element={<ManageClientes />} />
                   <Route path="/cargas" element={<ManageCargas />} />
+                  <Route path="/pacotes" element={<ManagePacotes />} />
+                  <Route path="/pacotes/:pacoteId" element={<PacoteDetails />} />
                   <Route path="/rotas" element={<ManageRoutes />} />
                   <Route path="/operador" element={<OperatorDashboard />} />
+                  {/*
+                    Alias /links -> OperatorDashboard.
+                    Justificativa: a entrada "Links" da sidebar historicamente
+                    apontou para /links em algumas builds e dispositivos antigos
+                    ainda tem essa rota como bookmark. Mantemos o alias para
+                    evitar 404 e padronizamos a entrada da sidebar em /operador
+                    (canonica).
+                  */}
+                  <Route path="/links" element={<OperatorDashboard />} />
                   <Route path="/leads" element={<Leads />} />
                   <Route path="/historico-fila" element={<HistoricoFila />} />
                   <Route path="/motoristas" element={<Motoristas />} />

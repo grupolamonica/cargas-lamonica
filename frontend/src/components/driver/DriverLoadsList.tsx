@@ -110,6 +110,7 @@ export function DriverLoadsList({
           detailsHref={`/motorista/cargas/${cargo.id}`}
           index={index}
           onInterestDialogOpenChange={onInterestDialogOpenChange}
+          pacoteMeta={cargo.pacote_meta ?? null}
         />
       );
     });

@@ -1,6 +1,106 @@
 import { getOperatorAccessToken, requestJson } from "@/services/apiClient";
 import type { PublicLeadValidationSummary, PublicLeadValidationOverallStatus } from "@/services/loadClaims";
 
+/**
+ * Pacote (cargas casadas) — meta enviada inline com cada carga no read model
+ * driver-facing quando a carga pertence a um pacote. Permite que o `LoadCard`
+ * detecte e renderize a vista de viagem casada sem fetch adicional.
+ *
+ * `total_cargas === 1` é um pacote "degenerado" — funcional equivalente a
+ * carga avulsa; o LoadCard deve renderizar como avulsa nesse caso.
+ *
+ * Plan 10-05 (CARGAS-CASADAS-06).
+ */
+export interface PacoteMeta {
+  id: string;
+  status: "publicado" | "reservado" | "em_andamento";
+  valor_total: number;
+  version: number;
+  total_cargas: number;
+  /** Posição (1..N) desta carga específica dentro do pacote. */
+  ordem_propria: number;
+  published_at?: string | null;
+  /**
+   * Campos derivados (plan revisão 2026-05-23) — agregados sobre as cargas do
+   * pacote. Opcionais para backward-compat com clientes antigos do read model.
+   */
+  /** Menor `data` (YYYY-MM-DD) entre as cargas do pacote. */
+  earliest_carga_date?: string | null;
+  /**
+   * Horário (HH:MM:SS) da carga com menor data — usado pelo PacoteHeader badge
+   * "Coleta DD/MM às HH:MM" (iter #2 2026-05-23). Null quando todas cargas
+   * estão sem horário definido.
+   */
+  earliest_carga_horario?: string | null;
+  /** Soma das `distancia_km` das cargas. */
+  total_km?: number | null;
+  /** Soma das `duracao_horas` das cargas. */
+  total_duration_horas?: number | null;
+  /** Cliente único (igual em todas as cargas) — null quando multi-cliente. */
+  cliente_uniforme?: {
+    id: string;
+    nome: string | null;
+    logo_url: string | null;
+  } | null;
+  /** Perfil de veículo único (igual em todas as cargas) — null quando heterogêneo. */
+  perfil_uniforme?: string | null;
+}
+
+/** Carga individual dentro do payload `PacoteFull` (detalhe completo do pacote). */
+export interface PacoteCarga {
+  id: string;
+  ordem_viagem: number;
+  status: string;
+  origem: string;
+  destino: string;
+  perfil: string;
+  valor: number | null;
+  bonus: number | null;
+  bonus_exigencias: string | null;
+  data: string | null;
+  horario: string | null;
+  distancia_km: number | null;
+  duracao_horas: number | null;
+  driver_visibility: "PUBLIC" | "PREMIUM";
+  cliente: {
+    id: string;
+    nome: string;
+    logo_url: string | null;
+    descricao: string | null;
+  } | null;
+}
+
+/** Payload completo retornado por GET /api/public-loads/pacotes/:id. */
+export interface PacoteFull {
+  id: string;
+  status: "publicado" | "reservado" | "em_andamento";
+  valor_total: number;
+  version: number;
+  published_at: string | null;
+  total_cargas: number;
+  cargas: PacoteCarga[];
+}
+
+/**
+ * Fetch público anônimo (sem Authorization header) do detalhe completo de um
+ * pacote. Backend retorna 404 quando o pacote não está em estado público
+ * (publicado/reservado/em_andamento), garantindo que rascunhos não vazem.
+ */
+export async function fetchPacote(pacoteId: string): Promise<PacoteFull> {
+  const res = await fetch(`/api/driver/pacotes/${pacoteId}`, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+    throw new Error(
+      body?.error?.message || `Falha ao carregar pacote (HTTP ${res.status})`,
+    );
+  }
+  const json = (await res.json()) as { pacote: PacoteFull };
+  return json.pacote;
+}
+
 export interface DriverLoadReadModelItem {
   id: string;
   data: string;
@@ -21,6 +121,12 @@ export interface DriverLoadReadModelItem {
   clienteLogoUrlProximas: string | null;
   carregamentoLabel: string | null;
   descargaLabel: string | null;
+  /** Pacote ao qual esta carga pertence — null quando carga é avulsa. */
+  viagem_id?: string | null;
+  /** Posição dentro do pacote (1..N) — null quando carga é avulsa. */
+  ordem_viagem?: number | null;
+  /** Resumo do pacote para renderização inline no LoadCard — null quando avulsa. */
+  pacote_meta?: PacoteMeta | null;
 }
 
 export interface OperatorDashboardItem {
@@ -93,6 +199,12 @@ export interface OperatorCargoListItem {
   clientes: {
     nome: string;
   } | null;
+  /** Pacote (cargas_casadas) — null quando carga é avulsa. Plan 10-05. */
+  viagem_id?: string | null;
+  /** Posição da carga dentro do pacote (1..N) — null quando avulsa. */
+  ordem_viagem?: number | null;
+  /** Resumo inline do pacote para painel operador — null quando avulsa. */
+  pacote_meta?: PacoteMeta | null;
 }
 
 export interface OperatorClienteListItem {

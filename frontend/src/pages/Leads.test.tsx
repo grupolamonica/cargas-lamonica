@@ -46,9 +46,28 @@ vi.mock("@/components/DashboardHeader", () => ({
   default: ({ title }: { title: string }) => <div>{title}</div>,
 }));
 
+// Reproduz a forma do ApiError (servico de loadClaims) sem importar o modulo
+// real — facilita o teste do banner amarelo sem fazer fetch.
+// Declarado dentro do vi.hoisted pois a factory de vi.mock e hoisted para o
+// topo do arquivo, antes de qualquer declaracao de class top-level.
+const { FakeApiError } = vi.hoisted(() => {
+  class FakeApiError extends Error {
+    status: number;
+    code?: string;
+    constructor(message: string, opts: { status: number; code?: string }) {
+      super(message);
+      this.name = "ApiError";
+      this.status = opts.status;
+      this.code = opts.code;
+    }
+  }
+  return { FakeApiError };
+});
+
 vi.mock("@/services/loadClaims", () => ({
   approveOperatorLoadLead: mockApproveOperatorLoadLead,
   fetchOperatorLoadLeads: vi.fn(),
+  ApiError: FakeApiError,
 }));
 
 vi.mock("@/integrations/supabase/client", () => ({
@@ -244,6 +263,62 @@ describe("Leads", () => {
     });
   });
 
+  it("mostra banner amarelo de sincronizacao indisponivel quando 503 e ja existem dados", () => {
+    // Cenario: polling ja trouxe dados; uma proxima refetch falhou com 503
+    // schema-drift. UI mantem os dados antigos visiveis e exibe banner gracioso.
+    mockUseQuery.mockReturnValue({
+      data: {
+        groups: [
+          {
+            load: {
+              id: "load-existente",
+              status: "OPEN",
+              origem: "Curitiba / PR",
+              destino: "Porto Alegre / RS",
+              perfil: "CARRETA",
+              data: "2026-05-25",
+              horario: "10:00:00",
+              reservedPublicLeadId: null,
+            },
+            queueCount: 1,
+            totalLeads: 1,
+            leads: [
+              {
+                id: "lead-stale",
+                status: "QUEUED",
+                cpf: "11122233344",
+                phone: "41999999999",
+                horsePlate: "AAA1B22",
+                trailerPlate: "BBB3C44",
+                trailerPlate2: "",
+                vehicleType: "CARRETA",
+                preRegisteredAt: "2026-05-25T09:00:00.000Z",
+                queuedAt: "2026-05-25T09:01:00.000Z",
+                whatsappClickedAt: null,
+                approvedAt: null,
+                approvedBy: null,
+                queuePosition: 1,
+                validation: null,
+                whatsappUrl: "https://wa.me/5541999999999",
+              },
+            ],
+          },
+        ],
+      },
+      error: new FakeApiError("Schema drift", { status: 503, code: "SCHEMA_DRIFT" }),
+      isLoading: false,
+      isFetching: true,
+    });
+
+    render(<Leads />);
+
+    expect(screen.getByText("Sincronizacao temporariamente indisponivel")).toBeInTheDocument();
+    // Dados antigos (rota) seguem visiveis — banner NAO bloqueia a UI.
+    expect(screen.getByText("Curitiba / PR -> Porto Alegre / RS")).toBeInTheDocument();
+    // Mensagem do erro completo NAO eh exibida (so o banner gracioso).
+    expect(screen.queryByText("Não foi possível carregar a fila")).not.toBeInTheDocument();
+  });
+
   it("mostra o erro da API em vez de fingir que a fila esta vazia", () => {
     mockUseQuery.mockReturnValue({
       data: undefined,
@@ -280,6 +355,253 @@ describe("Leads", () => {
 
     expect(screen.getAllByText("Reservado").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Reservar para este motorista" })).not.toBeInTheDocument();
+  });
+
+  it("agrupa N cargas de um pacote candidatadas pelo mesmo motorista em um unico card 'Viagem casada'", async () => {
+    // Mesmo pacote, mesmo motorista (cpf+phone iguais) → 1 card pacote agrupado.
+    mockUseQuery.mockReturnValue({
+      data: {
+        groups: [
+          {
+            load: {
+              id: "carga-pacote-1",
+              status: "OPEN",
+              origem: "Sao Paulo / SP",
+              destino: "Rio de Janeiro / RJ",
+              perfil: "CARRETA",
+              data: "2026-05-10",
+              horario: "08:00:00",
+              reservedPublicLeadId: null,
+              sheetLh: "LH-PCT-1",
+              viagemId: "pacote-001",
+              ordemViagem: 1,
+              pacoteMeta: {
+                id: "pacote-001",
+                status: "publicado",
+                valorTotal: 18000,
+                version: 1,
+                totalCargas: 2,
+                ordemPropria: 1,
+              },
+            },
+            queueCount: 1,
+            totalLeads: 1,
+            leads: [
+              {
+                id: "lead-pct-a",
+                status: "QUEUED",
+                cpf: "55544433322",
+                phone: "31988887777",
+                horsePlate: "PCT1A23",
+                trailerPlate: "PCT4B56",
+                trailerPlate2: "",
+                vehicleType: "CARRETA",
+                preRegisteredAt: "2026-05-08T10:00:00.000Z",
+                queuedAt: "2026-05-08T10:00:30.000Z",
+                whatsappClickedAt: null,
+                approvedAt: null,
+                approvedBy: null,
+                queuePosition: 1,
+                validation: null,
+                whatsappUrl: "https://wa.me/5531988887777",
+              },
+            ],
+          },
+          {
+            load: {
+              id: "carga-pacote-2",
+              status: "OPEN",
+              origem: "Rio de Janeiro / RJ",
+              destino: "Belo Horizonte / MG",
+              perfil: "CARRETA",
+              data: "2026-05-11",
+              horario: "07:00:00",
+              reservedPublicLeadId: null,
+              sheetLh: "LH-PCT-2",
+              viagemId: "pacote-001",
+              ordemViagem: 2,
+              pacoteMeta: {
+                id: "pacote-001",
+                status: "publicado",
+                valorTotal: 18000,
+                version: 1,
+                totalCargas: 2,
+                ordemPropria: 2,
+              },
+            },
+            queueCount: 1,
+            totalLeads: 1,
+            leads: [
+              {
+                id: "lead-pct-b",
+                status: "QUEUED",
+                cpf: "55544433322",
+                phone: "31988887777",
+                horsePlate: "PCT1A23",
+                trailerPlate: "PCT4B56",
+                trailerPlate2: "",
+                vehicleType: "CARRETA",
+                preRegisteredAt: "2026-05-08T10:00:00.000Z",
+                queuedAt: "2026-05-08T10:00:30.000Z",
+                whatsappClickedAt: null,
+                approvedAt: null,
+                approvedBy: null,
+                queuePosition: 1,
+                validation: null,
+                whatsappUrl: "https://wa.me/5531988887777",
+              },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+      isFetching: false,
+    });
+
+    render(<Leads />);
+
+    // Card pacote unico (1 viagem casada, 2 paradas).
+    expect(screen.getByText("Viagem casada")).toBeInTheDocument();
+    // Pelo menos um indicador de "2 paradas" no DOM (header + estado colapsado).
+    expect(screen.getAllByText(/2 paradas/i).length).toBeGreaterThan(0);
+
+    // Cards avulsos NAO existem (o card pacote substitui). Confirma pela ausencia
+    // do botao "Expandir disputa" (usado so em cards avulsos).
+    expect(screen.queryByRole("button", { name: /Expandir disputa/i })).not.toBeInTheDocument();
+    // Botoes "Reservar para este motorista" (avulso) tambem nao aparecem.
+    expect(screen.queryByRole("button", { name: /Reservar para este motorista/i })).not.toBeInTheDocument();
+
+    // Card pacote ja aparece expandido por padrao — cada parada tem seu LH e rota.
+    expect(screen.getByText("LH LH-PCT-1")).toBeInTheDocument();
+    expect(screen.getByText("LH LH-PCT-2")).toBeInTheDocument();
+    // Cada rota aparece pelo menos uma vez (lista de paradas exibe origem -> destino por parada).
+    expect(screen.getAllByText(/Sao Paulo \/ SP -> Rio de Janeiro \/ RJ/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Rio de Janeiro \/ RJ -> Belo Horizonte \/ MG/).length).toBeGreaterThan(0);
+
+    // Iter #9: candidaturas em tabela — 1 row por motorista, com "Reservar pacote"
+    // que reserva todas as paradas QUEUED daquele driver de uma vez.
+    const reservarPacoteBtn = screen.getByRole("button", { name: /Reservar pacote/i });
+    expect(reservarPacoteBtn).toBeInTheDocument();
+
+    // Clicar em "Reservar pacote" sequencia approve para todos os leads QUEUED.
+    fireEvent.click(reservarPacoteBtn);
+    await waitFor(() => {
+      expect(mockApproveOperatorLoadLead).toHaveBeenCalledWith("carga-pacote-1", "lead-pct-a");
+    });
+    // Sequencial: segunda parada tambem.
+    await waitFor(() => {
+      expect(mockApproveOperatorLoadLead).toHaveBeenCalledWith("carga-pacote-2", "lead-pct-b");
+    });
+  });
+
+  it("exibe driverName na coluna Motorista quando o backend resolve o nome", () => {
+    mockUseQuery.mockReturnValue({
+      data: {
+        groups: [
+          {
+            load: {
+              id: "load-com-nome",
+              status: "OPEN",
+              origem: "Sao Paulo / SP",
+              destino: "Rio de Janeiro / RJ",
+              perfil: "CARRETA",
+              data: "2026-05-25",
+              horario: "08:00:00",
+              reservedPublicLeadId: null,
+            },
+            queueCount: 1,
+            totalLeads: 1,
+            leads: [
+              {
+                id: "lead-com-nome",
+                status: "QUEUED",
+                cpf: "12345678901",
+                phone: "71999998888",
+                horsePlate: "ABC1D23",
+                trailerPlate: "DEF4G56",
+                trailerPlate2: "",
+                vehicleType: "CARRETA",
+                preRegisteredAt: "2026-05-25T09:00:00.000Z",
+                queuedAt: "2026-05-25T09:01:00.000Z",
+                whatsappClickedAt: null,
+                approvedAt: null,
+                approvedBy: null,
+                queuePosition: 1,
+                validation: null,
+                whatsappUrl: "https://wa.me/5571999998888",
+                driverName: "Carlos Eduardo Pereira",
+              },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+      isFetching: false,
+    });
+
+    render(<Leads />);
+    fireEvent.click(screen.getAllByRole("button", { name: /Expandir disputa/i })[0]);
+
+    // Cabecalho da coluna mudou de "Telefone" para "Motorista".
+    expect(screen.getByRole("columnheader", { name: "Motorista" })).toBeInTheDocument();
+    // Nome aparece como label principal.
+    expect(screen.getByText("Carlos Eduardo Pereira")).toBeInTheDocument();
+    // CPF mascarado + phone formatado aparecem como sublabel.
+    expect(screen.getByText(/CPF \*01.*\(71\) 99999-8888/)).toBeInTheDocument();
+  });
+
+  it("exibe phone formatado + sem cadastro quando driverName eh null", () => {
+    mockUseQuery.mockReturnValue({
+      data: {
+        groups: [
+          {
+            load: {
+              id: "load-sem-nome",
+              status: "OPEN",
+              origem: "Curitiba / PR",
+              destino: "Florianopolis / SC",
+              perfil: "CARRETA",
+              data: "2026-05-25",
+              horario: "10:00:00",
+              reservedPublicLeadId: null,
+            },
+            queueCount: 1,
+            totalLeads: 1,
+            leads: [
+              {
+                id: "lead-sem-nome",
+                status: "QUEUED",
+                cpf: "98765432100",
+                phone: "41977776666",
+                horsePlate: "XYZ1A22",
+                trailerPlate: "YYY2B33",
+                trailerPlate2: "",
+                vehicleType: "CARRETA",
+                preRegisteredAt: "2026-05-25T09:00:00.000Z",
+                queuedAt: "2026-05-25T09:01:00.000Z",
+                whatsappClickedAt: null,
+                approvedAt: null,
+                approvedBy: null,
+                queuePosition: 1,
+                validation: null,
+                whatsappUrl: "https://wa.me/5541977776666",
+                driverName: null,
+              },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+      isFetching: false,
+    });
+
+    render(<Leads />);
+    fireEvent.click(screen.getAllByRole("button", { name: /Expandir disputa/i })[0]);
+
+    // Phone formatado eh exibido como label principal (fallback do driverName null).
+    expect(screen.getByText("(41) 97777-6666")).toBeInTheDocument();
+    // Sublabel sinaliza "sem cadastro".
+    expect(screen.getByText(/CPF \*00.*sem cadastro/)).toBeInTheDocument();
   });
 
   it("abre as disputas minimizadas por padrao e permite expandir depois", () => {

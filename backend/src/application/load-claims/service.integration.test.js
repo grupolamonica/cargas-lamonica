@@ -97,25 +97,27 @@ describe.sequential("load-claim service integration", () => {
     expect(claims[0].status).toBe(CLAIM_STATUS.REJECTED);
   }, 15_000);
 
-  it("rejects a claim as LOAD_UNAVAILABLE when the source spreadsheet set sheet_status (load no longer available)", async () => {
+  it("allows a claim when sheet_status indicates pipeline-open state (AGUARDANDO CARREGAMENTO) and no sheet_motorista", async () => {
+    // Regressao do fix sheet-status-overbroad: statuses de pipeline aberto
+    // ('AGUARDANDO CARREGAMENTO', 'AGUARDANDO CHEGAR NO CLIENTE') representam
+    // carga ainda disponivel na planilha. O filtro nao deve bloquear claim.
     const { id: loadId } = await harness.seedLoad();
     const { userId: driverId } = await harness.seedDriverProfile();
 
     await harness.query(
       `UPDATE public.cargas SET sheet_status = $2 WHERE id = $1`,
-      [loadId, "DESCARREGADO"],
+      [loadId, "AGUARDANDO CARREGAMENTO"],
     );
 
     const result = await service.createLoadClaim({
       loadId,
       driverId,
-      idempotencyKey: harness.buildIdempotencyKey("sheet-locked-status"),
-      correlationId: "corr-sheet-locked-status",
+      idempotencyKey: harness.buildIdempotencyKey("sheet-pipeline-open"),
+      correlationId: "corr-sheet-pipeline-open",
     });
 
-    expect(result.statusCode).toBe(200);
-    expect(result.payload.outcome).toBe("REJECTED");
-    expect(result.payload.claim?.rejectedReason).toBe("LOAD_UNAVAILABLE");
+    expect(result.statusCode).toBe(201);
+    expect(result.payload.outcome).toBe("RESERVED");
   }, 15_000);
 
   it("runs the OPEN -> RESERVED -> BOOKED flow for the winning driver", async () => {

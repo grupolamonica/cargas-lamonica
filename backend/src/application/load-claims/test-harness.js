@@ -32,6 +32,23 @@ const schemaSql = `
     created_at timestamptz NOT NULL DEFAULT now()
   );
 
+  CREATE TABLE public.cargas_casadas (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    status text NOT NULL DEFAULT 'rascunho',
+    valor_total numeric,
+    reserved_driver_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+    reserved_claim_id uuid,
+    booked_driver_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+    version integer NOT NULL DEFAULT 1,
+    published_at timestamptz,
+    created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT cargas_casadas_status_check CHECK (
+      status IN ('rascunho','publicado','reservado','em_andamento','concluido','cancelado')
+    )
+  );
+
   CREATE TABLE public.clientes (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     nome text NOT NULL,
@@ -83,6 +100,8 @@ const schemaSql = `
     reserved_until timestamptz,
     booked_driver_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
     booked_at timestamptz,
+    viagem_id uuid,
+    ordem_viagem integer,
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT cargas_status_check CHECK (
       status IN ('DRAFT', 'OPEN', 'RESERVED', 'BOOKED', 'EXPIRED', 'CANCELLED', 'COMPLETED', 'FAILED')
@@ -250,6 +269,30 @@ const schemaSql = `
 
   CREATE UNIQUE INDEX ux_idempotency_records_scope_key
     ON public.idempotency_records (scope, driver_id, load_id, idempotency_key);
+
+  -- Tabelas usadas pelo fallback chain de driver-name na fila do operador.
+  -- Producao: aspx_drivers populada por GitHub Action via API ASPx;
+  -- pending_driver_registrations alimentada pelo flow /cadastro.
+  CREATE TABLE public.aspx_drivers (
+    cpf          text PRIMARY KEY,
+    display_name text,
+    raw_status   text,
+    last_seen_at timestamptz NOT NULL DEFAULT now(),
+    synced_at    timestamptz NOT NULL DEFAULT now(),
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.pending_driver_registrations (
+    id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    id_cadastro    text NOT NULL,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    status         text NOT NULL DEFAULT 'pendente',
+    dados          jsonb NOT NULL,
+    observacoes    text,
+    reviewed_at    timestamptz,
+    reviewed_by_id text
+  );
 
   CREATE TABLE public.vehicles (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -542,6 +585,54 @@ export async function seedLoad(overrides = {}) {
   );
 
   return { id, clienteId: client?.id ?? overrides.cliente_id ?? null };
+}
+
+export async function seedPacote(overrides = {}) {
+  const id = overrides.id ?? crypto.randomUUID();
+  await query(
+    `INSERT INTO public.cargas_casadas (id, status, valor_total, version, published_at, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      id,
+      overrides.status ?? "publicado",
+      overrides.valor_total ?? 12000,
+      overrides.version ?? 1,
+      overrides.published_at ?? new Date().toISOString(),
+      overrides.created_by ?? null,
+    ],
+  );
+  return { id };
+}
+
+export async function attachLoadToPacote(loadId, viagemId, ordemViagem) {
+  await query(
+    `UPDATE public.cargas
+     SET viagem_id = $2, ordem_viagem = $3, updated_at = now()
+     WHERE id = $1`,
+    [loadId, viagemId, ordemViagem],
+  );
+}
+
+export async function seedAspxDriver({ cpf, displayName }) {
+  await query(
+    `INSERT INTO public.aspx_drivers (cpf, display_name)
+     VALUES ($1, $2)
+     ON CONFLICT (cpf) DO UPDATE SET display_name = EXCLUDED.display_name`,
+    [cpf, displayName],
+  );
+}
+
+export async function seedPendingDriverRegistration({
+  cpf,
+  nomeMotorista,
+  status = "pendente",
+  id_cadastro = crypto.randomUUID(),
+}) {
+  await query(
+    `INSERT INTO public.pending_driver_registrations (id_cadastro, status, dados)
+     VALUES ($1, $2, $3::jsonb)`,
+    [id_cadastro, status, JSON.stringify({ motorista: { cpf, nome: nomeMotorista } })],
+  );
 }
 
 export async function expireReservation(loadId, reservedUntil = new Date(Date.now() - 60_000).toISOString()) {

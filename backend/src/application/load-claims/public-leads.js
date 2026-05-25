@@ -258,6 +258,84 @@ function isMissingPublicLeadValidationColumnError(error) {
   );
 }
 
+/**
+ * Detecta drift de schema na coluna `cargas.sheet_status` ou `cargas.viagem_id`.
+ * Cenarios: migracao 029_cargas_sheet_status nao aplicada (sheet_status), ou
+ * cargas_casadas em rollout incompleto (viagem_id).
+ *
+ * Compatibilidade: aceita codigo Postgres SQLSTATE (`42703` undefined_column,
+ * `42P01` undefined_table) **ou** o nome de classe usado pelo pg-mem em
+ * ambiente de teste (`ColumnNotFound`, `RelationNotFound`).
+ */
+function isUndefinedColumnError(error) {
+  if (error?.code === "42703") return true;
+  return error?.name === "ColumnNotFound" || error?.constructor?.name === "ColumnNotFound";
+}
+
+function isUndefinedTableError(error) {
+  if (error?.code === "42P01") return true;
+  return error?.name === "RelationNotFound" || error?.constructor?.name === "RelationNotFound";
+}
+
+/**
+ * Verifica se a coluna citada no erro (extraida do padrao `column "x.y" does
+ * not exist`) bate com o alvo. Evita falsos positivos quando a SQL faz
+ * referencia a varias colunas (ex.: erro em `pii_redacted_at` mas SELECT cita
+ * `viagem_id` ou `sheet_status` no projection).
+ */
+function extractMissingColumnName(error) {
+  const message = `${error?.message || ""} ${error?.detail || ""}`;
+  // pg: `column "foo" does not exist` / pg-mem: `column "alias.foo" does not exist`
+  const match = message.match(/column\s+"([^"]+)"\s+does not exist/i);
+  if (!match) return null;
+  // Strip alias prefix if present.
+  const raw = match[1];
+  return raw.includes(".") ? raw.split(".").pop().toLowerCase() : raw.toLowerCase();
+}
+
+function extractMissingTableName(error) {
+  const message = `${error?.message || ""} ${error?.detail || ""}`;
+  // pg: `relation "foo" does not exist`
+  const match = message.match(/relation\s+"([^"]+)"\s+does not exist/i);
+  if (!match) return null;
+  const raw = match[1];
+  return raw.includes(".") ? raw.split(".").pop().toLowerCase() : raw.toLowerCase();
+}
+
+function isMissingSheetStatusColumn(error) {
+  if (!isUndefinedColumnError(error)) return false;
+  return extractMissingColumnName(error) === "sheet_status";
+}
+
+function isMissingCargasCasadasTable(error) {
+  if (!isUndefinedTableError(error)) return false;
+  return extractMissingTableName(error) === "cargas_casadas";
+}
+
+function isMissingViagemIdColumn(error) {
+  if (!isUndefinedColumnError(error)) return false;
+  const col = extractMissingColumnName(error);
+  return col === "viagem_id" || col === "ordem_viagem";
+}
+
+/**
+ * Erro fatal de schema drift na fila do operador. Mapeado para 503 +
+ * Retry-After pelo handler HTTP. Mantem operador informado sem mascarar o bug
+ * (log estruturado capta o `code` PG original).
+ */
+function createOperatorLeadsSchemaDriftError(originalError) {
+  const error = new LoadClaimServiceError(
+    "A fila do operador esta temporariamente indisponivel devido a uma atualizacao de schema. Tente novamente em alguns instantes.",
+    {
+      code: "SCHEMA_DRIFT",
+      statusCode: 503,
+    },
+  );
+  error.originalCode = originalError?.code || null;
+  error.originalMessage = originalError?.message || null;
+  return error;
+}
+
 function createPublicLeadSchemaUpdateError() {
   return new LoadClaimServiceError(
     "O pre-cadastro desta carga esta passando por uma atualizacao. Tente novamente em alguns instantes.",
@@ -371,7 +449,9 @@ async function getLoadById(client, loadId, { lock = false } = {}) {
         reserved_driver_id,
         reserved_claim_id,
         reserved_public_lead_id,
-        version
+        version,
+        viagem_id,
+        ordem_viagem
       FROM public.cargas
       WHERE id = $1
       ${lockingClause}
@@ -380,6 +460,34 @@ async function getLoadById(client, loadId, { lock = false } = {}) {
   );
 
   return rows[0] ?? null;
+}
+
+/**
+ * Quando o motorista se candidata a uma carga que faz parte de um pacote
+ * (viagem_id != null), a candidatura deve criar um lead em CADA carga do pacote.
+ * O operador precisa ver o pacote como unidade agrupada na fila — e a aprovacao
+ * via atomic claim (cargas_casadas/atomic-claim) consome o pacote inteiro.
+ *
+ * Retorna a lista de cargas do pacote ordenada por ordem_viagem ASC. Se a carga
+ * nao faz parte de um pacote, retorna lista vazia (o caller deve fazer o single
+ * insert padrao).
+ */
+async function listPacoteCargas(client, viagemId) {
+  if (!viagemId) {
+    return [];
+  }
+
+  const { rows } = await client.query(
+    `
+      SELECT id, ordem_viagem
+      FROM public.cargas
+      WHERE viagem_id = $1
+      ORDER BY ordem_viagem ASC NULLS LAST, id ASC
+    `,
+    [viagemId],
+  );
+
+  return rows;
 }
 
 async function getPublicLeadByIdentity(
@@ -1071,6 +1179,14 @@ export async function createPublicLoadLeadPreRegistration({ loadId, payload, cor
       correlationId: resolvedCorrelationId,
     });
 
+    // Se a carga pertence a um pacote (cargas_casadas), a candidatura tem que
+    // gerar um lead em CADA carga do pacote — o operador precisa ver as N paradas
+    // como uma "viagem casada" agrupada na fila, e a aprovacao acontece via
+    // atomic claim do pacote (todas RESERVED em conjunto).
+    const pacoteCargas = await listPacoteCargas(client, loadRow.viagem_id);
+    const isPacote = pacoteCargas.length > 1;
+    const pacoteViagemId = isPacote ? loadRow.viagem_id : null;
+
     let leadRow = await getPublicLeadByIdentity(client, {
       loadId,
       cpf: normalizedPayload.cpf,
@@ -1080,6 +1196,7 @@ export async function createPublicLoadLeadPreRegistration({ loadId, payload, cor
       trailerPlate2: normalizedPayload.trailerPlate2,
     });
     let reused = Boolean(leadRow);
+    let pacoteLeadsCount = 0;
 
     if (!leadRow) {
       leadRow = await insertPreRegisteredLead(client, {
@@ -1094,6 +1211,7 @@ export async function createPublicLoadLeadPreRegistration({ loadId, payload, cor
         payload: {
           correlation_id: resolvedCorrelationId,
           vehicle_type: normalizedPayload.vehicleType,
+          pacote_viagem_id: pacoteViagemId,
         },
         actorType: "public-driver",
         actorId: normalizedPayload.cpf,
@@ -1106,10 +1224,74 @@ export async function createPublicLoadLeadPreRegistration({ loadId, payload, cor
         payload: {
           correlation_id: resolvedCorrelationId,
           source: "PRE_REGISTRATION",
+          pacote_viagem_id: pacoteViagemId,
         },
         actorType: "public-driver",
         actorId: normalizedPayload.cpf,
       });
+
+      pacoteLeadsCount = 1;
+
+      // Pacote: replicar a candidatura nas demais paradas do mesmo viagem_id.
+      // A transacao do withPgTransaction garante atomicidade — se qualquer insert
+      // falhar, todos os leads (incluindo o primario) sao desfeitos.
+      if (isPacote) {
+        for (const sibling of pacoteCargas) {
+          if (sibling.id === loadId) {
+            continue;
+          }
+
+          // Reusa o mesmo identity-lookup; se outro processo ja criou um lead
+          // identico para essa carga irmã, nao duplicamos.
+          const existingSibling = await getPublicLeadByIdentity(client, {
+            loadId: sibling.id,
+            cpf: normalizedPayload.cpf,
+            phone: normalizedPayload.phone,
+            horsePlate: normalizedPayload.horsePlate,
+            trailerPlate: normalizedPayload.trailerPlate,
+            trailerPlate2: normalizedPayload.trailerPlate2,
+          });
+
+          if (existingSibling) {
+            continue;
+          }
+
+          const siblingLead = await insertPreRegisteredLead(client, {
+            loadId: sibling.id,
+            normalizedPayload,
+          });
+
+          await insertPublicLeadEvent(client, {
+            loadId: sibling.id,
+            leadId: siblingLead.id,
+            eventType: PUBLIC_LEAD_EVENT_TYPE.PRE_REGISTERED,
+            payload: {
+              correlation_id: resolvedCorrelationId,
+              vehicle_type: normalizedPayload.vehicleType,
+              pacote_viagem_id: pacoteViagemId,
+              pacote_sibling_of: leadRow.id,
+            },
+            actorType: "public-driver",
+            actorId: normalizedPayload.cpf,
+          });
+
+          await insertPublicLeadEvent(client, {
+            loadId: sibling.id,
+            leadId: siblingLead.id,
+            eventType: PUBLIC_LEAD_EVENT_TYPE.QUEUED,
+            payload: {
+              correlation_id: resolvedCorrelationId,
+              source: "PRE_REGISTRATION_PACOTE_SIBLING",
+              pacote_viagem_id: pacoteViagemId,
+              pacote_sibling_of: leadRow.id,
+            },
+            actorType: "public-driver",
+            actorId: normalizedPayload.cpf,
+          });
+
+          pacoteLeadsCount += 1;
+        }
+      }
     } else if (leadRow.status === PUBLIC_LEAD_STATUS.APPROVED) {
       throw new ConflictError("Essa tentativa ja foi aprovada e a carga nao aceita um novo pre-cadastro ativo.", {
         code: "LEAD_ALREADY_APPROVED",
@@ -1223,6 +1405,11 @@ export async function createPublicLoadLeadPreRegistration({ loadId, payload, cor
         correlationId: resolvedCorrelationId,
         reused,
         validationPending,
+        pacoteViagemId,
+        // pacoteLeadsCount = numero de cargas em que esta candidatura foi
+        // replicada (>=2 quando a carga faz parte de um pacote, 1 quando avulsa
+        // ou quando foi reaproveitada via identity match).
+        pacoteLeadsCount: reused ? null : pacoteLeadsCount,
       },
     };
 
@@ -1232,6 +1419,8 @@ export async function createPublicLoadLeadPreRegistration({ loadId, payload, cor
       lead_id: leadRow.id,
       reused,
       lead_status: leadRow.status,
+      pacote_viagem_id: pacoteViagemId,
+      pacote_leads_count: pacoteLeadsCount || null,
     });
 
     return {
@@ -1389,6 +1578,69 @@ export async function queuePublicLoadLeadViaWhatsApp({ loadId, leadId, correlati
   });
 }
 
+function buildPacoteMeta(row) {
+  if (!row.load_viagem_id) {
+    return null;
+  }
+
+  // Pacote meta vem do JOIN com cargas_casadas. Quando o JOIN nao traz dados
+  // (ex.: pacote excluido em concorrencia), expoe apenas o id para que o
+  // frontend ainda agrupe pela viagem_id.
+  const valorTotalRaw = row.pacote_valor_total;
+  const valorTotal =
+    valorTotalRaw === null || valorTotalRaw === undefined
+      ? null
+      : Number(valorTotalRaw);
+
+  return {
+    id: row.load_viagem_id,
+    status: row.pacote_status || null,
+    valorTotal: Number.isFinite(valorTotal) ? valorTotal : null,
+    version: row.pacote_version ?? null,
+    totalCargas:
+      row.pacote_total_cargas != null ? Number(row.pacote_total_cargas) : null,
+    ordemPropria: row.load_ordem_viagem ?? null,
+  };
+}
+
+/**
+ * Resolve o nome do motorista para exibicao na fila do operador.
+ * Fallback chain (iter #9):
+ *   1. Angellira (validation_summary_json->'driver'->'angelira'->>'displayName')
+ *   2. ASPx (aspx_drivers.display_name)
+ *   3. Pending registration (pending_driver_registrations.dados->'motorista'->>'nome')
+ * Quando nada bate, retorna null e a UI cai no telefone como fallback.
+ */
+function resolveLeadDriverName(row) {
+  // 1) Tenta extrair do validation_summary_json (Angellira). Quando o JSON nao
+  //    foi rehidratado ainda (lead recem-criado), usamos a coluna serializada
+  //    diretamente.
+  let summary = row.validation_summary_json;
+  if (typeof summary === "string") {
+    try {
+      summary = JSON.parse(summary);
+    } catch {
+      summary = null;
+    }
+  }
+  const angelliraName = summary?.driver?.angelira?.displayName;
+  if (typeof angelliraName === "string" && angelliraName.trim()) {
+    return angelliraName.trim();
+  }
+
+  // 2) ASPx display_name (sincronizado por GitHub Action).
+  if (typeof row.aspx_display_name === "string" && row.aspx_display_name.trim()) {
+    return row.aspx_display_name.trim();
+  }
+
+  // 3) Pending registration dados->motorista->nome.
+  if (typeof row.pdr_display_name === "string" && row.pdr_display_name.trim()) {
+    return row.pdr_display_name.trim();
+  }
+
+  return null;
+}
+
 function groupLeadsForOperator(rows) {
   const groupsMap = new Map();
 
@@ -1413,6 +1665,9 @@ function groupLeadsForOperator(rows) {
         clienteId: row.load_cliente_id || null,
         clienteNome: row.load_cliente_nome || null,
         clienteLogoUrl: row.load_cliente_logo_url || null,
+        viagemId: row.load_viagem_id || null,
+        ordemViagem: row.load_ordem_viagem ?? null,
+        pacoteMeta: buildPacoteMeta(row),
       },
       queueCount: 0,
       totalLeads: 0,
@@ -1439,6 +1694,7 @@ function groupLeadsForOperator(rows) {
         status: row.validation_status,
         checkedAt: row.validation_checked_at,
       }),
+      driverName: resolveLeadDriverName(row),
       queuePosition,
       whatsappUrl: buildPhoneWhatsAppUrl(row.phone),
     });
@@ -1482,13 +1738,47 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
               cargas.sheet_carreta AS load_sheet_carreta,
               cargas.sheet_status AS load_sheet_status,
               cargas.cliente_id AS load_cliente_id,
+              cargas.viagem_id AS load_viagem_id,
+              cargas.ordem_viagem AS load_ordem_viagem,
               clientes.nome AS load_cliente_nome,
-              clientes.logo_url AS load_cliente_logo_url
+              clientes.logo_url AS load_cliente_logo_url,
+              cc.status AS pacote_status,
+              cc.valor_total AS pacote_valor_total,
+              cc.version AS pacote_version,
+              pacote_counts.total AS pacote_total_cargas,
+              -- Driver-name fallback chain (iter #9):
+              --   1. Angellira display name (rehidratado em groupLeadsForOperator)
+              --   2. ASPx (aspx_drivers — sincronizado por GitHub Action)
+              --   3. pending_driver_registrations (cadastro publico)
+              -- DISTINCT ON em CTE precomputado evita correlated subquery
+              -- (nao suportada pelo pg-mem com JSON ops).
+              ad.display_name AS aspx_display_name,
+              pdr_latest.nome_motorista AS pdr_display_name
             FROM public.load_public_leads AS leads
             INNER JOIN public.cargas
               ON cargas.id = leads.load_id
             LEFT JOIN public.clientes
               ON clientes.id = cargas.cliente_id
+            LEFT JOIN public.cargas_casadas AS cc
+              ON cc.id = cargas.viagem_id
+            LEFT JOIN public.aspx_drivers AS ad
+              ON ad.cpf = leads.cpf
+            LEFT JOIN (
+              SELECT DISTINCT ON (dados->'motorista'->>'cpf')
+                dados->'motorista'->>'cpf' AS cpf,
+                dados->'motorista'->>'nome' AS nome_motorista
+              FROM public.pending_driver_registrations
+              WHERE status IN ('pendente', 'em_revisao', 'em_analise', 'submitted', 'draft')
+              ORDER BY dados->'motorista'->>'cpf', created_at DESC
+            ) AS pdr_latest
+              ON pdr_latest.cpf = leads.cpf
+            LEFT JOIN (
+              SELECT viagem_id, COUNT(*)::int AS total
+              FROM public.cargas
+              WHERE viagem_id IS NOT NULL
+              GROUP BY viagem_id
+            ) AS pacote_counts
+              ON pacote_counts.viagem_id = cargas.viagem_id
             WHERE leads.status = ANY($1::text[])
               AND (leads.status = 'QUEUED' OR leads.pii_redacted_at IS NULL)
             ORDER BY COALESCE(leads.queued_at, leads.created_at) ASC, leads.created_at ASC, leads.id ASC
@@ -1498,6 +1788,23 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
       );
       rows = result.rows;
     } catch (error) {
+      // Schema-drift fatal: sheet_status / cargas_casadas / viagem_id ausentes.
+      // Em vez de propagar 500 (que quebra o polling do operador), retorna 503
+      // com `Retry-After` para o cliente refazer a consulta apos a migracao.
+      if (
+        isMissingSheetStatusColumn(error) ||
+        isMissingCargasCasadasTable(error) ||
+        isMissingViagemIdColumn(error)
+      ) {
+        logLoadClaimEvent("error", "operator-leads.schema_drift", {
+          correlation_id: resolvedCorrelationId,
+          pg_code: error?.code || null,
+          pg_message: error?.message || null,
+          pg_detail: error?.detail || null,
+        });
+        throw createOperatorLeadsSchemaDriftError(error);
+      }
+
       if (!isMissingPublicLeadRedactionColumnError(error)) {
         throw error;
       }
@@ -1521,13 +1828,41 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
             cargas.sheet_cavalo AS load_sheet_cavalo,
             cargas.sheet_carreta AS load_sheet_carreta,
             cargas.cliente_id AS load_cliente_id,
+            cargas.viagem_id AS load_viagem_id,
+            cargas.ordem_viagem AS load_ordem_viagem,
             clientes.nome AS load_cliente_nome,
-            clientes.logo_url AS load_cliente_logo_url
+            clientes.logo_url AS load_cliente_logo_url,
+            cc.status AS pacote_status,
+            cc.valor_total AS pacote_valor_total,
+            cc.version AS pacote_version,
+            pacote_counts.total AS pacote_total_cargas,
+            ad.display_name AS aspx_display_name,
+            pdr_latest.nome_motorista AS pdr_display_name
           FROM public.load_public_leads AS leads
           INNER JOIN public.cargas
             ON cargas.id = leads.load_id
           LEFT JOIN public.clientes
             ON clientes.id = cargas.cliente_id
+          LEFT JOIN public.cargas_casadas AS cc
+            ON cc.id = cargas.viagem_id
+          LEFT JOIN public.aspx_drivers AS ad
+            ON ad.cpf = leads.cpf
+          LEFT JOIN (
+            SELECT DISTINCT ON (dados->'motorista'->>'cpf')
+              dados->'motorista'->>'cpf' AS cpf,
+              dados->'motorista'->>'nome' AS nome_motorista
+            FROM public.pending_driver_registrations
+            WHERE status IN ('pendente', 'em_revisao', 'em_analise', 'submitted', 'draft')
+            ORDER BY dados->'motorista'->>'cpf', created_at DESC
+          ) AS pdr_latest
+            ON pdr_latest.cpf = leads.cpf
+          LEFT JOIN (
+            SELECT viagem_id, COUNT(*)::int AS total
+            FROM public.cargas
+            WHERE viagem_id IS NOT NULL
+            GROUP BY viagem_id
+          ) AS pacote_counts
+            ON pacote_counts.viagem_id = cargas.viagem_id
           WHERE leads.status = ANY($1::text[])
           ORDER BY COALESCE(leads.queued_at, leads.created_at) ASC, leads.created_at ASC, leads.id ASC
         `,
@@ -1539,38 +1874,73 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
     // Include OPEN/RESERVED cargas that have no active leads — they should remain
     // visible in the fila after their last lead is cancelled.
     const activeLoadIds = new Set(rows.map(r => r.load_id));
-    const { rows: emptyLoadRows } = await client.query(
-      `
-        SELECT
-          c.id AS load_id,
-          c.status AS load_status,
-          c.origem AS load_origem,
-          c.destino AS load_destino,
-          c.perfil AS load_perfil,
-          c.data AS load_data,
-          c.horario AS load_horario,
-          c.reserved_public_lead_id AS load_reserved_public_lead_id,
-          c.sheet_lh AS load_sheet_lh,
-          c.sheet_data_carregamento AS load_sheet_data_carregamento,
-          c.sheet_data_descarga AS load_sheet_data_descarga,
-          c.sheet_motorista AS load_sheet_motorista,
-          c.sheet_cavalo AS load_sheet_cavalo,
-          c.sheet_carreta AS load_sheet_carreta,
-          c.sheet_status AS load_sheet_status,
-          c.cliente_id AS load_cliente_id,
-          clientes.nome AS load_cliente_nome,
-          clientes.logo_url AS load_cliente_logo_url
-        FROM public.cargas AS c
-        LEFT JOIN public.clientes
-          ON clientes.id = c.cliente_id
-        LEFT JOIN public.load_public_leads AS active_leads
-          ON active_leads.load_id = c.id
-          AND active_leads.status = ANY($2::text[])
-        WHERE c.status = ANY($1::text[])
-          AND active_leads.id IS NULL
-      `,
-      [["OPEN", "RESERVED"], [PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED]],
-    );
+    let emptyLoadRows;
+    try {
+      const emptyResult = await client.query(
+        `
+          SELECT
+            c.id AS load_id,
+            c.status AS load_status,
+            c.origem AS load_origem,
+            c.destino AS load_destino,
+            c.perfil AS load_perfil,
+            c.data AS load_data,
+            c.horario AS load_horario,
+            c.reserved_public_lead_id AS load_reserved_public_lead_id,
+            c.sheet_lh AS load_sheet_lh,
+            c.sheet_data_carregamento AS load_sheet_data_carregamento,
+            c.sheet_data_descarga AS load_sheet_data_descarga,
+            c.sheet_motorista AS load_sheet_motorista,
+            c.sheet_cavalo AS load_sheet_cavalo,
+            c.sheet_carreta AS load_sheet_carreta,
+            c.sheet_status AS load_sheet_status,
+            c.cliente_id AS load_cliente_id,
+            c.viagem_id AS load_viagem_id,
+            c.ordem_viagem AS load_ordem_viagem,
+            clientes.nome AS load_cliente_nome,
+            clientes.logo_url AS load_cliente_logo_url,
+            cc.status AS pacote_status,
+            cc.valor_total AS pacote_valor_total,
+            cc.version AS pacote_version,
+            pacote_counts.total AS pacote_total_cargas
+          FROM public.cargas AS c
+          LEFT JOIN public.clientes
+            ON clientes.id = c.cliente_id
+          LEFT JOIN public.cargas_casadas AS cc
+            ON cc.id = c.viagem_id
+          LEFT JOIN (
+            SELECT viagem_id, COUNT(*)::int AS total
+            FROM public.cargas
+            WHERE viagem_id IS NOT NULL
+            GROUP BY viagem_id
+          ) AS pacote_counts
+            ON pacote_counts.viagem_id = c.viagem_id
+          LEFT JOIN public.load_public_leads AS active_leads
+            ON active_leads.load_id = c.id
+            AND active_leads.status = ANY($2::text[])
+          WHERE c.status = ANY($1::text[])
+            AND active_leads.id IS NULL
+        `,
+        [["OPEN", "RESERVED"], [PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED]],
+      );
+      emptyLoadRows = emptyResult.rows;
+    } catch (error) {
+      if (
+        isMissingSheetStatusColumn(error) ||
+        isMissingCargasCasadasTable(error) ||
+        isMissingViagemIdColumn(error)
+      ) {
+        logLoadClaimEvent("error", "operator-leads.schema_drift", {
+          correlation_id: resolvedCorrelationId,
+          stage: "empty-loads",
+          pg_code: error?.code || null,
+          pg_message: error?.message || null,
+          pg_detail: error?.detail || null,
+        });
+        throw createOperatorLeadsSchemaDriftError(error);
+      }
+      throw error;
+    }
 
     const emptyGroups = emptyLoadRows
       .filter(r => !activeLoadIds.has(r.load_id))
@@ -1594,6 +1964,9 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
           clienteId: r.load_cliente_id || null,
           clienteNome: r.load_cliente_nome || null,
           clienteLogoUrl: r.load_cliente_logo_url || null,
+          viagemId: r.load_viagem_id || null,
+          ordemViagem: r.load_ordem_viagem ?? null,
+          pacoteMeta: buildPacoteMeta(r),
         },
         queueCount: 0,
         totalLeads: 0,

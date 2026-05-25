@@ -520,6 +520,163 @@ describe.sequential("public load leads", () => {
     });
   });
 
+  it("resolve driverName via fallback chain (Angellira -> ASPx -> pending registration)", async () => {
+    const { id: loadId } = await harness.seedLoad();
+
+    // Lead 1: tem nome no Angellira (validation_summary_json).
+    // Lead 2: nao tem Angellira mas existe em aspx_drivers.
+    // Lead 3: nao tem Angellira nem ASPx mas tem cadastro pendente.
+    // Lead 4: nenhum dos tres — driverName deve ser null.
+    mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+      summary: {
+        schemaVersion: 1,
+        checkedAt: "2026-05-25T10:00:00.000Z",
+        candidateSubmittedAt: "2026-05-25T09:00:00.000Z",
+        overallStatus: "VALID",
+        missingFields: [],
+        warnings: [],
+        driver: {
+          angelira: { status: "FOUND", found: true, displayName: "Joao Silva Angellira", validUntil: "2026-12-31" },
+          aspx: { status: "FOUND", found: true },
+        },
+        plates: [],
+        vigency: { status: "VALID", validUntil: "2026-12-31", daysUntilExpiry: 200, source: "ANGELLIRA_DRIVER" },
+        support: { whatsappNumber: "5571999999999", whatsappUrl: "https://wa.me/5571999999999" },
+        sources: { angelira: { status: "OK" }, aspx: { status: "OK" } },
+      },
+      storedSummary: {
+        schemaVersion: 1,
+        checkedAt: "2026-05-25T10:00:00.000Z",
+        candidateSubmittedAt: "2026-05-25T09:00:00.000Z",
+        overallStatus: "VALID",
+        missingFields: [],
+        warnings: [],
+        driver: {
+          angelira: { status: "FOUND", found: true, displayName: "Joao Silva Angellira", validUntil: "2026-12-31" },
+          aspx: { status: "FOUND", found: true },
+        },
+        plates: [],
+        vigency: { status: "VALID", validUntil: "2026-12-31", daysUntilExpiry: 200, source: "ANGELLIRA_DRIVER" },
+        support: { whatsappNumber: "5571999999999", whatsappUrl: "https://wa.me/5571999999999" },
+        sources: { angelira: { status: "OK" }, aspx: { status: "OK" } },
+      },
+    });
+
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload({
+        cpf: "111.111.111-11",
+        phone: "(71) 91111-1111",
+        horsePlate: "AAA1B11",
+        trailerPlate: "BBB2C22",
+      }),
+      correlationId: "corr-name-angellira",
+    });
+
+    // Lead 2 — ASPx fallback (sem displayName Angellira)
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload({
+        cpf: "222.222.222-22",
+        phone: "(71) 92222-2222",
+        horsePlate: "AAA2B22",
+        trailerPlate: "BBB3C33",
+      }),
+      correlationId: "corr-name-aspx",
+    });
+    await harness.seedAspxDriver({ cpf: "22222222222", displayName: "Maria Santos ASPx" });
+
+    // Lead 3 — pending registration fallback
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload({
+        cpf: "333.333.333-33",
+        phone: "(71) 93333-3333",
+        horsePlate: "AAA3B33",
+        trailerPlate: "BBB4C44",
+      }),
+      correlationId: "corr-name-pdr",
+    });
+    await harness.seedPendingDriverRegistration({
+      cpf: "33333333333",
+      nomeMotorista: "Pedro Souza Cadastro",
+      status: "pendente",
+    });
+
+    // Lead 4 — phone-only (sem nada)
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload({
+        cpf: "444.444.444-44",
+        phone: "(71) 94444-4444",
+        horsePlate: "AAA4B44",
+        trailerPlate: "BBB5C55",
+      }),
+      correlationId: "corr-name-nothing",
+    });
+
+    const listing = await service.listOperatorPublicLoadLeads({
+      correlationId: "corr-name-list",
+    });
+
+    expect(listing.statusCode).toBe(200);
+    const leads = listing.payload.groups[0].leads;
+    const leadsByPhone = new Map(leads.map((l) => [l.phone, l]));
+
+    expect(leadsByPhone.get("71911111111")?.driverName).toBe("Joao Silva Angellira");
+    expect(leadsByPhone.get("71922222222")?.driverName).toBe("Maria Santos ASPx");
+    expect(leadsByPhone.get("71933333333")?.driverName).toBe("Pedro Souza Cadastro");
+    expect(leadsByPhone.get("71944444444")?.driverName).toBeNull();
+  });
+
+  it("expoe 503 SCHEMA_DRIFT quando a coluna cargas.sheet_status nao existe", async () => {
+    const { id: loadId } = await harness.seedLoad();
+
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-schema-drift-prereg",
+    });
+
+    // Simula migracao nao aplicada: sheet_status nao existe em producao.
+    await harness.query(`ALTER TABLE public.cargas DROP COLUMN sheet_status`);
+
+    const driftError = await service
+      .listOperatorPublicLoadLeads({
+        correlationId: "corr-schema-drift-list",
+      })
+      .catch((error) => error);
+
+    expect(driftError).toMatchObject({
+      code: "SCHEMA_DRIFT",
+      statusCode: 503,
+    });
+  });
+
+  it("expoe 503 SCHEMA_DRIFT quando a tabela cargas_casadas nao existe", async () => {
+    const { id: loadId } = await harness.seedLoad();
+
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-cargas-casadas-prereg",
+    });
+
+    // Simula rollout incompleto: cargas_casadas nao foi criada.
+    await harness.query(`DROP TABLE public.cargas_casadas CASCADE`);
+
+    const driftError = await service
+      .listOperatorPublicLoadLeads({
+        correlationId: "corr-cargas-casadas-list",
+      })
+      .catch((error) => error);
+
+    expect(driftError).toMatchObject({
+      code: "SCHEMA_DRIFT",
+      statusCode: 503,
+    });
+  });
+
   it("mantem o pre-cadastro funcionando quando a coluna da segunda placa ainda nao existe", async () => {
     const { id: loadId } = await harness.seedLoad();
 
@@ -567,6 +724,129 @@ describe.sequential("public load leads", () => {
     expect(load.reserved_driver_id).toBeNull();
     expect(load.reserved_claim_id).toBeNull();
     expect(load.booked_driver_id).toBeNull();
+  });
+
+  it("replicates a pacote candidatura em todas as cargas do mesmo viagem_id", async () => {
+    // 3 cargas no mesmo pacote — o motorista candidata na carga #1 e o backend
+    // precisa criar lead em #2 e #3 tambem (uma candidatura por viagem casada).
+    const { id: pacoteId } = await harness.seedPacote({ valor_total: 18000 });
+    const { id: carga1 } = await harness.seedLoad();
+    const { id: carga2 } = await harness.seedLoad();
+    const { id: carga3 } = await harness.seedLoad();
+    await harness.attachLoadToPacote(carga1, pacoteId, 1);
+    await harness.attachLoadToPacote(carga2, pacoteId, 2);
+    await harness.attachLoadToPacote(carga3, pacoteId, 3);
+
+    const response = await service.createPublicLoadLeadPreRegistration({
+      loadId: carga1,
+      payload: buildPayload(),
+      correlationId: "corr-pacote-prereg",
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.payload.meta.pacoteViagemId).toBe(pacoteId);
+    expect(response.payload.meta.pacoteLeadsCount).toBe(3);
+
+    const leadsCarga1 = await harness.getPublicLeadsByLoad(carga1);
+    const leadsCarga2 = await harness.getPublicLeadsByLoad(carga2);
+    const leadsCarga3 = await harness.getPublicLeadsByLoad(carga3);
+
+    expect(leadsCarga1).toHaveLength(1);
+    expect(leadsCarga2).toHaveLength(1);
+    expect(leadsCarga3).toHaveLength(1);
+    // mesma identidade replicada em todas as paradas
+    expect(leadsCarga1[0].cpf).toBe(leadsCarga2[0].cpf);
+    expect(leadsCarga1[0].cpf).toBe(leadsCarga3[0].cpf);
+    expect(leadsCarga1[0].phone).toBe(leadsCarga2[0].phone);
+    // todos ja entram em QUEUED
+    expect(leadsCarga1[0].status).toBe(PUBLIC_LEAD_STATUS.QUEUED);
+    expect(leadsCarga2[0].status).toBe(PUBLIC_LEAD_STATUS.QUEUED);
+    expect(leadsCarga3[0].status).toBe(PUBLIC_LEAD_STATUS.QUEUED);
+
+    // Eventos PRE_REGISTERED e QUEUED registram pacote_viagem_id no payload.
+    const eventsCarga2 = await harness.getPublicLeadEventsByLoad(carga2);
+    const preEvent = eventsCarga2.find((e) => e.event_type === PUBLIC_LEAD_STATUS.PRE_REGISTERED || e.event_type === "PRE_REGISTERED");
+    expect(preEvent).toBeDefined();
+    expect(preEvent.event_payload_json).toMatchObject({ pacote_viagem_id: pacoteId });
+  });
+
+  it("mantem comportamento avulso (1 insert) quando carga nao tem viagem_id", async () => {
+    const { id: loadId } = await harness.seedLoad();
+
+    const response = await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-avulsa-prereg",
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.payload.meta.pacoteViagemId).toBeNull();
+    expect(response.payload.meta.pacoteLeadsCount).toBe(1);
+
+    const leads = await harness.getPublicLeadsByLoad(loadId);
+    expect(leads).toHaveLength(1);
+  });
+
+  it("operator queue retorna pacote_meta nos groups quando carga tem viagem_id", async () => {
+    const { id: pacoteId } = await harness.seedPacote({
+      valor_total: 24000,
+      status: "publicado",
+      version: 2,
+    });
+    const { id: carga1 } = await harness.seedLoad();
+    const { id: carga2 } = await harness.seedLoad();
+    await harness.attachLoadToPacote(carga1, pacoteId, 1);
+    await harness.attachLoadToPacote(carga2, pacoteId, 2);
+
+    await service.createPublicLoadLeadPreRegistration({
+      loadId: carga1,
+      payload: buildPayload(),
+      correlationId: "corr-pacote-list",
+    });
+
+    const listing = await service.listOperatorPublicLoadLeads({
+      correlationId: "corr-pacote-list-operator",
+    });
+
+    expect(listing.statusCode).toBe(200);
+    // 2 cargas do pacote — ambas tem lead (pre-cadastro replicado).
+    const pacoteGroups = listing.payload.groups.filter(
+      (g) => g.load.viagemId === pacoteId,
+    );
+    expect(pacoteGroups).toHaveLength(2);
+
+    pacoteGroups.forEach((g) => {
+      expect(g.load.pacoteMeta).not.toBeNull();
+      expect(g.load.pacoteMeta).toMatchObject({
+        id: pacoteId,
+        status: "publicado",
+        valorTotal: 24000,
+        version: 2,
+        totalCargas: 2,
+      });
+      expect([1, 2]).toContain(g.load.pacoteMeta.ordemPropria);
+      expect(g.leads).toHaveLength(1);
+    });
+  });
+
+  it("operator queue mantem pacoteMeta=null para cargas avulsas", async () => {
+    const { id: loadId } = await harness.seedLoad();
+
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-avulsa-list",
+    });
+
+    const listing = await service.listOperatorPublicLoadLeads({
+      correlationId: "corr-avulsa-list-operator",
+    });
+
+    expect(listing.statusCode).toBe(200);
+    const avulsa = listing.payload.groups.find((g) => g.load.id === loadId);
+    expect(avulsa).toBeDefined();
+    expect(avulsa.load.viagemId).toBeNull();
+    expect(avulsa.load.pacoteMeta).toBeNull();
   });
 
   it("rejects approving a queued lead when the load is no longer open", async () => {

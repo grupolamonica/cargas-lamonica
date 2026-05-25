@@ -5,6 +5,7 @@ import { addDays, format, isSameDay, parseISO, startOfToday } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
 import { fetchDriverLoadFacets, fetchDriverLoads, fetchDriverLoadsDigest } from "@/services/readModels";
+import type { PacoteMeta } from "@/services/readModels";
 
 export const PAGE_SIZE = 12;
 
@@ -29,6 +30,12 @@ export interface Cargo {
   carregamentoLabel?: string | null;
   descargaLabel?: string | null;
   routeLabel?: string | null;
+  /** Pacote (cargas casadas) ao qual esta carga pertence — null quando avulsa. Plan 10-05. */
+  viagem_id?: string | null;
+  /** Posição (1..N) dentro do pacote — null quando avulsa. */
+  ordem_viagem?: number | null;
+  /** Resumo inline do pacote para renderização no LoadCard — null quando avulsa. */
+  pacote_meta?: PacoteMeta | null;
 }
 
 export interface FilterOption {

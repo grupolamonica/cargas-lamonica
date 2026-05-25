@@ -1,17 +1,18 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User, UserPlus } from "lucide-react";
+import { AlertTriangle, Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User, UserPlus } from "lucide-react";
 import { differenceInDays } from "date-fns";
 import { toast } from "sonner";
 
 import ClientLogo from "@/components/ClientLogo";
 import DashboardHeader from "@/components/DashboardHeader";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
+import OperatorPacoteLeadCard, { type DriverCandidatura, type PacoteLeadItem } from "@/components/operator/OperatorPacoteLeadCard";
 import { cn } from "@/lib/utils";
 import { buildDisplayDateTime, formatFullDateTime, formatShortDateTime } from "@/lib/dateDisplay";
 import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
-import { approveOperatorLoadLead, cancelOperatorLoadLead, createDirectAllocation, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type DirectAllocationPayload, type OperatorLeadGroup, type PublicLeadValidationSummary } from "@/services/loadClaims";
+import { ApiError, approveOperatorLoadLead, cancelOperatorLoadLead, createDirectAllocation, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type DirectAllocationPayload, type OperatorLeadGroup, type OperatorLeadPacoteMeta, type PublicLeadValidationSummary } from "@/services/loadClaims";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { VEHICLE_PROFILE_OPTIONS } from "@/lib/vehicleProfiles";
 import { fetchOperatorClientes, fetchSheetMonitor, type SheetMonitorRow } from "@/services/readModels";
@@ -108,6 +109,34 @@ function buildTrailerPlateLabel(lead: OperatorLeadGroup["leads"][number]) {
   return [lead.trailerPlate, lead.trailerPlate2].filter((value) => value && value.trim()).join(" | ") || "Sem carreta";
 }
 
+function maskCpfSuffix(cpf: string | null | undefined) {
+  const digits = (cpf ?? "").replace(/\D/g, "");
+  if (!digits) return null;
+  return `*${digits.slice(-2)}`;
+}
+
+function formatPhoneDisplay(phone: string | null | undefined) {
+  const digits = (phone ?? "").replace(/\D/g, "");
+  if (digits.length === 11) return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+  if (digits.length === 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+  return phone ?? "";
+}
+
+/**
+ * Sublabel mostrado abaixo do nome (ou abaixo do telefone, quando nao ha
+ * nome): "CPF *XX  ·  (DD) NNNNN-NNNN" ou "(sem cadastro)" quando so phone.
+ */
+function buildDriverSubLabel(lead: OperatorLeadGroup["leads"][number]) {
+  const cpfMask = maskCpfSuffix(lead.cpf);
+  const phoneFormatted = formatPhoneDisplay(lead.phone);
+  if (lead.driverName && lead.driverName.trim()) {
+    // Quando temos o nome, sublabel mostra CPF + phone.
+    return [cpfMask ? `CPF ${cpfMask}` : null, phoneFormatted].filter(Boolean).join(" · ");
+  }
+  // Sem nome: ja exibimos o phone como label principal; sublabel sinaliza falta de cadastro.
+  return cpfMask ? `CPF ${cpfMask} · sem cadastro` : "sem cadastro";
+}
+
 const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   const queryClient = useQueryClient();
   const [approvingLeadId, setApprovingLeadId] = useState<string | null>(null);
@@ -138,8 +167,19 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     staleTime: 15_000,
-    retry: false,
+    // Retry transient errors (5xx) with exponential backoff. 4xx errors
+    // (auth, validation) sao terminais e nao devem ser retentados.
+    retry: (failureCount, err) => {
+      if (failureCount >= 2) return false;
+      const status = (err as ApiError)?.status;
+      return status === undefined || status >= 500;
+    },
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10_000),
   });
+
+  // Detecta erro transient (503 schema-drift) para banner amarelo
+  // nao-bloqueante — dados antigos continuam visiveis enquanto retenta.
+  const isTransientError = (error as ApiError | null | undefined)?.status === 503;
 
   // Snapshot da planilha para detectar aloca\u00e7\u00e3o externa (motorista preenchido no Google Sheets)
   const { data: sheetData } = useQuery({
@@ -286,9 +326,114 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
       : filteredGroups,
   [filteredGroups, clienteFilter]);
 
+  /**
+   * Pacote grouping: cargas que pertencem ao mesmo `pacoteMeta.id` sao
+   * apresentadas como uma viagem casada unica em um card destacado, com TODAS
+   * as candidaturas (N motoristas) agrupadas dentro do mesmo card. Antes o
+   * agrupamento era por (pacote + driver) — gerando 1 card por motorista — e o
+   * operador via duplicacao visual.
+   *
+   * Cargas avulsas (viagemId == null) seguem rendering original.
+   */
+  type RenderItem =
+    | { kind: "carga"; group: OperatorLeadGroup }
+    | {
+        kind: "pacote";
+        pacoteMeta: OperatorLeadPacoteMeta;
+        /** Todas as paradas do pacote (cargas + lead correspondente), achatadas para compat com testes. */
+        items: PacoteLeadItem[];
+        /** Candidaturas agrupadas por motorista (cpf|phone). */
+        candidaturas: DriverCandidatura[];
+      };
+
+  const renderItems = useMemo<RenderItem[]>(() => {
+    const items: RenderItem[] = [];
+    // Map<viagemId, RenderItem(pacote)> — 1 card por pacote, independente de quantos drivers.
+    const pacoteIndex = new Map<string, Extract<RenderItem, { kind: "pacote" }>>();
+    // Map auxiliar: viagemId -> Map<driverKey, DriverCandidatura> para deduplicar candidatos.
+    const pacoteDriversIndex = new Map<string, Map<string, DriverCandidatura>>();
+
+    filteredByCliente.forEach((group) => {
+      const pacoteMeta = group.load.pacoteMeta ?? null;
+      // group sem viagem_id ou sem leads = render avulso (mantem comportamento).
+      if (!pacoteMeta || !group.load.viagemId || group.leads.length === 0) {
+        items.push({ kind: "carga", group });
+        return;
+      }
+
+      const indexKey = pacoteMeta.id;
+      let bucket = pacoteIndex.get(indexKey);
+      let driversMap = pacoteDriversIndex.get(indexKey);
+      if (!bucket) {
+        driversMap = new Map<string, DriverCandidatura>();
+        bucket = {
+          kind: "pacote",
+          pacoteMeta,
+          items: [],
+          candidaturas: [],
+        };
+        pacoteIndex.set(indexKey, bucket);
+        pacoteDriversIndex.set(indexKey, driversMap);
+        items.push(bucket);
+      }
+      // driversMap eh garantido nao-nulo a partir daqui
+      const drivers = driversMap as Map<string, DriverCandidatura>;
+
+      // Leads sem identidade (defensivo) caem em um candidatura "anonima" agregada.
+      const remainingLeads: typeof group.leads = [];
+
+      group.leads.forEach((lead) => {
+        const cpf = lead.cpf?.trim() ?? "";
+        const phone = lead.phone?.trim() ?? "";
+        if (!cpf && !phone) {
+          remainingLeads.push(lead);
+          return;
+        }
+
+        const driverKey = `${cpf}|${phone}`;
+        let cand = drivers.get(driverKey);
+        if (!cand) {
+          cand = { cpf, phone, items: [] };
+          drivers.set(driverKey, cand);
+        }
+        cand.items.push({ group, lead });
+        bucket!.items.push({ group, lead });
+      });
+
+      if (remainingLeads.length > 0) {
+        items.push({
+          kind: "carga",
+          group: { ...group, leads: remainingLeads },
+        });
+      }
+    });
+
+    // Ordena cada pacote por ordem_viagem ASC (multi-parada) e materializa candidaturas[].
+    pacoteIndex.forEach((bucket, key) => {
+      bucket.items.sort((a, b) => {
+        const ordemA = a.group.load.ordemViagem ?? Number.MAX_SAFE_INTEGER;
+        const ordemB = b.group.load.ordemViagem ?? Number.MAX_SAFE_INTEGER;
+        return ordemA - ordemB;
+      });
+      const drivers = pacoteDriversIndex.get(key);
+      if (drivers) {
+        bucket.candidaturas = Array.from(drivers.values()).map((cand) => ({
+          ...cand,
+          items: cand.items.slice().sort((a, b) => {
+            const ordemA = a.group.load.ordemViagem ?? Number.MAX_SAFE_INTEGER;
+            const ordemB = b.group.load.ordemViagem ?? Number.MAX_SAFE_INTEGER;
+            return ordemA - ordemB;
+          }),
+        }));
+      }
+    });
+
+    return items;
+  }, [filteredByCliente]);
+
   const PAGE_SIZE = 10;
-  const totalPages = Math.ceil(filteredByCliente.length / PAGE_SIZE);
-  const paginatedGroups = filteredByCliente.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const totalPages = Math.ceil(renderItems.length / PAGE_SIZE);
+  const paginatedItems = renderItems.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const hasActiveFilters =
     deferredSearch.length > 0 || loadStatusFilter !== "todos" || leadStatusFilter !== "todos" || clienteFilter !== "";
@@ -669,6 +814,21 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
           ) : null}
         </section>
 
+        {/* Banner gracioso para 503 transient: mostra alerta, mantem polling rodando
+            e preserva os dados anteriores ja renderizados (nao bloqueia a UI). */}
+        {isTransientError && groups.length > 0 ? (
+          <section className="admin-panel flex items-center gap-3 border-l-4 border-amber-500 bg-amber-50/70 px-5 py-3 text-sm text-amber-900 dark:border-amber-400 dark:bg-amber-500/15 dark:text-amber-100">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-300" />
+            <div className="flex-1">
+              <p className="font-semibold">Sincronizacao temporariamente indisponivel</p>
+              <p className="mt-0.5 text-xs leading-relaxed text-amber-900/85 dark:text-amber-100/80">
+                Reconectando automaticamente. Os dados exibidos podem estar desatualizados em alguns instantes.
+              </p>
+            </div>
+            {isFetching ? <Loader2 className="h-4 w-4 animate-spin text-amber-600 dark:text-amber-300" /> : null}
+          </section>
+        ) : null}
+
         {isLoading ? (
           <section className="admin-panel flex min-h-[260px] items-center justify-center">
             <div className="flex items-center gap-3 text-sm text-muted-foreground">
@@ -676,7 +836,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
               Carregando a fila de leads...
             </div>
           </section>
-        ) : error ? (
+        ) : error && !isTransientError ? (
           <section className="admin-panel flex min-h-[260px] flex-col items-center justify-center gap-4 p-10 text-center">
             <ShieldCheck className="h-14 w-14 text-amber-600/70" />
             <div className="space-y-1">
@@ -713,9 +873,78 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
               </div>
             ) : null}
           <section className="space-y-4">
-            {paginatedGroups.map((group) => {
+            {paginatedItems.map((renderItem) => {
+              if (renderItem.kind === "pacote") {
+                const pacoteCollapseKey = `pacote:${renderItem.pacoteMeta.id}`;
+                const isCollapsed = collapsedLoadIds.includes(pacoteCollapseKey);
+                return (
+                  <OperatorPacoteLeadCard
+                    key={pacoteCollapseKey}
+                    pacoteMeta={renderItem.pacoteMeta}
+                    items={renderItem.items}
+                    candidaturas={renderItem.candidaturas}
+                    isCollapsed={isCollapsed}
+                    onToggleCollapse={() => toggleLoadVisibility(pacoteCollapseKey)}
+                    approvingLeadId={approvingLeadId}
+                    cancellingLeadId={cancellingLeadId}
+                    onApprove={(loadId, leadId, val) => void handleApprove(loadId, leadId, val)}
+                    onCancel={(loadId, leadId, cpf) => void handleCancel(loadId, leadId, cpf)}
+                    onApprovePacote={(cand) => {
+                      // Iter #9: reserva o pacote inteiro para um motorista.
+                      // Sequencia handleApprove por lead QUEUED — aproveita o
+                      // atomic-claim do iter #3 que ja garante a transicao
+                      // PACOTE.publicado -> reservado quando a primeira parada
+                      // eh aprovada e replica via cascade nas demais.
+                      void (async () => {
+                        const queuedItems = cand.items.filter((it) => it.lead.status === "QUEUED");
+                        for (const it of queuedItems) {
+                          await handleApprove(it.group.load.id, it.lead.id, it.lead.validation);
+                        }
+                      })();
+                    }}
+                    onCancelPacote={(cand) => {
+                      // Cancela todas as candidaturas (1 por parada) deste motorista.
+                      const cpfSuffix = cand.cpf?.trim() ? cand.cpf.trim().slice(-2).padStart(2, "*") : null;
+                      const tail = cpfSuffix ? ` (final ${cpfSuffix})` : "";
+                      if (
+                        !confirmAction(
+                          `Cancelar a candidatura${tail} em todas as paradas do pacote? O motorista sera notificado.`,
+                        )
+                      ) {
+                        return;
+                      }
+                      void (async () => {
+                        for (const it of cand.items) {
+                          // Pula leads ja em estado terminal.
+                          if (it.lead.status === "QUEUED" || it.lead.status === "APPROVED") {
+                            await cancelOperatorLoadLead(it.group.load.id, it.lead.id).catch(() => undefined);
+                          }
+                        }
+                        toast.success("Candidaturas do pacote canceladas.");
+                        await queryClient.invalidateQueries({ queryKey: LEADS_QUERY_KEY });
+                      })();
+                    }}
+                    onOpenDriverDetail={(lead) =>
+                      setSelectedDriver({
+                        name: lead.validation?.driver.angelira.displayName || null,
+                        cpf: lead.cpf || null,
+                        phone: lead.phone || null,
+                        vehicleType: lead.vehicleType || null,
+                        plates: {
+                          horsePlate: lead.horsePlate || null,
+                          trailerPlate: lead.trailerPlate || null,
+                          trailerPlate2: lead.trailerPlate2 || null,
+                        },
+                        validation: lead.validation || null,
+                        angelliraDetails: null,
+                      })
+                    }
+                  />
+                );
+              }
+              const group = renderItem.group;
               const routeLabel = buildRouteLabel(group);
-              const isCollapsed = collapsedLoadIds.includes(group.load.id);
+              const isCargaCollapsed = collapsedLoadIds.includes(group.load.id);
               const sheetAllocation = group.load.sheetLh ? sheetAllocationByLh.get(group.load.sheetLh) : undefined;
               const effectiveStatus = sheetAllocation?.status || group.load.sheetStatus || group.load.status;
               const statusStyle = resolveStatusStyle(effectiveStatus);
@@ -743,11 +972,18 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                 isNearDeadline = diffMs >= -60 * 60 * 1000 && diffMs <= 6 * 60 * 60 * 1000;
               }
 
+              const coletaLabel =
+                group.load.sheetDataCarregamento ||
+                formatShortDateTime(buildDisplayDateTime(group.load.data, group.load.horario), "A confirmar");
+              const entregaLabel = group.load.sheetDataDescarga || null;
+
               return (
                 <article
                   key={group.load.id}
                   className={cn(
-                    "admin-panel overflow-hidden relative transition-all",
+                    // iter #9 — overflow-visible: deixa badge top-right respirar sem
+                    // ser cortado quando o card encolhe.
+                    "admin-panel relative transition-all",
                     isNearDeadline
                       ? "outline outline-[3px] -outline-offset-1 outline-amber-500 shadow-[0_0_0_6px_rgba(245,158,11,0.22)] dark:outline-amber-400"
                       : `outline outline-[3px] -outline-offset-1 ${statusStyle.ring} ${statusStyle.shadow}`,
@@ -755,7 +991,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                 >
                   <span
                     className={cn(
-                      "absolute right-4 top-4 z-10 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[0.65rem] font-bold uppercase tracking-[0.16em] shadow-sm",
+                      "absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[0.6rem] font-bold uppercase tracking-[0.14em] shadow-sm",
                       isNearDeadline
                         ? "bg-amber-500 text-white dark:bg-amber-400 dark:text-amber-950 animate-pulse"
                         : statusStyle.badge,
@@ -767,113 +1003,123 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                       <><ShieldCheck className="h-3 w-3" />{statusStyle.label}</>
                     )}
                   </span>
-                  <div className="border-b border-border/70 px-5 py-5 lg:px-6">
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">Carga {group.load.id}</p>
-                          {group.load.sheetLh ? (
-                            <span className="inline-flex rounded-full border border-primary/15 bg-primary/8 px-2.5 py-0.5 text-[0.68rem] font-bold font-mono text-primary">
-                              LH {group.load.sheetLh}
-                            </span>
-                          ) : null}
-                        </div>
-                        <h3 className="mt-2 flex items-center gap-2 text-xl font-semibold tracking-tight text-foreground">
-                          {routeLabel}
-                          {group.load.clienteLogoUrl ? (
-                            <ClientLogo
-                              logoUrl={group.load.clienteLogoUrl}
-                              name={group.load.clienteNome ?? ""}
-                              className="h-6 w-6"
-                            />
-                          ) : null}
-                        </h3>
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <LoadStatusBadge status={effectiveStatus} />
-                          <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2.5 py-0.5 text-[0.68rem] font-semibold text-muted-foreground">
-                            Perfil {group.load.perfil}
-                          </span>
-                          <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2.5 py-0.5 text-[0.68rem] font-semibold text-muted-foreground">
-                            {group.queueCount} na fila
-                          </span>
-                        </div>
-                      </div>
+                  {/*
+                    Header redesign iter #9: 3 linhas compactas (~85px no desktop).
+                    Linha 1: chips de identificacao + perfil + queue count.
+                    Linha 2: rota com logo do cliente.
+                    Linha 3: coleta / entrega / sheet info + acoes (flex-wrap).
+                    Badge "Carregamento em breve" / status do load fica top-right.
+                  */}
+                  <div className="border-b border-border/70 px-5 py-3 lg:px-6">
+                    {/* Linha 1: chips identificadores + status pill + queue counter */}
+                    <div className="flex flex-wrap items-center gap-2 pr-32">
+                      <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-primary/60">
+                        Carga {group.load.id}
+                      </p>
+                      {group.load.sheetLh ? (
+                        <span className="inline-flex rounded-full border border-primary/15 bg-primary/8 px-2 py-0.5 text-[0.6rem] font-bold font-mono text-primary">
+                          LH {group.load.sheetLh}
+                        </span>
+                      ) : null}
+                      <LoadStatusBadge status={effectiveStatus} />
+                      <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[0.6rem] font-semibold text-muted-foreground">
+                        {group.load.perfil}
+                      </span>
+                      <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[0.6rem] font-semibold text-muted-foreground">
+                        {group.queueCount} na fila
+                      </span>
+                    </div>
 
-                      <div className="flex flex-wrap gap-2">
+                    {/* Linha 2: rota com logo do cliente */}
+                    <h3 className="mt-1.5 flex items-center gap-2 text-base font-semibold tracking-tight text-foreground">
+                      <span className="truncate">{routeLabel}</span>
+                      {group.load.clienteLogoUrl ? (
+                        <ClientLogo
+                          logoUrl={group.load.clienteLogoUrl}
+                          name={group.load.clienteNome ?? ""}
+                          className="h-5 w-5 shrink-0"
+                        />
+                      ) : null}
+                    </h3>
+
+                    {/* Linha 3: datetimes + acoes em flex-wrap (mobile-friendly) */}
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <span className="inline-flex max-w-xs items-center gap-1.5 rounded-full border border-border/70 bg-muted/20 px-2.5 py-1 text-[0.65rem] font-semibold text-muted-foreground" title="Carregamento">
+                        <Truck className="h-3 w-3" />
+                        <span className="truncate">Coleta: {coletaLabel}</span>
+                      </span>
+                      {entregaLabel ? (
+                        <span className="inline-flex max-w-xs items-center gap-1.5 rounded-full border border-border/70 bg-muted/20 px-2.5 py-1 text-[0.65rem] font-semibold text-muted-foreground" title="Descarga">
+                          <Route className="h-3 w-3" />
+                          <span className="truncate">Entrega: {entregaLabel}</span>
+                        </span>
+                      ) : null}
+                      {group.load.sheetMotorista ? (
+                        <span className="inline-flex max-w-xs items-center gap-1.5 rounded-full border border-border/70 bg-muted/20 px-2.5 py-1 text-[0.65rem] font-semibold text-muted-foreground" title="Motorista (planilha)">
+                          <User className="h-3 w-3" />
+                          <span className="truncate">{group.load.sheetMotorista}</span>
+                        </span>
+                      ) : null}
+                      {hasVigenciaAlert && (
+                        <span
+                          className="inline-flex flex-wrap items-center gap-1"
+                          title={vigenciaItems.map((i) => `${i.label}: ${i.daysLeft < 0 ? "VENCIDO" : `${i.daysLeft}d`}`).join(" | ")}
+                        >
+                          {vigenciaItems.map((item) => {
+                            const expired = item.daysLeft < 0;
+                            const urgent = item.daysLeft >= 0 && item.daysLeft <= 7;
+                            return (
+                              <span
+                                key={item.label}
+                                className={cn(
+                                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.6rem] font-bold",
+                                  expired
+                                    ? "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300"
+                                    : urgent
+                                      ? "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
+                                      : "bg-yellow-50 text-yellow-700 dark:bg-yellow-500/15 dark:text-yellow-300",
+                                )}
+                              >
+                                <Clock className="h-3 w-3" />
+                                {item.label}: {item.daysLeft < 0 ? "Vencido" : `${item.daysLeft}d`}
+                              </span>
+                            );
+                          })}
+                        </span>
+                      )}
+                      {group.load.sheetCavalo ? (
+                        <span className="inline-flex max-w-xs items-center gap-1.5 rounded-full border border-border/70 bg-muted/20 px-2.5 py-1 text-[0.65rem] font-semibold text-muted-foreground" title="Veículo (planilha)">
+                          <Truck className="h-3 w-3" />
+                          <span className="truncate">{[group.load.sheetCavalo, group.load.sheetCarreta].filter(Boolean).join(" · ")}</span>
+                        </span>
+                      ) : null}
+                      {group.load.sheetStatus ? (
+                        // iter #9 UI-04: contrast no dark mode (bg-slate-700 escuro)
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/20 px-2.5 py-1 text-[0.65rem] font-semibold text-muted-foreground dark:bg-slate-700/40 dark:text-slate-100" title="Status (planilha)">
+                          {group.load.sheetStatus}
+                        </span>
+                      ) : null}
+                      <div className="ml-auto flex flex-wrap items-center gap-1.5">
                         <button
                           type="button"
                           onClick={() => toggleLoadVisibility(group.load.id)}
-                          className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-white px-3 py-1.5 text-xs font-semibold text-foreground transition-colors duration-200 hover:bg-muted dark:bg-muted/40"
-                          aria-expanded={!isCollapsed}
+                          className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-white px-2.5 py-1 text-[0.65rem] font-semibold text-foreground transition-colors duration-200 hover:bg-muted dark:bg-muted/40"
+                          aria-expanded={!isCargaCollapsed}
                           aria-controls={`lead-group-${group.load.id}`}
                         >
-                          {isCollapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
-                          {isCollapsed ? "Expandir disputa" : "Minimizar disputa"}
+                          {isCargaCollapsed ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
+                          {isCargaCollapsed ? "Expandir disputa" : "Minimizar disputa"}
                         </button>
-                        <span className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/20 px-3 py-1.5 text-xs font-semibold text-muted-foreground" title="Carregamento">
-                          <Truck className="h-3.5 w-3.5" />
-                          Coleta: {group.load.sheetDataCarregamento || formatShortDateTime(buildDisplayDateTime(group.load.data, group.load.horario), "A confirmar")}
-                        </span>
-                        {group.load.sheetDataDescarga ? (
-                          <span className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/20 px-3 py-1.5 text-xs font-semibold text-muted-foreground" title="Descarga">
-                            <Route className="h-3.5 w-3.5" />
-                            Entrega: {group.load.sheetDataDescarga}
-                          </span>
-                        ) : null}
-                        {group.load.sheetMotorista ? (
-                          <span className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/20 px-3 py-1.5 text-xs font-semibold text-muted-foreground" title="Motorista (planilha)">
-                            <User className="h-3.5 w-3.5" />
-                            {group.load.sheetMotorista}
-                          </span>
-                        ) : null}
-                        {hasVigenciaAlert && (
-                          <span
-                            className="inline-flex items-center gap-1.5"
-                            title={vigenciaItems.map((i) => `${i.label}: ${i.daysLeft < 0 ? "VENCIDO" : `${i.daysLeft}d`}`).join(" | ")}
-                          >
-                            {vigenciaItems.map((item) => {
-                              const expired = item.daysLeft < 0;
-                              const urgent = item.daysLeft >= 0 && item.daysLeft <= 7;
-                              return (
-                                <span
-                                  key={item.label}
-                                  className={cn(
-                                    "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.65rem] font-bold",
-                                    expired
-                                      ? "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300"
-                                      : urgent
-                                        ? "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
-                                        : "bg-yellow-50 text-yellow-700 dark:bg-yellow-500/15 dark:text-yellow-300",
-                                  )}
-                                >
-                                  <Clock className="h-3 w-3" />
-                                  {item.label}: {item.daysLeft < 0 ? "Vencido" : `${item.daysLeft}d`}
-                                </span>
-                              );
-                            })}
-                          </span>
-                        )}
-                        {group.load.sheetCavalo ? (
-                          <span className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/20 px-3 py-1.5 text-xs font-semibold text-muted-foreground" title="Veículo (planilha)">
-                            <Truck className="h-3.5 w-3.5" />
-                            {[group.load.sheetCavalo, group.load.sheetCarreta].filter(Boolean).join(" · ")}
-                          </span>
-                        ) : null}
-                        {group.load.sheetStatus ? (
-                          <span className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/20 px-3 py-1.5 text-xs font-semibold text-muted-foreground" title="Status (planilha)">
-                            {group.load.sheetStatus}
-                          </span>
-                        ) : null}
-                        {group.load.status === "OPEN" && !historicoMode ? (
+                        {group.load.status === "OPEN" && !historicoMode && permissions.canAllocateLeads ? (
                           <button
                             type="button"
                             onClick={() => {
                               setDirectAllocLoadId(group.load.id);
                               setDirectAllocForm({ cpf: "", phone: "", horsePlate: "", vehicleType: "CARRETA", trailerPlate: "" });
                             }}
-                            className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100 dark:border-blue-400/40 dark:bg-blue-500/15 dark:text-blue-200 dark:hover:bg-blue-500/25"
+                            className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[0.65rem] font-semibold text-blue-700 transition-colors hover:bg-blue-100 dark:border-blue-400/40 dark:bg-blue-500/15 dark:text-blue-200 dark:hover:bg-blue-500/25"
                           >
-                            <UserPlus className="h-3.5 w-3.5" />
+                            <UserPlus className="h-3 w-3" />
                             Alocar motorista
                           </button>
                         ) : null}
@@ -881,14 +1127,14 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                     </div>
                   </div>
 
-                  {!isCollapsed ? (
+                  {!isCargaCollapsed ? (
                     <div id={`lead-group-${group.load.id}`} className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead className="bg-primary/[0.045]">
                           <tr className="border-b border-border/70">
                             <th className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Fila</th>
                             <th className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Entrada</th>
-                            <th className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Telefone</th>
+                            <th className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Motorista</th>
                             <th className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Status</th>
                             <th className="px-4 py-4 text-right text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Ações</th>
                           </tr>
@@ -925,9 +1171,20 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                                   {formatFullDateTime(lead.queuedAt || lead.preRegisteredAt)}
                                 </td>
                                 <td className="px-4 py-4 text-foreground">
-                                  <div className="flex items-center gap-2 font-medium">
-                                    <Phone className="h-4 w-4 text-primary" />
-                                    {lead.phone}
+                                  <div className="flex items-start gap-2 font-medium">
+                                    {lead.driverName ? (
+                                      <User className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                                    ) : (
+                                      <Phone className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                                    )}
+                                    <div className="min-w-0 leading-tight">
+                                      <div className="truncate">
+                                        {lead.driverName?.trim() || formatPhoneDisplay(lead.phone)}
+                                      </div>
+                                      <div className="mt-0.5 truncate text-[0.65rem] font-normal text-muted-foreground">
+                                        {buildDriverSubLabel(lead)}
+                                      </div>
+                                    </div>
                                   </div>
                                 </td>
                                 <td className="px-4 py-4">

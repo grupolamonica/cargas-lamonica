@@ -81,6 +81,18 @@ export function isMissingDriverVisibilityColumnError(error) {
   return combinedMessage.includes("driver_visibility");
 }
 
+// Phase 10 (cargas-casadas): se a tabela cargas_casadas / coluna viagem_id ainda nao
+// foi aplicada na DB (rollout incremental), a query principal de driver-loads
+// faz fallback para a versao sem JOIN de pacote — comportamento pre-Phase 10.
+export function isMissingPacoteColumnsError(error) {
+  const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
+  return (
+    combinedMessage.includes("cargas_casadas") ||
+    combinedMessage.includes("viagem_id") ||
+    combinedMessage.includes("ordem_viagem")
+  );
+}
+
 export function isMissingOptionalCargoReadModelColumnsError(error) {
   return isMissingRouteColumnError(error) || isMissingSheetScheduleColumnsError(error);
 }
@@ -251,6 +263,75 @@ export function buildRouteLabelMap(loadRows) {
   return result;
 }
 
+/**
+ * Constroi o objeto `pacote_meta` quando a carga pertence a um pacote.
+ * Cargas avulsas (viagem_id IS NULL) retornam null — backward-compat: frontend
+ * antigo que ignora o campo nao quebra.
+ *
+ * Implementado em JS em vez de SQL (jsonb_build_object) porque pg-mem nao suporta
+ * jsonb_build_object e o codebase precisa rodar testes locais sem postgres real.
+ *
+ * Campos derivados (plan revisao 2026-05-23):
+ *  - earliest_carga_date: data (YYYY-MM-DD) da carga com menor data dentro do pacote
+ *  - earliest_carga_horario: horario (HH:MM:SS) da carga com menor data — usado
+ *    pelo PacoteHeader badge "Coleta DD/MM as HH:MM" (iter #2)
+ *  - total_km: soma das distancia_km das cargas do pacote (null quando todas null)
+ *  - total_duration_horas: soma das duracao_horas (null quando todas null)
+ *  - cliente_uniforme: { id, nome, logo_url } quando todas as cargas tem o mesmo
+ *    cliente_id; null quando ha clientes distintos ou cargas sem cliente
+ *  - perfil_uniforme: string do perfil quando todas as cargas tem o mesmo perfil;
+ *    null caso contrario
+ *
+ * Os agregados vem da query principal via cc_aggregates subquery — campos
+ * row.pacoteEarliestDate, row.pacoteEarliestHorario, row.pacoteTotalKm,
+ * row.pacoteTotalDuracaoHoras, row.pacoteClienteUniformeId,
+ * row.pacoteClienteUniformeNome, etc.
+ */
+export function buildPacoteMeta(row) {
+  if (!row?.viagemId) return null;
+
+  // Plan revisao 2026-05-23 — derivar uniformidade a partir dos primos
+  // (MIN + COUNT(DISTINCT)) que vem do cc_aggregates subquery. Quando o
+  // count distinto e 1, o MIN representa o valor uniforme. Quando > 1 ou
+  // 0, retorna null (heterogeneo ou sem dados).
+  const clienteDistinctCount = Number(row.pacoteClienteDistinctCount ?? 0);
+  const clienteIdMin = row.pacoteClienteIdMin ?? null;
+  const cliente_uniforme =
+    clienteDistinctCount === 1 && clienteIdMin
+      ? {
+          id: clienteIdMin,
+          nome: row.pacoteClienteUniformeNome ?? null,
+          logo_url: row.pacoteClienteUniformeLogoUrl ?? null,
+        }
+      : null;
+
+  const perfilDistinctCount = Number(row.pacotePerfilDistinctCount ?? 0);
+  const perfilMin =
+    typeof row.pacotePerfilMin === "string" && row.pacotePerfilMin.trim() !== ""
+      ? row.pacotePerfilMin
+      : null;
+  const perfil_uniforme = perfilDistinctCount === 1 ? perfilMin : null;
+
+  return {
+    id: row.viagemId,
+    status: row.pacoteStatus ?? null,
+    valor_total: parseNullableNumber(row.pacoteValorTotal),
+    version: row.pacoteVersion ?? null,
+    published_at: row.pacotePublishedAt ?? null,
+    total_cargas:
+      typeof row.pacoteTotalCargas === "number"
+        ? row.pacoteTotalCargas
+        : Number.parseInt(row.pacoteTotalCargas ?? "0", 10) || 0,
+    ordem_propria: row.ordemViagem ?? null,
+    earliest_carga_date: row.pacoteEarliestDate ?? null,
+    earliest_carga_horario: row.pacoteEarliestHorario ?? null,
+    total_km: parseNullableNumber(row.pacoteTotalKm),
+    total_duration_horas: parseNullableNumber(row.pacoteTotalDuracaoHoras),
+    cliente_uniforme,
+    perfil_uniforme,
+  };
+}
+
 export function mapDriverLoadReadModelItem(row) {
   return {
     id: row.id,
@@ -273,6 +354,10 @@ export function mapDriverLoadReadModelItem(row) {
     carregamentoLabel: row.carregamentoLabel ?? null,
     descargaLabel: row.descargaLabel ?? null,
     routeLabel: row.routeLabel ?? null,
+    // Phase 10 (cargas-casadas): expoe metadata do pacote quando a carga e parte de viagem casada.
+    viagem_id: row.viagemId ?? null,
+    ordem_viagem: row.ordemViagem ?? null,
+    pacote_meta: buildPacoteMeta(row),
   };
 }
 
@@ -317,39 +402,154 @@ export function buildDriverLoadPublicationState(row, routeCatalogMetrics, routeL
   };
 }
 
-export async function queryDriverLoadCandidateRows(client, { whereSql, values }) {
-  const buildItemQuery = ({ withRouteColumns = true, withSheetScheduleColumns = true } = {}) => `
-        SELECT
-          cargas.id,
-          cargas.data,
-          cargas.horario,
-          cargas.origem,
-          cargas.destino,
-          ${withRouteColumns ? "TRUE" : "FALSE"}::boolean AS "__routeColumnsAvailable",
-          ${withRouteColumns ? "cargas.distancia_km" : "NULL::numeric AS distancia_km"},
-          ${withRouteColumns ? "cargas.duracao_horas" : "NULL::numeric AS duracao_horas"},
-          cargas.perfil,
-          cargas.valor,
-          cargas.bonus,
-          cargas.cliente_id AS "clienteId",
-          clientes.nome AS "clienteNome",
-          clientes.descricao AS "clienteDescricao",
-          clientes.logo_url AS "clienteLogoUrl",
-          clientes.logo_url_card AS "clienteLogoUrlCard",
-          clientes.logo_url_proximas AS "clienteLogoUrlProximas",
-          ${withSheetScheduleColumns ? 'cargas.sheet_data_carregamento AS "carregamentoLabel"' : 'NULL::text AS "carregamentoLabel"'},
-          ${withSheetScheduleColumns ? 'cargas.sheet_data_descarga AS "descargaLabel"' : 'NULL::text AS "descargaLabel"'}
-        FROM public.cargas
-        LEFT JOIN public.clientes
-          ON clientes.id = cargas.cliente_id
-        WHERE ${whereSql}
-        ORDER BY cargas.data ASC, cargas.horario ASC, cargas.id ASC
-      `;
+/**
+ * Query principal do driver portal — devolve cargas elegiveis para listing.
+ *
+ * Phase 10 (cargas-casadas): quando `withPacoteJoin=true`, augmenta a query com:
+ *  - LEFT JOIN cargas_casadas (campos do pacote: status, valor_total, version, published_at)
+ *  - LEFT JOIN subquery GROUP BY (total_cargas por pacote — anti-N+1, evita correlated subquery
+ *    e LATERAL que pg-mem nao suporta; em postgres real, indice idx_cargas_viagem_id mantem custo baixo)
+ *  - DISTINCT ON (COALESCE(viagem_id, id)) — pacote aparece UMA vez no listing (primeira carga),
+ *    avulsa continua aparecendo normalmente
+ *  - Filtro WHERE adicional: cargas de pacote so visiveis em status publicado/reservado/em_andamento
+ *
+ * Facets/operator-admin chamam com `withPacoteJoin=false` — preservam comportamento legado.
+ *
+ * Ordem global do listing (data ASC, horario ASC, id ASC) e preservada via subquery:
+ * DISTINCT ON dedupe em inner SELECT; ORDER BY final aplica-se no outer SELECT.
+ */
+export async function queryDriverLoadCandidateRows(
+  client,
+  { whereSql, values, withPacoteJoin = false } = {},
+) {
+  const buildItemQuery = ({
+    withRouteColumns = true,
+    withSheetScheduleColumns = true,
+    includePacoteJoin = withPacoteJoin,
+  } = {}) => {
+    const innerSelect = `
+          SELECT
+            ${includePacoteJoin ? "DISTINCT ON (COALESCE(cargas.viagem_id, cargas.id))" : ""}
+            cargas.id,
+            cargas.data,
+            cargas.horario,
+            cargas.origem,
+            cargas.destino,
+            ${withRouteColumns ? "TRUE" : "FALSE"}::boolean AS "__routeColumnsAvailable",
+            ${withRouteColumns ? "cargas.distancia_km" : "NULL::numeric AS distancia_km"},
+            ${withRouteColumns ? "cargas.duracao_horas" : "NULL::numeric AS duracao_horas"},
+            cargas.perfil,
+            cargas.valor,
+            cargas.bonus,
+            cargas.cliente_id AS "clienteId",
+            clientes.nome AS "clienteNome",
+            clientes.descricao AS "clienteDescricao",
+            clientes.logo_url AS "clienteLogoUrl",
+            clientes.logo_url_card AS "clienteLogoUrlCard",
+            clientes.logo_url_proximas AS "clienteLogoUrlProximas",
+            ${withSheetScheduleColumns ? 'cargas.sheet_data_carregamento AS "carregamentoLabel"' : 'NULL::text AS "carregamentoLabel"'},
+            ${withSheetScheduleColumns ? 'cargas.sheet_data_descarga AS "descargaLabel"' : 'NULL::text AS "descargaLabel"'}
+            ${includePacoteJoin ? `,
+            cargas.viagem_id AS "viagemId",
+            cargas.ordem_viagem AS "ordemViagem",
+            cc.status AS "pacoteStatus",
+            cc.valor_total AS "pacoteValorTotal",
+            cc.version AS "pacoteVersion",
+            cc.published_at AS "pacotePublishedAt",
+            cc_counts.total_cargas AS "pacoteTotalCargas",
+            cc_aggregates.earliest_date AS "pacoteEarliestDate",
+            cc_aggregates.earliest_horario AS "pacoteEarliestHorario",
+            cc_aggregates.total_km AS "pacoteTotalKm",
+            cc_aggregates.total_duracao_horas AS "pacoteTotalDuracaoHoras",
+            cc_aggregates.perfil_min AS "pacotePerfilMin",
+            cc_aggregates.perfil_distinct_count AS "pacotePerfilDistinctCount",
+            cc_aggregates.cliente_id_min AS "pacoteClienteIdMin",
+            cc_aggregates.cliente_distinct_count AS "pacoteClienteDistinctCount",
+            cc_cliente_uniforme.nome AS "pacoteClienteUniformeNome",
+            cc_cliente_uniforme.logo_url AS "pacoteClienteUniformeLogoUrl"
+            ` : ""}
+          FROM public.cargas
+          LEFT JOIN public.clientes
+            ON clientes.id = cargas.cliente_id
+          ${includePacoteJoin ? `
+          LEFT JOIN public.cargas_casadas cc
+            ON cc.id = cargas.viagem_id
+          LEFT JOIN (
+            SELECT viagem_id, COUNT(*)::int AS total_cargas
+              FROM public.cargas
+             WHERE viagem_id IS NOT NULL
+             GROUP BY viagem_id
+          ) cc_counts ON cc_counts.viagem_id = cargas.viagem_id
+          LEFT JOIN (
+            -- Agregados por pacote (plan revisao 2026-05-23): date, km, horas,
+            -- e os elementos primos (MIN + COUNT DISTINCT) que o JS combina em
+            -- perfil_uniforme/cliente_uniforme via buildPacoteMeta. Evita
+            -- CASE WHEN COUNT(DISTINCT) IN subquery (pg-mem instavel).
+            SELECT
+              viagem_id,
+              MIN(data) AS earliest_date,
+              -- iter #2 (2026-05-23): MIN(horario) — usado pelo PacoteHeader
+              -- badge "Coleta DD/MM as HH:MM". Nullable quando todas cargas
+              -- nao tem horario (raro mas possivel em rascunho).
+              MIN(horario) AS earliest_horario,
+              SUM(distancia_km) AS total_km,
+              SUM(duracao_horas) AS total_duracao_horas,
+              MIN(perfil) AS perfil_min,
+              COUNT(DISTINCT perfil)::int AS perfil_distinct_count,
+              -- pg-mem nao implementa MIN(uuid); cast pra text e devolve string
+              -- (UUID-shaped) — buildPacoteMeta nao re-parsea, so usa como identifier.
+              MIN(cliente_id::text) AS cliente_id_min,
+              COUNT(DISTINCT cliente_id)::int AS cliente_distinct_count
+              FROM public.cargas
+             WHERE viagem_id IS NOT NULL
+             GROUP BY viagem_id
+          ) cc_aggregates ON cc_aggregates.viagem_id = cargas.viagem_id
+          LEFT JOIN public.clientes cc_cliente_uniforme
+            ON cc_cliente_uniforme.id::text = cc_aggregates.cliente_id_min
+          ` : ""}
+          WHERE ${whereSql}
+          ${includePacoteJoin
+            ? "ORDER BY COALESCE(cargas.viagem_id, cargas.id), cargas.ordem_viagem ASC NULLS LAST, cargas.data ASC, cargas.horario ASC, cargas.id ASC"
+            : "ORDER BY cargas.data ASC, cargas.horario ASC, cargas.id ASC"}
+        `;
+
+    // Pacote-aware: DISTINCT ON precisa do ORDER BY iniciando por COALESCE(viagem_id, id).
+    // Para devolver o listing na ordem global esperada (data ASC, horario ASC, id ASC),
+    // envelopamos a inner-query DISTINCT em uma outer-query que reordena.
+    if (includePacoteJoin) {
+      return `SELECT * FROM (${innerSelect}) deduped
+              ORDER BY deduped.data ASC, deduped.horario ASC, deduped.id ASC`;
+    }
+    return innerSelect;
+  };
 
   try {
     const queryResult = await client.query(buildItemQuery(), values);
     return queryResult.rows;
   } catch (error) {
+    // Fallback Phase 10: cargas_casadas / viagem_id / ordem_viagem ainda nao migrados.
+    // Re-tenta sem o JOIN de pacote, preservando o resto do comportamento.
+    if (withPacoteJoin && isMissingPacoteColumnsError(error)) {
+      try {
+        const fallback = await client.query(
+          buildItemQuery({ includePacoteJoin: false }),
+          values,
+        );
+        return fallback.rows;
+      } catch (fallbackError) {
+        if (!isMissingOptionalCargoReadModelColumnsError(fallbackError)) throw fallbackError;
+        const fallback2 = await client.query(
+          buildItemQuery({
+            includePacoteJoin: false,
+            withRouteColumns: !isMissingRouteColumnError(fallbackError),
+            withSheetScheduleColumns: !isMissingSheetScheduleColumnsError(fallbackError),
+          }),
+          values,
+        );
+        return fallback2.rows;
+      }
+    }
+
     if (!isMissingOptionalCargoReadModelColumnsError(error)) throw error;
     const fallbackQueryResult = await client.query(
       buildItemQuery({
@@ -395,7 +595,8 @@ export async function findSheetClientId(client) {
 export async function findCargoById(client, cargoId, { lock = false } = {}) {
   const suffix = lock ? "FOR UPDATE" : "";
   const { rows } = await client.query(
-    `SELECT id, status, cliente_id, sheet_lh, created_by, valor, bonus FROM public.cargas WHERE id = $1 ${suffix}`,
+    `SELECT id, status, cliente_id, sheet_lh, created_by, valor, bonus, viagem_id
+       FROM public.cargas WHERE id = $1 ${suffix}`,
     [cargoId],
   );
   return rows[0] || null;
@@ -561,24 +762,69 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
   return { warnings };
 }
 
-export function buildDriverLoadFilters(query, { includeDriverVisibilityFilter = true } = {}) {
+export function buildDriverLoadFilters(query, {
+  includeDriverVisibilityFilter = true,
+  includePacoteVisibilityFilter = false,
+} = {}) {
   const parsedQuery = parseDriverLoadsQuery(query);
   const clauses = [
     "cargas.status = 'OPEN'",
     "COALESCE(cargas.is_template, false) = false",
-    // Defense-in-depth: a planilha (Google Sheets/Shopee) é a fonte de verdade.
-    // Se o sync atrasar ou falhar, cargas já marcadas como alocadas no sheet
-    // continuariam visíveis no painel do motorista por dependerem só de
-    // `status='OPEN'`. Cruzar com sheet_motorista/sheet_status barra isso.
-    // O sync persiste NULL para vazios (google-sheet-loads.js: `load.motoristas || null`),
-    // então `COALESCE(..., '') = ''` cobre NULL + string vazia em produção.
+    // Defense-in-depth: a planilha (Google Sheets/Shopee) é a fonte de verdade
+    // para alocação de motorista. Se o sync atrasar/falhar, cargas com motorista
+    // já atribuído no sheet (sheet_motorista preenchido) continuariam visíveis
+    // no painel por dependerem só de `cargas.status='OPEN'`. Bloquear por
+    // sheet_motorista impede esse vazamento.
+    //
+    // NOTA: filtro de `sheet_status` foi removido (era over-broad). Statuses
+    // como 'AGUARDANDO CARREGAMENTO' / 'AGUARDANDO CHEGAR NO CLIENTE' indicam
+    // pipeline aberto na planilha, não alocação — bloquear escondia cargas
+    // legítimas dos motoristas. Para estados terminais (DESCARREGADO, CTE
+    // ENVIADO, CANCELADO, etc.), o `cargas.status` já transita para BOOKED
+    // /EXPIRED via sync, então o filtro principal `cargas.status='OPEN'` cobre.
     "COALESCE(cargas.sheet_motorista, '') = ''",
-    "COALESCE(cargas.sheet_status, '') = ''",
   ];
   const values = [];
   let index = 1;
 
-  if (includeDriverVisibilityFilter) {
+  // Iter #8 (2026-05-25): cargas com (data + horário) anterior ao momento atual
+  // NÃO devem aparecer para o motorista — viraram rascunho implicitamente até
+  // o operator transitar status formalmente (script expire-past-cargas.mjs).
+  // Mantemos cargas com data NULL como visíveis (operator pode estar
+  // cadastrando ainda). Quando horario for NULL, comparamos só pela data.
+  //
+  // Parameterizado pq pg-mem nao suporta CURRENT_DATE/CURRENT_TIME nativos.
+  const nowDate = new Date();
+  const todayIso = nowDate.toISOString().slice(0, 10); // YYYY-MM-DD
+  const nowTimeIso = nowDate.toTimeString().slice(0, 8); // HH:MM:SS (local TZ)
+  clauses.push(
+    `(cargas.data IS NULL OR cargas.data > $${index} OR (cargas.data = $${index + 1} AND (cargas.horario IS NULL OR cargas.horario >= $${index + 2})))`,
+  );
+  values.push(todayIso, todayIso, nowTimeIso);
+  index += 3;
+
+  // Phase 10: regra de visibilidade combina driver_visibility (avulsa) com status do pacote
+  // (premium em pacote publicado).
+  //  - Carga avulsa (viagem_id IS NULL):  driver_visibility='PUBLIC' (comportamento legado)
+  //  - Carga em pacote (viagem_id NOT NULL): cc.status IN ('publicado','reservado','em_andamento')
+  //    Pacote inclui cargas PREMIUM por design (CONTEXT.md: todas as cargas de um pacote sao
+  //    PREMIUM); driver_visibility e ignorado neste branch — quem gate-keeps e o status do pacote.
+  // Quando o pacote-join nao esta ativo (facets/legacy), aplica so o filtro de driver_visibility.
+  if (includePacoteVisibilityFilter) {
+    if (includeDriverVisibilityFilter) {
+      clauses.push(
+        "(" +
+          "(cargas.viagem_id IS NULL AND COALESCE(cargas.driver_visibility, 'PUBLIC') = 'PUBLIC')" +
+          " OR " +
+          "(cargas.viagem_id IS NOT NULL AND cc.status IN ('publicado','reservado','em_andamento'))" +
+        ")",
+      );
+    } else {
+      clauses.push(
+        "(cargas.viagem_id IS NULL OR cc.status IN ('publicado','reservado','em_andamento'))",
+      );
+    }
+  } else if (includeDriverVisibilityFilter) {
     clauses.push("COALESCE(cargas.driver_visibility, 'PUBLIC') = 'PUBLIC'");
   }
 
