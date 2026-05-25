@@ -84,7 +84,22 @@ function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
             </span>
           ) : null}
         </td>
-        <td className="px-4 py-3 align-top text-xs text-muted-foreground">
+        {/*
+          Bugfix: a coluna RECURSO mostrava textos longos como
+          "pending_driver_documents_audit/abc12345…" cortados sem
+          indicacao visual de truncamento e sem hover-to-full. Aplicamos
+          truncate explicito com max-width e title attribute carregando o
+          valor completo (resourceType + resourceId NAO encurtado). O
+          operador agora pode ler a string inteira no hover.
+        */}
+        <td
+          className="max-w-[220px] truncate px-4 py-3 align-top text-xs text-muted-foreground"
+          title={
+            log.resourceType && log.resourceId
+              ? `${log.resourceType}/${log.resourceId}`
+              : log.resourceType || ""
+          }
+        >
           {log.resourceType && log.resourceId
             ? `${log.resourceType}/${shortenId(log.resourceId)}`
             : log.resourceType || "—"}
