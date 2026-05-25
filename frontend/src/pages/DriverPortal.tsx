@@ -38,7 +38,12 @@ import { cn } from "@/lib/utils";
 import { DriverClaimWorkflow } from "@/components/driver/DriverClaimWorkflow";
 import { DriverRegistrationWizard } from "@/components/driver/cadastro-v2/DriverRegistrationWizard";
 import type { PreSubmitInterceptor } from "@/components/driver/DriverClaimPanel";
-import { requestCandidaturaPreCheck, type PreCheckResponse } from "@/api/candidaturaApi";
+import {
+  requestCandidaturaPreCheck,
+  useIncompleteCadastroDrafts,
+  type IncompleteCadastroDraft,
+  type PreCheckResponse,
+} from "@/api/candidaturaApi";
 import { useDriverAuth } from "@/hooks/useDriverAuth";
 import { persistStoredLeadState, readStoredLeadState } from "@/lib/driverLeadStorage";
 import {
@@ -186,6 +191,12 @@ const DriverPortal = () => {
   } = useDriverLoads();
 
   const { notifications, notificationCount, handleDismissNotification } = useLeadNotifications();
+  // Iter #7: lista de drafts incompletos do motorista (1 card por draft).
+  const incompleteDraftsQuery = useIncompleteCadastroDrafts();
+  const incompleteDrafts = incompleteDraftsQuery.data?.drafts ?? [];
+  const [draftLoadingId, setDraftLoadingId] = useState<string | null>(null);
+  // Badge count agregado: notifications + drafts incompletos.
+  const totalNotificationCount = notificationCount + incompleteDrafts.length;
   const { toast } = useToast();
   const driverAuth = useDriverAuth();
   const isDriverAuthenticated = Boolean(driverAuth.session?.access_token);
@@ -431,6 +442,49 @@ const DriverPortal = () => {
     }
   };
 
+  /**
+   * Iter #7 — Abre o wizard a partir de um draft incompleto. Reusa o snapshot
+   * salvo em driverLeadStorage (cpf + placas) — se nao existir, usa apenas o
+   * cargaId + cpf da sessao do motorista (sem placas, wizard reabre na Tela 0).
+   */
+  const handleContinueDraft = async (draft: IncompleteCadastroDraft) => {
+    setDraftLoadingId(draft.cargaId);
+    setIsNotificationsOpen(false);
+
+    try {
+      const stored = readStoredLeadState(draft.cargaId);
+      if (stored) {
+        const { cpf, horsePlate, trailerPlate, trailerPlate2 } = stored.form;
+        const trailerPlates = [trailerPlate, trailerPlate2].filter(Boolean);
+        const response = await requestCandidaturaPreCheck({ cpf, horsePlate, trailerPlates });
+        setRegistrationContext({
+          cargaId: draft.cargaId,
+          cpf,
+          horsePlate,
+          trailerPlates,
+          preCheckResponse: response,
+        });
+        setRegistrationWizardOpen(true);
+      } else {
+        // Sem snapshot local — direciona pra pagina da carga, motorista clica
+        // candidatar e o wizard reabre com o draft existente do server.
+        toast({
+          title: "Reabra a carga para continuar",
+          description: "Toque em Candidatar-se na pagina da carga para retomar o cadastro.",
+        });
+      }
+    } catch {
+      toast({
+        title: "Nao foi possivel retomar o cadastro",
+        description: "Tente novamente em alguns instantes.",
+        variant: "destructive",
+      });
+      setIsNotificationsOpen(true);
+    } finally {
+      setDraftLoadingId(null);
+    }
+  };
+
   const showStickyBarRef = useRef(false);
   const scrollFrameRef = useRef<number | null>(null);
   const desktopFiltersRef = useRef<HTMLDivElement | null>(null);
@@ -584,7 +638,7 @@ const DriverPortal = () => {
   return (
     <div className="driver-theme relative min-h-screen bg-background lg:bg-white">
       <DriverPortalNavbar
-        notificationCount={notificationCount}
+        notificationCount={totalNotificationCount}
         onNotificationsOpen={openNotifications}
         cadastroHref={cadastroHref}
         onFaqOpen={openFaq}
@@ -722,7 +776,7 @@ const DriverPortal = () => {
               ) : null}
 
               <NotificationTriggerButton
-                count={notificationCount}
+                count={totalNotificationCount}
                 onClick={openNotifications}
                 showLabel={false}
                 className="h-11 min-w-[58px] shrink-0 rounded-xl px-2.5"
@@ -961,6 +1015,11 @@ const DriverPortal = () => {
             void handleCompleteRegistrationFromNotification(loadId);
           }}
           registrationLoadingId={registrationLoadingId}
+          incompleteDrafts={incompleteDrafts}
+          onContinueDraft={(draft) => {
+            void handleContinueDraft(draft);
+          }}
+          draftLoadingId={draftLoadingId}
         />
 
         <DriverRegistrationWizard
@@ -1531,7 +1590,7 @@ const DriverPortal = () => {
             </Button>
 
             <NotificationTriggerButton
-              count={notificationCount}
+              count={totalNotificationCount}
               onClick={openNotifications}
               showLabel={false}
               className="h-12 min-w-[60px] shrink-0 rounded-xl px-2.5"

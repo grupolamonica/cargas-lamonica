@@ -1,10 +1,11 @@
-import { Activity, AlertCircle, ArrowRight, BellRing, CheckCircle2, ClipboardList, Loader2, RefreshCw } from "lucide-react";
+import { Activity, AlertCircle, ArrowRight, BellRing, CheckCircle2, ClipboardList, FileEdit, Loader2, RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatShortDateTime } from "@/lib/dateDisplay";
 import { buildCargoPublicPath } from "@/lib/cargoLinks";
 import { cn } from "@/lib/utils";
 import { type DriverLeadNotification } from "@/lib/driverLeadNotifications";
+import { type IncompleteCadastroDraft } from "@/api/candidaturaApi";
 
 interface DriverClaimWorkflowProps {
   isOpen: boolean;
@@ -16,6 +17,12 @@ interface DriverClaimWorkflowProps {
   onCompleteRegistration?: (loadId: string) => void;
   /** loadId que está sendo carregado (pre-check em progresso) — exibe spinner no botão. */
   registrationLoadingId?: string | null;
+  /** Iter #7: lista de drafts incompletos do motorista — 1 card por draft. */
+  incompleteDrafts?: IncompleteCadastroDraft[];
+  /** Iter #7: callback ao clicar em "Continuar cadastro" — abre o wizard daquela carga. */
+  onContinueDraft?: (draft: IncompleteCadastroDraft) => void;
+  /** Iter #7: cargaId do draft em loading (UX spinner). */
+  draftLoadingId?: string | null;
 }
 
 export function DriverClaimWorkflow({
@@ -26,7 +33,12 @@ export function DriverClaimWorkflow({
   onDismissNotification,
   onCompleteRegistration,
   registrationLoadingId,
+  incompleteDrafts = [],
+  onContinueDraft,
+  draftLoadingId,
 }: DriverClaimWorkflowProps) {
+  const draftCount = incompleteDrafts.length;
+  const totalCount = notificationCount + draftCount;
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent
@@ -53,6 +65,80 @@ export function DriverClaimWorkflow({
         </DialogHeader>
 
         <div className="max-h-[calc(86vh-7.5rem)] overflow-y-auto px-3 py-3 sm:max-h-[calc(82vh-8.5rem)] sm:px-4 sm:py-4">
+          {/* Iter #7 — Drafts incompletos do motorista. 1 card por draft. */}
+          {draftCount > 0 ? (
+            <div className="mb-4 grid gap-3">
+              <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-amber-700/80">
+                Cadastros pendentes ({draftCount})
+              </p>
+              {incompleteDrafts.map((draft) => {
+                const routeLabel =
+                  draft.origem && draft.destino
+                    ? `${draft.origem} -> ${draft.destino}`
+                    : "Carga sem rota disponivel";
+                const updatedLabel = formatShortDateTime(draft.updatedAt, "Agora");
+                const isLoading = draftLoadingId === draft.cargaId;
+                return (
+                  <article
+                    key={draft.id}
+                    className="rounded-[22px] border border-amber-200 bg-amber-50 p-3.5 shadow-[0_18px_34px_-28px_hsl(223_56%_12%/0.22)] sm:rounded-[26px] sm:p-4"
+                  >
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-700 sm:mt-0.5 sm:h-10 sm:w-10">
+                        <FileEdit className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                          <p className="text-sm font-semibold text-foreground sm:text-base">
+                            Completar cadastro pendente
+                          </p>
+                          <span className="max-w-full rounded-full bg-white/72 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                            {routeLabel}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-[13px] leading-6 text-muted-foreground sm:text-sm sm:leading-relaxed">
+                          Voce comecou o cadastro pra essa carga e nao terminou. Continue de onde parou
+                          antes que o rascunho expire.
+                        </p>
+                        <p className="mt-2 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                          Salvo em {updatedLabel}
+                        </p>
+                        <div className="mt-3 flex flex-col gap-2 sm:mt-4 sm:flex-row sm:flex-wrap sm:items-center">
+                          {onContinueDraft ? (
+                            <button
+                              type="button"
+                              disabled={isLoading}
+                              onClick={() => onContinueDraft(draft)}
+                              className={cn(
+                                "inline-flex w-full items-center justify-center gap-2 rounded-full bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-amber-700 sm:w-auto",
+                                isLoading && "cursor-not-allowed opacity-60",
+                              )}
+                            >
+                              {isLoading ? (
+                                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                              ) : (
+                                <ClipboardList className="h-4 w-4" aria-hidden="true" />
+                              )}
+                              Continuar cadastro
+                            </button>
+                          ) : null}
+                          <Link
+                            to={buildCargoPublicPath(draft.cargaId)}
+                            className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-amber-300 bg-white/85 px-4 py-2.5 text-sm font-semibold text-amber-900 transition-colors hover:bg-amber-100 sm:w-auto"
+                            onClick={() => onOpenChange(false)}
+                          >
+                            Abrir carga
+                            <ArrowRight className="h-4 w-4" />
+                          </Link>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : null}
+
           {notificationCount ? (
             <div className="grid gap-3">
               {/* N-01: hint sobre cadência de atualização — motorista entende que não é tempo real. */}
@@ -162,7 +248,7 @@ export function DriverClaimWorkflow({
                 );
               })}
             </div>
-          ) : (
+          ) : draftCount === 0 ? (
             <div className="flex min-h-[240px] flex-col items-center justify-center gap-4 rounded-[24px] border border-border/60 bg-white/82 px-6 py-10 text-center shadow-[0_18px_34px_-28px_hsl(223_56%_12%/0.18)]">
               <div className="flex h-14 w-14 items-center justify-center rounded-[20px] bg-primary/10 text-primary">
                 <BellRing className="h-6 w-6" />
@@ -174,7 +260,7 @@ export function DriverClaimWorkflow({
                 </p>
               </div>
             </div>
-          )}
+          ) : null}
         </div>
       </DialogContent>
     </Dialog>
