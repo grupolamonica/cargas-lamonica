@@ -270,6 +270,30 @@ const schemaSql = `
   CREATE UNIQUE INDEX ux_idempotency_records_scope_key
     ON public.idempotency_records (scope, driver_id, load_id, idempotency_key);
 
+  -- Tabelas usadas pelo fallback chain de driver-name na fila do operador.
+  -- Producao: aspx_drivers populada por GitHub Action via API ASPx;
+  -- pending_driver_registrations alimentada pelo flow /cadastro.
+  CREATE TABLE public.aspx_drivers (
+    cpf          text PRIMARY KEY,
+    display_name text,
+    raw_status   text,
+    last_seen_at timestamptz NOT NULL DEFAULT now(),
+    synced_at    timestamptz NOT NULL DEFAULT now(),
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.pending_driver_registrations (
+    id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    id_cadastro    text NOT NULL,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    status         text NOT NULL DEFAULT 'pendente',
+    dados          jsonb NOT NULL,
+    observacoes    text,
+    reviewed_at    timestamptz,
+    reviewed_by_id text
+  );
+
   CREATE TABLE public.vehicles (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     plate text NOT NULL,
@@ -586,6 +610,28 @@ export async function attachLoadToPacote(loadId, viagemId, ordemViagem) {
      SET viagem_id = $2, ordem_viagem = $3, updated_at = now()
      WHERE id = $1`,
     [loadId, viagemId, ordemViagem],
+  );
+}
+
+export async function seedAspxDriver({ cpf, displayName }) {
+  await query(
+    `INSERT INTO public.aspx_drivers (cpf, display_name)
+     VALUES ($1, $2)
+     ON CONFLICT (cpf) DO UPDATE SET display_name = EXCLUDED.display_name`,
+    [cpf, displayName],
+  );
+}
+
+export async function seedPendingDriverRegistration({
+  cpf,
+  nomeMotorista,
+  status = "pendente",
+  id_cadastro = crypto.randomUUID(),
+}) {
+  await query(
+    `INSERT INTO public.pending_driver_registrations (id_cadastro, status, dados)
+     VALUES ($1, $2, $3::jsonb)`,
+    [id_cadastro, status, JSON.stringify({ motorista: { cpf, nome: nomeMotorista } })],
   );
 }
 

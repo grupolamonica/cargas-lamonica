@@ -101,6 +101,14 @@ export interface PublicLoadLead {
   approvedAt: string | null;
   approvedBy: string | null;
   validation?: PublicLeadValidationSummary | null;
+  /**
+   * Nome resolvido pelo backend (iter #9) via fallback chain:
+   *   1. validation.driver.angelira.displayName
+   *   2. aspx_drivers.display_name
+   *   3. pending_driver_registrations.dados->motorista->nome
+   * `null` quando nenhuma fonte tem o nome → frontend cai no telefone.
+   */
+  driverName?: string | null;
   queuePosition: number | null;
 }
 

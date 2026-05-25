@@ -1603,6 +1603,44 @@ function buildPacoteMeta(row) {
   };
 }
 
+/**
+ * Resolve o nome do motorista para exibicao na fila do operador.
+ * Fallback chain (iter #9):
+ *   1. Angellira (validation_summary_json->'driver'->'angelira'->>'displayName')
+ *   2. ASPx (aspx_drivers.display_name)
+ *   3. Pending registration (pending_driver_registrations.dados->'motorista'->>'nome')
+ * Quando nada bate, retorna null e a UI cai no telefone como fallback.
+ */
+function resolveLeadDriverName(row) {
+  // 1) Tenta extrair do validation_summary_json (Angellira). Quando o JSON nao
+  //    foi rehidratado ainda (lead recem-criado), usamos a coluna serializada
+  //    diretamente.
+  let summary = row.validation_summary_json;
+  if (typeof summary === "string") {
+    try {
+      summary = JSON.parse(summary);
+    } catch {
+      summary = null;
+    }
+  }
+  const angelliraName = summary?.driver?.angelira?.displayName;
+  if (typeof angelliraName === "string" && angelliraName.trim()) {
+    return angelliraName.trim();
+  }
+
+  // 2) ASPx display_name (sincronizado por GitHub Action).
+  if (typeof row.aspx_display_name === "string" && row.aspx_display_name.trim()) {
+    return row.aspx_display_name.trim();
+  }
+
+  // 3) Pending registration dados->motorista->nome.
+  if (typeof row.pdr_display_name === "string" && row.pdr_display_name.trim()) {
+    return row.pdr_display_name.trim();
+  }
+
+  return null;
+}
+
 function groupLeadsForOperator(rows) {
   const groupsMap = new Map();
 
@@ -1656,6 +1694,7 @@ function groupLeadsForOperator(rows) {
         status: row.validation_status,
         checkedAt: row.validation_checked_at,
       }),
+      driverName: resolveLeadDriverName(row),
       queuePosition,
       whatsappUrl: buildPhoneWhatsAppUrl(row.phone),
     });
@@ -1706,7 +1745,15 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
               cc.status AS pacote_status,
               cc.valor_total AS pacote_valor_total,
               cc.version AS pacote_version,
-              pacote_counts.total AS pacote_total_cargas
+              pacote_counts.total AS pacote_total_cargas,
+              -- Driver-name fallback chain (iter #9):
+              --   1. Angellira display name (rehidratado em groupLeadsForOperator)
+              --   2. ASPx (aspx_drivers — sincronizado por GitHub Action)
+              --   3. pending_driver_registrations (cadastro publico)
+              -- DISTINCT ON em CTE precomputado evita correlated subquery
+              -- (nao suportada pelo pg-mem com JSON ops).
+              ad.display_name AS aspx_display_name,
+              pdr_latest.nome_motorista AS pdr_display_name
             FROM public.load_public_leads AS leads
             INNER JOIN public.cargas
               ON cargas.id = leads.load_id
@@ -1714,6 +1761,17 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
               ON clientes.id = cargas.cliente_id
             LEFT JOIN public.cargas_casadas AS cc
               ON cc.id = cargas.viagem_id
+            LEFT JOIN public.aspx_drivers AS ad
+              ON ad.cpf = leads.cpf
+            LEFT JOIN (
+              SELECT DISTINCT ON (dados->'motorista'->>'cpf')
+                dados->'motorista'->>'cpf' AS cpf,
+                dados->'motorista'->>'nome' AS nome_motorista
+              FROM public.pending_driver_registrations
+              WHERE status IN ('pendente', 'em_revisao', 'em_analise', 'submitted', 'draft')
+              ORDER BY dados->'motorista'->>'cpf', created_at DESC
+            ) AS pdr_latest
+              ON pdr_latest.cpf = leads.cpf
             LEFT JOIN (
               SELECT viagem_id, COUNT(*)::int AS total
               FROM public.cargas
@@ -1777,7 +1835,9 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
             cc.status AS pacote_status,
             cc.valor_total AS pacote_valor_total,
             cc.version AS pacote_version,
-            pacote_counts.total AS pacote_total_cargas
+            pacote_counts.total AS pacote_total_cargas,
+            ad.display_name AS aspx_display_name,
+            pdr_latest.nome_motorista AS pdr_display_name
           FROM public.load_public_leads AS leads
           INNER JOIN public.cargas
             ON cargas.id = leads.load_id
@@ -1785,6 +1845,17 @@ export async function listOperatorPublicLoadLeads({ correlationId }) {
             ON clientes.id = cargas.cliente_id
           LEFT JOIN public.cargas_casadas AS cc
             ON cc.id = cargas.viagem_id
+          LEFT JOIN public.aspx_drivers AS ad
+            ON ad.cpf = leads.cpf
+          LEFT JOIN (
+            SELECT DISTINCT ON (dados->'motorista'->>'cpf')
+              dados->'motorista'->>'cpf' AS cpf,
+              dados->'motorista'->>'nome' AS nome_motorista
+            FROM public.pending_driver_registrations
+            WHERE status IN ('pendente', 'em_revisao', 'em_analise', 'submitted', 'draft')
+            ORDER BY dados->'motorista'->>'cpf', created_at DESC
+          ) AS pdr_latest
+            ON pdr_latest.cpf = leads.cpf
           LEFT JOIN (
             SELECT viagem_id, COUNT(*)::int AS total
             FROM public.cargas
