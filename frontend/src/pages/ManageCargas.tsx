@@ -392,6 +392,8 @@ const ManageCargas = () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: CARGAS_QUERY_KEY }),
       queryClient.invalidateQueries({ queryKey: ["operator", "dashboard-read-model"] }),
+      // Fila operacional consome o mesmo read-model e precisa refletir status atualizado pos-sync.
+      queryClient.invalidateQueries({ queryKey: ["operator", "public-load-leads"] }),
       queryClient.invalidateQueries({ queryKey: ["driver", "loads-read-model"] }),
       queryClient.invalidateQueries({ queryKey: ["driver", "loads-facets"] }),
     ]);
