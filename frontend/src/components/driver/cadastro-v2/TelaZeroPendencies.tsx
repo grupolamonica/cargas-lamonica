@@ -64,7 +64,7 @@ function TelaZeroPendenciesImpl({
             <FastForward className="mt-0.5 size-6 shrink-0 text-amber-700" />
             <div className="flex-1 space-y-2">
               <p className="text-base font-semibold text-foreground">
-                Cadastro em analise
+                Cadastro em análise
               </p>
               <p className="text-sm leading-relaxed text-foreground/80">
                 {duplicate.label}

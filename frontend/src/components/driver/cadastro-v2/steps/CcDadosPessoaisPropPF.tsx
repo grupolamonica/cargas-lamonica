@@ -100,7 +100,7 @@ export function CcDadosPessoaisPropPF({
           Dados pessoais e CNH do proprietário
         </h3>
         <p className="text-sm text-muted-foreground">
-          Opcional — filiação, RG e dados da CNH do proprietário PF.
+          Filiação, RG e dados da CNH do proprietário PF — CNH é obrigatória.
         </p>
       </header>
 
