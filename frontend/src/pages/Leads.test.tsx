@@ -474,17 +474,23 @@ describe("Leads", () => {
     // Card pacote ja aparece expandido por padrao — cada parada tem seu LH e rota.
     expect(screen.getByText("LH LH-PCT-1")).toBeInTheDocument();
     expect(screen.getByText("LH LH-PCT-2")).toBeInTheDocument();
-    expect(screen.getByText(/Sao Paulo \/ SP -> Rio de Janeiro \/ RJ/)).toBeInTheDocument();
-    expect(screen.getByText(/Rio de Janeiro \/ RJ -> Belo Horizonte \/ MG/)).toBeInTheDocument();
+    // Cada rota aparece pelo menos uma vez (lista de paradas exibe origem -> destino por parada).
+    expect(screen.getAllByText(/Sao Paulo \/ SP -> Rio de Janeiro \/ RJ/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Rio de Janeiro \/ RJ -> Belo Horizonte \/ MG/).length).toBeGreaterThan(0);
 
-    // 2 botoes de "Reservar parada" (um por parada do pacote).
-    const reservarBtns = screen.getAllByRole("button", { name: /Reservar parada/i });
-    expect(reservarBtns).toHaveLength(2);
+    // Iter #9: candidaturas em tabela — 1 row por motorista, com "Reservar pacote"
+    // que reserva todas as paradas QUEUED daquele driver de uma vez.
+    const reservarPacoteBtn = screen.getByRole("button", { name: /Reservar pacote/i });
+    expect(reservarPacoteBtn).toBeInTheDocument();
 
-    // Clicar em "Reservar parada" dispara approve para o lead daquela parada.
-    fireEvent.click(reservarBtns[0]);
+    // Clicar em "Reservar pacote" sequencia approve para todos os leads QUEUED.
+    fireEvent.click(reservarPacoteBtn);
     await waitFor(() => {
       expect(mockApproveOperatorLoadLead).toHaveBeenCalledWith("carga-pacote-1", "lead-pct-a");
+    });
+    // Sequencial: segunda parada tambem.
+    await waitFor(() => {
+      expect(mockApproveOperatorLoadLead).toHaveBeenCalledWith("carga-pacote-2", "lead-pct-b");
     });
   });
 
