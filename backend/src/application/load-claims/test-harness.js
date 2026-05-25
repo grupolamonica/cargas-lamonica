@@ -32,6 +32,23 @@ const schemaSql = `
     created_at timestamptz NOT NULL DEFAULT now()
   );
 
+  CREATE TABLE public.cargas_casadas (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    status text NOT NULL DEFAULT 'rascunho',
+    valor_total numeric,
+    reserved_driver_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+    reserved_claim_id uuid,
+    booked_driver_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+    version integer NOT NULL DEFAULT 1,
+    published_at timestamptz,
+    created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT cargas_casadas_status_check CHECK (
+      status IN ('rascunho','publicado','reservado','em_andamento','concluido','cancelado')
+    )
+  );
+
   CREATE TABLE public.clientes (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     nome text NOT NULL,
@@ -544,6 +561,32 @@ export async function seedLoad(overrides = {}) {
   );
 
   return { id, clienteId: client?.id ?? overrides.cliente_id ?? null };
+}
+
+export async function seedPacote(overrides = {}) {
+  const id = overrides.id ?? crypto.randomUUID();
+  await query(
+    `INSERT INTO public.cargas_casadas (id, status, valor_total, version, published_at, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      id,
+      overrides.status ?? "publicado",
+      overrides.valor_total ?? 12000,
+      overrides.version ?? 1,
+      overrides.published_at ?? new Date().toISOString(),
+      overrides.created_by ?? null,
+    ],
+  );
+  return { id };
+}
+
+export async function attachLoadToPacote(loadId, viagemId, ordemViagem) {
+  await query(
+    `UPDATE public.cargas
+     SET viagem_id = $2, ordem_viagem = $3, updated_at = now()
+     WHERE id = $1`,
+    [loadId, viagemId, ordemViagem],
+  );
 }
 
 export async function expireReservation(loadId, reservedUntil = new Date(Date.now() - 60_000).toISOString()) {
