@@ -569,6 +569,129 @@ describe.sequential("public load leads", () => {
     expect(load.booked_driver_id).toBeNull();
   });
 
+  it("replicates a pacote candidatura em todas as cargas do mesmo viagem_id", async () => {
+    // 3 cargas no mesmo pacote — o motorista candidata na carga #1 e o backend
+    // precisa criar lead em #2 e #3 tambem (uma candidatura por viagem casada).
+    const { id: pacoteId } = await harness.seedPacote({ valor_total: 18000 });
+    const { id: carga1 } = await harness.seedLoad();
+    const { id: carga2 } = await harness.seedLoad();
+    const { id: carga3 } = await harness.seedLoad();
+    await harness.attachLoadToPacote(carga1, pacoteId, 1);
+    await harness.attachLoadToPacote(carga2, pacoteId, 2);
+    await harness.attachLoadToPacote(carga3, pacoteId, 3);
+
+    const response = await service.createPublicLoadLeadPreRegistration({
+      loadId: carga1,
+      payload: buildPayload(),
+      correlationId: "corr-pacote-prereg",
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.payload.meta.pacoteViagemId).toBe(pacoteId);
+    expect(response.payload.meta.pacoteLeadsCount).toBe(3);
+
+    const leadsCarga1 = await harness.getPublicLeadsByLoad(carga1);
+    const leadsCarga2 = await harness.getPublicLeadsByLoad(carga2);
+    const leadsCarga3 = await harness.getPublicLeadsByLoad(carga3);
+
+    expect(leadsCarga1).toHaveLength(1);
+    expect(leadsCarga2).toHaveLength(1);
+    expect(leadsCarga3).toHaveLength(1);
+    // mesma identidade replicada em todas as paradas
+    expect(leadsCarga1[0].cpf).toBe(leadsCarga2[0].cpf);
+    expect(leadsCarga1[0].cpf).toBe(leadsCarga3[0].cpf);
+    expect(leadsCarga1[0].phone).toBe(leadsCarga2[0].phone);
+    // todos ja entram em QUEUED
+    expect(leadsCarga1[0].status).toBe(PUBLIC_LEAD_STATUS.QUEUED);
+    expect(leadsCarga2[0].status).toBe(PUBLIC_LEAD_STATUS.QUEUED);
+    expect(leadsCarga3[0].status).toBe(PUBLIC_LEAD_STATUS.QUEUED);
+
+    // Eventos PRE_REGISTERED e QUEUED registram pacote_viagem_id no payload.
+    const eventsCarga2 = await harness.getPublicLeadEventsByLoad(carga2);
+    const preEvent = eventsCarga2.find((e) => e.event_type === PUBLIC_LEAD_STATUS.PRE_REGISTERED || e.event_type === "PRE_REGISTERED");
+    expect(preEvent).toBeDefined();
+    expect(preEvent.event_payload_json).toMatchObject({ pacote_viagem_id: pacoteId });
+  });
+
+  it("mantem comportamento avulso (1 insert) quando carga nao tem viagem_id", async () => {
+    const { id: loadId } = await harness.seedLoad();
+
+    const response = await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-avulsa-prereg",
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.payload.meta.pacoteViagemId).toBeNull();
+    expect(response.payload.meta.pacoteLeadsCount).toBe(1);
+
+    const leads = await harness.getPublicLeadsByLoad(loadId);
+    expect(leads).toHaveLength(1);
+  });
+
+  it("operator queue retorna pacote_meta nos groups quando carga tem viagem_id", async () => {
+    const { id: pacoteId } = await harness.seedPacote({
+      valor_total: 24000,
+      status: "publicado",
+      version: 2,
+    });
+    const { id: carga1 } = await harness.seedLoad();
+    const { id: carga2 } = await harness.seedLoad();
+    await harness.attachLoadToPacote(carga1, pacoteId, 1);
+    await harness.attachLoadToPacote(carga2, pacoteId, 2);
+
+    await service.createPublicLoadLeadPreRegistration({
+      loadId: carga1,
+      payload: buildPayload(),
+      correlationId: "corr-pacote-list",
+    });
+
+    const listing = await service.listOperatorPublicLoadLeads({
+      correlationId: "corr-pacote-list-operator",
+    });
+
+    expect(listing.statusCode).toBe(200);
+    // 2 cargas do pacote — ambas tem lead (pre-cadastro replicado).
+    const pacoteGroups = listing.payload.groups.filter(
+      (g) => g.load.viagemId === pacoteId,
+    );
+    expect(pacoteGroups).toHaveLength(2);
+
+    pacoteGroups.forEach((g) => {
+      expect(g.load.pacoteMeta).not.toBeNull();
+      expect(g.load.pacoteMeta).toMatchObject({
+        id: pacoteId,
+        status: "publicado",
+        valorTotal: 24000,
+        version: 2,
+        totalCargas: 2,
+      });
+      expect([1, 2]).toContain(g.load.pacoteMeta.ordemPropria);
+      expect(g.leads).toHaveLength(1);
+    });
+  });
+
+  it("operator queue mantem pacoteMeta=null para cargas avulsas", async () => {
+    const { id: loadId } = await harness.seedLoad();
+
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-avulsa-list",
+    });
+
+    const listing = await service.listOperatorPublicLoadLeads({
+      correlationId: "corr-avulsa-list-operator",
+    });
+
+    expect(listing.statusCode).toBe(200);
+    const avulsa = listing.payload.groups.find((g) => g.load.id === loadId);
+    expect(avulsa).toBeDefined();
+    expect(avulsa.load.viagemId).toBeNull();
+    expect(avulsa.load.pacoteMeta).toBeNull();
+  });
+
   it("rejects approving a queued lead when the load is no longer open", async () => {
     const { id: loadId } = await harness.seedLoad();
     const operator = await harness.seedOperator();
