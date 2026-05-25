@@ -120,9 +120,22 @@ function SummaryCard({ icon: Icon, label, value, color }: { icon: typeof FileSpr
       <div className={cn("flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl", color)}>
         <Icon className="h-5 w-5" />
       </div>
-      <div className="min-w-0">
+      {/*
+        Bugfix: o label antes usava `truncate` em min-w-0 e cortava textos
+        como "Total de linhas", "Disponiveis (sem motorista)", etc para
+        "Total de li...", "Disponiv...". Trocamos por `whitespace-normal`
+        + `leading-tight` para o label quebrar em 2 linhas quando o card
+        ficar estreito (grid 2-col no mobile, 4-col no desktop). O `title`
+        garante tooltip nativo no hover para o caso de overflow extremo.
+      */}
+      <div className="min-w-0 flex-1">
         <p className="text-2xl font-bold tracking-tight text-foreground">{value}</p>
-        <p className="mt-0.5 truncate text-xs font-medium text-muted-foreground">{label}</p>
+        <p
+          className="mt-0.5 whitespace-normal text-xs font-medium leading-tight text-muted-foreground"
+          title={label}
+        >
+          {label}
+        </p>
       </div>
     </div>
   );
