@@ -48,11 +48,11 @@ const PacoteHeader = ({ pacoteMeta }: PacoteHeaderProps) => {
 
   return (
     <section data-testid="pacote-header" className="relative">
-      {/* Row 1 (mobile + tablet, lg:hidden) — Date badge esquerda + "Carga casada" badge direita.
-          iter #8 (2026-05-25): area direita ganha indicador intuitivo do tipo de carga.
-          Substitui o vazio anterior (D6 do iter #2) — necessario deixar claro pro motorista
-          que e uma viagem multi-paradas, nao avulsa. */}
-      <div className="relative mb-3 flex items-start justify-between gap-2 sm:mb-5 lg:hidden">
+      {/* Row 1 — Date badge esquerda + "Carga casada" badge direita.
+          iter #8 (2026-05-25): area direita ganha indicador intuitivo do tipo
+          de carga em TODOS os breakpoints (removido lg:hidden) — desktop
+          motorista precisa ver claramente que e viagem multi-paradas. */}
+      <div className="relative mb-3 flex items-start justify-between gap-2 sm:mb-5">
         <span className="inline-flex items-center gap-1.5 rounded-lg bg-badge px-2.5 py-1 text-[11px] font-bold tracking-wide text-badge-text sm:gap-2 sm:rounded-xl sm:px-3.5 sm:py-1.5 sm:text-xs">
           <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse-glow" />
           {dateBadgeLabel}
