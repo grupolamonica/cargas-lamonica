@@ -488,6 +488,116 @@ describe("Leads", () => {
     });
   });
 
+  it("exibe driverName na coluna Motorista quando o backend resolve o nome", () => {
+    mockUseQuery.mockReturnValue({
+      data: {
+        groups: [
+          {
+            load: {
+              id: "load-com-nome",
+              status: "OPEN",
+              origem: "Sao Paulo / SP",
+              destino: "Rio de Janeiro / RJ",
+              perfil: "CARRETA",
+              data: "2026-05-25",
+              horario: "08:00:00",
+              reservedPublicLeadId: null,
+            },
+            queueCount: 1,
+            totalLeads: 1,
+            leads: [
+              {
+                id: "lead-com-nome",
+                status: "QUEUED",
+                cpf: "12345678901",
+                phone: "71999998888",
+                horsePlate: "ABC1D23",
+                trailerPlate: "DEF4G56",
+                trailerPlate2: "",
+                vehicleType: "CARRETA",
+                preRegisteredAt: "2026-05-25T09:00:00.000Z",
+                queuedAt: "2026-05-25T09:01:00.000Z",
+                whatsappClickedAt: null,
+                approvedAt: null,
+                approvedBy: null,
+                queuePosition: 1,
+                validation: null,
+                whatsappUrl: "https://wa.me/5571999998888",
+                driverName: "Carlos Eduardo Pereira",
+              },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+      isFetching: false,
+    });
+
+    render(<Leads />);
+    fireEvent.click(screen.getAllByRole("button", { name: /Expandir disputa/i })[0]);
+
+    // Cabecalho da coluna mudou de "Telefone" para "Motorista".
+    expect(screen.getByRole("columnheader", { name: "Motorista" })).toBeInTheDocument();
+    // Nome aparece como label principal.
+    expect(screen.getByText("Carlos Eduardo Pereira")).toBeInTheDocument();
+    // CPF mascarado + phone formatado aparecem como sublabel.
+    expect(screen.getByText(/CPF \*01.*\(71\) 99999-8888/)).toBeInTheDocument();
+  });
+
+  it("exibe phone formatado + sem cadastro quando driverName eh null", () => {
+    mockUseQuery.mockReturnValue({
+      data: {
+        groups: [
+          {
+            load: {
+              id: "load-sem-nome",
+              status: "OPEN",
+              origem: "Curitiba / PR",
+              destino: "Florianopolis / SC",
+              perfil: "CARRETA",
+              data: "2026-05-25",
+              horario: "10:00:00",
+              reservedPublicLeadId: null,
+            },
+            queueCount: 1,
+            totalLeads: 1,
+            leads: [
+              {
+                id: "lead-sem-nome",
+                status: "QUEUED",
+                cpf: "98765432100",
+                phone: "41977776666",
+                horsePlate: "XYZ1A22",
+                trailerPlate: "YYY2B33",
+                trailerPlate2: "",
+                vehicleType: "CARRETA",
+                preRegisteredAt: "2026-05-25T09:00:00.000Z",
+                queuedAt: "2026-05-25T09:01:00.000Z",
+                whatsappClickedAt: null,
+                approvedAt: null,
+                approvedBy: null,
+                queuePosition: 1,
+                validation: null,
+                whatsappUrl: "https://wa.me/5541977776666",
+                driverName: null,
+              },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+      isFetching: false,
+    });
+
+    render(<Leads />);
+    fireEvent.click(screen.getAllByRole("button", { name: /Expandir disputa/i })[0]);
+
+    // Phone formatado eh exibido como label principal (fallback do driverName null).
+    expect(screen.getByText("(41) 97777-6666")).toBeInTheDocument();
+    // Sublabel sinaliza "sem cadastro".
+    expect(screen.getByText(/CPF \*00.*sem cadastro/)).toBeInTheDocument();
+  });
+
   it("abre as disputas minimizadas por padrao e permite expandir depois", () => {
     render(<Leads />);
 
