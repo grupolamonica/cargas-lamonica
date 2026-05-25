@@ -14,6 +14,10 @@ const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_FAILURE_THRESHOLD = 3;
 const DEFAULT_COOLDOWN_MS = 60_000;
 const FETCH_PAGE_SIZE = 1000;
+// Operational alert threshold: quando o registro mais recente em aspx_drivers
+// passa de 6h, logamos um warning estruturado pra observability — sinaliza
+// que o sync container parou. Iter #10.
+const STALE_CACHE_WARNING_SECONDS = 6 * 60 * 60;
 
 let directoryCache = {
   byCpf: null,
@@ -89,13 +93,14 @@ function getSupabaseClient() {
 async function fetchAllAspxDrivers(client) {
   const rows = [];
   let offset = 0;
+  let maxSyncedAtMs = null;
 
   // Paginação manual: a tabela pode passar de ~1000 registros.
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const { data, error } = await client
       .from("aspx_drivers")
-      .select("cpf, display_name")
+      .select("cpf, display_name, synced_at")
       .range(offset, offset + FETCH_PAGE_SIZE - 1);
 
     if (error) {
@@ -105,6 +110,12 @@ async function fetchAllAspxDrivers(client) {
     const batch = data || [];
     for (const row of batch) {
       rows.push(row);
+      if (row?.synced_at) {
+        const tsMs = new Date(row.synced_at).getTime();
+        if (Number.isFinite(tsMs) && (maxSyncedAtMs === null || tsMs > maxSyncedAtMs)) {
+          maxSyncedAtMs = tsMs;
+        }
+      }
     }
 
     if (batch.length < FETCH_PAGE_SIZE) {
@@ -114,7 +125,7 @@ async function fetchAllAspxDrivers(client) {
     offset += FETCH_PAGE_SIZE;
   }
 
-  return rows;
+  return { rows, maxSyncedAtMs };
 }
 
 function buildDirectoryIndex(rows) {
@@ -157,7 +168,7 @@ async function loadDirectoryIndex({ correlationId } = {}) {
 
     try {
       const client = getSupabaseClient();
-      const rows = await fetchAllAspxDrivers(client);
+      const { rows, maxSyncedAtMs } = await fetchAllAspxDrivers(client);
       const directoryByCpf = buildDirectoryIndex(rows);
 
       directoryCache = {
@@ -176,6 +187,24 @@ async function loadDirectoryIndex({ correlationId } = {}) {
         availability: "OK",
         latencyMs: Date.now() - startedAt,
       });
+
+      // Iter #10: alerta operacional. Quando o sync container para de rodar,
+      // o cache passa a servir dados velhos e motoristas recem-cadastrados no
+      // portal Angellira ficam invisiveis para a candidatura. Detectamos via
+      // idade do registro mais recente em aspx_drivers.
+      if (maxSyncedAtMs !== null) {
+        const ageSeconds = Math.max(0, Math.floor((Date.now() - maxSyncedAtMs) / 1000));
+        if (ageSeconds > STALE_CACHE_WARNING_SECONDS) {
+          logStructuredEvent("warn", "driver-validation.aspx.stale_cache", {
+            correlationId: correlationId || null,
+            ageSeconds,
+            ageHours: Math.round(ageSeconds / 3600),
+            driverCount: directoryByCpf.size,
+            mostRecentSyncedAt: new Date(maxSyncedAtMs).toISOString(),
+            thresholdSeconds: STALE_CACHE_WARNING_SECONDS,
+          });
+        }
+      }
 
       return directoryByCpf;
     } catch (error) {
