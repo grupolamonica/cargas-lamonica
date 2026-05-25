@@ -67,6 +67,117 @@ export const candidaturaDraftSchema = z
 //
 // Aplicado via z.preprocess(stripPrivateKeys, schema) — antes da validacao.
 // ────────────────────────────────────────────────────────────────────────────
+/**
+ * Iter #7 — mapeamento explicito de path JSON do payload do submit para a
+ * "secao do wizard" + label do campo amigavel ao motorista. Usado pelo
+ * `buildMissingFieldsMessage` para construir mensagens de erro especificas
+ * em vez do generico "Faltam campos obrigatorios. Verifique a secao...".
+ *
+ * Chaves: regex string do path (sem indices) para suportar arrays (carretas,
+ * carreta_owners). Quando aplicavel, indice e injetado via {idx}.
+ *
+ * Source-of-truth: schemas zod + DriverRegistrationWizard step labels.
+ */
+export const SUBMIT_PATH_LABEL_MAP = {
+  // Motorista (Step A)
+  "motorista.nome": "Motorista — Nome",
+  "motorista.cpf": "Motorista — CPF",
+  "motorista.telefones": "Motorista — Telefones",
+  "motorista.telefone_primario": "Motorista — Telefone principal",
+  "motorista.endereco.cep": "Motorista — CEP",
+  "motorista.endereco.numero": "Motorista — Numero (endereco)",
+  "motorista.endereco.logradouro": "Motorista — Logradouro",
+  "motorista.endereco.comprovante_storage_path": "Motorista — Comprovante de residencia",
+  "motorista.tag_pedagio": "Motorista — Tag de pedagio",
+  "motorista.pancary_autodeclaration": "Motorista — Autodeclaracao Pancary",
+  "motorista.cnh_url": "Motorista — CNH (upload)",
+  "motorista.selfie_cnh_url": "Motorista — Selfie com CNH",
+  "motorista.rastreador.empresa": "Motorista — Rastreador (empresa)",
+  "motorista.rastreador.login": "Motorista — Rastreador (login)",
+  "motorista.rastreador.senha": "Motorista — Rastreador (senha)",
+  "motorista.rastreador.id_rastreador": "Motorista — Rastreador (ID)",
+  // Cavalo (Step B)
+  "cavalo.placa": "Cavalo — Placa",
+  "cavalo.crlv_url": "Cavalo — CRLV (upload)",
+  "cavalo.owner_doc": "Cavalo — CPF/CNPJ do proprietario",
+  "cavalo.cor": "Cavalo — Cor",
+  // Proprietario do cavalo (Step C)
+  "cavalo_owner.tipo": "Proprietario do cavalo — Tipo (PF/PJ)",
+  "cavalo_owner.doc": "Proprietario do cavalo — CPF/CNPJ",
+  "cavalo_owner.nome": "Proprietario do cavalo — Nome",
+  "cavalo_owner.owner_doc_url": "Proprietario do cavalo — CNH ou cartao CNPJ",
+  "cavalo_owner.endereco.cep": "Proprietario do cavalo — CEP",
+  "cavalo_owner.endereco.numero": "Proprietario do cavalo — Numero",
+  "cavalo_owner.endereco.logradouro": "Proprietario do cavalo — Logradouro",
+  "cavalo_owner.endereco.comprovante_storage_path": "Proprietario do cavalo — Comprovante de residencia",
+  "cavalo_owner.telefone": "Proprietario do cavalo — Telefone",
+  "cavalo_owner.antt_titular.doc": "Titular ANTT do cavalo — CPF/CNPJ",
+  "cavalo_owner.antt_titular.nome": "Titular ANTT do cavalo — Nome",
+  // Carretas (Step D)
+  "carretas.{idx}.placa": "Carreta {idx} — Placa",
+  "carretas.{idx}.crlv_url": "Carreta {idx} — CRLV (upload)",
+  "carretas.{idx}.owner_doc": "Carreta {idx} — CPF/CNPJ do proprietario",
+  // Proprietario carreta (Step E)
+  "carreta_owners.{idx}.tipo": "Proprietario da carreta {idx} — Tipo (PF/PJ)",
+  "carreta_owners.{idx}.doc": "Proprietario da carreta {idx} — CPF/CNPJ",
+  "carreta_owners.{idx}.nome": "Proprietario da carreta {idx} — Nome",
+  "carreta_owners.{idx}.owner_doc_url": "Proprietario da carreta {idx} — CNH ou cartao CNPJ",
+  "carreta_owners.{idx}.endereco.cep": "Proprietario da carreta {idx} — CEP",
+  "carreta_owners.{idx}.endereco.numero": "Proprietario da carreta {idx} — Numero",
+  "carreta_owners.{idx}.endereco.logradouro": "Proprietario da carreta {idx} — Logradouro",
+  "carreta_owners.{idx}.endereco.comprovante_storage_path": "Proprietario da carreta {idx} — Comprovante de residencia",
+  "carreta_owners.{idx}.telefone": "Proprietario da carreta {idx} — Telefone",
+};
+
+/**
+ * Iter #7 — Converte path zod (ex.: 'dados.cavalo_owner.endereco.comprovante_storage_path')
+ * em label amigavel mapeado pelo `SUBMIT_PATH_LABEL_MAP`. Index numerico nos
+ * arrays (carretas[0], carreta_owners[1]) e substituido por {idx} (1-based)
+ * no template.
+ *
+ * @param {string} rawPath path do zod issue (dot-separated, com prefixo opcional 'dados.')
+ * @returns {string} label amigavel ou o proprio path se nao mapeado.
+ */
+export function mapSubmitPathToLabel(rawPath) {
+  if (!rawPath) return "";
+  // Remove prefixo `dados.` do path do zod (ex.: dados.cavalo_owner.X -> cavalo_owner.X).
+  const stripped = rawPath.replace(/^dados\./, "");
+  // Substitui indices numericos (ex.: carretas.0.placa) por {idx} no template.
+  const normalized = stripped.replace(/\.(\d+)\./g, ".{idx}.");
+  const indexMatch = stripped.match(/\.(\d+)\./);
+  const idx = indexMatch ? Number(indexMatch[1]) + 1 : null;
+
+  const template = SUBMIT_PATH_LABEL_MAP[normalized];
+  if (!template) return stripped;
+  return idx != null ? template.replace(/\{idx\}/g, String(idx)) : template;
+}
+
+/**
+ * Iter #7 — Constroi mensagem de erro do submit citando TODAS as secoes/campos
+ * faltantes (em vez do generico "Faltam campos obrigatorios").
+ *
+ * @param {Array<{path: string, message: string}>} issues lista de zod issues.
+ * @returns {string} mensagem multi-linha amigavel.
+ */
+export function buildMissingFieldsMessage(issues) {
+  if (!Array.isArray(issues) || issues.length === 0) {
+    return "Faltam campos obrigatorios. Revise as secoes do cadastro.";
+  }
+  const seen = new Set();
+  const items = [];
+  for (const issue of issues) {
+    const label = mapSubmitPathToLabel(issue.path);
+    if (!seen.has(label)) {
+      seen.add(label);
+      items.push(label);
+    }
+  }
+  if (items.length === 1) {
+    return `Campo obrigatorio faltando: ${items[0]}.`;
+  }
+  return `Campos obrigatorios faltando (${items.length}):\n${items.map((i) => `• ${i}`).join("\n")}`;
+}
+
 export function stripPrivateKeys(value) {
   if (Array.isArray(value)) {
     return value.map(stripPrivateKeys);

@@ -26,6 +26,7 @@ import {
   parseJsonBody,
 } from "../http-utils.js";
 import {
+  buildMissingFieldsMessage,
   candidaturaAnttPrecheckSchema,
   candidaturaDraftSchema,
   candidaturaPreCheckSchema,
@@ -619,7 +620,17 @@ export async function resolveCandidaturaSubmitResponse(request) {
     parsedInput = candidaturaSubmitSchema.parse(body);
   } catch (err) {
     if (err instanceof ZodError) {
-      return zodErrorToHttpResponse(err, correlationId);
+      // Iter #7 — enriquece a resposta com mensagem agregada citando todas as
+      // secoes/campos faltantes (em vez do generico do zodErrorToHttpResponse).
+      const baseResponse = zodErrorToHttpResponse(err, correlationId);
+      const friendlyMessage = buildMissingFieldsMessage(baseResponse.payload.issues || []);
+      return {
+        statusCode: baseResponse.statusCode,
+        payload: {
+          ...baseResponse.payload,
+          message: friendlyMessage,
+        },
+      };
     }
     throw err;
   }
