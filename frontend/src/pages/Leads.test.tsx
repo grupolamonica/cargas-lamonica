@@ -282,6 +282,137 @@ describe("Leads", () => {
     expect(screen.queryByRole("button", { name: "Reservar para este motorista" })).not.toBeInTheDocument();
   });
 
+  it("agrupa N cargas de um pacote candidatadas pelo mesmo motorista em um unico card 'Viagem casada'", async () => {
+    // Mesmo pacote, mesmo motorista (cpf+phone iguais) → 1 card pacote agrupado.
+    mockUseQuery.mockReturnValue({
+      data: {
+        groups: [
+          {
+            load: {
+              id: "carga-pacote-1",
+              status: "OPEN",
+              origem: "Sao Paulo / SP",
+              destino: "Rio de Janeiro / RJ",
+              perfil: "CARRETA",
+              data: "2026-05-10",
+              horario: "08:00:00",
+              reservedPublicLeadId: null,
+              sheetLh: "LH-PCT-1",
+              viagemId: "pacote-001",
+              ordemViagem: 1,
+              pacoteMeta: {
+                id: "pacote-001",
+                status: "publicado",
+                valorTotal: 18000,
+                version: 1,
+                totalCargas: 2,
+                ordemPropria: 1,
+              },
+            },
+            queueCount: 1,
+            totalLeads: 1,
+            leads: [
+              {
+                id: "lead-pct-a",
+                status: "QUEUED",
+                cpf: "55544433322",
+                phone: "31988887777",
+                horsePlate: "PCT1A23",
+                trailerPlate: "PCT4B56",
+                trailerPlate2: "",
+                vehicleType: "CARRETA",
+                preRegisteredAt: "2026-05-08T10:00:00.000Z",
+                queuedAt: "2026-05-08T10:00:30.000Z",
+                whatsappClickedAt: null,
+                approvedAt: null,
+                approvedBy: null,
+                queuePosition: 1,
+                validation: null,
+                whatsappUrl: "https://wa.me/5531988887777",
+              },
+            ],
+          },
+          {
+            load: {
+              id: "carga-pacote-2",
+              status: "OPEN",
+              origem: "Rio de Janeiro / RJ",
+              destino: "Belo Horizonte / MG",
+              perfil: "CARRETA",
+              data: "2026-05-11",
+              horario: "07:00:00",
+              reservedPublicLeadId: null,
+              sheetLh: "LH-PCT-2",
+              viagemId: "pacote-001",
+              ordemViagem: 2,
+              pacoteMeta: {
+                id: "pacote-001",
+                status: "publicado",
+                valorTotal: 18000,
+                version: 1,
+                totalCargas: 2,
+                ordemPropria: 2,
+              },
+            },
+            queueCount: 1,
+            totalLeads: 1,
+            leads: [
+              {
+                id: "lead-pct-b",
+                status: "QUEUED",
+                cpf: "55544433322",
+                phone: "31988887777",
+                horsePlate: "PCT1A23",
+                trailerPlate: "PCT4B56",
+                trailerPlate2: "",
+                vehicleType: "CARRETA",
+                preRegisteredAt: "2026-05-08T10:00:00.000Z",
+                queuedAt: "2026-05-08T10:00:30.000Z",
+                whatsappClickedAt: null,
+                approvedAt: null,
+                approvedBy: null,
+                queuePosition: 1,
+                validation: null,
+                whatsappUrl: "https://wa.me/5531988887777",
+              },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+      isFetching: false,
+    });
+
+    render(<Leads />);
+
+    // Card pacote unico (1 viagem casada, 2 paradas).
+    expect(screen.getByText("Viagem casada")).toBeInTheDocument();
+    // Pelo menos um indicador de "2 paradas" no DOM (header + estado colapsado).
+    expect(screen.getAllByText(/2 paradas/i).length).toBeGreaterThan(0);
+
+    // Cards avulsos NAO existem (o card pacote substitui). Confirma pela ausencia
+    // do botao "Expandir disputa" (usado so em cards avulsos).
+    expect(screen.queryByRole("button", { name: /Expandir disputa/i })).not.toBeInTheDocument();
+    // Botoes "Reservar para este motorista" (avulso) tambem nao aparecem.
+    expect(screen.queryByRole("button", { name: /Reservar para este motorista/i })).not.toBeInTheDocument();
+
+    // Card pacote ja aparece expandido por padrao — cada parada tem seu LH e rota.
+    expect(screen.getByText("LH LH-PCT-1")).toBeInTheDocument();
+    expect(screen.getByText("LH LH-PCT-2")).toBeInTheDocument();
+    expect(screen.getByText(/Sao Paulo \/ SP -> Rio de Janeiro \/ RJ/)).toBeInTheDocument();
+    expect(screen.getByText(/Rio de Janeiro \/ RJ -> Belo Horizonte \/ MG/)).toBeInTheDocument();
+
+    // 2 botoes de "Reservar parada" (um por parada do pacote).
+    const reservarBtns = screen.getAllByRole("button", { name: /Reservar parada/i });
+    expect(reservarBtns).toHaveLength(2);
+
+    // Clicar em "Reservar parada" dispara approve para o lead daquela parada.
+    fireEvent.click(reservarBtns[0]);
+    await waitFor(() => {
+      expect(mockApproveOperatorLoadLead).toHaveBeenCalledWith("carga-pacote-1", "lead-pct-a");
+    });
+  });
+
   it("abre as disputas minimizadas por padrao e permite expandir depois", () => {
     render(<Leads />);
 
