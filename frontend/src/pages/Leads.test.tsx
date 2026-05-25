@@ -46,9 +46,28 @@ vi.mock("@/components/DashboardHeader", () => ({
   default: ({ title }: { title: string }) => <div>{title}</div>,
 }));
 
+// Reproduz a forma do ApiError (servico de loadClaims) sem importar o modulo
+// real — facilita o teste do banner amarelo sem fazer fetch.
+// Declarado dentro do vi.hoisted pois a factory de vi.mock e hoisted para o
+// topo do arquivo, antes de qualquer declaracao de class top-level.
+const { FakeApiError } = vi.hoisted(() => {
+  class FakeApiError extends Error {
+    status: number;
+    code?: string;
+    constructor(message: string, opts: { status: number; code?: string }) {
+      super(message);
+      this.name = "ApiError";
+      this.status = opts.status;
+      this.code = opts.code;
+    }
+  }
+  return { FakeApiError };
+});
+
 vi.mock("@/services/loadClaims", () => ({
   approveOperatorLoadLead: mockApproveOperatorLoadLead,
   fetchOperatorLoadLeads: vi.fn(),
+  ApiError: FakeApiError,
 }));
 
 vi.mock("@/integrations/supabase/client", () => ({
@@ -242,6 +261,62 @@ describe("Leads", () => {
         queryKey: ["operator", "public-load-leads"],
       });
     });
+  });
+
+  it("mostra banner amarelo de sincronizacao indisponivel quando 503 e ja existem dados", () => {
+    // Cenario: polling ja trouxe dados; uma proxima refetch falhou com 503
+    // schema-drift. UI mantem os dados antigos visiveis e exibe banner gracioso.
+    mockUseQuery.mockReturnValue({
+      data: {
+        groups: [
+          {
+            load: {
+              id: "load-existente",
+              status: "OPEN",
+              origem: "Curitiba / PR",
+              destino: "Porto Alegre / RS",
+              perfil: "CARRETA",
+              data: "2026-05-25",
+              horario: "10:00:00",
+              reservedPublicLeadId: null,
+            },
+            queueCount: 1,
+            totalLeads: 1,
+            leads: [
+              {
+                id: "lead-stale",
+                status: "QUEUED",
+                cpf: "11122233344",
+                phone: "41999999999",
+                horsePlate: "AAA1B22",
+                trailerPlate: "BBB3C44",
+                trailerPlate2: "",
+                vehicleType: "CARRETA",
+                preRegisteredAt: "2026-05-25T09:00:00.000Z",
+                queuedAt: "2026-05-25T09:01:00.000Z",
+                whatsappClickedAt: null,
+                approvedAt: null,
+                approvedBy: null,
+                queuePosition: 1,
+                validation: null,
+                whatsappUrl: "https://wa.me/5541999999999",
+              },
+            ],
+          },
+        ],
+      },
+      error: new FakeApiError("Schema drift", { status: 503, code: "SCHEMA_DRIFT" }),
+      isLoading: false,
+      isFetching: true,
+    });
+
+    render(<Leads />);
+
+    expect(screen.getByText("Sincronizacao temporariamente indisponivel")).toBeInTheDocument();
+    // Dados antigos (rota) seguem visiveis — banner NAO bloqueia a UI.
+    expect(screen.getByText("Curitiba / PR -> Porto Alegre / RS")).toBeInTheDocument();
+    // Mensagem do erro completo NAO eh exibida (so o banner gracioso).
+    expect(screen.queryByText("Não foi possível carregar a fila")).not.toBeInTheDocument();
   });
 
   it("mostra o erro da API em vez de fingir que a fila esta vazia", () => {
