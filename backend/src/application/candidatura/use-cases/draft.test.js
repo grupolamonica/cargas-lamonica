@@ -43,11 +43,28 @@ const fakeClient = {
   async query(sql, params = []) {
     const normalizedSql = sql.replace(/\s+/g, " ").trim();
 
-    // SELECT ... FOR UPDATE (save-draft lock pessimista).
-    if (/SELECT id, id_cadastro\s+FROM public\.pending_driver_registrations\s+WHERE driver_user_id = \$1\s+AND status = 'draft'\s+AND versao_cadastro = 'v2'\s+FOR UPDATE/i.test(normalizedSql)) {
+    // Iter #7 — SELECT ... FOR UPDATE escopado por (driver_user_id, carga_id).
+    if (/SELECT id, id_cadastro\s+FROM public\.pending_driver_registrations\s+WHERE driver_user_id = \$1\s+AND carga_id = \$2\s+AND status = 'draft'\s+AND versao_cadastro = 'v2'\s+FOR UPDATE/i.test(normalizedSql)) {
+      const [driverUserId, cargaId] = params;
+      const matches = fakeDb.rows.filter(
+        (r) =>
+          r.driver_user_id === driverUserId &&
+          r.carga_id === cargaId &&
+          r.status === "draft" &&
+          r.versao_cadastro === "v2",
+      );
+      return { rows: matches.map((r) => ({ id: r.id, id_cadastro: r.id_cadastro })), rowCount: matches.length };
+    }
+
+    // Iter #7 — fallback legacy: SELECT ... carga_id IS NULL (backcompat).
+    if (/SELECT id, id_cadastro\s+FROM public\.pending_driver_registrations\s+WHERE driver_user_id = \$1\s+AND carga_id IS NULL\s+AND status = 'draft'\s+AND versao_cadastro = 'v2'\s+FOR UPDATE/i.test(normalizedSql)) {
       const [driverUserId] = params;
       const matches = fakeDb.rows.filter(
-        (r) => r.driver_user_id === driverUserId && r.status === "draft" && r.versao_cadastro === "v2",
+        (r) =>
+          r.driver_user_id === driverUserId &&
+          r.carga_id == null &&
+          r.status === "draft" &&
+          r.versao_cadastro === "v2",
       );
       return { rows: matches.map((r) => ({ id: r.id, id_cadastro: r.id_cadastro })), rowCount: matches.length };
     }
@@ -83,8 +100,40 @@ const fakeClient = {
       return { rows: [{ id, updated_at }], rowCount: 1 };
     }
 
-    // SELECT do get-draft (com filtro de TTL via now() - 72h).
-    if (/SELECT id, carga_id, dados, updated_at\s+FROM public\.pending_driver_registrations\s+WHERE driver_user_id = \$1\s+AND status = 'draft'\s+AND versao_cadastro = 'v2'\s+AND updated_at > now\(\) - interval '72 hours'/i.test(normalizedSql)) {
+    // SELECT do get-draft escopado por cargaId (iter #7, $2 = cargaId).
+    if (/SELECT id, carga_id, dados, updated_at\s+FROM public\.pending_driver_registrations\s+WHERE driver_user_id = \$1\s+AND status = 'draft'\s+AND versao_cadastro = 'v2'\s+AND updated_at > now\(\) - interval '72 hours'\s+AND \(carga_id = \$2 OR carga_id IS NULL\)/i.test(normalizedSql)) {
+      const [driverUserId, cargaId] = params;
+      const cutoff = Date.now() - 72 * 3600 * 1000;
+      const matches = fakeDb.rows
+        .filter(
+          (r) =>
+            r.driver_user_id === driverUserId &&
+            r.status === "draft" &&
+            r.versao_cadastro === "v2" &&
+            r.updated_at.getTime() > cutoff &&
+            (r.carga_id === cargaId || r.carga_id == null),
+        )
+        .sort((a, b) => {
+          // prefere carga_id exato, depois mais recente
+          const aMatch = a.carga_id === cargaId ? 1 : 0;
+          const bMatch = b.carga_id === cargaId ? 1 : 0;
+          if (aMatch !== bMatch) return bMatch - aMatch;
+          return b.updated_at.getTime() - a.updated_at.getTime();
+        })
+        .slice(0, 1);
+      return {
+        rows: matches.map((r) => ({
+          id: r.id,
+          carga_id: r.carga_id,
+          dados: r.dados,
+          updated_at: r.updated_at,
+        })),
+        rowCount: matches.length,
+      };
+    }
+
+    // SELECT do get-draft SEM cargaId (legacy — mais recente do driver).
+    if (/SELECT id, carga_id, dados, updated_at\s+FROM public\.pending_driver_registrations\s+WHERE driver_user_id = \$1\s+AND status = 'draft'\s+AND versao_cadastro = 'v2'\s+AND updated_at > now\(\) - interval '72 hours'\s+ORDER BY updated_at DESC\s+LIMIT 1/i.test(normalizedSql)) {
       const [driverUserId] = params;
       const cutoff = Date.now() - 72 * 3600 * 1000;
       const matches = fakeDb.rows
@@ -290,6 +339,68 @@ describe("candidatura draft use cases", () => {
     // Restou apenas o fresco.
     expect(fakeDb.rows).toHaveLength(1);
     expect(fakeDb.rows[0].id).toBe(fresh.payload.id);
+  });
+
+  it("(iter#7-h) saveCandidaturaDraft permite MULTI-DRAFT simultaneo por driver (1 row por carga)", async () => {
+    const driverUserId = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+
+    const first = await saveCandidaturaDraft({
+      driverUserId,
+      cargaId: "carga-A",
+      dados: { step: 1 },
+      correlationId: "h-a",
+    });
+    const second = await saveCandidaturaDraft({
+      driverUserId,
+      cargaId: "carga-B",
+      dados: { step: 2 },
+      correlationId: "h-b",
+    });
+
+    expect(first.payload.id).not.toBe(second.payload.id);
+    expect(fakeDb.rows).toHaveLength(2);
+
+    // Update do draft A nao toca o B (scoping correto por carga).
+    const updatedA = await saveCandidaturaDraft({
+      driverUserId,
+      cargaId: "carga-A",
+      dados: { step: 1.5 },
+      correlationId: "h-a2",
+    });
+    expect(updatedA.payload.id).toBe(first.payload.id);
+    expect(fakeDb.rows).toHaveLength(2);
+    expect(fakeDb.rows.find((r) => r.id === first.payload.id).dados).toEqual({ step: 1.5 });
+    expect(fakeDb.rows.find((r) => r.id === second.payload.id).dados).toEqual({ step: 2 });
+  });
+
+  it("(iter#7-i) saveCandidaturaDraft adota draft LEGACY (carga_id IS NULL) na primeira chamada com cargaId", async () => {
+    const driverUserId = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+    // Simula draft legacy pre-iter#7 (carga_id NULL).
+    fakeDb.rows.push(
+      makeRow({
+        id: "legacy-1",
+        id_cadastro: "CAD-V2-legacy",
+        status: "draft",
+        versao_cadastro: "v2",
+        driver_user_id: driverUserId,
+        carga_id: null,
+        dados: { step: "legacy" },
+        updated_at: new Date(),
+      }),
+    );
+
+    const result = await saveCandidaturaDraft({
+      driverUserId,
+      cargaId: "carga-NEW",
+      dados: { step: "novo" },
+      correlationId: "i-1",
+    });
+
+    // Reaproveita legacy — mesmo id, mas agora vinculado a carga-NEW.
+    expect(result.payload.id).toBe("legacy-1");
+    expect(fakeDb.rows).toHaveLength(1);
+    expect(fakeDb.rows[0].carga_id).toBe("carga-NEW");
+    expect(fakeDb.rows[0].dados).toEqual({ step: "novo" });
   });
 
   it("(g) UPDATE de draft 70h atras reseta updated_at — get subsequente retorna 200 (sliding window)", async () => {

@@ -18,6 +18,10 @@ function toIsoString(value) {
 /**
  * Le o draft do motorista autenticado, aplicando TTL SLIDING via updated_at.
  *
+ * Iter #7: quando `cargaId` e fornecido, busca o draft daquela carga especifica
+ * (suporta multi-draft simultaneo). Sem cargaId mantem comportamento legacy
+ * (draft mais recente — chamadas antigas do frontend que ainda nao passam carga).
+ *
  * - Se nao existe row OU updated_at < now() - 72h → 204 (sem payload).
  * - Caso contrario → 200 com { draft: { id, cargaId, dados, updatedAt }, expiresAt }.
  *
@@ -26,24 +30,43 @@ function toIsoString(value) {
  *
  * @param {Object} args
  * @param {string} args.driverUserId UUID do motorista autenticado.
+ * @param {string} [args.cargaId] Quando presente, escopa o draft a esta carga (iter #7).
  * @param {string} [args.correlationId]
  * @returns {Promise<{ statusCode: number, payload?: object }>}
  */
-export async function getCandidaturaDraft({ driverUserId, correlationId }) {
+export async function getCandidaturaDraft({ driverUserId, cargaId, correlationId }) {
   return withPgClient(async (client) => {
-    const result = await client.query(
-      `
-        SELECT id, carga_id, dados, updated_at
-        FROM public.pending_driver_registrations
-        WHERE driver_user_id = $1
-          AND status = 'draft'
-          AND versao_cadastro = 'v2'
-          AND updated_at > now() - interval '72 hours'
-        ORDER BY updated_at DESC
-        LIMIT 1
-      `,
-      [driverUserId],
-    );
+    // Iter #7: prefere o draft especifico da cargaId; fallback ao mais recente
+    // (e ao legacy com carga_id IS NULL) quando cargaId nao foi fornecido.
+    const scopedByCarga = cargaId ? true : false;
+    const result = scopedByCarga
+      ? await client.query(
+          `
+            SELECT id, carga_id, dados, updated_at
+            FROM public.pending_driver_registrations
+            WHERE driver_user_id = $1
+              AND status = 'draft'
+              AND versao_cadastro = 'v2'
+              AND updated_at > now() - interval '72 hours'
+              AND (carga_id = $2 OR carga_id IS NULL)
+            ORDER BY (carga_id = $2) DESC, updated_at DESC
+            LIMIT 1
+          `,
+          [driverUserId, cargaId],
+        )
+      : await client.query(
+          `
+            SELECT id, carga_id, dados, updated_at
+            FROM public.pending_driver_registrations
+            WHERE driver_user_id = $1
+              AND status = 'draft'
+              AND versao_cadastro = 'v2'
+              AND updated_at > now() - interval '72 hours'
+            ORDER BY updated_at DESC
+            LIMIT 1
+          `,
+          [driverUserId],
+        );
 
     if (result.rows.length === 0) {
       return { statusCode: 204 };

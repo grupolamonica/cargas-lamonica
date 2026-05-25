@@ -12,6 +12,7 @@ import {
   getCandidaturaDraft,
   getCandidaturaDraftByCpf,
 } from "../../../application/candidatura/use-cases/get-draft.js";
+import { listIncompleteCadastroDrafts } from "../../../application/candidatura/use-cases/list-incomplete-drafts.js";
 import { submitCandidaturaFinal } from "../../../application/candidatura/use-cases/submit-final.js";
 import { resolveAnttCascade } from "../../../application/candidatura/use-cases/antt-cascade.js";
 import { verifyDocument } from "../../../application/candidatura/use-cases/verify-document.js";
@@ -476,10 +477,15 @@ export async function resolveCandidaturaDraftGetResponse(request) {
     }
   }
 
+  // Iter #7 — cargaId opcional escopa o draft a uma carga especifica (multi-draft).
+  const cargaIdRaw = getQueryParam(request, "cargaId");
+  const cargaId = cargaIdRaw ? String(cargaIdRaw).trim() : null;
+
   try {
     if (session?.user?.id) {
       return await getCandidaturaDraft({
         driverUserId: session.user.id,
+        cargaId: cargaId || undefined,
         correlationId,
       });
     }
@@ -882,6 +888,67 @@ export async function resolveCandidaturaVerifyDocumentResponse(request) {
         status: null,
         lastCandidatura: null,
         meta: { correlationId, degraded: true },
+      },
+    };
+  }
+}
+
+/**
+ * GET /api/driver/cadastros/incompletos (Iter #7)
+ *
+ * Lista drafts incompletos do motorista autenticado, com 1 entrada por carga.
+ * DriverPortal usa para renderizar 1 notification card "Completar cadastro
+ * pendente" por draft, com origem/destino/data da carga associada.
+ *
+ * Auth: driver session obrigatoria (D-01). Sem session retorna 401.
+ *
+ * Response 200: { drafts: [{ id, cargaId, currentStep, updatedAt, expiresAt,
+ *   origem, destino, dataColeta, horarioColeta }] }
+ */
+export async function resolveListIncompleteCadastrosResponse(request) {
+  const correlationId = getCorrelationId(request);
+  const requestIp = getRequestIp(request);
+
+  if (isRateLimited(requestIp)) {
+    return {
+      statusCode: 429,
+      payload: {
+        error: "TooManyRequests",
+        message: "Muitas tentativas. Aguarde alguns instantes e tente novamente.",
+        meta: { correlationId },
+      },
+    };
+  }
+
+  const { session, errorResponse } = await resolveDriverSessionOrError(request, correlationId);
+  if (errorResponse) return errorResponse;
+  if (!session?.user?.id) {
+    return {
+      statusCode: 401,
+      payload: {
+        error: "Unauthorized",
+        message: "Login do motorista obrigatorio para listar cadastros incompletos.",
+        meta: { correlationId },
+      },
+    };
+  }
+
+  try {
+    return await listIncompleteCadastroDrafts({
+      driverUserId: session.user.id,
+      correlationId,
+    });
+  } catch (err) {
+    console.error("[candidatura.list-incomplete-drafts]", {
+      correlationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return {
+      statusCode: 500,
+      payload: {
+        error: "InternalError",
+        message: "Nao foi possivel listar os cadastros incompletos agora. Tente novamente.",
+        meta: { correlationId },
       },
     };
   }

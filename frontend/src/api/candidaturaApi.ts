@@ -313,7 +313,8 @@ export interface CandidaturaDraftGetResponse {
  * Hook TanStack para GET /api/candidatura/draft/me (CADASTRO-09 / D-05).
  *
  * Retorna o rascunho ativo. Dois fluxos suportados:
- *  - Autenticado: usa `driverUserId` + access_token (1 draft ativo por user).
+ *  - Autenticado: usa `driverUserId` + access_token. Iter #7: quando `cargaId`
+ *    e fornecido, escopa o draft a esta carga (multi-draft simultaneo).
  *  - Publico (Bug-8 / fix F5): passa `?cpf=XXX` quando o motorista nao tem
  *    sessao Supabase — backend identifica via `dados->'motorista'->>'cpf'`.
  *
@@ -322,26 +323,80 @@ export interface CandidaturaDraftGetResponse {
 export function useCandidaturaDraftGet(
   driverUserId: string | null,
   cpf?: string | null,
+  cargaId?: string | null,
 ) {
   const auth = useDriverAuth();
   const accessToken = auth.session?.access_token ?? null;
   const normalizedCpf = (cpf ?? "").replace(/\D/g, "");
   const hasPublicKey = normalizedCpf.length === 11;
   const hasAuthKey = !!driverUserId && !!accessToken;
+  const cargaIdNormalized = (cargaId ?? "").trim();
 
   return useQuery<CandidaturaDraftGetResponse | null, CandidaturaApiError>({
     enabled: hasAuthKey || hasPublicKey,
-    queryKey: ["candidatura-draft", driverUserId || `cpf:${normalizedCpf}`],
+    queryKey: [
+      "candidatura-draft",
+      driverUserId || `cpf:${normalizedCpf}`,
+      cargaIdNormalized || "no-carga",
+    ],
     queryFn: () => {
-      const url = hasAuthKey
+      let url = hasAuthKey
         ? "/api/candidatura/draft/me"
         : `/api/candidatura/draft/me?cpf=${encodeURIComponent(normalizedCpf)}`;
+      if (cargaIdNormalized) {
+        url += `${url.includes("?") ? "&" : "?"}cargaId=${encodeURIComponent(cargaIdNormalized)}`;
+      }
       return requestJson<CandidaturaDraftGetResponse | null>(url, {
         method: "GET",
         accessToken: hasAuthKey ? accessToken ?? undefined : undefined,
       });
     },
     staleTime: 30_000,
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * list-incomplete-drafts — Iter #7 (1 notification card per draft)
+ * ------------------------------------------------------------------ */
+
+export interface IncompleteCadastroDraft {
+  id: string;
+  cargaId: string;
+  currentStep: string | null;
+  updatedAt: string;
+  expiresAt: string;
+  origem: string | null;
+  destino: string | null;
+  dataColeta: string | null;
+  horarioColeta: string | null;
+}
+
+export interface IncompleteCadastroDraftsResponse {
+  drafts: IncompleteCadastroDraft[];
+  meta: PreCheckResponseMeta;
+}
+
+/**
+ * Hook TanStack para GET /api/driver/cadastros/incompletos.
+ *
+ * Retorna a lista de drafts incompletos do motorista (1 entrada por carga).
+ * Usado pelo DriverPortal para renderizar 1 card "Completar cadastro" por draft.
+ */
+export function useIncompleteCadastroDrafts() {
+  const auth = useDriverAuth();
+  const accessToken = auth.session?.access_token ?? null;
+  const driverUserId = auth.session?.user?.id ?? null;
+
+  return useQuery<IncompleteCadastroDraftsResponse, CandidaturaApiError>({
+    enabled: !!driverUserId && !!accessToken,
+    queryKey: ["candidatura-incomplete-drafts", driverUserId],
+    queryFn: () =>
+      requestJson<IncompleteCadastroDraftsResponse>(
+        "/api/driver/cadastros/incompletos",
+        { method: "GET", accessToken: accessToken ?? undefined },
+      ),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
   });
 }
 

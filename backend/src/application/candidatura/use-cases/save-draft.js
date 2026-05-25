@@ -15,11 +15,15 @@ function computeExpiresAtIso(updatedAt) {
 }
 
 /**
- * Upsert do draft do candidato (1 ativo por driver_user_id).
+ * Upsert do draft do candidato — Iter #7: escopo por (driver_user_id, cargaId).
+ *
+ * Multi-draft: motorista pode ter N drafts simultaneos, um por carga. Drafts
+ * legacy criados antes do iter #7 (carga_id IS NULL) sao reaproveitados quando
+ * o save chega sem carga_id, preservando backcompat.
  *
  * Estrategia transacional:
- *   1. SELECT ... FOR UPDATE para serializar concorrencia por driver.
- *   2. Se existe → UPDATE dados+carga_id (trigger BEFORE UPDATE seta updated_at).
+ *   1. SELECT ... FOR UPDATE escopado por (driver_user_id, carga_id).
+ *   2. Se existe → UPDATE dados (trigger BEFORE UPDATE seta updated_at).
  *   3. Se nao → INSERT novo (id_cadastro com prefixo CAD-V2- + uuid).
  *
  * IMPORTANTE: NUNCA seta `updated_at` manualmente — o trigger trg_pending_driver_updated_at
@@ -35,18 +39,42 @@ function computeExpiresAtIso(updatedAt) {
  */
 export async function saveCandidaturaDraft({ driverUserId, cargaId, dados, requestIp, correlationId }) {
   return withPgTransaction(async (client) => {
-    // Lock pessimista por driver para evitar dois INSERTs concorrentes do mesmo motorista.
-    const existing = await client.query(
+    // Iter #7: lock pessimista por (driver, carga_id) — suporta multi-draft.
+    // Fallback para drafts legacy (carga_id IS NULL) quando o cargaId atual
+    // ainda nao tem draft proprio: usa o legacy e atualiza-o com o cargaId.
+    const cargaScopedExisting = await client.query(
       `
         SELECT id, id_cadastro
         FROM public.pending_driver_registrations
         WHERE driver_user_id = $1
+          AND carga_id = $2
           AND status = 'draft'
           AND versao_cadastro = 'v2'
         FOR UPDATE
       `,
-      [driverUserId],
+      [driverUserId, cargaId],
     );
+
+    let existing = cargaScopedExisting;
+
+    if (existing.rows.length === 0) {
+      // Backcompat: tenta reaproveitar draft legacy (carga_id IS NULL) do mesmo
+      // driver — UMA unica vez, ja vinculando-o ao cargaId atual. Drafts legacy
+      // sao raros (gerados antes do iter #7); a partir do primeiro save, ficam
+      // escopados.
+      existing = await client.query(
+        `
+          SELECT id, id_cadastro
+          FROM public.pending_driver_registrations
+          WHERE driver_user_id = $1
+            AND carga_id IS NULL
+            AND status = 'draft'
+            AND versao_cadastro = 'v2'
+          FOR UPDATE
+        `,
+        [driverUserId],
+      );
+    }
 
     let row;
     let idCadastro;

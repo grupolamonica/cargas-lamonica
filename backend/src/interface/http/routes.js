@@ -96,6 +96,7 @@ import {
   resolveCandidaturaPreCheckResponse,
   resolveCandidaturaSubmitResponse,
   resolveCandidaturaVerifyDocumentResponse,
+  resolveListIncompleteCadastrosResponse,
 } from "./candidatura/handlers.js";
 import { resolveUploadDraftFileResponse } from "./candidatura/upload-draft-file.handler.js";
 import { draftFileUpload } from "./upload-middleware.js";
@@ -173,6 +174,8 @@ export function registerRoutes(app) {
   router.get("/api/candidatura/draft/me", wrap(resolveCandidaturaDraftGetResponse));
   router.post("/api/candidatura/antt-precheck", wrap(resolveCandidaturaAnttPrecheckResponse));
   router.post("/api/candidatura/submit", wrap(resolveCandidaturaSubmitResponse));
+  // Iter #7: list drafts incompletos do motorista (1 entrada por carga).
+  router.get("/api/driver/cadastros/incompletos", wrap(resolveListIncompleteCadastrosResponse));
   // Cadastro v2 — lookup-pis (driver-auth, plan 260515-loi).
   router.post("/api/cadastro/lookup-pis", wrap(resolveLookupPisResponse));
   // Cadastro v2 — verify-document (PUBLICO, rate limit 5/min/IP).

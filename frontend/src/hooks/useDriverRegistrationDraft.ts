@@ -70,7 +70,8 @@ export function useDriverRegistrationDraft({
 
   // Fix F5 publico: passa o CPF pro server-query quando nao ha session — assim
   // o GET /api/candidatura/draft/me?cpf=XXX hidrata o draft anonimo apos refresh.
-  const serverDraftQuery = useCandidaturaDraftGet(driverUserId || null, cpf ?? null);
+  // Iter #7: passa cargaId pra escopar o draft a esta carga (multi-draft).
+  const serverDraftQuery = useCandidaturaDraftGet(driverUserId || null, cpf ?? null, cargaId);
   const saveMutation = useCandidaturaDraftSave();
 
   // True quando NAO ha session Supabase do motorista. Nesse fluxo (Bug-8 P1)
