@@ -209,10 +209,17 @@ const ManageCargas = () => {
   const [origemFilter, setOrigemFilter] = useState<string>("");
   const [destinoFilter, setDestinoFilter] = useState<string>("");
   const [perfilFilter, setPerfilFilter] = useState<string>("todos");
-  // Default de data = hoje (ambos). Alinhado ao pedido do operador para ver
-  // por padr\u00e3o as cargas programadas para o dia corrente.
+  // Default de data: dateFrom = hoje, dateTo = hoje + 90 dias.
+  // O range estreito anterior (hoje/hoje) escondia as cargas reais da planilha
+  // que tem data de carregamento >= D+0 (frequentemente D+3..D+30), levando o
+  // operador a abrir /cargas e ver "0 cargas em exibicao" mesmo com cargas
+  // ativas na fila. 90 dias cobre o horizonte operacional sem trazer historico.
   const [dateFrom, setDateFrom] = useState<string>(() => new Date().toISOString().slice(0, 10));
-  const [dateTo, setDateTo] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [dateTo, setDateTo] = useState<string>(() => {
+    const future = new Date();
+    future.setDate(future.getDate() + 90);
+    return future.toISOString().slice(0, 10);
+  });
   const [clienteFilter, setClienteFilter] = useState<string>("");
   const [page, setPage] = useState(1);
   const deferredSearch = useDeferredValue(search);
@@ -226,6 +233,13 @@ const ManageCargas = () => {
   const deferredDateTo = useDeferredValue(dateTo);
   const deferredClienteFilter = useDeferredValue(clienteFilter);
   const todayIsoDate = new Date().toISOString().slice(0, 10);
+  const defaultDateToIso = useMemo(() => {
+    const future = new Date();
+    future.setDate(future.getDate() + 90);
+    return future.toISOString().slice(0, 10);
+  }, []);
+  // hasActiveFilters: range default (hoje .. hoje+90d) NAO conta como filtro
+  // ativo — o operador so ve "Limpar filtros" habilitado se mexer em algo.
   const hasActiveFilters =
     deferredSearch.trim().length > 0 ||
     deferredStatusFilter !== "ativas" ||
@@ -234,8 +248,8 @@ const ManageCargas = () => {
     deferredOrigemFilter.trim().length > 0 ||
     deferredDestinoFilter.trim().length > 0 ||
     deferredPerfilFilter !== "todos" ||
-    deferredDateFrom.length > 0 ||
-    deferredDateTo.length > 0 ||
+    (deferredDateFrom.length > 0 && deferredDateFrom !== todayIsoDate) ||
+    (deferredDateTo.length > 0 && deferredDateTo !== defaultDateToIso) ||
     deferredClienteFilter.length > 0;
 
   useEffect(() => {
@@ -740,6 +754,8 @@ const ManageCargas = () => {
                 value={dateFrom}
                 onChange={(event) => setDateFrom(event.target.value)}
                 className="rounded-2xl border border-border/80 bg-white/92 px-4 py-3 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
+                title="Data inicial (default: hoje)"
+                aria-label="Data inicial do filtro (default: hoje)"
               />
 
               <input
@@ -747,6 +763,8 @@ const ManageCargas = () => {
                 value={dateTo}
                 onChange={(event) => setDateTo(event.target.value)}
                 className="rounded-2xl border border-border/80 bg-white/92 px-4 py-3 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
+                title="Data final (default: hoje + 90 dias)"
+                aria-label="Data final do filtro (default: hoje + 90 dias)"
               />
 
               <select
@@ -763,6 +781,10 @@ const ManageCargas = () => {
               <button
                 type="button"
                 onClick={() => {
+                  const today = new Date().toISOString().slice(0, 10);
+                  const future = new Date();
+                  future.setDate(future.getDate() + 90);
+                  const futureIso = future.toISOString().slice(0, 10);
                   setSearch("");
                   setStatusFilter("ativas");
                   setVisibilityFilter("todos");
@@ -770,8 +792,11 @@ const ManageCargas = () => {
                   setOrigemFilter("");
                   setDestinoFilter("");
                   setPerfilFilter("todos");
-                  setDateFrom("");
-                  setDateTo("");
+                  // Restaura o range default (hoje .. hoje + 90 dias) em vez de
+                  // deixar vazio — alinhado com o estado inicial e evita o
+                  // bug do operador ver "0 cargas em exibicao" apos limpar.
+                  setDateFrom(today);
+                  setDateTo(futureIso);
                   setClienteFilter("");
                 }}
                 disabled={!hasActiveFilters}
