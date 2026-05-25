@@ -7,13 +7,14 @@ import { toast } from "sonner";
 import ClientLogo from "@/components/ClientLogo";
 import DashboardHeader from "@/components/DashboardHeader";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
+import OperatorPacoteLeadCard, { type PacoteLeadItem } from "@/components/operator/OperatorPacoteLeadCard";
 import { cn } from "@/lib/utils";
 import { confirmAction } from "@/lib/confirm";
 import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 import { buildDisplayDateTime, formatFullDateTime, formatShortDateTime } from "@/lib/dateDisplay";
 import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
-import { approveOperatorLoadLead, cancelOperatorLoadLead, createDirectAllocation, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type DirectAllocationPayload, type OperatorLeadGroup, type PublicLeadValidationSummary } from "@/services/loadClaims";
+import { approveOperatorLoadLead, cancelOperatorLoadLead, createDirectAllocation, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type DirectAllocationPayload, type OperatorLeadGroup, type OperatorLeadPacoteMeta, type PublicLeadValidationSummary } from "@/services/loadClaims";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { VEHICLE_PROFILE_OPTIONS } from "@/lib/vehicleProfiles";
 import { fetchOperatorClientes, fetchSheetMonitor, type SheetMonitorRow } from "@/services/readModels";
@@ -289,9 +290,98 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
       : filteredGroups,
   [filteredGroups, clienteFilter]);
 
+  /**
+   * Pacote grouping: cargas que pertencem ao mesmo `pacoteMeta.id` E recebem
+   * candidatura do mesmo motorista (chave = cpf+phone) sao apresentadas como
+   * uma viagem casada unica em um card destacado. O bug original mostrava
+   * apenas a primeira parada — agora o operador ve as N paradas e decide com
+   * contexto completo.
+   *
+   * Cargas avulsas (viagemId == null) seguem rendering original.
+   */
+  type RenderItem =
+    | { kind: "carga"; group: OperatorLeadGroup }
+    | {
+        kind: "pacote";
+        pacoteMeta: OperatorLeadPacoteMeta;
+        driverCpf: string;
+        driverPhone: string;
+        items: PacoteLeadItem[];
+      };
+
+  const renderItems = useMemo<RenderItem[]>(() => {
+    const items: RenderItem[] = [];
+    // Map<`${viagemId}|${driverKey}`, RenderItem(pacote)>
+    const pacoteIndex = new Map<string, Extract<RenderItem, { kind: "pacote" }>>();
+    // Ordem de insercao do primeiro group de cada pacote — preserva a ordem
+    // original do filteredByCliente para nao misturar cargas avulsas/pacotes.
+    const pacoteOrderIndex = new Map<string, number>();
+
+    filteredByCliente.forEach((group) => {
+      const pacoteMeta = group.load.pacoteMeta ?? null;
+      // group sem viagem_id ou sem leads = render avulso (mantem comportamento).
+      if (!pacoteMeta || !group.load.viagemId || group.leads.length === 0) {
+        items.push({ kind: "carga", group });
+        return;
+      }
+
+      // Para cada lead com mesmo (cpf, phone) dentro deste pacote, agrupar.
+      // Leads sem cpf/phone (defensivo) caem no fluxo avulso.
+      const remainingLeads: typeof group.leads = [];
+
+      group.leads.forEach((lead) => {
+        const cpf = lead.cpf?.trim() ?? "";
+        const phone = lead.phone?.trim() ?? "";
+        if (!cpf && !phone) {
+          remainingLeads.push(lead);
+          return;
+        }
+
+        const driverKey = `${cpf}|${phone}`;
+        const indexKey = `${pacoteMeta.id}|${driverKey}`;
+        let bucket = pacoteIndex.get(indexKey);
+        if (!bucket) {
+          bucket = {
+            kind: "pacote",
+            pacoteMeta,
+            driverCpf: cpf,
+            driverPhone: phone,
+            items: [],
+          };
+          pacoteIndex.set(indexKey, bucket);
+          pacoteOrderIndex.set(indexKey, items.length);
+          items.push(bucket);
+        }
+        // O group sera apresentado como uma "parada" dentro do card; o lead
+        // que pertence ao motorista do bucket vai pra dentro de items[].
+        bucket.items.push({ group, lead });
+      });
+
+      // Leads sem identidade (ou cargas sem qualquer lead matched a pacote) —
+      // renderiza o group avulso adicional para nao perder informacao.
+      if (remainingLeads.length > 0) {
+        items.push({
+          kind: "carga",
+          group: { ...group, leads: remainingLeads },
+        });
+      }
+    });
+
+    // Ordena cada pacote por ordem_viagem ASC (multi-parada).
+    pacoteIndex.forEach((bucket) => {
+      bucket.items.sort((a, b) => {
+        const ordemA = a.group.load.ordemViagem ?? Number.MAX_SAFE_INTEGER;
+        const ordemB = b.group.load.ordemViagem ?? Number.MAX_SAFE_INTEGER;
+        return ordemA - ordemB;
+      });
+    });
+
+    return items;
+  }, [filteredByCliente]);
+
   const PAGE_SIZE = 10;
-  const totalPages = Math.ceil(filteredByCliente.length / PAGE_SIZE);
-  const paginatedGroups = filteredByCliente.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const totalPages = Math.ceil(renderItems.length / PAGE_SIZE);
+  const paginatedItems = renderItems.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const hasActiveFilters =
     deferredSearch.length > 0 || loadStatusFilter !== "todos" || leadStatusFilter !== "todos" || clienteFilter !== "";
@@ -719,9 +809,49 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
               </div>
             ) : null}
           <section className="space-y-4">
-            {paginatedGroups.map((group) => {
+            {paginatedItems.map((renderItem) => {
+              if (renderItem.kind === "pacote") {
+                const pacoteCollapseKey = `pacote:${renderItem.pacoteMeta.id}:${renderItem.driverCpf}|${renderItem.driverPhone}`;
+                const isCollapsed = collapsedLoadIds.includes(pacoteCollapseKey);
+                const firstItem = renderItem.items[0];
+                const validation = firstItem?.lead.validation ?? null;
+                const whatsappUrl = firstItem?.lead.whatsappUrl ?? "";
+                return (
+                  <OperatorPacoteLeadCard
+                    key={pacoteCollapseKey}
+                    pacoteMeta={renderItem.pacoteMeta}
+                    items={renderItem.items}
+                    driverCpf={renderItem.driverCpf}
+                    driverPhone={renderItem.driverPhone}
+                    whatsappUrl={whatsappUrl}
+                    validation={validation}
+                    isCollapsed={isCollapsed}
+                    onToggleCollapse={() => toggleLoadVisibility(pacoteCollapseKey)}
+                    approvingLeadId={approvingLeadId}
+                    cancellingLeadId={cancellingLeadId}
+                    onApprove={(loadId, leadId, val) => void handleApprove(loadId, leadId, val)}
+                    onCancel={(loadId, leadId, cpf) => void handleCancel(loadId, leadId, cpf)}
+                    onOpenDriverDetail={(lead) =>
+                      setSelectedDriver({
+                        name: lead.validation?.driver.angelira.displayName || null,
+                        cpf: lead.cpf || null,
+                        phone: lead.phone || null,
+                        vehicleType: lead.vehicleType || null,
+                        plates: {
+                          horsePlate: lead.horsePlate || null,
+                          trailerPlate: lead.trailerPlate || null,
+                          trailerPlate2: lead.trailerPlate2 || null,
+                        },
+                        validation: lead.validation || null,
+                        angelliraDetails: null,
+                      })
+                    }
+                  />
+                );
+              }
+              const group = renderItem.group;
               const routeLabel = buildRouteLabel(group);
-              const isCollapsed = collapsedLoadIds.includes(group.load.id);
+              const isCargaCollapsed = collapsedLoadIds.includes(group.load.id);
               const sheetAllocation = group.load.sheetLh ? sheetAllocationByLh.get(group.load.sheetLh) : undefined;
               const effectiveStatus = sheetAllocation?.status || group.load.sheetStatus || group.load.status;
               const statusStyle = resolveStatusStyle(effectiveStatus);
@@ -810,11 +940,11 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                           type="button"
                           onClick={() => toggleLoadVisibility(group.load.id)}
                           className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-white px-3 py-1.5 text-xs font-semibold text-foreground transition-colors duration-200 hover:bg-muted dark:bg-muted/40"
-                          aria-expanded={!isCollapsed}
+                          aria-expanded={!isCargaCollapsed}
                           aria-controls={`lead-group-${group.load.id}`}
                         >
-                          {isCollapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
-                          {isCollapsed ? "Expandir disputa" : "Minimizar disputa"}
+                          {isCargaCollapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
+                          {isCargaCollapsed ? "Expandir disputa" : "Minimizar disputa"}
                         </button>
                         <span className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/20 px-3 py-1.5 text-xs font-semibold text-muted-foreground" title="Carregamento">
                           <Truck className="h-3.5 w-3.5" />
@@ -887,7 +1017,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                     </div>
                   </div>
 
-                  {!isCollapsed ? (
+                  {!isCargaCollapsed ? (
                     <div id={`lead-group-${group.load.id}`} className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead className="bg-primary/[0.045]">
