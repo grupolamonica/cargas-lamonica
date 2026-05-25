@@ -80,21 +80,23 @@ function formatCurrency(value: number | null) {
 export interface PacoteLeadItem {
   /** Group da carga (uma parada do pacote). */
   group: OperatorLeadGroup;
-  /** O lead desta carga referente ao mesmo motorista. */
+  /** O lead desta carga referente a um motorista candidato. */
   lead: OperatorLeadGroup["leads"][number];
+}
+
+export interface DriverCandidatura {
+  cpf: string;
+  phone: string;
+  /** Items (parada+lead) deste motorista neste pacote (ordenados por ordem_viagem). */
+  items: PacoteLeadItem[];
 }
 
 interface Props {
   pacoteMeta: OperatorLeadPacoteMeta;
-  /** Carga + lead daquele motorista para cada parada (ordenado por ordem_viagem ASC). */
+  /** Todos os items do pacote (flatten — usado para metricas e ordering). */
   items: PacoteLeadItem[];
-  /** Identifica o motorista (CPF/phone do primeiro lead). */
-  driverCpf: string;
-  driverPhone: string;
-  /** WhatsApp URL — usa o do primeiro lead (igual em todos). */
-  whatsappUrl: string;
-  /** Validation summary — igual para todos os leads. */
-  validation: PublicLeadValidationSummary | null | undefined;
+  /** N motoristas que se candidataram a este mesmo pacote. */
+  candidaturas: DriverCandidatura[];
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   approvingLeadId: string | null;
@@ -122,10 +124,7 @@ interface Props {
 const OperatorPacoteLeadCard = ({
   pacoteMeta,
   items,
-  driverCpf,
-  driverPhone,
-  whatsappUrl,
-  validation,
+  candidaturas,
   isCollapsed,
   onToggleCollapse,
   approvingLeadId,
@@ -134,15 +133,20 @@ const OperatorPacoteLeadCard = ({
   onCancel,
   onOpenDriverDetail,
 }: Props) => {
-  const totalParadas = items.length;
+  // Paradas unicas do pacote — dedup por load.id (varias candidaturas geram items repetidos).
+  const paradasMap = new Map<string, PacoteLeadItem>();
+  items.forEach((it) => {
+    if (!paradasMap.has(it.group.load.id)) {
+      paradasMap.set(it.group.load.id, it);
+    }
+  });
+  const paradas = Array.from(paradasMap.values());
+  const totalParadas = paradas.length;
   const totalCargas = pacoteMeta.totalCargas ?? totalParadas;
   const isComplete = pacoteMeta.totalCargas != null && totalParadas === pacoteMeta.totalCargas;
   const valorTotalLabel = formatCurrency(pacoteMeta.valorTotal);
-  const firstClienteLogoUrl = items[0]?.group.load.clienteLogoUrl ?? null;
-  const firstClienteNome = items[0]?.group.load.clienteNome ?? null;
-
-  // Sufixo do CPF para diálogo de cancelamento (defense in depth — não vaza CPF cheio).
-  const cpfDigits = driverCpf?.trim() ?? "";
+  const firstClienteLogoUrl = paradas[0]?.group.load.clienteLogoUrl ?? null;
+  const firstClienteNome = paradas[0]?.group.load.clienteNome ?? null;
 
   return (
     <article
@@ -174,7 +178,7 @@ const OperatorPacoteLeadCard = ({
               {firstClienteLogoUrl ? (
                 <ClientLogo logoUrl={firstClienteLogoUrl} name={firstClienteNome ?? ""} className="h-6 w-6" />
               ) : null}
-              Candidatura única — {totalParadas} {totalParadas === 1 ? "parada" : "paradas"}
+              Viagem casada — {totalParadas} {totalParadas === 1 ? "parada" : "paradas"}
             </h3>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <PacoteStatusBadge status={pacoteMeta.status ?? null} />
@@ -184,8 +188,7 @@ const OperatorPacoteLeadCard = ({
                 </span>
               ) : null}
               <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/30 px-2.5 py-0.5 text-[0.68rem] font-semibold text-muted-foreground">
-                <Phone className="h-3 w-3" />
-                {driverPhone}
+                {candidaturas.length} {candidaturas.length === 1 ? "candidato" : "candidatos"}
               </span>
             </div>
           </div>
@@ -196,46 +199,30 @@ const OperatorPacoteLeadCard = ({
               onClick={onToggleCollapse}
               className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-white px-3 py-1.5 text-xs font-semibold text-foreground transition-colors duration-200 hover:bg-muted dark:bg-muted/40"
               aria-expanded={!isCollapsed}
-              aria-controls={`pacote-lead-${pacoteMeta.id}-${cpfDigits}`}
+              aria-controls={`pacote-lead-${pacoteMeta.id}`}
             >
               {isCollapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
               {isCollapsed ? "Expandir paradas" : "Minimizar paradas"}
-            </button>
-            <button
-              type="button"
-              onClick={() => window.open(whatsappUrl, "_blank", "noopener,noreferrer")}
-              className="inline-flex items-center gap-2 rounded-full bg-[linear-gradient(135deg,#23b26b,#25D366)] px-4 py-1.5 text-xs font-semibold text-white shadow-[0_10px_22px_rgba(37,211,102,0.24)] transition-all duration-200 hover:-translate-y-0.5"
-            >
-              <MessageCircle className="h-4 w-4" />
-              Chamar no WhatsApp
             </button>
           </div>
         </div>
       </div>
 
       {!isCollapsed ? (
-        <div id={`pacote-lead-${pacoteMeta.id}-${cpfDigits}`} className="divide-y divide-border/70">
-          {items.map((item, index) => {
-            const { group, lead } = item;
-            const isApproved = lead.status === "APPROVED";
-            const canApprove = group.load.status === "OPEN" && lead.status === "QUEUED";
-            const isApproving = approvingLeadId === lead.id;
-            const isCancelling = cancellingLeadId === lead.id;
-            const ordem = group.load.ordemViagem ?? index + 1;
-            const coletaLabel =
-              group.load.sheetDataCarregamento ||
-              formatShortDateTime(buildDisplayDateTime(group.load.data, group.load.horario), "A confirmar");
-            const descargaLabel = group.load.sheetDataDescarga || null;
+        <div id={`pacote-lead-${pacoteMeta.id}`} className="space-y-0">
+          {/* Paradas do pacote (uma carga = uma parada). */}
+          <div className="divide-y divide-border/70 border-b border-border/70">
+            {paradas.map((item, index) => {
+              const { group } = item;
+              const ordem = group.load.ordemViagem ?? index + 1;
+              const coletaLabel =
+                group.load.sheetDataCarregamento ||
+                formatShortDateTime(buildDisplayDateTime(group.load.data, group.load.horario), "A confirmar");
+              const descargaLabel = group.load.sheetDataDescarga || null;
 
-            return (
-              <div
-                key={`${group.load.id}-${lead.id}`}
-                className="px-5 py-4 lg:px-6 cursor-pointer hover:bg-primary/[0.03] transition-colors"
-                onClick={() => onOpenDriverDetail(lead)}
-                data-testid={`pacote-parada-${ordem}`}
-              >
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                  <div className="flex flex-1 flex-col gap-2">
+              return (
+                <div key={group.load.id} className="px-5 py-4 lg:px-6" data-testid={`pacote-parada-${ordem}`}>
+                  <div className="flex flex-col gap-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="inline-flex h-7 min-w-[2rem] items-center justify-center rounded-full bg-violet-500 px-2 text-xs font-bold text-white">
                         #{ordem}
@@ -246,7 +233,6 @@ const OperatorPacoteLeadCard = ({
                         </span>
                       ) : null}
                       <CargaStatusBadge status={group.load.status} />
-                      <LeadStatusBadge status={lead.status} />
                     </div>
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                       <Route className="h-4 w-4 text-violet-500" />
@@ -271,35 +257,100 @@ const OperatorPacoteLeadCard = ({
                       ) : null}
                     </div>
                   </div>
+                </div>
+              );
+            })}
+          </div>
 
-                  <div className="flex flex-wrap items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      type="button"
-                      onClick={() => onApprove(group.load.id, lead.id, validation)}
-                      disabled={!canApprove || isApproving}
-                      className="inline-flex items-center gap-2 rounded-full border border-border/80 px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {isApproving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : isApproved ? <BadgeCheck className="h-3.5 w-3.5 text-emerald-600" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                      {isApproved ? "Já reservada" : "Reservar parada"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onCancel(group.load.id, lead.id, lead.cpf)}
-                      disabled={isCancelling}
-                      className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-400/40 dark:bg-red-500/15 dark:text-red-200"
-                    >
-                      {isCancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
-                      Cancelar
-                    </button>
+          {/* Candidaturas — N motoristas no mesmo pacote, cada um com seus N leads (1 por parada). */}
+          <div className="space-y-3 px-5 py-4 lg:px-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
+              Candidaturas ({candidaturas.length})
+            </p>
+            {candidaturas.map((cand) => {
+              const firstLead = cand.items[0]?.lead;
+              const whatsappUrl = firstLead?.whatsappUrl ?? "";
+              const validation = firstLead?.validation ?? null;
+              return (
+                <div
+                  key={`${cand.cpf}|${cand.phone}`}
+                  className="rounded-xl border border-border/60 bg-card p-3"
+                  data-testid={`pacote-candidatura-${cand.cpf}-${cand.phone}`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-sm">
+                      <Phone className="h-3.5 w-3.5 text-violet-500" />
+                      <span className="font-semibold text-foreground">{cand.phone || "Sem telefone"}</span>
+                      {cand.cpf ? (
+                        <span className="font-mono text-[0.65rem] text-muted-foreground">
+                          CPF final {cand.cpf.trim().slice(-2)}
+                        </span>
+                      ) : null}
+                    </div>
+                    {whatsappUrl ? (
+                      <button
+                        type="button"
+                        onClick={() => window.open(whatsappUrl, "_blank", "noopener,noreferrer")}
+                        className="inline-flex items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#23b26b,#25D366)] px-3 py-1 text-[0.65rem] font-semibold text-white shadow-[0_10px_22px_rgba(37,211,102,0.24)]"
+                      >
+                        <MessageCircle className="h-3 w-3" />
+                        WhatsApp
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-2 space-y-1.5">
+                    {cand.items.map((it) => {
+                      const { group, lead } = it;
+                      const isApproved = lead.status === "APPROVED";
+                      const canApprove = group.load.status === "OPEN" && lead.status === "QUEUED";
+                      const isApproving = approvingLeadId === lead.id;
+                      const isCancelling = cancellingLeadId === lead.id;
+                      const ordem = group.load.ordemViagem ?? 0;
+                      return (
+                        <div
+                          key={`${group.load.id}-${lead.id}`}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/20 px-2.5 py-1.5 cursor-pointer"
+                          onClick={() => onOpenDriverDetail(lead)}
+                        >
+                          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                            <span className="inline-flex h-5 min-w-[1.5rem] items-center justify-center rounded-full bg-violet-500/20 px-1.5 text-[0.6rem] font-bold text-violet-700 dark:text-violet-200">
+                              Parada #{ordem}
+                            </span>
+                            <LeadStatusBadge status={lead.status} />
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => onApprove(group.load.id, lead.id, validation)}
+                              disabled={!canApprove || isApproving}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-border/80 px-2.5 py-1 text-[0.65rem] font-semibold text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {isApproving ? <Loader2 className="h-3 w-3 animate-spin" /> : isApproved ? <BadgeCheck className="h-3 w-3 text-emerald-600" /> : <CheckCircle2 className="h-3 w-3" />}
+                              {isApproved ? "Já reservada" : "Reservar parada"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onCancel(group.load.id, lead.id, lead.cpf)}
+                              disabled={isCancelling}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[0.65rem] font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-400/40 dark:bg-red-500/15 dark:text-red-200"
+                            >
+                              {isCancelling ? <Loader2 className="h-3 w-3 animate-spin" /> : <Ban className="h-3 w-3" />}
+                              Cancelar
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       ) : (
-        <div id={`pacote-lead-${pacoteMeta.id}-${cpfDigits}`} className="px-5 py-4 lg:px-6 text-sm text-muted-foreground">
-          {totalParadas} parada{totalParadas === 1 ? "" : "s"} agrupada{totalParadas === 1 ? "" : "s"} nesta candidatura.
+        <div id={`pacote-lead-${pacoteMeta.id}`} className="px-5 py-4 lg:px-6 text-sm text-muted-foreground">
+          {totalParadas} parada{totalParadas === 1 ? "" : "s"} · {candidaturas.length} candidato{candidaturas.length === 1 ? "" : "s"} agrupado{candidaturas.length === 1 ? "" : "s"} neste pacote.
         </div>
       )}
     </article>

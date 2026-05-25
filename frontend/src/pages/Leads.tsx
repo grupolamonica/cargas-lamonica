@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import ClientLogo from "@/components/ClientLogo";
 import DashboardHeader from "@/components/DashboardHeader";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
-import OperatorPacoteLeadCard, { type PacoteLeadItem } from "@/components/operator/OperatorPacoteLeadCard";
+import OperatorPacoteLeadCard, { type DriverCandidatura, type PacoteLeadItem } from "@/components/operator/OperatorPacoteLeadCard";
 import { cn } from "@/lib/utils";
 import { confirmAction } from "@/lib/confirm";
 import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
@@ -291,11 +291,11 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   [filteredGroups, clienteFilter]);
 
   /**
-   * Pacote grouping: cargas que pertencem ao mesmo `pacoteMeta.id` E recebem
-   * candidatura do mesmo motorista (chave = cpf+phone) sao apresentadas como
-   * uma viagem casada unica em um card destacado. O bug original mostrava
-   * apenas a primeira parada — agora o operador ve as N paradas e decide com
-   * contexto completo.
+   * Pacote grouping: cargas que pertencem ao mesmo `pacoteMeta.id` sao
+   * apresentadas como uma viagem casada unica em um card destacado, com TODAS
+   * as candidaturas (N motoristas) agrupadas dentro do mesmo card. Antes o
+   * agrupamento era por (pacote + driver) — gerando 1 card por motorista — e o
+   * operador via duplicacao visual.
    *
    * Cargas avulsas (viagemId == null) seguem rendering original.
    */
@@ -304,18 +304,18 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     | {
         kind: "pacote";
         pacoteMeta: OperatorLeadPacoteMeta;
-        driverCpf: string;
-        driverPhone: string;
+        /** Todas as paradas do pacote (cargas + lead correspondente), achatadas para compat com testes. */
         items: PacoteLeadItem[];
+        /** Candidaturas agrupadas por motorista (cpf|phone). */
+        candidaturas: DriverCandidatura[];
       };
 
   const renderItems = useMemo<RenderItem[]>(() => {
     const items: RenderItem[] = [];
-    // Map<`${viagemId}|${driverKey}`, RenderItem(pacote)>
+    // Map<viagemId, RenderItem(pacote)> — 1 card por pacote, independente de quantos drivers.
     const pacoteIndex = new Map<string, Extract<RenderItem, { kind: "pacote" }>>();
-    // Ordem de insercao do primeiro group de cada pacote — preserva a ordem
-    // original do filteredByCliente para nao misturar cargas avulsas/pacotes.
-    const pacoteOrderIndex = new Map<string, number>();
+    // Map auxiliar: viagemId -> Map<driverKey, DriverCandidatura> para deduplicar candidatos.
+    const pacoteDriversIndex = new Map<string, Map<string, DriverCandidatura>>();
 
     filteredByCliente.forEach((group) => {
       const pacoteMeta = group.load.pacoteMeta ?? null;
@@ -325,8 +325,25 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
         return;
       }
 
-      // Para cada lead com mesmo (cpf, phone) dentro deste pacote, agrupar.
-      // Leads sem cpf/phone (defensivo) caem no fluxo avulso.
+      const indexKey = pacoteMeta.id;
+      let bucket = pacoteIndex.get(indexKey);
+      let driversMap = pacoteDriversIndex.get(indexKey);
+      if (!bucket) {
+        driversMap = new Map<string, DriverCandidatura>();
+        bucket = {
+          kind: "pacote",
+          pacoteMeta,
+          items: [],
+          candidaturas: [],
+        };
+        pacoteIndex.set(indexKey, bucket);
+        pacoteDriversIndex.set(indexKey, driversMap);
+        items.push(bucket);
+      }
+      // driversMap eh garantido nao-nulo a partir daqui
+      const drivers = driversMap as Map<string, DriverCandidatura>;
+
+      // Leads sem identidade (defensivo) caem em um candidatura "anonima" agregada.
       const remainingLeads: typeof group.leads = [];
 
       group.leads.forEach((lead) => {
@@ -338,27 +355,15 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
         }
 
         const driverKey = `${cpf}|${phone}`;
-        const indexKey = `${pacoteMeta.id}|${driverKey}`;
-        let bucket = pacoteIndex.get(indexKey);
-        if (!bucket) {
-          bucket = {
-            kind: "pacote",
-            pacoteMeta,
-            driverCpf: cpf,
-            driverPhone: phone,
-            items: [],
-          };
-          pacoteIndex.set(indexKey, bucket);
-          pacoteOrderIndex.set(indexKey, items.length);
-          items.push(bucket);
+        let cand = drivers.get(driverKey);
+        if (!cand) {
+          cand = { cpf, phone, items: [] };
+          drivers.set(driverKey, cand);
         }
-        // O group sera apresentado como uma "parada" dentro do card; o lead
-        // que pertence ao motorista do bucket vai pra dentro de items[].
-        bucket.items.push({ group, lead });
+        cand.items.push({ group, lead });
+        bucket!.items.push({ group, lead });
       });
 
-      // Leads sem identidade (ou cargas sem qualquer lead matched a pacote) —
-      // renderiza o group avulso adicional para nao perder informacao.
       if (remainingLeads.length > 0) {
         items.push({
           kind: "carga",
@@ -367,13 +372,24 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
       }
     });
 
-    // Ordena cada pacote por ordem_viagem ASC (multi-parada).
-    pacoteIndex.forEach((bucket) => {
+    // Ordena cada pacote por ordem_viagem ASC (multi-parada) e materializa candidaturas[].
+    pacoteIndex.forEach((bucket, key) => {
       bucket.items.sort((a, b) => {
         const ordemA = a.group.load.ordemViagem ?? Number.MAX_SAFE_INTEGER;
         const ordemB = b.group.load.ordemViagem ?? Number.MAX_SAFE_INTEGER;
         return ordemA - ordemB;
       });
+      const drivers = pacoteDriversIndex.get(key);
+      if (drivers) {
+        bucket.candidaturas = Array.from(drivers.values()).map((cand) => ({
+          ...cand,
+          items: cand.items.slice().sort((a, b) => {
+            const ordemA = a.group.load.ordemViagem ?? Number.MAX_SAFE_INTEGER;
+            const ordemB = b.group.load.ordemViagem ?? Number.MAX_SAFE_INTEGER;
+            return ordemA - ordemB;
+          }),
+        }));
+      }
     });
 
     return items;
@@ -811,20 +827,14 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
           <section className="space-y-4">
             {paginatedItems.map((renderItem) => {
               if (renderItem.kind === "pacote") {
-                const pacoteCollapseKey = `pacote:${renderItem.pacoteMeta.id}:${renderItem.driverCpf}|${renderItem.driverPhone}`;
+                const pacoteCollapseKey = `pacote:${renderItem.pacoteMeta.id}`;
                 const isCollapsed = collapsedLoadIds.includes(pacoteCollapseKey);
-                const firstItem = renderItem.items[0];
-                const validation = firstItem?.lead.validation ?? null;
-                const whatsappUrl = firstItem?.lead.whatsappUrl ?? "";
                 return (
                   <OperatorPacoteLeadCard
                     key={pacoteCollapseKey}
                     pacoteMeta={renderItem.pacoteMeta}
                     items={renderItem.items}
-                    driverCpf={renderItem.driverCpf}
-                    driverPhone={renderItem.driverPhone}
-                    whatsappUrl={whatsappUrl}
-                    validation={validation}
+                    candidaturas={renderItem.candidaturas}
                     isCollapsed={isCollapsed}
                     onToggleCollapse={() => toggleLoadVisibility(pacoteCollapseKey)}
                     approvingLeadId={approvingLeadId}
