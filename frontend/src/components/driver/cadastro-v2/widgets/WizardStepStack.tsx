@@ -82,14 +82,37 @@ function WizardStepStackImpl({
   const prevCompletedRef = useRef<Record<string, boolean>>(completedMap);
   const stackRef = useRef<HTMLDivElement>(null);
 
+  // 2026-05-26 — Debounce do auto-advance pra evitar pular o step enquanto
+  // o motorista ainda está digitando. Cenário real: telefone "7129498367"
+  // (10 dígitos, DDD 71) já é válido em isValidBrazilianPhone (landline),
+  // mas o motorista pode estar a meio caminho de digitar 11 dígitos do
+  // celular (com o 9 do meio). Sem debounce, transição false→true no 10º
+  // dígito fazia pular antes do 11º.
+  //
+  // Estratégia: timer 1500ms ao transicionar para completed. QUALQUER input
+  // event no DOM reseta o timer. Se pausar 1500ms sem digitar, avança.
+  // Refs usados imperativamente porque completedMap muda ref a cada parent
+  // render — não dá pra montar listeners dentro do effect (cleanup runa).
+  const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const advanceFnRef = useRef<(() => void) | null>(null);
+
   useEffect(() => {
     const prev = prevCompletedRef.current;
     prevCompletedRef.current = completedMap;
     if (!activeId) return;
     const wasCompleted = Boolean(prev[activeId]);
     const isNowCompleted = Boolean(completedMap[activeId]);
+
+    if (!isNowCompleted) {
+      if (advanceTimerRef.current) {
+        clearTimeout(advanceTimerRef.current);
+        advanceTimerRef.current = null;
+      }
+      advanceFnRef.current = null;
+      return;
+    }
+
     if (!wasCompleted && isNowCompleted) {
-      // Auto-avança para o próximo pending após o atual.
       const currentIdx = stepIds.indexOf(activeId);
       let nextPending: string | null = null;
       for (let i = currentIdx + 1; i < stepIds.length; i++) {
@@ -98,11 +121,12 @@ function WizardStepStackImpl({
           break;
         }
       }
-      if (nextPending) {
+      if (!nextPending) return;
+      const fireAdvance = () => {
+        advanceTimerRef.current = null;
+        advanceFnRef.current = null;
         setActiveId(nextPending);
         if (autoScrollOnAdvance && typeof window !== "undefined") {
-          // Scrolla para o novo ativo após o paint para garantir que o
-          // WizardStepCard já está expandido. RAF dupla previne stutter.
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
               const node = stackRef.current?.querySelector<HTMLElement>(
@@ -110,7 +134,6 @@ function WizardStepStackImpl({
               );
               if (node) {
                 node.scrollIntoView({ behavior: "smooth", block: "start" });
-                // Foco programático no primeiro input — a11y.
                 const firstFocusable = node.querySelector<HTMLElement>(
                   "input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])",
                 );
@@ -119,10 +142,34 @@ function WizardStepStackImpl({
             });
           });
         }
-      }
+      };
+      advanceFnRef.current = fireAdvance;
+      if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
+      advanceTimerRef.current = setTimeout(fireAdvance, 1500);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [completedMap, activeId]);
+
+  // Listener global de input — vive enquanto o stack existe. Reseta o timer
+  // qualquer vez que o motorista digita, mas só se houver advance pendente.
+  useEffect(() => {
+    const onInput = () => {
+      if (advanceTimerRef.current && advanceFnRef.current) {
+        clearTimeout(advanceTimerRef.current);
+        advanceTimerRef.current = setTimeout(advanceFnRef.current, 1500);
+      }
+    };
+    document.addEventListener("input", onInput, true);
+    document.addEventListener("change", onInput, true);
+    return () => {
+      document.removeEventListener("input", onInput, true);
+      document.removeEventListener("change", onInput, true);
+      if (advanceTimerRef.current) {
+        clearTimeout(advanceTimerRef.current);
+        advanceTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const activateStep = useCallback((id: string) => {
     setActiveId(id);
