@@ -139,6 +139,100 @@ function buildAnttSummary(antt: {
   return null;
 }
 
+/**
+ * 2026-05-26 — Anexa TODOS os campos do titular do RNTRC (ANTT) ao resumo,
+ * pra que o motorista confira no final tudo que foi coletado das etapas
+ * "Proprietário ANTT do cavalo/carreta": identidade, RNTRC, telefone,
+ * endereço completo, documento/comprovante anexados e (só cavalo) banco +
+ * campos sociais. `showBank` controla o bloco bancário (Lamônica paga só o
+ * titular do cavalo).
+ */
+function appendAnttTitularFields(
+  f: OcrResultField[],
+  titular:
+    | {
+        tipo?: "pf" | "pj";
+        doc?: string;
+        nome?: string;
+        rntrc?: string;
+        telefone?: string;
+        endereco?: {
+          cep?: string;
+          numero?: string;
+          logradouro?: string;
+          bairro?: string;
+          cidade?: string;
+          uf?: string;
+          comprovanteUrl?: string;
+        };
+        banco?: {
+          bank?: { compe?: string; nome?: string } | null;
+          agencia?: string;
+          conta?: string;
+          tipo?: string;
+        };
+        pis?: string;
+        estado_civil?: string;
+        cor_raca?: string;
+        anttOwnerDocStoragePath?: string;
+        anttOwnerComprovanteStoragePath?: string;
+      }
+    | null
+    | undefined,
+  opts: { showBank: boolean },
+): void {
+  if (!titular || !titular.doc) return;
+  f.push({
+    label: "Titular do RNTRC",
+    value: `${titular.nome ?? ""} — ${
+      titular.tipo === "pj" ? CNPJ_MASK(titular.doc) : CPF_MASK(titular.doc)
+    }`.trim(),
+  });
+  if (titular.rntrc) f.push({ label: "RNTRC (titular)", value: titular.rntrc });
+  if (titular.telefone) {
+    f.push({ label: "Telefone (titular)", value: PHONE_MASK(titular.telefone) });
+  }
+  const end = titular.endereco;
+  if (end?.cep) f.push({ label: "CEP (titular)", value: end.cep });
+  if (end?.numero) f.push({ label: "Número (titular)", value: end.numero });
+  if (end?.logradouro) {
+    f.push({ label: "Logradouro (titular)", value: end.logradouro });
+  }
+  if (end?.bairro) f.push({ label: "Bairro (titular)", value: end.bairro });
+  if (end?.cidade && end?.uf) {
+    f.push({ label: "Cidade / UF (titular)", value: `${end.cidade} / ${end.uf}` });
+  }
+  if (opts.showBank && titular.banco?.bank) {
+    f.push({
+      label: "Banco (titular ANTT)",
+      value: `${titular.banco.bank.compe ?? ""} ${titular.banco.bank.nome ?? ""}`.trim(),
+    });
+    if (titular.banco.agencia) f.push({ label: "Agência", value: titular.banco.agencia });
+    if (titular.banco.conta) f.push({ label: "Conta", value: titular.banco.conta });
+    if (titular.banco.tipo) {
+      f.push({
+        label: "Tipo de conta",
+        value: titular.banco.tipo === "corrente" ? "Corrente" : "Poupança",
+      });
+    }
+  }
+  if (opts.showBank && titular.pis) {
+    f.push({ label: "PIS / PASEP (titular)", value: titular.pis });
+  }
+  if (opts.showBank && titular.estado_civil) {
+    f.push({ label: "Estado civil (titular)", value: titular.estado_civil });
+  }
+  if (opts.showBank && titular.cor_raca) {
+    f.push({ label: "Cor / raça (titular)", value: titular.cor_raca });
+  }
+  if (titular.anttOwnerDocStoragePath) {
+    f.push({ label: "Documento do titular", value: "arquivo enviado" });
+  }
+  if (titular.anttOwnerComprovanteStoragePath) {
+    f.push({ label: "Comprovante do titular", value: "arquivo enviado" });
+  }
+}
+
 function buildMotoristaFields(stepA: StepAData | null): OcrResultField[] {
   if (!stepA?.a1) return [];
   const f: OcrResultField[] = [];
@@ -226,45 +320,29 @@ function buildOwnerCavaloFields(stepC: StepCData | null): OcrResultField[] {
   if (stepC.pf?.telefone) {
     f.push({ label: "Telefone", value: PHONE_MASK(stepC.pf.telefone) });
   }
-  if (stepC.pf?.cep) f.push({ label: "CEP", value: stepC.pf.cep });
-  if (stepC.pf?.numero) f.push({ label: "Número", value: stepC.pf.numero });
+  // 2026-05-26 — Inscrição estadual (PJ) e endereço do proprietário (do
+  // cartão CNPJ / comprovante) no resumo.
+  if (stepC.ccPJ?.isento_ie) {
+    f.push({ label: "Inscrição estadual", value: "Isento" });
+  } else if (stepC.ccPJ?.inscricao_estadual) {
+    f.push({ label: "Inscrição estadual", value: stepC.ccPJ.inscricao_estadual });
+  }
+  const oe = stepC.ownerEndereco;
+  if (oe?.cep) f.push({ label: "CEP", value: oe.cep });
+  if (oe?.numero) f.push({ label: "Número", value: oe.numero });
+  if (oe?.logradouro) f.push({ label: "Logradouro", value: oe.logradouro });
+  if (oe?.cidade && oe?.uf) {
+    f.push({ label: "Cidade / UF", value: `${oe.cidade} / ${oe.uf}` });
+  }
+  if (oe?.comprovanteUrl) f.push({ label: "Comprovante", value: "arquivo enviado" });
+  // Fallback PF legado (contato avulso) quando não há ownerEndereco.
+  if (!oe?.cep && stepC.pf?.cep) f.push({ label: "CEP", value: stepC.pf.cep });
+  if (!oe?.numero && stepC.pf?.numero) f.push({ label: "Número", value: stepC.pf.numero });
   // 2026-05-18 refator — anttTitular agora e SEMPRE capturado (mesmo quando
   // cascade confirma que e o mesmo do CRLV). Exibe banco e campos sociais sob
   // esta secao, ja que esse e o detentor do RNTRC que Lamonica paga.
-  const titular = stepC.anttTitular;
-  if (titular && titular.doc) {
-    f.push({
-      label: "Titular do RNTRC",
-      value: `${titular.nome ?? ""} — ${
-        titular.tipo === "pj" ? CNPJ_MASK(titular.doc) : CPF_MASK(titular.doc)
-      }`.trim(),
-    });
-    if (titular.banco?.bank) {
-      f.push({
-        label: "Banco (titular ANTT)",
-        value: `${titular.banco.bank.compe ?? ""} ${titular.banco.bank.nome ?? ""}`.trim(),
-      });
-    }
-    if (titular.banco?.agencia) {
-      f.push({ label: "Agência", value: titular.banco.agencia });
-    }
-    if (titular.banco?.conta) {
-      f.push({ label: "Conta", value: titular.banco.conta });
-    }
-    if (titular.banco?.tipo) {
-      f.push({
-        label: "Tipo de conta",
-        value: titular.banco.tipo === "corrente" ? "Corrente" : "Poupança",
-      });
-    }
-    if (titular.pis) f.push({ label: "PIS / PASEP (titular)", value: titular.pis });
-    if (titular.estado_civil) {
-      f.push({ label: "Estado civil (titular)", value: titular.estado_civil });
-    }
-    if (titular.cor_raca) {
-      f.push({ label: "Cor / raça (titular)", value: titular.cor_raca });
-    }
-  }
+  // 2026-05-26 — agora via helper, incluindo RNTRC/telefone/endereço/docs.
+  appendAnttTitularFields(f, stepC.anttTitular, { showBank: true });
   return f;
 }
 
@@ -328,20 +406,28 @@ function buildOwnerCarretaFields(stepE: StepEData | null | undefined): OcrResult
   if (stepE.pf?.telefone) {
     f.push({ label: "Telefone", value: PHONE_MASK(stepE.pf.telefone) });
   }
-  if (stepE.pf?.cep) f.push({ label: "CEP", value: stepE.pf.cep });
-  if (stepE.pf?.numero) f.push({ label: "Número", value: stepE.pf.numero });
+  // 2026-05-26 — IE (PJ) + endereço do proprietário (do cartão CNPJ).
+  if (stepE.ccPJ?.isento_ie) {
+    f.push({ label: "Inscrição estadual", value: "Isento" });
+  } else if (stepE.ccPJ?.inscricao_estadual) {
+    f.push({ label: "Inscrição estadual", value: stepE.ccPJ.inscricao_estadual });
+  }
+  const oeE = stepE.ownerEndereco;
+  if (oeE?.cep) f.push({ label: "CEP", value: oeE.cep });
+  if (oeE?.numero) f.push({ label: "Número", value: oeE.numero });
+  if (oeE?.logradouro) f.push({ label: "Logradouro", value: oeE.logradouro });
+  if (oeE?.cidade && oeE?.uf) {
+    f.push({ label: "Cidade / UF", value: `${oeE.cidade} / ${oeE.uf}` });
+  }
+  if (oeE?.comprovanteUrl) f.push({ label: "Comprovante", value: "arquivo enviado" });
+  if (!oeE?.cep && stepE.pf?.cep) f.push({ label: "CEP", value: stepE.pf.cep });
+  if (!oeE?.numero && stepE.pf?.numero) f.push({ label: "Número", value: stepE.pf.numero });
   // 2026-05-18 refator — anttTitular agora e SEMPRE capturado (mesmo quando
   // cascade confirma que e o mesmo do CRLV). Exibimos a linha "Titular do
   // RNTRC" para registro explicito, mesmo se duplicar identidade do owner.
-  const titular = stepE.anttTitular;
-  if (titular && titular.doc) {
-    f.push({
-      label: "Titular do RNTRC",
-      value: `${titular.nome ?? ""} — ${
-        titular.tipo === "pj" ? CNPJ_MASK(titular.doc) : CPF_MASK(titular.doc)
-      }`.trim(),
-    });
-  }
+  // 2026-05-26 — agora via helper, incluindo RNTRC/telefone/endereço/docs.
+  // showBank=false: Lamônica não paga o titular ANTT da carreta (só cavalo).
+  appendAnttTitularFields(f, stepE.anttTitular, { showBank: false });
   return f;
 }
 
