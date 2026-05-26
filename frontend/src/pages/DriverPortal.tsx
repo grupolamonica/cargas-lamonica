@@ -217,6 +217,11 @@ const DriverPortal = () => {
     horsePlate: string;
     trailerPlates: string[];
     preCheckResponse: PreCheckResponse;
+    // Snapshot do nome amigavel da carga (origem/destino/routeLabel) capturado
+    // no momento da abertura do wizard. Necessario porque o `cargas` listing
+    // pode refresh durante o cadastro (carga vira BOOKED → some da lista) —
+    // sem snapshot, summary cai pro UUID cru no retry/refresh.
+    cargaSummary?: { origem?: string; destino?: string; routeLabel?: string };
   } | null>(null);
   /** loadId com pre-check em progresso — controla spinner no botão da notificação. */
   const [registrationLoadingId, setRegistrationLoadingId] = useState<string | null>(null);
@@ -341,17 +346,21 @@ const DriverPortal = () => {
       }
 
       // Pendências detectadas — interceptor toma controle e abre o wizard.
+      const cargaSnap = cargas.find((c) => c.id === loadId);
       setRegistrationContext({
         cargaId: loadId,
         cpf,
         horsePlate: form.horsePlate,
         trailerPlates: trailerPlatesArray,
         preCheckResponse: response,
+        cargaSummary: cargaSnap
+          ? { origem: cargaSnap.origem, destino: cargaSnap.destino, routeLabel: cargaSnap.routeLabel }
+          : undefined,
       });
       setRegistrationWizardOpen(true);
       return "abort";
     },
-    [],
+    [cargas],
   );
 
   /**
@@ -367,16 +376,20 @@ const DriverPortal = () => {
       trailerPlates: string[];
       loadId: string;
     }) => {
+      const cargaSnap = cargas.find((c) => c.id === params.loadId);
       setRegistrationContext({
         cargaId: params.loadId,
         cpf: params.cpf,
         horsePlate: params.horsePlate,
         trailerPlates: params.trailerPlates,
         preCheckResponse: params.preCheckResponse,
+        cargaSummary: cargaSnap
+          ? { origem: cargaSnap.origem, destino: cargaSnap.destino, routeLabel: cargaSnap.routeLabel }
+          : undefined,
       });
       setRegistrationWizardOpen(true);
     },
-    [],
+    [cargas],
   );
 
   /**
@@ -422,12 +435,16 @@ const DriverPortal = () => {
       }
 
       // Há pendências — abre o wizard mostrando apenas os steps necessários
+      const cargaSnap = cargas.find((c) => c.id === loadId);
       setRegistrationContext({
         cargaId: loadId,
         cpf,
         horsePlate,
         trailerPlates,
         preCheckResponse: response,
+        cargaSummary: cargaSnap
+          ? { origem: cargaSnap.origem, destino: cargaSnap.destino, routeLabel: cargaSnap.routeLabel }
+          : undefined,
       });
       setRegistrationWizardOpen(true);
     } catch {
@@ -457,12 +474,16 @@ const DriverPortal = () => {
         const { cpf, horsePlate, trailerPlate, trailerPlate2 } = stored.form;
         const trailerPlates = [trailerPlate, trailerPlate2].filter(Boolean);
         const response = await requestCandidaturaPreCheck({ cpf, horsePlate, trailerPlates });
+        const cargaSnap = cargas.find((c) => c.id === draft.cargaId);
         setRegistrationContext({
           cargaId: draft.cargaId,
           cpf,
           horsePlate,
           trailerPlates,
           preCheckResponse: response,
+          cargaSummary: cargaSnap
+            ? { origem: cargaSnap.origem, destino: cargaSnap.destino, routeLabel: cargaSnap.routeLabel }
+            : undefined,
         });
         setRegistrationWizardOpen(true);
       } else {
@@ -1029,6 +1050,12 @@ const DriverPortal = () => {
           cargaContext={(() => {
             const id = registrationContext?.cargaId;
             if (!id) return undefined;
+            // Prefere snapshot capturado na abertura (sobrevive a refresh do
+            // listing). Fallback ao lookup live caso snapshot ausente.
+            const snap = registrationContext?.cargaSummary;
+            if (snap && (snap.origem || snap.destino || snap.routeLabel)) {
+              return { origem: snap.origem, destino: snap.destino, routeLabel: snap.routeLabel };
+            }
             const match = cargas.find((c) => c.id === id);
             if (!match) return undefined;
             return {
