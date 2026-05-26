@@ -332,18 +332,28 @@ export function DriverRegistrationWizard({
     // +1 quando há Step E (proprietário da carreta). Não soma por carreta pra
     // não inflar a contagem no header.
     const hasStepCAntt = hasStepC;
+    // 2026-05-26 BUG-40 fix — step-e (Proprietário da carreta) era detectado
+    // como "hard to predict upfront" e não contado. Mas quando o owner CRLV
+    // da carreta difere do cavalo (caso comum em arrendamentos), step-e
+    // aparece com baseStep=6 e step-e-antt com baseStep=7 — gerando header
+    // "ETAPA 7 DE 6". Contamos quando há sinal de step-e (state ou dados
+    // coletados), espelho da heurística de hasStepC.
+    const hasStepE =
+      state.kind === "step-e" ||
+      state.kind === "step-e-antt" ||
+      Object.keys(stepEDataMap).length > 0 ||
+      collectedCarretaOwners.length > 0;
     const hasStepEAntt = stepDCount > 0; // se há carreta, haverá owner ANTT
-    // NOTE: step-e is also conditional per-trailer but hard to predict upfront;
-    // it's not counted here (rare path, low UX impact).
     return (
       (hasStepA ? 1 : 0) +
       (hasStepB ? 1 : 0) +
       (hasStepC ? 1 : 0) +
       (hasStepCAntt ? 1 : 0) +
       stepDCount +
+      (hasStepE ? 1 : 0) +
       (hasStepEAntt ? 1 : 0)
     );
-  }, [preCheckResponse, stepCData, state.kind]);
+  }, [preCheckResponse, stepCData, state.kind, stepEDataMap, collectedCarretaOwners]);
 
   // Derived: whether step-A is among the pending items.
   // Used to compute correct currentStep numbers when step-A is absent.
