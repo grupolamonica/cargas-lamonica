@@ -266,8 +266,14 @@ const motoristaSchema = z
     cnh_url: z.string().trim().min(1).optional(),
     comprovante_url: z.string().trim().min(1).optional(),
     selfie_cnh_url: z.string().trim().min(1).optional(),
-    tag_pedagio: tagPedagioEnum,
-    pancary_autodeclaration: pancaryAutodeclaracaoEnum,
+    // Skip-Step-B fix — tag_pedagio + pancary_autodeclaration sao coletados no
+    // Step B do wizard (junto com o cavalo). Quando o Step B e pulado (placa
+    // do cavalo ja vigente via Angellira), o submit nao carrega esses campos.
+    // Relaxados para optional — handler faz merge com motorista persistido
+    // (mergeMotorista/getExistingMotorista) e o operator-admin trata ausencia
+    // como "nao coletado" (UI ja suporta).
+    tag_pedagio: tagPedagioEnum.optional(),
+    pancary_autodeclaration: pancaryAutodeclaracaoEnum.optional(),
     rastreador: rastreadorSchema.optional(),
   })
   .strict();

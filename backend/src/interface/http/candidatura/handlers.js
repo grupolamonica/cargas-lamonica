@@ -17,6 +17,7 @@ import { submitCandidaturaFinal } from "../../../application/candidatura/use-cas
 import { resolveAnttCascade } from "../../../application/candidatura/use-cases/antt-cascade.js";
 import { verifyDocument } from "../../../application/candidatura/use-cases/verify-document.js";
 import { getExistingMotorista } from "../../../application/candidatura/use-cases/get-existing-motorista.js";
+import { getExistingCavalo } from "../../../application/candidatura/use-cases/get-existing-cavalo.js";
 import {
   getAuthorizationHeader,
   getCorrelationId,
@@ -130,6 +131,9 @@ function isMotoristaPartial(motorista) {
   if (!motorista.endereco.cep || !motorista.endereco.numero || !motorista.endereco.logradouro) {
     return true;
   }
+  // Skip-Step-B fix — tag_pedagio + pancary_autodeclaration sao opcionais
+  // (coletados no Step B do wizard, pulado quando cavalo vigente). Quando
+  // ausentes, dispara merge com motorista persistido pra reidratar se houver.
   if (!motorista.tag_pedagio) return true;
   if (!motorista.pancary_autodeclaration) return true;
   return false;
@@ -153,6 +157,30 @@ function mergeMotorista(existing, incoming) {
     cnh: safe.cnh || base.cnh,
     rastreador: safe.rastreador || base.rastreador,
   };
+}
+
+/**
+ * Skip-Step-B fix — detecta se `dados.cavalo` veio incompleto (Step B pulado
+ * porque a placa ja tem cadastro vigente). Campos obrigatorios por
+ * `cavaloSchema`: placa, owner_doc, owner_doc_type.
+ */
+function isCavaloPartial(cavalo) {
+  if (!cavalo || typeof cavalo !== "object") return true;
+  if (!cavalo.placa) return true;
+  if (!cavalo.owner_doc) return true;
+  if (!cavalo.owner_doc_type) return true;
+  return false;
+}
+
+/**
+ * Merge defensivo do cavalo: campos enviados pelo cliente tem prioridade;
+ * ausentes sao preenchidos do veiculo persistido. Mesmo padrao do
+ * mergeMotorista.
+ */
+function mergeCavalo(existing, incoming) {
+  const safe = (incoming && typeof incoming === "object") ? incoming : {};
+  const base = existing || {};
+  return { ...base, ...safe };
 }
 
 function checkVerifyDocRateLimit(ip) {
@@ -611,6 +639,65 @@ export async function resolveCandidaturaSubmitResponse(request) {
           correlationId,
           message: err instanceof Error ? err.message : String(err),
         });
+      }
+    }
+
+    // Skip-Step-B fix — `dados.cavalo` incompleto (apenas { placa }) quando o
+    // wizard pulou o Step B (placa do cavalo ja tem cadastro vigente). Faz
+    // merge do veiculo persistido (+ cavalo_owner) ANTES da validacao zod.
+    const incomingCavalo = body.dados.cavalo;
+    if (isCavaloPartial(incomingCavalo)) {
+      const placaForLookup = String(incomingCavalo?.placa ?? "").trim();
+      let lookupCpf = (body.dados.motorista?.cpf ?? "").toString().replace(/\D/g, "");
+      if (driverUserId) {
+        try {
+          const profileResp = await getDriverProfileByUserId({
+            userId: driverUserId,
+            correlationId,
+          });
+          const profileCpf = (profileResp?.payload?.profile?.document_number ?? "")
+            .toString()
+            .replace(/\D/g, "");
+          if (profileCpf) lookupCpf = profileCpf;
+        } catch {
+          /* lookup CPF best-effort */
+        }
+      }
+      if (placaForLookup) {
+        try {
+          const existing = await getExistingCavalo({
+            driverUserId,
+            driverCpf: lookupCpf || null,
+            placa: placaForLookup,
+          });
+          if (existing?.cavalo) {
+            body.dados.cavalo = mergeCavalo(existing.cavalo, incomingCavalo);
+            // cavalo_owner ausente no payload + existente persistido → reidrata
+            // (mesmo principio do cavalo: schema strict precisa do bloco).
+            if (
+              existing.cavalo_owner &&
+              (!body.dados.cavalo_owner || typeof body.dados.cavalo_owner !== "object")
+            ) {
+              body.dados.cavalo_owner = existing.cavalo_owner;
+            }
+          }
+        } catch (err) {
+          console.warn("[candidatura.submit.merge-cavalo]", {
+            correlationId,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      // Fallback final — quando lookup nao achou cavalo prior e o motorista
+      // ainda nao tem owner_doc no cavalo, assume que ele e o proprio dono
+      // (consistente com `cavaloOwnerIsDriver` em submit-final). Operator
+      // pode revisar no painel. Sem isso o schema strict rejeita.
+      if (!body.dados.cavalo?.owner_doc && lookupCpf) {
+        body.dados.cavalo = {
+          ...(body.dados.cavalo || {}),
+          owner_doc: lookupCpf,
+          owner_doc_type: "cpf",
+        };
       }
     }
   }

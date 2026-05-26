@@ -33,6 +33,12 @@ export interface ConfirmationWizardData {
   stepE: Record<number, StepEData>;
   /** Owners de carretas coletados nesta sessão (PF/PJ + reuse). */
   collectedCarretaOwners: CollectedCarretaOwner[];
+  /**
+   * Placa do cavalo vinda do wizard (prop). Necessária quando o wizard
+   * pulou o Step B (cavalo já com cadastro vigente) — o submit precisa
+   * informar a placa para que o backend faça merge com o veiculo persistido.
+   */
+  horsePlate?: string;
 }
 
 /**

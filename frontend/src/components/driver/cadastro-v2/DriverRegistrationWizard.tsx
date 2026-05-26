@@ -1336,10 +1336,12 @@ export function DriverRegistrationWizard({
       stepD: stepDData,
       stepE: stepEDataMap,
       collectedCarretaOwners,
+      horsePlate: horsePlate ?? undefined,
     }),
     [
       cavaloOwnerIsDriver,
       collectedCarretaOwners,
+      horsePlate,
       stepAData,
       stepBData,
       stepCData,

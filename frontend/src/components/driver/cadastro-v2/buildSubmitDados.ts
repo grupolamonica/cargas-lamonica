@@ -90,7 +90,13 @@ function buildMotorista(data: ConfirmationWizardData) {
 
 function buildCavalo(data: ConfirmationWizardData) {
   const b = data.stepB;
-  if (!b) throw new Error("stepB ausente no submit");
+  // Step B pode ter sido pulado no wizard quando a placa do cavalo ja tem
+  // cadastro vigente (pre-check.completos contem o cavalo). Nesse caso o
+  // backend faz merge do veiculo persistido (handler `submit-candidatura`),
+  // mas precisa da placa para o lookup. Emitimos um partial { placa } pra
+  // que o handler reconheca e busque o resto. Caller (buildSubmitDados)
+  // garante que stepB null -> partial cavalo.
+  if (!b) return null;
 
   const docDigits = digitsOnly(b.ownerDoc);
   const ownerDocType: "cpf" | "cnpj" =
@@ -374,6 +380,12 @@ export function buildSubmitDados(data: ConfirmationWizardData): Record<string, u
   const cavalo = buildCavalo(data);
   const carretas = buildCarretas(data);
 
+  // Step B pulado (cavalo vigente) — emite partial `{ placa }` pra que o
+  // backend faca merge com o veiculo persistido (mirror do skip motorista).
+  const cavaloPlateFromProps = (data.horsePlate ?? "").trim().toUpperCase();
+  const cavaloPayload =
+    cavalo ?? (cavaloPlateFromProps ? { placa: cavaloPlateFromProps } : undefined);
+
   const ownerIsDriver = data.stepB?.ownerIsDriver ?? false;
   const cavalo_owner =
     !ownerIsDriver && data.stepC ? buildOwnerFromStepC(data.stepC) : undefined;
@@ -398,7 +410,8 @@ export function buildSubmitDados(data: ConfirmationWizardData): Record<string, u
   return {
     // Bug 7 — omite `motorista` quando stepA foi pulado; backend merge do persistido.
     ...(motorista ? { motorista } : {}),
-    cavalo,
+    // Step B pulado (cavalo vigente) — envia partial `{ placa }`; backend merge.
+    ...(cavaloPayload ? { cavalo: cavaloPayload } : {}),
     ...(cavalo_owner ? { cavalo_owner } : {}),
     carretas,
     ...(carreta_owners.length > 0 ? { carreta_owners } : {}),
