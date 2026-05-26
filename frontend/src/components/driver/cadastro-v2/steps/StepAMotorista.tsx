@@ -197,13 +197,31 @@ function StepAMotoristaImpl({
     [validity],
   );
 
+  // 2026-05-26 BUG-PISCAR: `onChange` (handleStepAProgress no wizard) muda
+  // de ref a cada render do wizard porque depende de `persistSlice`, que por
+  // sua vez depende de `draft`, que se rerenderiza a cada `draft.setData`.
+  // Como o effect abaixo tinha `onChange` na lista de deps, virava loop
+  // (~170Hz observado via MutationObserver no `a3-cep.value`):
+  //   1. onChange propaga partial → wizard.setStepAData → wizard.persistSlice
+  //   2. draft.setData → draft ref novo → persistSlice ref novo
+  //   3. handleStepAProgress ref novo → onChange prop novo
+  //   4. effect re-dispara (mesmo a1Data/a3Data sem mudar) → onChange again
+  //   5. volta pra 1
+  // Fix: ler `onChange` via ref. Effect só dispara quando a1Data/a3Data
+  // realmente mudam.
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
   // Propaga slice parcial ao wizard sempre que qualquer sub-etapa muda.
   // Wizard persiste via debounce — garante que o que o OCR extraiu (CNH:
   // nome/cpf/categoria/validade; comprovante: cep/numero; etc.) seja salvo
   // ANTES do usuário clicar "Próximo". Sem isso, sair na tela do OCR perde
   // os campos extraídos (arquivo é restaurado, mas dados ficavam só em React).
   useEffect(() => {
-    if (!onChange) return;
+    const onChangeFn = onChangeRef.current;
+    if (!onChangeFn) return;
     const partial: Partial<StepAData> = {};
     // 2026-05-26: só propaga sub-etapa pro wizard quando há conteúdo
     // significativo. Antes propagava qualquer ref truthy (incluindo
@@ -220,9 +238,9 @@ function StepAMotoristaImpl({
     if (a2Data && a2Data.telefone_primario) partial.a2 = a2Data;
     if (a3Data && (a3Data.cep || a3Data.comprovanteUrl)) partial.a3 = a3Data;
     if (Object.keys(partial).length > 0) {
-      onChange(partial);
+      onChangeFn(partial);
     }
-  }, [a1Data, a1bData, a2Data, a3Data, onChange]);
+  }, [a1Data, a1bData, a2Data, a3Data]);
 
   // Summaries exibidos quando o card está em `completed`.
   const a1Summary = a1Data?.nome ? a1Data.nome : undefined;
