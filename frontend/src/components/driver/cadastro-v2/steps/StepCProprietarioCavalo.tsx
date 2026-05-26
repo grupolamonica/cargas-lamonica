@@ -457,6 +457,34 @@ function StepCProprietarioCavaloImpl({
       if (ownerDocType === "cpf" && extracted.extras) {
         setOwnerExtras(extracted.extras);
       }
+      // 2026-05-26 — PJ: o cartão CNPJ (Infosimples) já traz o endereço
+      // cadastral. Pré-preenche o sub-card de endereço pra que o motorista
+      // não precise anexar comprovante de residência (só confere/edita).
+      if (docDigits.length === 14 && extracted.raw) {
+        const raw = extracted.raw as Record<string, unknown>;
+        const str = (k: string) => {
+          const v = raw[k];
+          return v != null ? String(v).trim() : "";
+        };
+        const cep = str("cep");
+        const cidade = str("cidade") || str("municipio");
+        const uf = str("uf");
+        if (cep || cidade || uf) {
+          setOwnerEndereco((current) => {
+            // Não sobrescreve se o motorista já editou (tem comprovante salvo).
+            if (current?.comprovanteUrl) return current;
+            return {
+              cep: cep || current?.cep || "",
+              numero: str("numero") || current?.numero || "",
+              logradouro: str("logradouro") || str("endereco") || current?.logradouro || "",
+              bairro: str("bairro") || current?.bairro || "",
+              cidade: cidade || current?.cidade || "",
+              uf: uf || current?.uf || "",
+              comprovanteUrl: current?.comprovanteUrl,
+            };
+          });
+        }
+      }
     },
     [ownerDocType],
   );
@@ -586,15 +614,16 @@ function StepCProprietarioCavaloImpl({
         // contato (sem campos a coletar — apenas IE).
         const hasContactCard = ownerDocType === "cpf";
         const hasCcCard = ownerDocType === "cnpj";
-        // Sub-card "Endereço do proprietário" com OCR do comprovante (todo owner
-        // — PF ou PJ — precisa endereço com comprovante salvo no Storage).
+        // Sub-card "Endereço do proprietário". PF exige comprovante salvo no
+        // Storage; PJ usa endereço do cartão CNPJ (Infosimples) — comprovante
+        // opcional. 2026-05-26.
         const hasEnderecoCard = true;
         const ownerEnderecoCompleted = Boolean(
-          ownerEndereco?.comprovanteUrl &&
-            ownerEndereco?.cep &&
+          ownerEndereco?.cep &&
             ownerEndereco?.numero &&
             ownerEndereco?.cidade &&
-            ownerEndereco?.uf,
+            ownerEndereco?.uf &&
+            (ownerDocType === "cpf" ? ownerEndereco?.comprovanteUrl : true),
         );
         const baseCards = driverIsOwner ? 1 : 2; // antt + (opcional) doc
         const totalCards =
@@ -809,6 +838,7 @@ function StepCProprietarioCavaloImpl({
                         slot="cavalo_owner_comprovante"
                         title="Endereço do proprietário"
                         description="Conta de luz/água/internet — últimos 3 meses."
+                        requireComprovante={ownerDocType === "cpf"}
                         value={ownerEndereco}
                         onChange={(data) => {
                           setOwnerEndereco(data);

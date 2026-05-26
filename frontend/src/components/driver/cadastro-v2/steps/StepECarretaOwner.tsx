@@ -426,6 +426,32 @@ function StepECarretaOwnerImpl({
       if (ownerDocType === "cpf" && extracted.extras) {
         setOwnerExtras(extracted.extras);
       }
+      // 2026-05-26 — PJ: prefill endereço do cartão CNPJ (Infosimples), pra
+      // não exigir comprovante de residência. Mesma lógica do StepC.
+      if (docDigits.length === 14 && extracted.raw) {
+        const raw = extracted.raw as Record<string, unknown>;
+        const str = (k: string) => {
+          const v = raw[k];
+          return v != null ? String(v).trim() : "";
+        };
+        const cep = str("cep");
+        const cidade = str("cidade") || str("municipio");
+        const uf = str("uf");
+        if (cep || cidade || uf) {
+          setOwnerEndereco((current) => {
+            if (current?.comprovanteUrl) return current;
+            return {
+              cep: cep || current?.cep || "",
+              numero: str("numero") || current?.numero || "",
+              logradouro: str("logradouro") || str("endereco") || current?.logradouro || "",
+              bairro: str("bairro") || current?.bairro || "",
+              cidade: cidade || current?.cidade || "",
+              uf: uf || current?.uf || "",
+              comprovanteUrl: current?.comprovanteUrl,
+            };
+          });
+        }
+      }
       // 2026-05-20 — Cascade ANTT backend-only; nao dispara aqui no front.
     },
     [ownerDocType],
@@ -536,15 +562,15 @@ function StepECarretaOwnerImpl({
         // (telefone/CEP/numero). PJ apenas IE (sem contato proprio).
         const hasContactCard = ownerDocType === "cpf";
         const hasCcCard = ownerDocType === "cnpj";
-        // Sub-card "Endereço do proprietário" — todo owner precisa endereço
-        // com comprovante salvo (2026-05-20).
+        // Sub-card "Endereço do proprietário". PF exige comprovante; PJ usa
+        // endereço do cartão CNPJ (Infosimples) — comprovante opcional. 2026-05-26.
         const hasEnderecoCard = true;
         const ownerEnderecoCompleted = Boolean(
-          ownerEndereco?.comprovanteUrl &&
-            ownerEndereco?.cep &&
+          ownerEndereco?.cep &&
             ownerEndereco?.numero &&
             ownerEndereco?.cidade &&
-            ownerEndereco?.uf,
+            ownerEndereco?.uf &&
+            (ownerDocType === "cpf" ? ownerEndereco?.comprovanteUrl : true),
         );
         const totalCards =
           2 + (hasContactCard ? 1 : 0) + (hasEnderecoCard ? 1 : 0) + (hasCcCard ? 1 : 0);
@@ -716,6 +742,7 @@ function StepECarretaOwnerImpl({
                               }
                               title="Endereço do proprietário"
                               description="Conta de luz/água/internet — últimos 3 meses."
+                              requireComprovante={ownerDocType === "cpf"}
                               value={ownerEndereco}
                               onChange={(data) => {
                                 setOwnerEndereco(data);

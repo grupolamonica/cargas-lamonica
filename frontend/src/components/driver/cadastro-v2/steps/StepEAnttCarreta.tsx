@@ -111,11 +111,14 @@ function StepEAnttCarretaImpl({
     return { ...value, anttTitular: merged };
   };
 
+  // 2026-05-26 — Comprovante só obrigatório p/ titular ANTT PF. PJ usa o
+  // endereço do cartão CNPJ (Infosimples).
+  const anttIsPJ = anttTitular?.tipo === "pj";
   const canContinue =
     !!anttTitular &&
     anttTitular.doc.length >= 11 &&
     anttTitular.nome.trim().length > 0 &&
-    !!enderecoAnttOwner.comprovanteUrl &&
+    (anttIsPJ ? true : !!enderecoAnttOwner.comprovanteUrl) &&
     enderecoAnttOwner.cep.replace(/\D/g, "").length === 8 &&
     enderecoAnttOwner.numero.trim().length > 0 &&
     enderecoAnttOwner.cidade.trim().length > 0 &&
@@ -169,8 +172,33 @@ function StepEAnttCarretaImpl({
           key={`antt-doc-carreta-${trailerIdx}`}
           ownerDocType={anttTitular?.tipo === "pj" ? "cnpj" : "cpf"}
           expectedDocument={anttTitular?.doc.replace(/\D/g, "") ?? ""}
-          onExtracted={() => {
-            /* extras só ficam no widget */
+          onExtracted={(extracted) => {
+            // 2026-05-26 — PJ: prefill endereço do titular ANTT carreta do
+            // cartão CNPJ (Infosimples), pra não exigir comprovante.
+            if (anttTitular?.tipo === "pj" && extracted.raw) {
+              const raw = extracted.raw as Record<string, unknown>;
+              const str = (k: string) => {
+                const v = raw[k];
+                return v != null ? String(v).trim() : "";
+              };
+              const cep = str("cep");
+              const cidade = str("cidade") || str("municipio");
+              const uf = str("uf");
+              if (cep || cidade || uf) {
+                setEnderecoAnttOwner((current) => {
+                  if (current.comprovanteUrl) return current;
+                  return {
+                    cep: cep || current.cep,
+                    numero: str("numero") || current.numero,
+                    logradouro: str("logradouro") || str("endereco") || current.logradouro,
+                    bairro: str("bairro") || current.bairro,
+                    cidade: cidade || current.cidade,
+                    uf: uf || current.uf,
+                    comprovanteUrl: current.comprovanteUrl,
+                  };
+                });
+              }
+            }
           }}
           slot={docSlot}
           cargaId={cargaId}
@@ -197,6 +225,7 @@ function StepEAnttCarretaImpl({
           slot={compSlot}
           title="Endereço do titular ANTT"
           description="Conta de luz/água/internet — últimos 3 meses."
+          requireComprovante={!anttIsPJ}
           value={enderecoAnttOwner}
           onChange={(data) => {
             setEnderecoAnttOwner(data);

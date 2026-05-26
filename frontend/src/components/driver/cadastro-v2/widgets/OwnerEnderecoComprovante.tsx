@@ -59,6 +59,14 @@ export interface OwnerEnderecoComprovanteProps {
   cpf?: string;
   accessToken?: string | null;
   expandOptional?: boolean;
+  /**
+   * 2026-05-26 — Comprovante de residência só é obrigatório para proprietário
+   * PF. Para PJ (CNPJ), a consulta Infosimples (cartão CNPJ) já traz o
+   * endereço cadastral — não faz sentido exigir conta de luz. Quando false,
+   * o tile de upload vira opcional e a validade não exige `comprovanteUrl`
+   * (apenas CEP + número + cidade + UF). Default true (compat. PF).
+   */
+  requireComprovante?: boolean;
 }
 
 const EMPTY_DATA: OwnerEnderecoData = {
@@ -102,6 +110,7 @@ export function OwnerEnderecoComprovante({
   cpf,
   accessToken,
   expandOptional,
+  requireComprovante = true,
 }: OwnerEnderecoComprovanteProps) {
   const [data, setData] = useState<OwnerEnderecoData>(value ?? EMPTY_DATA);
   const [tileState, setTileState] = useState<OcrTileState>(
@@ -156,19 +165,19 @@ export function OwnerEnderecoComprovante({
   useEffect(() => {
     onChange(data);
     const cepDigits = digitsOnly(data.cep);
-    // Validity: exige arquivo salvo + CEP + número. Cidade/UF vem do ViaCEP
-    // — quando o CEP é válido a consulta autopopula. OCR pode falhar sem
-    // bloquear o motorista; o que NÃO pode falhar é o upload (comprovanteUrl).
+    // Validity: CEP + número + cidade + UF sempre exigidos. Comprovante só
+    // obrigatório quando requireComprovante (PF) — para PJ o endereço vem do
+    // cartão CNPJ (Infosimples), sem necessidade de conta de luz.
     const hasComprovante = Boolean(data.comprovanteUrl);
-    const valid =
-      hasComprovante &&
+    const enderecoOk =
       cepDigits.length === 8 &&
       data.numero.trim().length > 0 &&
       data.cidade.trim().length > 0 &&
       data.uf.trim().length > 0;
+    const valid = enderecoOk && (requireComprovante ? hasComprovante : true);
     if (onValid) onValid(valid);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data]);
+  }, [data, requireComprovante]);
 
   useEffect(() => {
     return () => {
@@ -275,13 +284,21 @@ export function OwnerEnderecoComprovante({
         <h3 id={headingId} className="text-base font-semibold text-foreground">
           {title}
         </h3>
-        <p className="text-sm text-muted-foreground">{description}</p>
+        <p className="text-sm text-muted-foreground">
+          {requireComprovante
+            ? description
+            : "Endereço preenchido pelo Cartão CNPJ. Confira abaixo (anexar comprovante é opcional)."}
+        </p>
       </header>
 
       <OcrUploadTile
         accept="image/*,application/pdf"
         maxSizeMb={8}
-        label="Comprovante de residência"
+        label={
+          requireComprovante
+            ? "Comprovante de residência"
+            : "Comprovante de endereço (opcional)"
+        }
         helper="Conta de luz, água, internet ou similar — últimos 3 meses"
         state={tileState}
         previewName={previewName}
