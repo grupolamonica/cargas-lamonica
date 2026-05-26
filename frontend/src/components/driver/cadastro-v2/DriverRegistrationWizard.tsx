@@ -815,11 +815,27 @@ export function DriverRegistrationWizard({
 
       // Se já houver stepAData parcial, atualiza CPF/nome para refletir a CNH.
       // Mantém demais campos (categoria, validade, documentUrl).
-      setStepAData((current) =>
-        current
-          ? { ...current, cpf: normalizedCpf, nome: nome || current.nome }
-          : current,
-      );
+      //
+      // BUG-FIX 2026-05-26: antes spread era feito no NÍVEL TOPO de stepAData
+      // (`{ ...current, cpf, nome }`), mas a estrutura é aninhada em sub-keys
+      // a1/a1b/a2/a3. Resultado: `stepAData.a1.nome` ficava vazio enquanto
+      // `stepAData.nome` no topo era setado mas ignorado por buildSubmitDados.
+      // Submit retornava 422 com "Motorista — Nome" obrigatório faltando, mesmo
+      // após o motorista ter feito o adopt CPF da CNH com OCR bem-sucedido.
+      // Fix: mergear corretamente em `a1.{nome,cpf}` (com fallback se current.a1
+      // ainda não existia).
+      setStepAData((current) => {
+        if (!current) return current;
+        const currentA1 = current.a1 ?? {};
+        return {
+          ...current,
+          a1: {
+            ...currentA1,
+            cpf: normalizedCpf,
+            nome: nome || currentA1.nome || "",
+          },
+        } as StepAData;
+      });
     },
     [cargaId, horsePlate, trailerPlates],
   );
