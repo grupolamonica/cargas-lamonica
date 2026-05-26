@@ -93,29 +93,35 @@ export function A3Endereco({
 
   // Sync externo → state interno. Roda no mount E quando o parent troca `value`
   // (ex.: hidratacao tardia via GET /api/candidatura/draft/me?cpf=XXX no F5
-  // publico). Guard: so substitui quando os digits do CEP, numero ou outros
-  // campos divergem do state atual — evita loop com onChange→setStepAData→novo ref.
+  // publico).
+  //
+  // 2026-05-26 — Removida lógica de setData(value) on field-mismatch porque
+  // criava loop: parent reagia ao onChange interno, devolvia ref nova com
+  // mesmo conteúdo, Effect 1 disparava setData(value) → novo ref data →
+  // Effect 2 → onChange → ... a 26Hz constante. A3Endereco é a fonte da
+  // verdade durante edição. Hidratação inicial via useState(value ?? EMPTY).
+  // Hidratação tardia (F5 + GET draft) só aplica quando o state local
+  // ainda está vazio — não sobrescreve dados que o motorista já digitou.
   useEffect(() => {
     if (!value) return;
-    const sameCep = digitsOnly(value.cep) === digitsOnly(data.cep);
-    const sameNumero = (value.numero || "") === (data.numero || "");
-    const sameLogradouro = (value.logradouro || "") === (data.logradouro || "");
-    const sameBairro = (value.bairro || "") === (data.bairro || "");
-    const sameCidade = (value.cidade || "") === (data.cidade || "");
-    const sameUf = (value.uf || "") === (data.uf || "");
-    const sameComprovante = (value.comprovanteUrl || "") === (data.comprovanteUrl || "");
-    if (sameCep && sameNumero && sameLogradouro && sameBairro && sameCidade && sameUf && sameComprovante) {
+    const localHasData = Boolean(data.cep || data.comprovanteUrl);
+    if (localHasData) {
+      // State local já hidratado pelo próprio fluxo (CNH OCR, comprovante OCR,
+      // typing). Skip — não sobrescreve. Apenas reage a value.comprovanteUrl
+      // novo (upload completou).
+      if (value.comprovanteUrl && value.comprovanteUrl !== data.comprovanteUrl) {
+        setData((curr) => ({ ...curr, comprovanteUrl: value.comprovanteUrl }));
+        setTileState("success");
+        setOcrSuccess(true);
+      }
       return;
     }
+    // Estado local vazio — hidrata do parent (draft restaurado).
     setData(value);
     if (value.comprovanteUrl) {
       setTileState("success");
       setOcrSuccess(true);
     }
-    // Auto-resolve ViaCEP quando o draft hidratou um CEP válido SEM cidade/UF
-    // (race condition em fechamentos rápidos: flushAndClose dispara antes do
-    // setTimeout 400ms do ViaCEP). Sem isso o motorista veria o CEP preenchido
-    // mas os outros campos vazios após F5.
     const cepDigits = digitsOnly(value.cep);
     if (cepDigits.length === 8 && (!value.cidade || !value.uf)) {
       void lookupCep(cepDigits);
@@ -151,15 +157,26 @@ export function A3Endereco({
     setData((current) => ({ ...current, ...patch }));
   };
 
+  // 2026-05-26 BUG fix — race condition: lookupCep("AAA") in flight, user
+  // muda CEP pra "BBB". Quando "AAA" lookup retorna depois, fazia updateData
+  // com endereço do CEP antigo, sobrescrevendo as limpezas. Fix com generation
+  // counter: descarta resultados de gerações anteriores.
+  const lookupGenRef = useRef(0);
   const lookupCep = async (rawCep: string) => {
     const digits = digitsOnly(rawCep);
     if (digits.length !== 8) return;
     if (digits === lastLookedUpCepRef.current) return;
     lastLookedUpCepRef.current = digits;
+    lookupGenRef.current += 1;
+    const myGen = lookupGenRef.current;
     setCepLookupLoading(true);
     setCepLookupError(null);
     try {
       const result = await consultaCep(digits);
+      // Descartar resultado se outra consulta foi disparada (CEP mudou) OU
+      // se o CEP atual já não bate com o requisitado.
+      if (myGen !== lookupGenRef.current) return;
+      if (digitsOnly(data.cep) !== digits) return;
       updateData({
         logradouro: result.logradouro || "",
         bairro: result.bairro || "",
@@ -167,9 +184,12 @@ export function A3Endereco({
         uf: (result.uf || "").toUpperCase(),
       });
     } catch {
+      if (myGen !== lookupGenRef.current) return;
       setCepLookupError("CEP nao encontrado. Confira os digitos ou preencha manualmente.");
     } finally {
-      setCepLookupLoading(false);
+      if (myGen === lookupGenRef.current) {
+        setCepLookupLoading(false);
+      }
     }
   };
 

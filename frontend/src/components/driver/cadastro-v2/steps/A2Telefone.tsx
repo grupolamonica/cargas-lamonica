@@ -55,17 +55,24 @@ export function A2Telefone({
 
   // Sync externo → state interno. Necessario pra hidratacao tardia do draft
   // (fluxo publico apos F5 — GET /draft/me?cpf=XXX resolve depois do mount).
-  // Guard por digits evita loop com o effect onChange.
+  //
+  // 2026-05-26 — Mesmo pattern do A3Endereco: A2Telefone é fonte da verdade
+  // durante edição. Só sincroniza do parent quando o state local ainda está
+  // vazio (hidratação inicial ou tardia). Não sobrescreve digits parciais que
+  // o motorista está digitando agora.
   useEffect(() => {
     if (!value) return;
     const primaryDigits = primary.replace(/\D/g, "");
     const secondaryDigits = secondary.replace(/\D/g, "");
     const valuePrimaryDigits = (value.telefone_primario || "").replace(/\D/g, "");
     const valueSecondaryDigits = (value.telefones?.[1] || "").replace(/\D/g, "");
-    if (valuePrimaryDigits && valuePrimaryDigits !== primaryDigits) {
+    // Só sincroniza primary do parent quando local está vazio E parent tem
+    // valor (hidratação). Não promove digits incompletos do parent over o
+    // que o motorista está digitando.
+    if (valuePrimaryDigits && primaryDigits.length === 0) {
       setPrimary(formatPhone(valuePrimaryDigits));
     }
-    if (valueSecondaryDigits !== secondaryDigits) {
+    if (valueSecondaryDigits && secondaryDigits.length === 0) {
       setSecondary(formatPhone(valueSecondaryDigits));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
