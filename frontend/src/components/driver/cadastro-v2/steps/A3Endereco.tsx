@@ -175,15 +175,27 @@ export function A3Endereco({
 
   const handleCepChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const masked = formatCep(event.target.value);
-    updateData({ cep: masked });
+    const newDigits = digitsOnly(masked);
+    const prevDigits = digitsOnly(data.cep);
+    // 2026-05-26 BUG fix — quando o CEP muda, os campos derivados
+    // (logradouro/bairro/cidade/UF) ficavam com dados do CEP anterior. Se o
+    // novo CEP era inválido ou não-encontrado pelo ViaCEP, a UI mostrava
+    // cidade/UF do CEP antigo + erro "CEP nao encontrado" — motorista
+    // entendia que o cadastro estava OK mesmo com dados inconsistentes.
+    // Limpa derivados quando os digits do CEP mudam de fato (ignora apenas
+    // mascaramento) e zera o cache do dedup pra forçar nova consulta.
+    if (newDigits !== prevDigits) {
+      updateData({ cep: masked, logradouro: "", bairro: "", cidade: "", uf: "" });
+      lastLookedUpCepRef.current = "";
+      setCepLookupError(null);
+    } else {
+      updateData({ cep: masked });
+    }
     if (cepLookupTimerRef.current) clearTimeout(cepLookupTimerRef.current);
-    const digits = digitsOnly(masked);
-    if (digits.length === 8) {
+    if (newDigits.length === 8) {
       cepLookupTimerRef.current = setTimeout(() => {
         void lookupCep(masked);
       }, 400);
-    } else {
-      lastLookedUpCepRef.current = "";
     }
   };
 
