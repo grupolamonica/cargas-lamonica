@@ -161,6 +161,13 @@ export function A3Endereco({
   // muda CEP pra "BBB". Quando "AAA" lookup retorna depois, fazia updateData
   // com endereço do CEP antigo, sobrescrevendo as limpezas. Fix com generation
   // counter: descarta resultados de gerações anteriores.
+  //
+  // 2026-05-26 (2) — Removida verificação adicional `digitsOnly(data.cep) !==
+  // digits` porque `data` no closure pode ser stale (lookupCep é redefinido
+  // a cada render; setTimeout em handleCepChange captura a ref atual do
+  // lookupCep, mas seu closure tem data PRE-commit). Resultado: lookup
+  // legítimo era descartado e cidade/UF não chegava. Generation counter é
+  // suficiente pra detectar in-flight staleness.
   const lookupGenRef = useRef(0);
   const lookupCep = async (rawCep: string) => {
     const digits = digitsOnly(rawCep);
@@ -173,10 +180,7 @@ export function A3Endereco({
     setCepLookupError(null);
     try {
       const result = await consultaCep(digits);
-      // Descartar resultado se outra consulta foi disparada (CEP mudou) OU
-      // se o CEP atual já não bate com o requisitado.
       if (myGen !== lookupGenRef.current) return;
-      if (digitsOnly(data.cep) !== digits) return;
       updateData({
         logradouro: result.logradouro || "",
         bairro: result.bairro || "",
