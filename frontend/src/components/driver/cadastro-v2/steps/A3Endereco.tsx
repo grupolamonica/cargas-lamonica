@@ -198,11 +198,28 @@ export function A3Endereco({
       const cepDigits = digitsOnly(extracted.cep);
       const formattedCep = cepDigits.length === 8 ? formatCep(cepDigits) : extracted.cep;
       const numero = extracted.numero || data.numero;
+      const extractedSomething = cepDigits.length === 8 || (extracted.numero?.trim().length ?? 0) > 0;
+
       updateData({ cep: formattedCep, numero });
       if (cepDigits.length === 8) {
         // Sempre consulta ViaCEP — OCR nao traz mais logradouro/bairro/cidade/UF.
         // Nao pre-seta o ref aqui — lookupCep faz isso internamente apos rodar.
         void lookupCep(cepDigits);
+      }
+
+      // 2026-05-26 BUG fix — OCR pode "succeed" sem extrair nada útil (comprovante
+      // ilegível, doc com layout não suportado). Antes setávamos ocrSuccess=true
+      // sempre, mostrando "Dados extraídos com sucesso" com campos vazios — UX
+      // enganosa: motorista achava que tinha funcionado e não preenchia manual.
+      // Agora só marca success quando há CEP válido OU número, e instrui o
+      // motorista quando precisamos do preenchimento manual.
+      if (!extractedSomething) {
+        setOcrSuccess(false);
+        setTileState("success");
+        toast.message(
+          "Não conseguimos ler CEP nem número desse comprovante. Digite abaixo.",
+        );
+        return;
       }
       setOcrSuccess(true);
       setTileState("success");
