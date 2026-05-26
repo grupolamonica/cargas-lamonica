@@ -362,8 +362,8 @@ function StepAMotoristaImpl({
                 <WizardStepCard
                   position={3}
                   total={4}
-                  title="Telefone"
-                  description="Confirme o número que recebe notificações da carga."
+                  title="Contato WhatsApp"
+                  description="Número que recebe as notificações da Lamônica."
                   summary={a2Summary}
                   status={status}
                   onActivate={onActivate}
