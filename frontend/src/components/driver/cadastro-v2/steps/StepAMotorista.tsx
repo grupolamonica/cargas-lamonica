@@ -257,9 +257,11 @@ function StepAMotoristaImpl({
   // Summaries exibidos quando o card está em `completed`.
   const a1Summary = a1Data?.nome ? a1Data.nome : undefined;
   const a1bSummary = a1bData ? "Selfie enviada" : undefined;
-  const a2Summary = a2Data?.telefone_primario
-    ? formatPhoneMask(a2Data.telefone_primario)
-    : undefined;
+  // 2026-05-26 — Não mostra o número formatado no summary. a2Data.telefone_primario
+  // pode dessincronizar do state interno do A2Telefone durante typing/HMR,
+  // causando o card a piscar entre números diferentes. Summary fixo elimina
+  // o sintoma visual; validity continua sendo computada do A2Telefone.onValid.
+  const a2Summary = a2Data?.telefone_primario ? "Telefone salvo" : undefined;
   const a3Summary =
     a3Data?.cidade && a3Data.uf ? `${a3Data.cidade} / ${a3Data.uf}` : undefined;
 
