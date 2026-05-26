@@ -287,6 +287,21 @@ export function OwnerDocumentUploader({
         const extracted = await ocrCartaoCnpj(file);
         const cnpjDigits = (extracted.cnpj || "").replace(/\D/g, "");
         const extractedNome = extracted.razao_social || extracted.nome_fantasia || "";
+        // BUG-FIX 2026-05-26: antes setTileState("success") era chamado sempre
+        // após OCR sem erro HTTP, mesmo quando cnpjDigits/razao_social vinham
+        // vazios (ex.: motorista anexou um CRLV no slot de Cartão CNPJ). O
+        // tile virava verde "Dados extraídos com sucesso" enganando o
+        // usuário. Agora só marca sucesso quando há CNPJ válido (14 dígitos)
+        // E razão social. Caso contrário, falha com mensagem específica
+        // pedindo o documento certo.
+        if (cnpjDigits.length !== 14 || !extractedNome.trim()) {
+          setTileState("failure");
+          setErrorMessage(
+            "Não conseguimos ler CNPJ e razão social desse arquivo. " +
+              "Confira se você enviou o Cartão CNPJ (foto ou PDF), não outro documento.",
+          );
+          return;
+        }
         setNome(extractedNome);
         setDocumento(cnpjDigits);
         setTileState("success");
@@ -298,7 +313,7 @@ export function OwnerDocumentUploader({
           cnpjDigits.length > 0 &&
           cnpjDigits !== expectedDigitsLocal;
         if (mismatchLocal && onMismatch) onMismatch(cnpjDigits, expectedDigitsLocal);
-        if (cnpjDigits.length === 14 && extractedNome && !mismatchLocal) {
+        if (!mismatchLocal) {
           onExtracted({
             documento: cnpjDigits,
             nome: extractedNome,

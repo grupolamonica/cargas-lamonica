@@ -828,6 +828,9 @@ function StepECarretaOwnerImpl({
           <ValidationBannerMessage
             ownerDocType={ownerDocType}
             pfData={pfData}
+            anttFulfilled={anttFulfilled}
+            ownerDocValid={ownerDocValid}
+            ownerHasName={ownerData.nome.trim().length > 0}
           />
         </div>
       ) : null}

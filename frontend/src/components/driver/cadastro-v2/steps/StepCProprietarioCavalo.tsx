@@ -864,6 +864,11 @@ function StepCProprietarioCavaloImpl({
           <ValidationBannerMessage
             ownerDocType={ownerDocType}
             pfData={pfData}
+            anttFulfilled={anttFulfilled}
+            ownerDocValid={ownerDocValid}
+            ownerHasName={
+              driverIsOwner || ownerData.nome.trim().length > 0
+            }
           />
         </div>
       ) : null}
@@ -896,15 +901,51 @@ export const StepCProprietarioCavalo = memo(StepCProprietarioCavaloImpl);
 export function ValidationBannerMessage({
   ownerDocType,
   pfData,
+  anttFulfilled = true,
+  ownerDocValid = true,
+  ownerHasName = true,
 }: {
   ownerDocType: "cpf" | "cnpj";
   pfData: OwnerPFData;
+  anttFulfilled?: boolean;
+  ownerDocValid?: boolean;
+  ownerHasName?: boolean;
 }) {
+  // 2026-05-26 — antes mostrava "Faltam dados bancários obrigatórios" sempre que
+  // ownerDocType !== "cpf", mas o formulário PJ não tem campos bancários
+  // (banking vive em AnttTitularPrompt do cavalo, não aqui). A mensagem genérica
+  // confundia o motorista. Agora apontamos o problema real:
+  //   1. Falta escolher titular do RNTRC (anttFulfilled=false)
+  //   2. Falta nome do proprietário (ownerHasName=false)
+  //   3. Documento (CPF/CNPJ) inválido (ownerDocValid=false)
+  if (!ownerDocValid) {
+    return (
+      <span>
+        O <strong>{ownerDocType === "cpf" ? "CPF" : "CNPJ"}</strong> do
+        proprietário está incompleto ou inválido.
+      </span>
+    );
+  }
+  if (!ownerHasName) {
+    return (
+      <span>
+        Falta preencher o <strong>nome do proprietário</strong>.
+      </span>
+    );
+  }
+  if (!anttFulfilled) {
+    return (
+      <span>
+        Escolha quem é o <strong>titular do RNTRC</strong> em{" "}
+        <em>Proprietário da ANTT do cavalo</em>.
+      </span>
+    );
+  }
   if (ownerDocType !== "cpf") {
     return (
       <span>
-        Faltam dados bancários obrigatórios. Verifique{" "}
-        <strong>banco, agência, conta e tipo</strong>.
+        Faltam campos obrigatórios. Verifique a seção{" "}
+        <strong>Proprietário da ANTT do cavalo</strong> (banco, agência, conta).
       </span>
     );
   }

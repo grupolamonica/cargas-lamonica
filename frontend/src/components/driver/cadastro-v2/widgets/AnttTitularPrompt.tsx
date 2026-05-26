@@ -467,6 +467,71 @@ export function AnttTitularPrompt({
     }
   };
 
+  // 2026-05-26 — Quando o motorista escolhe "É o mesmo proprietário do CRLV"
+  // (cenário A, sameAsOwner=true) e o kind é cavalo, ainda precisamos coletar
+  // os dados bancários do titular do RNTRC (a Lamônica paga o detentor do
+  // RNTRC). Antes desse fix, o BankSelector vivia DENTRO do mini-form, que
+  // só renderizava quando "outra pessoa" — resultado: para cavalo PJ + mesmo
+  // proprietário, o motorista nunca via os campos bancários e o banner
+  // "Faltam dados bancários" aparecia sem onde corrigir.
+  const renderStandaloneBankCard = () => (
+    <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+      <h4 className="text-sm font-semibold text-foreground">
+        Banco para pagamento
+      </h4>
+      <p className="text-xs text-muted-foreground">
+        Conta da pessoa/empresa que detém o RNTRC. É para onde a Lamônica
+        deposita o frete.
+      </p>
+      <BankSelector
+        value={data.banco?.bank ?? null}
+        onChange={(bank) => handleBankField("bank", bank)}
+      />
+      {data.banco?.bank ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="space-y-1">
+            <Label htmlFor={`antt-tit-ag-same-${context}`}>Agência</Label>
+            <Input
+              id={`antt-tit-ag-same-${context}`}
+              value={data.banco?.agencia ?? ""}
+              onChange={(e) => handleBankField("agencia", e.target.value)}
+              className="h-12"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor={`antt-tit-conta-same-${context}`}>Conta</Label>
+            <Input
+              id={`antt-tit-conta-same-${context}`}
+              value={data.banco?.conta ?? ""}
+              onChange={(e) => handleBankField("conta", e.target.value)}
+              className="h-12"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor={`antt-tit-tipo-same-${context}`}>Tipo</Label>
+            <Select
+              value={data.banco?.tipo || ""}
+              onValueChange={(v) =>
+                handleBankField("tipo", v as AnttTitularBank["tipo"])
+              }
+            >
+              <SelectTrigger
+                id={`antt-tit-tipo-same-${context}`}
+                className="h-12"
+              >
+                <SelectValue placeholder="Tipo de conta" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="corrente">Conta corrente</SelectItem>
+                <SelectItem value="poupanca">Conta poupança</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+
   // Render do mini-form (compartilhado entre B, C e A-outra-pessoa).
   const renderMiniForm = () => (
     <div className="space-y-3 rounded-xl border border-border bg-card p-4">
@@ -857,6 +922,11 @@ export function AnttTitularPrompt({
         </fieldset>
 
         {sameAsOwner === false ? renderMiniForm() : null}
+        {/* 2026-05-26 — Quando "É o mesmo proprietário do CRLV" e kind=cavalo,
+            ainda precisamos coletar os dados bancários do titular ANTT (a
+            Lamônica paga quem detém o RNTRC). O resto dos dados (nome/doc)
+            vem do owner do CRLV automaticamente via buildSameAsOwnerData. */}
+        {sameAsOwner === true && showBankBlock ? renderStandaloneBankCard() : null}
       </div>
     );
   }

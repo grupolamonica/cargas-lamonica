@@ -120,19 +120,44 @@ function WizardStepCardImpl({
   }, [isActive, prefersReducedMotion]);
 
   // Quando o conteúdo cresce/encolhe enquanto active (ex.: prefill chega via
-  // OCR), reflete via ResizeObserver para evitar conteúdo cortado.
+  // OCR, OU alert de mismatch aparece), reflete via ResizeObserver para evitar
+  // conteúdo cortado.
+  //
+  // BUG-FIX 2026-05-26: usava `maxHeight` por closure (com deps
+  // `[isActive, prefersReducedMotion]` apenas). Quando o conteúdo crescia
+  // após a transição inicial — ex.: alert "Qual placa deseja usar?" aparece
+  // 250ms depois de abrir o sub-step — o observer não atualizava porque a
+  // closure capturava `maxHeight` stale e o guard `!== "none"` virava
+  // inconsistente. Resultado: `max-height: 222px; overflow: hidden` travava
+  // e os botões "Usar do documento" / "Usar da candidatura" ficavam ocultos
+  // abaixo do fold sem o usuário perceber.
+  //
+  // Fix: usar ref para ler o valor atual sem depender da closure. Sempre que
+  // o conteúdo crescer enquanto active (mesmo após `maxHeight === "none"`),
+  // se ainda houver discrepância entre scrollHeight e o valor renderizado,
+  // atualizamos para o tamanho medido.
+  const maxHeightRef = useRef<number | "none">(maxHeight);
+  useEffect(() => {
+    maxHeightRef.current = maxHeight;
+  }, [maxHeight]);
+
   useEffect(() => {
     if (!isActive || prefersReducedMotion) return;
     const inner = innerRef.current;
     if (!inner || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      if (maxHeight !== "none") {
-        setMaxHeight(inner.scrollHeight);
+      const measured = inner.scrollHeight;
+      const current = maxHeightRef.current;
+      // Quando estamos em "none" (overflow:visible), o conteúdo cresce
+      // naturalmente e não precisamos intervir. Se estamos em valor numérico
+      // travado e o conteúdo cresceu, atualizamos. Inclui o caso onde o
+      // transitionend nunca disparou (transição interrompida por re-render).
+      if (current !== "none" && measured !== current) {
+        setMaxHeight(measured);
       }
     });
     observer.observe(inner);
     return () => observer.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, prefersReducedMotion]);
 
   const badgeBase =
