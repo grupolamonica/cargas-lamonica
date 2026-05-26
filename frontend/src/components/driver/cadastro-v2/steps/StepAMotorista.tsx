@@ -114,7 +114,13 @@ function StepAMotoristaImpl({
     a1: Boolean(value?.a1?.cpf && isValidCpf(value.a1.cpf) && value.a1.nome),
     a1b: Boolean(value?.a1b?.fileName),
     a2: Boolean(value?.a2?.telefone_primario && isValidBrazilianPhone(value.a2.telefone_primario)),
-    a3: Boolean(value?.a3?.cep && value.a3.numero && value.a3.cidade),
+    a3: Boolean(
+      value?.a3?.cep &&
+        (value.a3.cep.replace(/\D/g, "").length === 8) &&
+        value.a3.numero?.trim() &&
+        value.a3.cidade?.trim() &&
+        value.a3.uf?.trim(),
+    ),
   }));
 
   // Hidratacao tardia do draft (fluxo publico apos F5 — GET /draft/me?cpf=XXX
@@ -188,7 +194,13 @@ function StepAMotoristaImpl({
         ),
       a3:
         current.a3 ||
-        Boolean(value.a3?.cep && value.a3.numero && value.a3.cidade),
+        Boolean(
+          value.a3?.cep &&
+            value.a3.cep.replace(/\D/g, "").length === 8 &&
+            value.a3.numero?.trim() &&
+            value.a3.cidade?.trim() &&
+            value.a3.uf?.trim(),
+        ),
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
