@@ -121,9 +121,33 @@ function StepAMotoristaImpl({
   // quando o parent troca `value`. Guard de identidade evita loop com
   // onChange-->setStepAData no parent: so reseta quando o REF muda E o valor
   // novo difere do interno em digits-equality minima.
+  //
+  // BUG-FIX 2026-05-26: setA1Data(value.a1) era chamado sempre que `value` ref
+  // mudava (qualquer re-render do wizard). Quando o A1Cnh interno acabou de
+  // propagar dados do OCR para cima (parent.a1Data = GILSON), o ciclo de
+  // re-render do wizard recriava value e essa useEffect setava a1Data de volta
+  // para o conteúdo (potencialmente vazio) do draft inicial — criando loop
+  // EMPTY ↔ GILSON e dados sumindo. Agora pulamos a re-sync quando o `value.a1`
+  // tem nome vazio MAS o a1Data local já tem nome preenchido (OCR concluído).
+  // O draft hydrate ainda funciona porque é o caso oposto (value.a1 com nome,
+  // a1Data vazio).
   useEffect(() => {
     if (!value) return;
-    if (value.a1 && value.a1 !== a1Data) setA1Data(value.a1);
+    if (value.a1 && value.a1 !== a1Data) {
+      const incomingHasNome = Boolean(value.a1.nome?.trim());
+      const localHasNome = Boolean(a1Data?.nome?.trim());
+      const bothEmpty = !incomingHasNome && !localHasNome;
+      // Só re-hidrata quando: incoming tem nome E é diferente do local.
+      // bothEmpty=true: pula pra evitar loop infinito EMPTY ↔ EMPTY entre
+      // useEffect [value] e useEffect [a1Data,...] (ambos disparam setState
+      // com refs novas a cada render).
+      // !localHasNome && incomingHasNome: hidratação inicial do draft.
+      // localHasNome && !incomingHasNome: pula pra não sobrescrever OCR
+      // já populado com a1Data vazio do draft.
+      if (incomingHasNome && !bothEmpty) {
+        setA1Data(value.a1);
+      }
+    }
     if (value.a1b && value.a1b !== a1bData) setA1bData(value.a1b);
     if (value.a2 && value.a2 !== a2Data) {
       const incomingPrimary = (value.a2.telefone_primario || "").replace(/\D/g, "");
@@ -181,10 +205,20 @@ function StepAMotoristaImpl({
   useEffect(() => {
     if (!onChange) return;
     const partial: Partial<StepAData> = {};
-    if (a1Data) partial.a1 = a1Data;
-    if (a1bData) partial.a1b = a1bData;
-    if (a2Data) partial.a2 = a2Data;
-    if (a3Data) partial.a3 = a3Data;
+    // 2026-05-26: só propaga sub-etapa pro wizard quando há conteúdo
+    // significativo. Antes propagava qualquer ref truthy (incluindo
+    // placeholders `{nome:""}` de mount initial) — isso criava ping-pong
+    // EMPTY ↔ EMPTY entre useEffect [a1Data,...] e useEffect [value],
+    // já que cada call de setStepAData(empty) gerava nova ref no wizard,
+    // que voltava como novo `value` prop, que via useEffect [value]
+    // chamava setA1Data(empty) de novo. Cada ciclo gastava render + commit.
+    // Gate por conteúdo mínimo: nome (a1), fileName (a1b), telefone (a2),
+    // cep ou comprovanteUrl (a3). Empty placeholder fica local até o sub-step
+    // gerar dado real (OCR ou input).
+    if (a1Data && (a1Data.nome?.trim() || a1Data.storage_path)) partial.a1 = a1Data;
+    if (a1bData && a1bData.fileName) partial.a1b = a1bData;
+    if (a2Data && a2Data.telefone_primario) partial.a2 = a2Data;
+    if (a3Data && (a3Data.cep || a3Data.comprovanteUrl)) partial.a3 = a3Data;
     if (Object.keys(partial).length > 0) {
       onChange(partial);
     }
