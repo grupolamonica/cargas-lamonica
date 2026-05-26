@@ -170,37 +170,31 @@ function StepAMotoristaImpl({
         setA3Data(value.a3);
       }
     }
-    // Hidratação STICKY: só promove validity de false→true (quando o draft
-    // restaurado traz dados). Nunca rebaixa true→false: se o sub-step interno
-    // já reportou onValid(true) via callback do filho, não devemos zerar por
-    // causa de uma re-passada de `value` que ainda não inclui o upload recém-feito
-    // (race: setA1bData async vs useEffect dispatch de value).
+    // Hidratação STICKY (a1/a1b): só promove validity de false→true. Não
+    // rebaixa true→false. Necessário pra a1 (CNH OCR async) e a1b (selfie
+    // upload async) — race: setA1bData async vs [value] dispatch.
     //
-    // 2026-05-26 BUG fix — Boolean(value.a2?.telefone_primario) considerava
-    // QUALQUER string não-vazia como válida. Quando o motorista apagava o
-    // telefone e digitava "3" (1 dígito), A2Telefone reportava onValid(false)
-    // mas este sticky promovia de volta pra true (pois "3" é truthy) → card
-    // marcado completed → auto-advance disparava com telefone inválido.
-    // Idem para a1 (CPF) — qualquer string não-vazia passava. Agora valida
-    // o formato real antes de promover sticky.
+    // 2026-05-26 — a2 (telefone) e a3 (endereço) NÃO são sticky. Validação
+    // é síncrona (isValidBrazilianPhone, ViaCEP completou). Se motorista
+    // apaga digitos e telefone volta a ficar inválido, a validity deve
+    // refletir IMEDIATAMENTE (não pode manter completed). O sub-step interno
+    // (A2Telefone.onValid) reporta o estado certo via setValidityFor — o
+    // problema era o sticky aqui ressuscitando true porque current.a2 era
+    // true uma vez. Agora sempre recomputa a partir do value.
     setValidity((current) => ({
       a1: current.a1 || Boolean(value.a1?.cpf && isValidCpf(value.a1.cpf) && value.a1.nome),
       a1b: current.a1b || Boolean(value.a1b?.fileName),
-      a2:
-        current.a2 ||
-        Boolean(
-          value.a2?.telefone_primario &&
-            isValidBrazilianPhone(value.a2.telefone_primario),
-        ),
-      a3:
-        current.a3 ||
-        Boolean(
-          value.a3?.cep &&
-            value.a3.cep.replace(/\D/g, "").length === 8 &&
-            value.a3.numero?.trim() &&
-            value.a3.cidade?.trim() &&
-            value.a3.uf?.trim(),
-        ),
+      a2: Boolean(
+        value.a2?.telefone_primario &&
+          isValidBrazilianPhone(value.a2.telefone_primario),
+      ),
+      a3: Boolean(
+        value.a3?.cep &&
+          value.a3.cep.replace(/\D/g, "").length === 8 &&
+          value.a3.numero?.trim() &&
+          value.a3.cidade?.trim() &&
+          value.a3.uf?.trim(),
+      ),
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
