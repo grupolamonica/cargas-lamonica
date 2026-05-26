@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { isValidBrazilianPhone, isValidCpf } from "@/lib/brazilianValidators";
 
 import { StepHeader } from "../StepHeader";
 import { WizardStepCard } from "../widgets/WizardStepCard";
@@ -110,9 +111,9 @@ function StepAMotoristaImpl({
   const [a2Data, setA2Data] = useState<A2Data | undefined>(value?.a2);
   const [a3Data, setA3Data] = useState<A3Data | undefined>(value?.a3);
   const [validity, setValidity] = useState<Validity>(() => ({
-    a1: Boolean(value?.a1?.cpf && value.a1.nome),
+    a1: Boolean(value?.a1?.cpf && isValidCpf(value.a1.cpf) && value.a1.nome),
     a1b: Boolean(value?.a1b?.fileName),
-    a2: Boolean(value?.a2?.telefone_primario),
+    a2: Boolean(value?.a2?.telefone_primario && isValidBrazilianPhone(value.a2.telefone_primario)),
     a3: Boolean(value?.a3?.cep && value.a3.numero && value.a3.cidade),
   }));
 
@@ -168,10 +169,23 @@ function StepAMotoristaImpl({
     // já reportou onValid(true) via callback do filho, não devemos zerar por
     // causa de uma re-passada de `value` que ainda não inclui o upload recém-feito
     // (race: setA1bData async vs useEffect dispatch de value).
+    //
+    // 2026-05-26 BUG fix — Boolean(value.a2?.telefone_primario) considerava
+    // QUALQUER string não-vazia como válida. Quando o motorista apagava o
+    // telefone e digitava "3" (1 dígito), A2Telefone reportava onValid(false)
+    // mas este sticky promovia de volta pra true (pois "3" é truthy) → card
+    // marcado completed → auto-advance disparava com telefone inválido.
+    // Idem para a1 (CPF) — qualquer string não-vazia passava. Agora valida
+    // o formato real antes de promover sticky.
     setValidity((current) => ({
-      a1: current.a1 || Boolean(value.a1?.cpf && value.a1.nome),
+      a1: current.a1 || Boolean(value.a1?.cpf && isValidCpf(value.a1.cpf) && value.a1.nome),
       a1b: current.a1b || Boolean(value.a1b?.fileName),
-      a2: current.a2 || Boolean(value.a2?.telefone_primario),
+      a2:
+        current.a2 ||
+        Boolean(
+          value.a2?.telefone_primario &&
+            isValidBrazilianPhone(value.a2.telefone_primario),
+        ),
       a3:
         current.a3 ||
         Boolean(value.a3?.cep && value.a3.numero && value.a3.cidade),
