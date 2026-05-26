@@ -170,32 +170,24 @@ function StepAMotoristaImpl({
         setA3Data(value.a3);
       }
     }
-    // Hidratação STICKY (a1/a1b): só promove validity de false→true. Não
-    // rebaixa true→false. Necessário pra a1 (CNH OCR async) e a1b (selfie
-    // upload async) — race: setA1bData async vs [value] dispatch.
+    // 2026-05-26 — Removida setValidity sticky aqui. Causava oscillação:
+    // setValidityFor (do A2Telefone.onValid / A3Endereco.onValid) competia
+    // com este setValidity, e cada parent re-render disparava este effect
+    // criando nova validity object ref, mesmo que conteúdo igual — quando
+    // unicamente o sub-step interno é fonte da verdade.
     //
-    // 2026-05-26 — a2 (telefone) e a3 (endereço) NÃO são sticky. Validação
-    // é síncrona (isValidBrazilianPhone, ViaCEP completou). Se motorista
-    // apaga digitos e telefone volta a ficar inválido, a validity deve
-    // refletir IMEDIATAMENTE (não pode manter completed). O sub-step interno
-    // (A2Telefone.onValid) reporta o estado certo via setValidityFor — o
-    // problema era o sticky aqui ressuscitando true porque current.a2 era
-    // true uma vez. Agora sempre recomputa a partir do value.
-    setValidity((current) => ({
-      a1: current.a1 || Boolean(value.a1?.cpf && isValidCpf(value.a1.cpf) && value.a1.nome),
-      a1b: current.a1b || Boolean(value.a1b?.fileName),
-      a2: Boolean(
-        value.a2?.telefone_primario &&
-          isValidBrazilianPhone(value.a2.telefone_primario),
-      ),
-      a3: Boolean(
-        value.a3?.cep &&
-          value.a3.cep.replace(/\D/g, "").length === 8 &&
-          value.a3.numero?.trim() &&
-          value.a3.cidade?.trim() &&
-          value.a3.uf?.trim(),
-      ),
-    }));
+    // a1 sticky: apenas para hidratação tardia do draft (CNH OCR ainda
+    // pendente quando value chega).
+    setValidity((current) => {
+      const hydratedA1 =
+        current.a1 ||
+        Boolean(value.a1?.cpf && isValidCpf(value.a1.cpf) && value.a1.nome);
+      const hydratedA1b = current.a1b || Boolean(value.a1b?.fileName);
+      if (hydratedA1 === current.a1 && hydratedA1b === current.a1b) {
+        return current;
+      }
+      return { ...current, a1: hydratedA1, a1b: hydratedA1b };
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
