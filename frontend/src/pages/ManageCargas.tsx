@@ -783,10 +783,6 @@ const ManageCargas = () => {
               <button
                 type="button"
                 onClick={() => {
-                  const today = new Date().toISOString().slice(0, 10);
-                  const future = new Date();
-                  future.setDate(future.getDate() + 90);
-                  const futureIso = future.toISOString().slice(0, 10);
                   setSearch("");
                   setStatusFilter("ativas");
                   setVisibilityFilter("todos");
@@ -794,11 +790,13 @@ const ManageCargas = () => {
                   setOrigemFilter("");
                   setDestinoFilter("");
                   setPerfilFilter("todos");
-                  // Restaura o range default (hoje .. hoje + 90 dias) em vez de
-                  // deixar vazio — alinhado com o estado inicial e evita o
-                  // bug do operador ver "0 cargas em exibicao" apos limpar.
-                  setDateFrom(today);
-                  setDateTo(futureIso);
+                  // Limpa de fato as datas de coleta/entrega (sem range). Datas
+                  // vazias contam como "sem filtro" no hasActiveFilters e o
+                  // servidor retorna todas as cargas ativas — sem o bug de
+                  // "0 cargas" (verificado). Antes restaurava hoje..hoje+90, o
+                  // que deixava as datas presas e nao limpava o filtro.
+                  setDateFrom("");
+                  setDateTo("");
                   setClienteFilter("");
                 }}
                 disabled={!hasActiveFilters}

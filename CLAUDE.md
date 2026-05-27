@@ -32,7 +32,14 @@ Este documento é a **fonte da verdade** sobre:
 
 **Lamonica Cargas** (LMC) — Plataforma logística full-stack para operação de cargas, clientes, leads e portal do motorista.
 
-**Current milestone:** `v1-refactor-arch-docker-vps` — refactor estrutural brownfield para clean architecture, split físico front/back, containerização Docker, deploy automatizado em VPS via GitHub Actions.
+**Em produção:** `https://cargas.grupolamonica.com` (VPS + Docker + Traefik). Deploy automatizado via GitHub Actions a cada push na `main`.
+
+**Milestone v1 (`v1-refactor-arch-docker-vps`) — CONCLUÍDO** (Phases 1-6: split estrutural + clean architecture, runtime Express, Docker, comunicação/env, CI/CD + deploy VPS, hardening). O sub-repo legado `lan-a-cargas-main` foi removido.
+
+**Foco atual — entrega de features pós-refactor:**
+- **Cadastro v2** — wizard do motorista (candidatura a partir de carga **e** cadastro avulso pelo botão "Cadastro"), cascata ANTT, OCR via sidecar FastAPI. A rota pública `/cadastro` foi **removida** (cadastro só via wizard de candidatura/standalone).
+- **Painel do operador + Sheet Monitor** — fixes de enriquecimento (consulta só pendentes), revisão de ficha completa, KPIs.
+- **Cargas Casadas** (multi-stop, claim atômico) — em andamento.
 
 ## GSD Workflow
 
@@ -45,51 +52,45 @@ Este projeto usa **GSD** (Get Shit Done). Planejamento em `.planning/` (local-on
 - `.planning/STATE.md` — posição atual, progresso, contexto acumulado
 - `.planning/codebase/` — análise do código existente (ARCHITECTURE, STACK, STRUCTURE, INTEGRATIONS, CONCERNS, CONVENTIONS, TESTING)
 
-**Config:** `.planning/config.json` — `mode: yolo`, `granularity: coarse`, `parallelization: sequential`, `sub_repos: ["lan-a-cargas-main"]`, `workflow: { research: false, plan_check: true, verifier: true }`.
+**Config:** `.planning/config.json` — `mode: yolo`, `granularity: coarse`, `parallelization: sequential`, `workflow: { research: false, plan_check: true, verifier: true }`. (O sub-repo `lan-a-cargas-main` foi removido na Phase 5.)
 
-**Próximos passos:**
-- `/gsd-plan-phase 1` — decompor Phase 1 (Structural Split) em planos executáveis
-- `/gsd-execute-phase 1` — executar os planos após criados
-- `/gsd-progress` — checar status em qualquer momento
+**Rastreamento no Jira:** projeto **DC** (`Desenvolvimento CargasLamonica`). Convenções de board na issue **DC-101**; automação commit↔Jira em [`docs/JIRA-WORKFLOW.md`](./docs/JIRA-WORKFLOW.md) (slash `/jira-sync`).
 
-## Architecture (current → target)
+**Comandos úteis:** `/gsd-progress` (status), `/gsd-quick` (tarefa pequena), `/gsd-plan-phase` (decompor nova fase), `/jira-sync` (sincronizar commits com o Jira).
 
-### Current state
+## Architecture (estado atual — pós-refactor)
+
 ```
-Cargas_Lamonica/                    ← Workspace (sem .git)
-├── src/                            ← Demo legacy (static data) — a remover
-├── backend/                        ← Stub legacy — a remover
-└── lan-a-cargas-main/              ← PRODUCTION (tem .git — sub-repo)
-    ├── api/[...route].mjs          ← Vercel catch-all serverless
-    ├── frontend/                   ← React 18 + Vite 6 + TS
-    ├── backend/                    ← Node.js ESM + pg + Supabase Admin
-    └── supabase/                   ← Migrations + bootstrap RLS
-```
-
-### Target state (pós-refactor)
-```
-Cargas_Lamonica/
-├── frontend/                       ← Package.json próprio, Dockerfile multi-stage → nginx
-├── backend/                        ← Package.json próprio, clean architecture (domain/application/infrastructure/interface), Dockerfile → node slim
-│   └── supabase/                   ← Migrations mantidas aqui
-├── docker-compose.yml              ← frontend + backend + Traefik
-├── .github/workflows/deploy.yml    ← build → GHCR → SSH deploy VPS
-└── .planning/                      ← GSD docs (local-only)
+Cargas_Lamonica/                    ← Monorepo (um único .git)
+├── frontend/                       ← React 18 + Vite 6 + TS; Dockerfile multi-stage → nginx:alpine
+│   └── src/modules/cadastro-motorista/  ← (legado da rota /cadastro removida)
+├── backend/                        ← Node.js 22 ESM + Express v4; clean architecture
+│   │                                  (domain / application / infrastructure / interface)
+│   ├── Dockerfile                  ← node:22-slim, porta 3001
+│   └── supabase/                   ← Migrations + bootstrap RLS
+├── cadastro-motorista/backend/     ← Sidecar FastAPI (Python, :8765) — OCR + consultas externas
+├── docker-compose.yml              ← frontend + backend + Traefik (overrides: .override dev / .deploy prod)
+├── .github/workflows/              ← ci.yml + deploy.yml (GHCR → SSH VPS) + rollback.yml
+├── docs/                           ← README de infra, runbooks, JIRA-WORKFLOW.md
+└── .planning/                      ← GSD docs (local-only, gitignored salvo STATE.md + alguns summaries)
 ```
 
-## Tech Stack (preservado no refactor)
+> Fluxo de cadastro v2: `frontend` (wizard) → `backend` Express (`/api/candidatura/*`, persistência + cascata ANTT) → sidecar FastAPI (`/api/consulta/*`, OCR + Infosimples/ANTT/ViaCEP). O sidecar FastAPI continua ativo mesmo após a remoção da rota React `/cadastro`.
 
-**Frontend:** React 18.3.1 / Vite 6.4.2 / TypeScript 5.8.3 / TanStack Query v5 / React Router v6 / shadcn/ui (Radix) / Tailwind 3.4.17 / next-themes
-**Backend:** Node.js ESM (`.mjs`) / pg 8.16 / @supabase/supabase-js / zod 3.25 / vitest 3.2
-**Database:** PostgreSQL via Supabase (managed, external) — direct pg connection + RLS via `current_app_role()`
+## Tech Stack
+
+**Frontend:** React 18.3 / Vite 6 / TypeScript 5.8 / TanStack Query v5 / React Router v6 / shadcn/ui (Radix) / Tailwind 3.4 / next-themes
+**Backend:** Node.js 22 ESM + Express v4 / pg 8 / @supabase/supabase-js / zod 3 / vitest 3
+**Sidecar OCR:** FastAPI (Python, `:8765`) em `cadastro-motorista/backend/` — OCR de documentos + consultas (Infosimples, ANTT, DENATRAN, ViaCEP)
+**Database:** PostgreSQL via Supabase (managed, external) — direct pg connection (pgBouncer transaction mode) + RLS via `current_app_role()`
 **Auth:** Supabase Auth dupla (operator: `lamonica-operator-auth` / driver: `lamonica-driver-auth`) com clientes separados
-**Integrações externas:** Geoapify (routing/geocoding), Angellira (CPF validation), ASPX directory (CSV), Google Sheets (Shopee sync)
+**Integrações externas:** Angellira (validação CPF), ASPX directory (CSV), Google Sheets (Shopee sync), Infosimples/ANTT (via sidecar). _Geoapify removido (routing/geocoding) — ver DC-83._
 
 ## Deployment
 
-**Atual:** Vercel (serverless functions + static CDN, Cloudflare na frente)
-**Target:** VPS com Docker + docker-compose + Traefik (TLS automático via Let's Encrypt) + GHCR como registry
-**CI/CD target:** GitHub Actions — `push main` → test → build imagens paralelas → push GHCR → SSH deploy VPS (`docker compose pull && up -d`)
+**Atual (produção):** VPS (`76.13.169.177`, domínio `cargas.grupolamonica.com`) com Docker + docker-compose + Traefik v3 (TLS automático via Let's Encrypt) + GHCR como registry. _Vercel foi descontinuado._
+**CI/CD:** GitHub Actions — `push main` → `ci.yml` (lint+typecheck+test+build) + `deploy.yml` (gate de test → build imagens paralelas → push GHCR → SSH deploy VPS `docker compose pull && up -d` → smoke test). Rollback via `rollback.yml` (workflow_dispatch com SHA).
+**Operação:** ver [`README.md`](./README.md) (secrets, first-time setup, rollback, TLS, backup, smoke tests). Antes de mergear/deployar: `scripts/pre-deploy-check.sh`.
 
 ## Conventions (do refactor)
 
@@ -102,19 +103,21 @@ Cargas_Lamonica/
 - **Idempotência**: `Idempotency-Key` header em mutações de load-claims — preservar.
 - **Correlation IDs**: `X-Correlation-Id` em todas as requests — preservar.
 
-## Out of Scope (reforço)
+## Out of Scope (do milestone v1-refactor — histórico)
 
-- Migração de Supabase para outro provider
-- Reescrita de regras de negócio
-- Mudanças de UI/UX
-- Kubernetes (docker-compose é suficiente)
-- Refactor dos god modules (`operator-admin/service.js` 2771L, `DriverPortal.tsx` 2107L) além do mínimo para separar camadas
+Estes eram limites do **refactor** (concluído). Migração de Supabase, Kubernetes e
+reescrita de regras de negócio seguem fora de escopo. O refactor dos god modules
+(`operator-admin/service.js`, `DriverPortal.tsx`) foi feito além do mínimo nas
+features pós-refactor (split de hooks/use-cases — ver DC-66/DC-68). Mudanças de
+UI/UX, que eram out-of-scope do refactor, passaram a ser trabalho de feature
+(redesign do portal, wizard cadastro v2).
 
-## Known Issues (do codebase legacy, tratados pelo refactor)
+## Known Issues
 
-- **H-01**: Estado em memória (idempotency cache, circuit breakers, rate limiters) quebra em serverless. Migração para container persistente **resolve isso automaticamente**.
-- **H-03**: `ALLOWED_ORIGINS` não documentado em `.env.example`. A ser corrigido em Phase 4 (COMM-05).
-- Detalhes em `.planning/codebase/CONCERNS.md`.
+- **H-01** (RESOLVIDO): estado em memória (idempotency cache, circuit breakers, rate limiters) quebrava em serverless — resolvido pela migração para container persistente (Phase 2/3).
+- **H-03** (RESOLVIDO): `ALLOWED_ORIGINS` documentado em `.env.example` (Phase 4).
+- Limitação atual conhecida: rate limiters/idempotency são in-memory (não cluster-safe) — aceitável em single-replica; upgrade futuro para Redis rastreado em DC-95 (Phase 9, Sprint 1).
+- Histórico do codebase legado em `.planning/codebase/CONCERNS.md`.
 
 ---
-*Gerado em 2026-04-24 durante `/gsd-new-project` init*
+*Gerado em 2026-04-24 durante `/gsd-new-project` init. Atualizado em 2026-05-27 (milestone v1 concluído + features pós-refactor).*
