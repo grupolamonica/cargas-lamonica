@@ -684,7 +684,13 @@ export default function SheetMonitor() {
       queryClient.setQueryData([...SHEET_MONITOR_QUERY_KEY], freshData);
       // Fila operacional usa status da planilha — invalidar para refletir status novo apos sync.
       queryClient.invalidateQueries({ queryKey: ["operator", "public-load-leads"] });
-      handleStartEnrich(true);
+      // 2026-05-27 — enrich SEM force: processa só linhas pendentes/vencidas
+      // (>6h), pulando as já consultadas recentemente. Com force=true o botão
+      // re-consultava TODAS as linhas no Angellira/ASPX e, no timeout, gravava
+      // UNAVAILABLE por cima do dado bom — "consultado voltava a pendente".
+      // O check no banco (driver_profiles/vehicles) já evita reconsulta de quem
+      // tem dado; aqui só garantimos não forçar reprocessamento do que está ok.
+      handleStartEnrich(false);
     },
   });
 
