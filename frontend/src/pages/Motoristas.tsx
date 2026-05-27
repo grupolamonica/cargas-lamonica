@@ -209,6 +209,195 @@ async function updateDriverProfile(driverId: string, payload: Record<string, unk
   return response.json();
 }
 
+// 2026-05-27 — Render recursivo da ficha do cadastro (painel do operador).
+// O render anterior pulava arrays (carretas, carreta_owners), filtrava objetos
+// aninhados (antt_titular, endereco, cnh, dados_bancarios) e cortava em 10
+// campos — então o operador não via o proprietário ANTT (cavalo/carreta), as
+// carretas, o banco nem os endereços. FichaNode percorre tudo recursivamente.
+const CADASTRO_DADOS_LABELS: Record<string, string> = {
+  motorista: "Motorista",
+  cavalo: "Cavalo",
+  cavalo_owner: "Dono do cavalo",
+  carretas: "Carretas",
+  carreta_owners: "Donos das carretas",
+  antt_titular: "Titular ANTT (RNTRC)",
+  endereco: "Endereço",
+  dados_bancarios: "Dados bancários",
+  banco: "Banco",
+  cnh: "CNH",
+  owner_reuse: "Reuso de proprietário",
+  telefones: "Telefones",
+  nome: "Nome",
+  doc: "CPF/CNPJ",
+  cpf: "CPF",
+  tipo: "Tipo",
+  placa: "Placa",
+  renavam: "RENAVAM",
+  chassi: "Chassi",
+  marca: "Marca / Modelo",
+  modelo: "Modelo",
+  ano: "Ano",
+  cor: "Cor",
+  eixos: "Eixos",
+  carroceria: "Carroceria",
+  owner_doc: "CPF/CNPJ proprietário",
+  owner_doc_type: "Tipo do doc",
+  owner_resolution: "Resolução",
+  rntrc: "RNTRC",
+  telefone: "Telefone",
+  telefone_primario: "Telefone",
+  cep: "CEP",
+  numero: "Número",
+  logradouro: "Logradouro",
+  bairro: "Bairro",
+  cidade: "Cidade",
+  uf: "UF",
+  banco_nome: "Banco",
+  banco_compe: "Cód. banco",
+  agencia: "Agência",
+  conta: "Conta",
+  isento_ie: "Isento de IE",
+  inscricao_estadual: "Inscrição estadual",
+  validade: "Validade",
+  categoria: "Categoria",
+  protocolo: "Protocolo",
+  pis: "PIS / PASEP",
+  estado_civil: "Estado civil",
+  cor_raca: "Cor / raça",
+  rg: "RG",
+  rg_orgao: "Órgão emissor",
+  rg_uf: "UF do RG",
+  nome_mae: "Nome da mãe",
+  nome_pai: "Nome do pai",
+  naturalidade: "Naturalidade",
+  data_nascimento: "Nascimento",
+  tag_pedagio: "Tag de pedágio",
+  pancary_autodeclaration: "Pancary",
+  uf_emplacamento: "UF emplacamento",
+  cidade_emplacamento: "Cidade emplacamento",
+  ano_fabricacao: "Ano de fabricação",
+  ultimo_licenciamento: "Últ. licenciamento",
+  cavalo_owner_is_driver: "Dono = motorista",
+  carreta_owners_reused: "Reuso por carreta",
+};
+
+function humanizeFichaKey(key: string): string {
+  return (
+    CADASTRO_DADOS_LABELS[key] ??
+    key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+  );
+}
+
+function isFichaEmpty(value: unknown): boolean {
+  return (
+    value === null ||
+    value === undefined ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0)
+  );
+}
+
+function formatFichaScalar(key: string, value: unknown): string {
+  if (typeof value === "boolean") return value ? "Sim" : "Não";
+  const s = String(value);
+  if (/_url$|storage_path$|storagePath$/i.test(key) && s.length > 0) {
+    return "✓ arquivo enviado";
+  }
+  return s;
+}
+
+/** Render recursivo de qualquer nó do JSONB `dados` (escalar, objeto ou array). */
+function FichaNode({
+  nodeKey,
+  value,
+  depth,
+  bare = false,
+}: {
+  nodeKey: string;
+  value: unknown;
+  depth: number;
+  bare?: boolean;
+}) {
+  if (isFichaEmpty(value)) return null;
+
+  // Escalar → linha rótulo/valor.
+  if (typeof value !== "object" || value === null) {
+    const field = (
+      <>
+        <dt className="text-muted-foreground truncate">{humanizeFichaKey(nodeKey)}</dt>
+        <dd className="font-medium text-foreground break-words">
+          {formatFichaScalar(nodeKey, value)}
+        </dd>
+      </>
+    );
+    if (depth === 0) {
+      return (
+        <div className="rounded-xl border border-border/60 p-3">
+          <dl className="text-xs">{field}</dl>
+        </div>
+      );
+    }
+    return <div>{field}</div>;
+  }
+
+  const cardCls =
+    depth === 0
+      ? "rounded-xl border border-border/60 p-3"
+      : "rounded-lg border border-border/40 bg-muted/20 p-2.5 mt-2";
+  const titleCls = "text-xs font-semibold uppercase tracking-wide text-primary/60 mb-2";
+
+  // Array → card com cada item ("Singular N").
+  if (Array.isArray(value)) {
+    const items = value.filter((v) => !isFichaEmpty(v));
+    if (!items.length) return null;
+    const singular = humanizeFichaKey(nodeKey).replace(/s$/i, "");
+    return (
+      <div className={cardCls}>
+        <p className={titleCls}>{humanizeFichaKey(nodeKey)}</p>
+        <div className="space-y-2">
+          {items.map((item, i) => (
+            <div key={i} className="rounded-lg border border-border/40 bg-background/60 p-2">
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {singular} {i + 1}
+              </p>
+              <FichaNode nodeKey={nodeKey} value={item} depth={depth + 1} bare />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Objeto → grid de escalares + nós aninhados.
+  const entries = Object.entries(value as Record<string, unknown>).filter(
+    ([, v]) => !isFichaEmpty(v),
+  );
+  const scalars = entries.filter(([, v]) => typeof v !== "object" || v === null);
+  const nested = entries.filter(([, v]) => typeof v === "object" && v !== null);
+  const body = (
+    <>
+      {scalars.length > 0 ? (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+          {scalars.map(([k, v]) => (
+            <FichaNode key={k} nodeKey={k} value={v} depth={depth + 1} />
+          ))}
+        </dl>
+      ) : null}
+      {nested.map(([k, v]) => (
+        <FichaNode key={k} nodeKey={k} value={v} depth={depth + 1} />
+      ))}
+    </>
+  );
+  // bare = item de array (já tem cabeçalho "Singular N") → sem card/título extra.
+  if (bare) return body;
+  return (
+    <div className={cardCls}>
+      <p className={titleCls}>{humanizeFichaKey(nodeKey)}</p>
+      {body}
+    </div>
+  );
+}
+
 
 const PENDENTES_QUERY_KEY = ["operator", "cadastros-pendentes"] as const;
 
@@ -541,25 +730,11 @@ const Motoristas = () => {
 
                     {selectedPendente.dados && (
                       <div className="mt-4 space-y-3 max-h-[420px] overflow-y-auto pr-1">
-                        {Object.entries(selectedPendente.dados as Record<string, unknown>).map(([section, value]) => {
-                          if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-                          const fields = value as Record<string, unknown>;
-                          const fieldEntries = Object.entries(fields).filter(([, v]) => v !== null && v !== "" && v !== undefined && typeof v !== "object");
-                          if (!fieldEntries.length) return null;
-                          return (
-                            <div key={section} className="rounded-xl border border-border/60 p-3">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-primary/60 mb-2">{section}</p>
-                              <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                                {fieldEntries.slice(0, 10).map(([k, v]) => (
-                                  <div key={k}>
-                                    <dt className="text-muted-foreground truncate">{k}</dt>
-                                    <dd className="font-medium text-foreground truncate">{String(v)}</dd>
-                                  </div>
-                                ))}
-                              </dl>
-                            </div>
-                          );
-                        })}
+                        {Object.entries(selectedPendente.dados as Record<string, unknown>)
+                          .filter(([, v]) => !isFichaEmpty(v))
+                          .map(([section, value]) => (
+                            <FichaNode key={section} nodeKey={section} value={value} depth={0} />
+                          ))}
                       </div>
                     )}
 
