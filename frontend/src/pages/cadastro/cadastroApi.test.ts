@@ -8,9 +8,9 @@ import {
 
 describe("humanizeOcrMessage", () => {
   it("retorna fallback amigavel quando msg ausente", () => {
-    expect(humanizeOcrMessage(undefined)).toMatch(/Não deu pra ler/i);
-    expect(humanizeOcrMessage("")).toMatch(/Não deu pra ler/i);
-    expect(humanizeOcrMessage("   ")).toMatch(/Não deu pra ler/i);
+    expect(humanizeOcrMessage(undefined)).toMatch(/Não conseguimos ler/i);
+    expect(humanizeOcrMessage("")).toMatch(/Não conseguimos ler/i);
+    expect(humanizeOcrMessage("   ")).toMatch(/Não conseguimos ler/i);
   });
 
   it("retorna fallback do nosso lado em 5xx sem msg", () => {
@@ -34,7 +34,7 @@ describe("humanizeOcrMessage", () => {
     for (const sample of technicalSamples) {
       const out = humanizeOcrMessage(sample);
       expect(out).not.toContain(sample);
-      expect(out).toMatch(/Não deu pra ler|Deu problema/i);
+      expect(out).toMatch(/Não conseguimos ler|Deu problema/i);
     }
   });
 
@@ -63,7 +63,7 @@ describe("humanizeOcrMessage", () => {
 
   it("descarta mensagens muito longas (provavel stacktrace)", () => {
     const longMsg = "x".repeat(250);
-    expect(humanizeOcrMessage(longMsg)).toMatch(/Não deu pra ler/i);
+    expect(humanizeOcrMessage(longMsg)).toMatch(/Não conseguimos ler/i);
   });
 });
 

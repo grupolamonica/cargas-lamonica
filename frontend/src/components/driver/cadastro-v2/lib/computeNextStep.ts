@@ -100,9 +100,6 @@ export function describeSkippedStep(
   if (from === "step-a" && to === "confirmation") {
     return "Cavalo e carretas estão em dia — só faltava você.";
   }
-  if (from === "step-b" && to === "confirmation" && /* sem skip C necessario */ false) {
-    return null;
-  }
   if (from === "step-c" && to === "confirmation") {
     return "Carretas estão em dia — pulamos esse passo.";
   }
