@@ -1048,9 +1048,17 @@ export function DriverRegistrationWizard({
       let nextStepD: StepDData | null = null;
       setStepDData((current) => {
         const carretas = current ? [...current.carretas] : [];
-        const idx = carretas.findIndex((existing) => existing.plate === entry.plate);
-        if (idx >= 0) carretas[idx] = entry;
-        else carretas.push(entry);
+        // 2026-05-27 — indexa o slot pela POSIÇÃO do trailer (currentTrailerIdx),
+        // não pela placa. Quando o motorista resolve a divergência CRLV ≠
+        // candidatura ("Qual placa deseja usar?"), a placa do entry muda; o
+        // findIndex por placa não achava o slot original e EMPURRAVA uma carreta
+        // duplicada (ex.: TXF3C54 + JRQ2501 com mesmo renavam/owner). Indexar
+        // pelo trailer garante substituir o slot correto, mesmo com placa nova.
+        if (currentTrailerIdx >= 0 && currentTrailerIdx <= carretas.length) {
+          carretas[currentTrailerIdx] = entry;
+        } else {
+          carretas.push(entry);
+        }
         nextStepD = { carretas };
         return nextStepD;
       });
