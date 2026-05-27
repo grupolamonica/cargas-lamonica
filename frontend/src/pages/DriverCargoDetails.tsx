@@ -14,10 +14,18 @@ import type { CustomBadgeItem } from "@/services/operatorAdmin";
 import { getBadgeIcon } from "@/lib/badgeIcons";
 import { Link, useParams } from "react-router-dom";
 
-import DriverClaimPanel from "@/components/driver/DriverClaimPanel";
+import DriverClaimPanel, { type PreSubmitInterceptor } from "@/components/driver/DriverClaimPanel";
 import CargaParadaCard from "@/components/driver/CargaParadaCard";
 import { usePacoteRealtime, type PacoteRealtimeRow } from "@/hooks/usePacoteRealtime";
 import { fetchPacote, type PacoteFull } from "@/services/readModels";
+import { DriverRegistrationWizard } from "@/components/driver/cadastro-v2/DriverRegistrationWizard";
+import { requestCandidaturaPreCheck } from "@/api/candidaturaApi";
+import {
+  createPublicLoadLeadPreRegistration,
+  type PublicLoadLeadPayload,
+} from "@/services/loadClaims";
+import { persistStoredLeadState } from "@/lib/driverLeadStorage";
+import { useDriverAuth } from "@/hooks/useDriverAuth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -314,6 +322,153 @@ const DriverCargoDetails = () => {
   const { cargoId } = useParams();
   const normalizedCargoId = cargoId?.trim() || "";
   const [isClaimDialogOpen, setIsClaimDialogOpen] = useState(false);
+  const driverAuth = useDriverAuth();
+  const isDriverAuthenticated = Boolean(driverAuth.session?.access_token);
+  const [registrationWizardOpen, setRegistrationWizardOpen] = useState(false);
+  const [registrationContext, setRegistrationContext] = useState<{
+    cargaId: string;
+    cpf: string;
+    horsePlate: string;
+    trailerPlates: string[];
+    preCheckResponse: import("@/api/candidaturaApi").PreCheckResponse;
+  } | null>(null);
+
+  // Abre o fluxo de candidatura existente (DriverClaimPanel dentro do dialog atual).
+  // Este handler e chamado:
+  //   1) Direto por drivers NAO autenticados (fallback público v1)
+  //   2) Pelo wizard v2 após pre-check com pendencias = 0
+  const handleExistingClaimFlow = (_ctx: {
+    cargaId: string;
+    horsePlate: string;
+    trailerPlates: string[];
+  }) => {
+    setIsClaimDialogOpen(true);
+  };
+
+  const openCandidaturaFlow = () => {
+    // SEMPRE abre o modal de candidatura existente (DriverClaimPanel).
+    // O interceptor v2 (handlePreSubmitInterceptor abaixo) é injetado nele
+    // e dispara o pre-check com as placas que o motorista digitou no modal,
+    // APÓS o submit do form mas ANTES do POST v1 — se houver pendências,
+    // troca para o wizard v2; se zero, segue submit v1 normal.
+    setIsClaimDialogOpen(true);
+  };
+
+  /**
+   * Phase 7 interceptor — injetado no DriverClaimPanel para TODOS os drivers
+   * (autenticados ou não). Roda DEPOIS de o form estar válido e ANTES do POST v1.
+   * Endpoint público: CPF vem do próprio form, sem necessidade de login.
+   *
+   * Decisão:
+   *  - CPF vazio / sem cargoId    → 'continue' (não bloqueia)
+   *  - pre-check pendências=0     → 'continue' (driver OK, submit v1 normal)
+   *  - pre-check pendências>0     → 'abort' + abre wizard v2 com dados pré-populados
+   *  - falha de rede no pre-check → 'continue' (não bloqueia driver; backend re-valida)
+   */
+  const handlePreSubmitInterceptor: PreSubmitInterceptor = async (form) => {
+    if (!normalizedCargoId) {
+      return "continue";
+    }
+
+    const cpf = form.cpf?.replace(/\D/g, "") || "";
+    if (cpf.length !== 11) {
+      return "continue";
+    }
+
+    const trailerPlatesArray = [form.trailerPlate, form.trailerPlate2]
+      .map((plate) => plate?.trim() || "")
+      .filter((plate) => plate.length > 0);
+
+    let response: { pendencias: unknown[]; completos?: unknown[] };
+    try {
+      response = await requestCandidaturaPreCheck({
+        cpf,
+        horsePlate: form.horsePlate,
+        trailerPlates: trailerPlatesArray,
+      });
+    } catch (preCheckError) {
+      console.warn("[DriverCargoDetails] pre-check failed; continuing v1 submit", preCheckError);
+      return "continue";
+    }
+
+    if (!Array.isArray(response.pendencias) || response.pendencias.length === 0) {
+      return "continue";
+    }
+
+    // Bug A — Sintoma 2 (Task 08-18): persistir o lead com os dados novos
+    // ANTES de abrir o wizard. Sem isso, se o motorista clica "Agora não"
+    // na Tela 0, a candidatura volta a exibir os dados antigos (placa A)
+    // tanto no DB quanto no localStorage, descartando silenciosamente a
+    // atualização que ele acabou de digitar (ex.: placa B).
+    //
+    // O endpoint /pre-registration funciona como UPSERT: insere quando não
+    // existe lead matching e atualiza vehicle_type/trailer_plate quando o
+    // identity tuple bate. Aceita lead com placa pendente (a validação
+    // detachada roda em background).
+    //
+    // Falha de rede / 4xx → fallback: persistir só no localStorage e abrir
+    // o wizard mesmo assim (melhor que descarte silencioso).
+    const payload: PublicLoadLeadPayload = {
+      cpf,
+      phone: form.phone,
+      horsePlate: form.horsePlate,
+      trailerPlate: form.trailerPlate,
+      trailerPlate2: form.trailerPlate2,
+      vehicleType: form.vehicleType,
+    };
+
+    try {
+      const persistResult = await createPublicLoadLeadPreRegistration(
+        normalizedCargoId,
+        payload,
+      );
+      persistStoredLeadState({
+        loadId: normalizedCargoId,
+        leadId: persistResult.lead.id,
+        stage: persistResult.lead.status === "PRE_REGISTERED" ? "PRE_REGISTERED" : "QUEUED",
+        form: payload,
+        whatsappUrl: null,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (persistError) {
+      // Não bloqueia o fluxo — o motorista ainda completa o wizard, e o
+      // backend re-valida no submit final. O localStorage guarda a placa
+      // nova para o usuário não perder o trabalho ao reabrir o painel.
+      console.warn(
+        "[DriverCargoDetails] persist-before-wizard failed; opening wizard mesmo assim",
+        persistError,
+      );
+      try {
+        persistStoredLeadState({
+          loadId: normalizedCargoId,
+          // sem lead.id servidor — usamos sentinel local para a UI saber que
+          // ainda não está confirmado.
+          leadId: `local-pending-${cpf}`,
+          stage: "PRE_REGISTERED",
+          form: payload,
+          whatsappUrl: null,
+          updatedAt: new Date().toISOString(),
+        });
+      } catch (storageError) {
+        console.warn(
+          "[DriverCargoDetails] localStorage persist also failed",
+          storageError,
+        );
+      }
+    }
+
+    // Pendências detectadas — fecha o claim panel e abre o wizard com os dados digitados.
+    setIsClaimDialogOpen(false);
+    setRegistrationContext({
+      cargaId: normalizedCargoId,
+      cpf,
+      horsePlate: form.horsePlate,
+      trailerPlates: trailerPlatesArray,
+      preCheckResponse: response as import("@/api/candidaturaApi").PreCheckResponse,
+    });
+    setRegistrationWizardOpen(true);
+    return "abort";
+  };
 
   // Registra acesso ao portal para o "Pico de acesso" do painel do operador.
   // Os motoristas chegam direto nesta rota pelo link compartilhado no WhatsApp
@@ -556,7 +711,7 @@ const DriverCargoDetails = () => {
                 <Button
                   type="button"
                   variant="cta"
-                  onClick={() => setIsClaimDialogOpen(true)}
+                  onClick={openCandidaturaFlow}
                   className="group h-11 rounded-full px-4"
                 >
                   <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/20 transition-colors group-hover:bg-white/28">
@@ -837,7 +992,7 @@ const DriverCargoDetails = () => {
         <Button
           type="button"
           variant="cta"
-          onClick={() => setIsClaimDialogOpen(true)}
+          onClick={openCandidaturaFlow}
           className="pointer-events-auto group h-14 w-full rounded-full px-6 text-sm sm:min-w-[220px] sm:w-auto"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/20 transition-colors group-hover:bg-white/28">
@@ -862,11 +1017,37 @@ const DriverCargoDetails = () => {
             <DriverClaimPanel
               loadId={cargo.id}
               panelId={`driver-claim-dialog-${cargo.id}`}
+              mode={isDriverAuthenticated ? "authenticated-claim" : "public-form"}
+              onPreSubmitInterceptor={handlePreSubmitInterceptor}
+              onCompleteRegistration={({ preCheckResponse, cpf, horsePlate, trailerPlates }) => {
+                if (!normalizedCargoId) return;
+                setIsClaimDialogOpen(false);
+                setRegistrationContext({
+                  cargaId: normalizedCargoId,
+                  cpf,
+                  horsePlate,
+                  trailerPlates,
+                  preCheckResponse,
+                });
+                setRegistrationWizardOpen(true);
+              }}
               className="admin-card-surface-deep rounded-[28px] border shadow-[0_32px_64px_-38px_hsl(223_56%_10%/0.38)] sm:rounded-[32px]"
             />
           </DialogContent>
         ) : null}
       </Dialog>
+
+      <DriverRegistrationWizard
+        open={registrationWizardOpen}
+        onOpenChange={setRegistrationWizardOpen}
+        cargaId={registrationContext?.cargaId}
+        cargaContext={{ origem: cargo.origem, destino: cargo.destino }}
+        cpf={registrationContext?.cpf}
+        horsePlate={registrationContext?.horsePlate}
+        trailerPlates={registrationContext?.trailerPlates}
+        initialPreCheckResponse={registrationContext?.preCheckResponse}
+        onPreCheckPassed={handleExistingClaimFlow}
+      />
     </div>
   );
 };

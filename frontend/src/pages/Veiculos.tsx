@@ -18,6 +18,7 @@ import {
 import { revalidateOperatorVehiclesAngellira } from "@/services/operatorAdmin";
 
 import AdminPagination from "@/components/AdminPagination";
+import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 import DashboardHeader from "@/components/DashboardHeader";
 import {
   Dialog,
@@ -147,6 +148,7 @@ function renderVehicleVigencyBadge(vehicle: OperatorVehicleListItem) {
 
 const Veiculos = () => {
   const queryClient = useQueryClient();
+  const permissions = useOperatorPermissions();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("todos");
   const [plateRoleFilter, setPlateRoleFilter] = useState("todos");
@@ -244,18 +246,20 @@ const Veiculos = () => {
               <p className="mt-3 max-w-3xl text-sm text-muted-foreground">
                 Veículos cadastrados automaticamente quando motoristas enviam placas durante o processo de candidatura. Os dados de vigência são verificados pelo Angellira.
               </p>
-              <div className="mt-4">
-                <button
-                  type="button"
-                  onClick={() => void handleRevalidateVehicles()}
-                  disabled={revalidating}
-                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-[0_10px_22px_-14px_rgba(2,36,131,0.55)] transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-                  title="Consulta Angellira para todos os veículos e atualiza o banco de dados"
-                >
-                  {revalidating ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgeCheck className="h-4 w-4" />}
-                  <span className="whitespace-nowrap">{revalidating ? "Consultando Angellira..." : "Revalidar Angellira em massa"}</span>
-                </button>
-              </div>
+              {permissions.canBulkRevalidateVehicles ? (
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    onClick={() => void handleRevalidateVehicles()}
+                    disabled={revalidating}
+                    className="inline-flex items-center justify-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-[0_10px_22px_-14px_rgba(2,36,131,0.55)] transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                    title="Consulta Angellira para todos os veículos e atualiza o banco de dados"
+                  >
+                    {revalidating ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgeCheck className="h-4 w-4" />}
+                    <span className="whitespace-nowrap">{revalidating ? "Consultando Angellira..." : "Revalidar Angellira em massa"}</span>
+                  </button>
+                </div>
+              ) : null}
             </div>
 
             <div className="grid gap-3 sm:grid-cols-4">

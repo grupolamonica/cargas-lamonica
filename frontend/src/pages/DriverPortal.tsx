@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { format, parseISO } from "date-fns";
 import {
   BellRing,
@@ -36,6 +36,21 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { DriverClaimWorkflow } from "@/components/driver/DriverClaimWorkflow";
+import { DriverRegistrationWizard } from "@/components/driver/cadastro-v2/DriverRegistrationWizard";
+import type { PreSubmitInterceptor } from "@/components/driver/DriverClaimPanel";
+import {
+  requestCandidaturaPreCheck,
+  useIncompleteCadastroDrafts,
+  type IncompleteCadastroDraft,
+  type PreCheckResponse,
+} from "@/api/candidaturaApi";
+import { useDriverAuth } from "@/hooks/useDriverAuth";
+import { persistStoredLeadState, readStoredLeadState } from "@/lib/driverLeadStorage";
+import {
+  createPublicLoadLeadPreRegistration,
+  type PublicLoadLeadPayload,
+} from "@/services/loadClaims";
+import { useToast } from "@/components/ui/use-toast";
 import { DriverLoadsList } from "@/components/driver/DriverLoadsList";
 import {
   useDriverLoads,
@@ -50,6 +65,8 @@ import {
 import { useLeadNotifications } from "@/hooks/useLeadNotifications";
 import { useDriverGeolocation } from "@/hooks/useDriverGeolocation";
 import { getOriginCoords, haversineKm } from "@/lib/cityCoordinates";
+import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
+import { DriverAlert } from "@/components/driver/ui/DriverAlert";
 import lamonicaLogo from "@/assets/lamonica-logo-white.png";
 import { SponsoredCarousel } from "@/components/SponsoredCarousel";
 
@@ -174,6 +191,15 @@ const DriverPortal = () => {
   } = useDriverLoads();
 
   const { notifications, notificationCount, handleDismissNotification } = useLeadNotifications();
+  // Iter #7: lista de drafts incompletos do motorista (1 card por draft).
+  const incompleteDraftsQuery = useIncompleteCadastroDrafts();
+  const incompleteDrafts = incompleteDraftsQuery.data?.drafts ?? [];
+  const [draftLoadingId, setDraftLoadingId] = useState<string | null>(null);
+  // Badge count agregado: notifications + drafts incompletos.
+  const totalNotificationCount = notificationCount + incompleteDrafts.length;
+  const { toast } = useToast();
+  const driverAuth = useDriverAuth();
+  const isDriverAuthenticated = Boolean(driverAuth.session?.access_token);
 
   const [isMobileFilterDrawerOpen, setIsMobileFilterDrawerOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
@@ -181,11 +207,320 @@ const DriverPortal = () => {
   const [isLoadInterestDialogOpen, setIsLoadInterestDialogOpen] = useState(false);
   const [showStickyBar, setShowStickyBar] = useState(false);
 
+  // Wizard de cadastro v2 (CADASTRO-01/02). Abertura via:
+  //   (a) interceptor em DriverCargoDetails (fluxo original de candidatura)
+  //   (b) botão "Completar/Atualizar cadastro" nas notificações (novo fluxo de renovação)
+  const [registrationWizardOpen, setRegistrationWizardOpen] = useState(false);
+  const [registrationContext, setRegistrationContext] = useState<{
+    cargaId: string;
+    cpf: string;
+    horsePlate: string;
+    trailerPlates: string[];
+    preCheckResponse: PreCheckResponse;
+    // Snapshot do nome amigavel da carga (origem/destino/routeLabel) capturado
+    // no momento da abertura do wizard. Necessario porque o `cargas` listing
+    // pode refresh durante o cadastro (carga vira BOOKED → some da lista) —
+    // sem snapshot, summary cai pro UUID cru no retry/refresh.
+    cargaSummary?: { origem?: string; destino?: string; routeLabel?: string };
+  } | null>(null);
+  /** loadId com pre-check em progresso — controla spinner no botão da notificação. */
+  const [registrationLoadingId, setRegistrationLoadingId] = useState<string | null>(null);
+
+  // PERF-02: handlers estáveis para hotspots — evita re-render em cascata
+  // quando setShowStickyBar/scroll dispara render do root.
+  const openNotifications = useCallback(() => setIsNotificationsOpen(true), []);
+  const openFaq = useCallback(() => setIsFaqOpen(true), []);
+  const clearOrigemFilter = useCallback(() => setOrigemFilter(""), [setOrigemFilter]);
+  const clearDestinoFilter = useCallback(() => setDestinoFilter(""), [setDestinoFilter]);
+  const clearPerfilFilter = useCallback(() => setPerfilFilter(""), [setPerfilFilter]);
+
+  const handleExistingClaimFlow = (ctx: {
+    cargaId: string;
+    horsePlate: string;
+    trailerPlates: string[];
+  }) => {
+    // Hand-off para o fluxo de candidatura existente. Hoje os cards levam o usuario
+    // ate /cargo/:id (DriverCargoDetails) onde o DriverClaimPanel abre — basta
+    // garantir que a navegacao ja existente continue valida.
+    void ctx;
+  };
+
+  /**
+   * Phase 8 — Fix entry-point "Candidatar-se" quebrado.
+   *
+   * Factory que devolve um interceptor com o loadId do card capturado.
+   * Espelha o `handlePreSubmitInterceptor` do DriverCargoDetails para que o
+   * fluxo de candidatura iniciado direto da tela principal (card → "Candidatar-se")
+   * também rode o pre-check v2 e abra o wizard quando houver pendências.
+   *
+   * Decisão (sem mudar o submit v1):
+   *  - CPF inválido / vazio       → 'continue' (não bloqueia)
+   *  - pre-check pendências=0     → 'continue' (submit v1 normal)
+   *  - pre-check pendências>0     → 'abort' + abre wizard v2 já pré-populado
+   *  - falha de rede no pre-check → 'continue' (backend re-valida no submit final)
+   */
+  const buildPreSubmitInterceptor = useCallback(
+    (loadId: string): PreSubmitInterceptor => async (form) => {
+      const cpf = form.cpf?.replace(/\D/g, "") || "";
+      if (cpf.length !== 11) {
+        return "continue";
+      }
+
+      const trailerPlatesArray = [form.trailerPlate, form.trailerPlate2]
+        .map((plate) => plate?.trim() || "")
+        .filter((plate) => plate.length > 0);
+
+      let response: PreCheckResponse;
+      try {
+        response = await requestCandidaturaPreCheck({
+          cpf,
+          horsePlate: form.horsePlate,
+          trailerPlates: trailerPlatesArray,
+        });
+      } catch (preCheckError) {
+        console.warn("[DriverPortal] pre-check failed; continuing v1 submit", preCheckError);
+        return "continue";
+      }
+
+      if (!Array.isArray(response.pendencias) || response.pendencias.length === 0) {
+        return "continue";
+      }
+
+      // BUG FIX (15/05/2026) — replicar persist-before-wizard do
+      // DriverCargoDetails.handlePreSubmitInterceptor (Task 08-18 / Bug A S2).
+      //
+      // Wave 1 fix 08-19 (commit 7c097fa) plumbou o canal card→wizard mas
+      // omitiu este passo: lead precisa ser PERSISTIDO no DB (status QUEUED)
+      // ANTES de abrir o wizard. Sem isso, motorista que clica "Agora não"
+      // descarta a candidatura inteira — operator dashboard nunca vê.
+      //
+      // O endpoint /pre-registration funciona como UPSERT idempotente (insere
+      // se não existe, reutiliza se identity tuple bate). Status inicial
+      // QUEUED (via insertPreRegisteredLead). Falha de rede/4xx cai para
+      // fallback localStorage para não bloquear motorista.
+      const payload: PublicLoadLeadPayload = {
+        cpf,
+        phone: form.phone,
+        horsePlate: form.horsePlate,
+        trailerPlate: form.trailerPlate,
+        trailerPlate2: form.trailerPlate2,
+        vehicleType: form.vehicleType,
+      };
+
+      try {
+        const persistResult = await createPublicLoadLeadPreRegistration(
+          loadId,
+          payload,
+        );
+        persistStoredLeadState({
+          loadId,
+          leadId: persistResult.lead.id,
+          stage:
+            persistResult.lead.status === "PRE_REGISTERED"
+              ? "PRE_REGISTERED"
+              : "QUEUED",
+          form: payload,
+          whatsappUrl: null,
+          updatedAt: new Date().toISOString(),
+        });
+      } catch (persistError) {
+        console.warn(
+          "[DriverPortal] persist-before-wizard failed; opening wizard mesmo assim",
+          persistError,
+        );
+        try {
+          persistStoredLeadState({
+            loadId,
+            leadId: `local-pending-${cpf}`,
+            stage: "PRE_REGISTERED",
+            form: payload,
+            whatsappUrl: null,
+            updatedAt: new Date().toISOString(),
+          });
+        } catch (storageError) {
+          console.warn(
+            "[DriverPortal] localStorage persist also failed",
+            storageError,
+          );
+        }
+      }
+
+      // Pendências detectadas — interceptor toma controle e abre o wizard.
+      const cargaSnap = cargas.find((c) => c.id === loadId);
+      setRegistrationContext({
+        cargaId: loadId,
+        cpf,
+        horsePlate: form.horsePlate,
+        trailerPlates: trailerPlatesArray,
+        preCheckResponse: response,
+        cargaSummary: cargaSnap
+          ? { origem: cargaSnap.origem, destino: cargaSnap.destino, routeLabel: cargaSnap.routeLabel }
+          : undefined,
+      });
+      setRegistrationWizardOpen(true);
+      return "abort";
+    },
+    [cargas],
+  );
+
+  /**
+   * Disparado quando o motorista clica em "Completar/Atualizar cadastro"
+   * na view de candidatura salva do DriverClaimPanel (embed do card). Aqui o
+   * pre-check já foi feito pelo painel — só passamos o contexto adiante.
+   */
+  const handleCompleteRegistrationFromCard = useCallback(
+    (params: {
+      preCheckResponse: PreCheckResponse;
+      cpf: string;
+      horsePlate: string;
+      trailerPlates: string[];
+      loadId: string;
+    }) => {
+      const cargaSnap = cargas.find((c) => c.id === params.loadId);
+      setRegistrationContext({
+        cargaId: params.loadId,
+        cpf: params.cpf,
+        horsePlate: params.horsePlate,
+        trailerPlates: params.trailerPlates,
+        preCheckResponse: params.preCheckResponse,
+        cargaSummary: cargaSnap
+          ? { origem: cargaSnap.origem, destino: cargaSnap.destino, routeLabel: cargaSnap.routeLabel }
+          : undefined,
+      });
+      setRegistrationWizardOpen(true);
+    },
+    [cargas],
+  );
+
+  /**
+   * Abre o wizard de cadastro a partir da central de notificações.
+   * Roda pre-check com os dados salvos da candidatura para identificar
+   * apenas os steps com pendências (cadastro incompleto ou vigência vencendo).
+   */
+  const handleCompleteRegistrationFromNotification = async (loadId: string) => {
+    const stored = readStoredLeadState(loadId);
+    if (!stored) {
+      toast({
+        title: "Dados não encontrados",
+        description: "Reabra a carga e tente candidatar-se novamente.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const { cpf, horsePlate, trailerPlate, trailerPlate2 } = stored.form;
+    const trailerPlates = [trailerPlate, trailerPlate2].filter(Boolean);
+
+    setRegistrationLoadingId(loadId);
+    setIsNotificationsOpen(false);
+
+    try {
+      const response = await requestCandidaturaPreCheck({ cpf, horsePlate, trailerPlates });
+
+      if (response.pendencias.length === 0) {
+        // Sem pendências — verificar se há documentos próximos do vencimento
+        const expiring = response.completos.filter((c) => c.daysUntilExpiry <= 30);
+        if (expiring.length === 0) {
+          toast({
+            title: "Cadastro em dia ✓",
+            description: "Todos os seus documentos estão válidos e atualizados.",
+          });
+        } else {
+          toast({
+            title: "Documentos próximos do vencimento",
+            description: `${expiring.length} documento(s) vence(m) em menos de 30 dias. Renove em breve.`,
+          });
+        }
+        return;
+      }
+
+      // Há pendências — abre o wizard mostrando apenas os steps necessários
+      const cargaSnap = cargas.find((c) => c.id === loadId);
+      setRegistrationContext({
+        cargaId: loadId,
+        cpf,
+        horsePlate,
+        trailerPlates,
+        preCheckResponse: response,
+        cargaSummary: cargaSnap
+          ? { origem: cargaSnap.origem, destino: cargaSnap.destino, routeLabel: cargaSnap.routeLabel }
+          : undefined,
+      });
+      setRegistrationWizardOpen(true);
+    } catch {
+      toast({
+        title: "Erro ao verificar cadastro",
+        description: "Não foi possível checar o status. Tente novamente.",
+        variant: "destructive",
+      });
+      setIsNotificationsOpen(true); // reabre o painel se falhar
+    } finally {
+      setRegistrationLoadingId(null);
+    }
+  };
+
+  /**
+   * Iter #7 — Abre o wizard a partir de um draft incompleto. Reusa o snapshot
+   * salvo em driverLeadStorage (cpf + placas) — se nao existir, usa apenas o
+   * cargaId + cpf da sessao do motorista (sem placas, wizard reabre na Tela 0).
+   */
+  const handleContinueDraft = async (draft: IncompleteCadastroDraft) => {
+    setDraftLoadingId(draft.cargaId);
+    setIsNotificationsOpen(false);
+
+    try {
+      const stored = readStoredLeadState(draft.cargaId);
+      if (stored) {
+        const { cpf, horsePlate, trailerPlate, trailerPlate2 } = stored.form;
+        const trailerPlates = [trailerPlate, trailerPlate2].filter(Boolean);
+        const response = await requestCandidaturaPreCheck({ cpf, horsePlate, trailerPlates });
+        const cargaSnap = cargas.find((c) => c.id === draft.cargaId);
+        setRegistrationContext({
+          cargaId: draft.cargaId,
+          cpf,
+          horsePlate,
+          trailerPlates,
+          preCheckResponse: response,
+          cargaSummary: cargaSnap
+            ? { origem: cargaSnap.origem, destino: cargaSnap.destino, routeLabel: cargaSnap.routeLabel }
+            : undefined,
+        });
+        setRegistrationWizardOpen(true);
+      } else {
+        // Sem snapshot local — direciona pra pagina da carga, motorista clica
+        // candidatar e o wizard reabre com o draft existente do server.
+        toast({
+          title: "Reabra a carga para continuar",
+          description: "Toque em Candidatar-se na pagina da carga para retomar o cadastro.",
+        });
+      }
+    } catch {
+      toast({
+        title: "Nao foi possivel retomar o cadastro",
+        description: "Tente novamente em alguns instantes.",
+        variant: "destructive",
+      });
+      setIsNotificationsOpen(true);
+    } finally {
+      setDraftLoadingId(null);
+    }
+  };
+
   const showStickyBarRef = useRef(false);
   const scrollFrameRef = useRef<number | null>(null);
   const desktopFiltersRef = useRef<HTMLDivElement | null>(null);
   const mobileFiltersRef = useRef<HTMLDivElement | null>(null);
   const resultsSectionRef = useRef<HTMLDivElement | null>(null);
+
+  // PERF-02: pagination handlers estáveis (referenciam resultsSectionRef declarado acima).
+  const handlePrevPage = useCallback(
+    () => handlePageChange(page - 1, resultsSectionRef),
+    [handlePageChange, page],
+  );
+  const handleNextPage = useCallback(
+    () => handlePageChange(page + 1, resultsSectionRef),
+    [handlePageChange, page],
+  );
 
   const cadastroHref = buildDriverSupportWhatsAppUrl(DRIVER_CADASTRO_MESSAGE);
   const supportHref = buildDriverSupportWhatsAppUrl(DRIVER_SAC_MESSAGE);
@@ -304,7 +639,7 @@ const DriverPortal = () => {
             type="button"
             variant="outline"
             className="rounded-full"
-            onClick={() => handlePageChange(page - 1, resultsSectionRef)}
+            onClick={handlePrevPage}
             disabled={page <= 1 || isFetching}
           >
             Anterior
@@ -312,7 +647,7 @@ const DriverPortal = () => {
           <Button
             type="button"
             className="rounded-full"
-            onClick={() => handlePageChange(page + 1, resultsSectionRef)}
+            onClick={handleNextPage}
             disabled={page >= totalPages || isFetching}
           >
             Próxima
@@ -324,10 +659,10 @@ const DriverPortal = () => {
   return (
     <div className="driver-theme relative min-h-screen bg-background lg:bg-white">
       <DriverPortalNavbar
-        notificationCount={notificationCount}
-        onNotificationsOpen={() => setIsNotificationsOpen(true)}
+        notificationCount={totalNotificationCount}
+        onNotificationsOpen={openNotifications}
         cadastroHref={cadastroHref}
-        onFaqOpen={() => setIsFaqOpen(true)}
+        onFaqOpen={openFaq}
         supportHref={supportHref}
       />
       <div className="relative overflow-hidden">
@@ -384,7 +719,7 @@ const DriverPortal = () => {
               </a>
               <button
                 type="button"
-                onClick={() => setIsFaqOpen(true)}
+                onClick={openFaq}
                 className="inline-flex items-center justify-center rounded-[18px] border border-white/18 bg-white/[0.12] px-3 py-3 text-center text-[11px] font-semibold uppercase tracking-[0.14em] text-white shadow-[0_18px_34px_-24px_rgba(3,14,42,0.62)] backdrop-blur-md transition-all duration-200 hover:bg-white/[0.18]"
               >
                 Dúvidas
@@ -462,8 +797,8 @@ const DriverPortal = () => {
               ) : null}
 
               <NotificationTriggerButton
-                count={notificationCount}
-                onClick={() => setIsNotificationsOpen(true)}
+                count={totalNotificationCount}
+                onClick={openNotifications}
                 showLabel={false}
                 className="h-11 min-w-[58px] shrink-0 rounded-xl px-2.5"
               />
@@ -475,6 +810,7 @@ const DriverPortal = () => {
             <button
               type="button"
               onClick={handleTodayQuickFilter}
+              aria-pressed={isTodayQuickFilter}
               className={cn(
                 "inline-flex h-9 items-center rounded-full border px-3 text-xs font-bold transition-colors",
                 isTodayQuickFilter
@@ -487,6 +823,7 @@ const DriverPortal = () => {
             <button
               type="button"
               onClick={handleTomorrowQuickFilter}
+              aria-pressed={isTomorrowQuickFilter}
               className={cn(
                 "inline-flex h-9 items-center rounded-full border px-3 text-xs font-bold transition-colors",
                 isTomorrowQuickFilter
@@ -499,6 +836,7 @@ const DriverPortal = () => {
             <button
               type="button"
               onClick={clearAllFilters}
+              aria-label="Limpar filtros"
               className={cn(
                 "inline-flex h-9 items-center rounded-full border px-3 text-xs font-bold transition-colors",
                 activeFilterCount > 0
@@ -540,7 +878,7 @@ const DriverPortal = () => {
                 </select>
                 <button
                   type="button"
-                  onClick={() => setOrigemFilter("")}
+                  onClick={clearOrigemFilter}
                   className="mt-3 text-sm font-semibold text-primary"
                 >
                   Limpar origem
@@ -575,7 +913,7 @@ const DriverPortal = () => {
                 </select>
                 <button
                   type="button"
-                  onClick={() => setDestinoFilter("")}
+                  onClick={clearDestinoFilter}
                   className="mt-3 text-sm font-semibold text-primary"
                 >
                   Limpar destino
@@ -587,7 +925,7 @@ const DriverPortal = () => {
               <PopoverTrigger asChild>
                 <FilterChip
                   label="Veículo"
-                  value={perfilFilter || "Todos"}
+                  value={perfilFilter ? formatVehicleProfileLabel(perfilFilter) : "Todos"}
                   active={Boolean(perfilFilter)}
                   icon={<Truck className="h-3.5 w-3.5" />}
                 />
@@ -603,14 +941,14 @@ const DriverPortal = () => {
                 >
                   <option value="">Todos os perfis</option>
                   {perfis.map((perfil) => (
-                    <option key={perfil} value={perfil}>
-                      {perfil}
+                    <option key={perfil.value} value={perfil.value}>
+                      {perfil.label}
                     </option>
                   ))}
                 </select>
                 <button
                   type="button"
-                  onClick={() => setPerfilFilter("")}
+                  onClick={clearPerfilFilter}
                   className="mt-3 text-sm font-semibold text-primary"
                 >
                   Limpar veículo
@@ -694,6 +1032,43 @@ const DriverPortal = () => {
           notifications={notifications}
           notificationCount={notificationCount}
           onDismissNotification={handleDismissNotification}
+          onCompleteRegistration={(loadId) => {
+            void handleCompleteRegistrationFromNotification(loadId);
+          }}
+          registrationLoadingId={registrationLoadingId}
+          incompleteDrafts={incompleteDrafts}
+          onContinueDraft={(draft) => {
+            void handleContinueDraft(draft);
+          }}
+          draftLoadingId={draftLoadingId}
+        />
+
+        <DriverRegistrationWizard
+          open={registrationWizardOpen}
+          onOpenChange={setRegistrationWizardOpen}
+          cargaId={registrationContext?.cargaId}
+          cargaContext={(() => {
+            const id = registrationContext?.cargaId;
+            if (!id) return undefined;
+            // Prefere snapshot capturado na abertura (sobrevive a refresh do
+            // listing). Fallback ao lookup live caso snapshot ausente.
+            const snap = registrationContext?.cargaSummary;
+            if (snap && (snap.origem || snap.destino || snap.routeLabel)) {
+              return { origem: snap.origem, destino: snap.destino, routeLabel: snap.routeLabel };
+            }
+            const match = cargas.find((c) => c.id === id);
+            if (!match) return undefined;
+            return {
+              origem: match.origem,
+              destino: match.destino,
+              routeLabel: match.routeLabel,
+            };
+          })()}
+          cpf={registrationContext?.cpf}
+          horsePlate={registrationContext?.horsePlate}
+          trailerPlates={registrationContext?.trailerPlates}
+          initialPreCheckResponse={registrationContext?.preCheckResponse}
+          onPreCheckPassed={handleExistingClaimFlow}
         />
 
         <Dialog open={isFaqOpen} onOpenChange={setIsFaqOpen}>
@@ -796,8 +1171,8 @@ const DriverPortal = () => {
                   >
                     <option value="">Todos os perfis</option>
                     {perfis.map((perfil) => (
-                      <option key={`perfil-drawer-${perfil}`} value={perfil}>
-                        {perfil}
+                      <option key={`perfil-drawer-${perfil.value}`} value={perfil.value}>
+                        {perfil.label}
                       </option>
                     ))}
                   </select>
@@ -953,7 +1328,7 @@ const DriverPortal = () => {
                   </select>
                   <button
                     type="button"
-                    onClick={() => setOrigemFilter("")}
+                    onClick={clearOrigemFilter}
                     className="mt-3 text-sm font-semibold text-primary"
                   >
                     Limpar origem
@@ -995,7 +1370,7 @@ const DriverPortal = () => {
                   </select>
                   <button
                     type="button"
-                    onClick={() => setDestinoFilter("")}
+                    onClick={clearDestinoFilter}
                     className="mt-3 text-sm font-semibold text-primary"
                   >
                     Limpar destino
@@ -1015,7 +1390,7 @@ const DriverPortal = () => {
                     <span className="min-w-0 flex-1">
                       <span className="block text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground/80">Veículo</span>
                       <span className="mt-0.5 block truncate text-[15px] font-bold text-foreground">
-                        {perfilFilter || "Todos os perfis"}
+                        {perfilFilter ? formatVehicleProfileLabel(perfilFilter) : "Todos os perfis"}
                       </span>
                     </span>
                     <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-hover:text-primary/60" />
@@ -1030,14 +1405,14 @@ const DriverPortal = () => {
                   >
                     <option value="">Todos os perfis</option>
                     {perfis.map((perfil) => (
-                      <option key={`desktop-popover-perfil-${perfil}`} value={perfil}>
-                        {perfil}
+                      <option key={`desktop-popover-perfil-${perfil.value}`} value={perfil.value}>
+                        {perfil.label}
                       </option>
                     ))}
                   </select>
                   <button
                     type="button"
-                    onClick={() => setPerfilFilter("")}
+                    onClick={clearPerfilFilter}
                     className="mt-3 text-sm font-semibold text-primary"
                   >
                     Limpar veículo
@@ -1113,6 +1488,9 @@ const DriverPortal = () => {
             hasActiveFilters={hasActiveFilters}
             onClearFilters={clearAllFilters}
             onInterestDialogOpenChange={setIsLoadInterestDialogOpen}
+            driverClaimMode={isDriverAuthenticated ? "authenticated-claim" : "public-form"}
+            buildDriverClaimPreSubmit={buildPreSubmitInterceptor}
+            onDriverClaimCompleteRegistration={handleCompleteRegistrationFromCard}
           />
           {paginationControls}
         </div>
@@ -1129,6 +1507,19 @@ const DriverPortal = () => {
                 loading={locationLoading}
                 denied={locationDenied}
                 unavailable={locationUnavailable}
+              />
+            </div>
+          ) : null}
+          {/* D-01: fallback quando geolocalização OK mas nenhuma carga próxima foi computada
+              (origem fora do whitelist hardcoded em cityCoordinates.ts). Aponta a lista completa abaixo.
+              TODO: substituir cityCoordinates hardcoded por Geoapify geocoding (refactor futuro). */}
+          {!locationLoading && !locationDenied && !locationUnavailable && driverLocation
+            && nearbyItems.length === 0 && cargas.length > 0 ? (
+            <div className="mb-6">
+              <DriverAlert
+                variant="info"
+                title="Não calculamos cargas próximas"
+                description="Não conseguimos estimar a distância da sua localização até as cargas. Olha a lista completa abaixo."
               />
             </div>
           ) : null}
@@ -1152,6 +1543,9 @@ const DriverPortal = () => {
             hasActiveFilters={hasActiveFilters}
             onClearFilters={clearAllFilters}
             onInterestDialogOpenChange={setIsLoadInterestDialogOpen}
+            driverClaimMode={isDriverAuthenticated ? "authenticated-claim" : "public-form"}
+            buildDriverClaimPreSubmit={buildPreSubmitInterceptor}
+            onDriverClaimCompleteRegistration={handleCompleteRegistrationFromCard}
           />
           {paginationControls}
         </div>
@@ -1223,8 +1617,8 @@ const DriverPortal = () => {
             </Button>
 
             <NotificationTriggerButton
-              count={notificationCount}
-              onClick={() => setIsNotificationsOpen(true)}
+              count={totalNotificationCount}
+              onClick={openNotifications}
               showLabel={false}
               className="h-12 min-w-[60px] shrink-0 rounded-xl px-2.5"
             />

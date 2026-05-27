@@ -28,7 +28,6 @@ const OperatorDashboard = lazy(() => import("./pages/OperatorDashboard"));
 const Veiculos = lazy(() => import("./pages/Veiculos"));
 const SheetMonitor = lazy(() => import("./pages/SheetMonitor"));
 const OperatorAuditLogs = lazy(() => import("./pages/OperatorAuditLogs"));
-const CadastroDocumentos = lazy(() => import("./pages/cadastro/CadastroDocumentos"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const RouteFallback = () => (
@@ -80,8 +79,9 @@ const App = () => {
                 <Route path="/motorista/cargas/:cargoId" element={<DriverCargoDetails />} />
                 <Route path="/motorista/cliente/:clienteId" element={<DriverClientDetails />} />
                 <Route path="/cargas/:cargoId" element={<DriverCargoDetails />} />
-                {/* Driver registration (public, no auth) */}
-                <Route path="/cadastro" element={<CadastroDocumentos />} />
+                {/* 2026-05-27 — rota /cadastro (formulário público) removida:
+                    cadastro de motorista agora é feito apenas via candidatura
+                    no portal do motorista (/motorista → "Candidatar-se"). */}
                 {/* Admin Login */}
                 <Route path="/painel-x7k9m2" element={<AdminLogin />} />
                 {/* Default: / always redirects to /motorista */}

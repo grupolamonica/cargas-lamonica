@@ -16,3 +16,20 @@ export const finalizarCadastroSchema = z
       .passthrough(),
   })
   .strict();
+
+/**
+ * POST /api/cadastro/lookup-pis (260515-loi T2).
+ * Body driver-auth para consultar PIS no CNIS via Infosimples.
+ */
+export const lookupPisSchema = z
+  .object({
+    cpf: z
+      .string()
+      .transform((v) => String(v ?? "").replace(/\D/g, ""))
+      .pipe(z.string().length(11, "CPF deve ter 11 digitos")),
+    nome: z.string().trim().min(2, "Nome obrigatorio"),
+    dataNascimento: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "Data deve ser yyyy-mm-dd"),
+  })
+  .strict();

@@ -88,6 +88,19 @@ import {
 } from "./cargas-casadas/handlers.js";
 
 import { resolveFinalizarCadastroResponse } from "./cadastro/handlers.js";
+import { resolveLookupPisResponse } from "./cadastro/lookup-pis.handler.js";
+
+import {
+  resolveCandidaturaAnttPrecheckResponse,
+  resolveCandidaturaDraftGetResponse,
+  resolveCandidaturaDraftSaveResponse,
+  resolveCandidaturaPreCheckResponse,
+  resolveCandidaturaSubmitResponse,
+  resolveCandidaturaVerifyDocumentResponse,
+  resolveListIncompleteCadastrosResponse,
+} from "./candidatura/handlers.js";
+import { resolveUploadDraftFileResponse } from "./candidatura/upload-draft-file.handler.js";
+import { draftFileUpload } from "./upload-middleware.js";
 
 import { resolveRouteInfoResponse } from "./route-info.handler.js";
 import { resolveSheetSyncResponse } from "./sheet-sync.handler.js";
@@ -155,6 +168,57 @@ export function registerRoutes(app) {
 
   // Public cadastro (no auth)
   router.post("/api/public/cadastro/finalizar", wrap(resolveFinalizarCadastroResponse));
+
+  // Cadastro v2 — driver-authenticated wizard endpoints
+  router.post("/api/candidatura/pre-check", wrap(resolveCandidaturaPreCheckResponse));
+  router.post("/api/candidatura/draft", wrap(resolveCandidaturaDraftSaveResponse));
+  router.get("/api/candidatura/draft/me", wrap(resolveCandidaturaDraftGetResponse));
+  router.post("/api/candidatura/antt-precheck", wrap(resolveCandidaturaAnttPrecheckResponse));
+  router.post("/api/candidatura/submit", wrap(resolveCandidaturaSubmitResponse));
+  // Iter #7: list drafts incompletos do motorista (1 entrada por carga).
+  router.get("/api/driver/cadastros/incompletos", wrap(resolveListIncompleteCadastrosResponse));
+  // Cadastro v2 — lookup-pis (driver-auth, plan 260515-loi).
+  router.post("/api/cadastro/lookup-pis", wrap(resolveLookupPisResponse));
+  // Cadastro v2 — verify-document (PUBLICO, rate limit 5/min/IP).
+  router.post("/api/candidatura/verify-document", wrap(resolveCandidaturaVerifyDocumentResponse));
+
+  // Cadastro v2 — upload-draft-file (multipart). Persiste arquivos do wizard
+  // em Supabase Storage (bucket `cadastro-drafts`) antes do submit final.
+  router.post(
+    "/api/cadastro/upload-draft-file",
+    (req, res, next) => {
+      draftFileUpload.single("file")(req, res, (err) => {
+        if (!err) return next();
+        const correlationId = req.correlationId || null;
+        if (err?.code === "LIMIT_FILE_SIZE") {
+          return res.status(413).json({
+            error: "FILE_TOO_LARGE",
+            message: "Arquivo excede o limite de 8 MB.",
+            meta: { correlationId },
+          });
+        }
+        if (err?.code === "UNSUPPORTED_TYPE") {
+          return res.status(415).json({
+            error: "UNSUPPORTED_TYPE",
+            message:
+              "Tipo de arquivo nao suportado. Use JPEG, PNG, HEIC, HEIF ou PDF.",
+            meta: { correlationId },
+          });
+        }
+        console.warn("[upload-draft-file.multer]", {
+          correlationId,
+          code: err?.code,
+          message: err?.message,
+        });
+        return res.status(400).json({
+          error: "BadRequest",
+          message: "Falha ao processar upload multipart.",
+          meta: { correlationId },
+        });
+      });
+    },
+    wrap(resolveUploadDraftFileResponse),
+  );
 
   // Driver / public loads
   router.get("/api/driver/loads", wrap(resolveDriverLoadsReadModelResponse));

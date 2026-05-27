@@ -57,3 +57,41 @@ export function isValidPlate(raw: string | null | undefined): boolean {
   if (normalized.length !== 7) return false;
   return OLD_PLATE_PATTERN.test(normalized) || MERCOSUL_PLATE_PATTERN.test(normalized);
 }
+
+export function isValidCnpj(raw: string | null | undefined): boolean {
+  const digits = onlyDigits(raw);
+  if (digits.length !== 14) return false;
+  if (/^(\d)\1{13}$/.test(digits)) return false;
+
+  const calcDigit = (slice: string, weights: number[]) => {
+    let sum = 0;
+    for (let i = 0; i < weights.length; i += 1) {
+      sum += Number(slice[i]) * weights[i];
+    }
+    const remainder = sum % 11;
+    return remainder < 2 ? 0 : 11 - remainder;
+  };
+
+  const weights1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  const weights2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+
+  const dv1 = calcDigit(digits.slice(0, 12), weights1);
+  if (dv1 !== Number(digits[12])) return false;
+  const dv2 = calcDigit(digits.slice(0, 13), weights2);
+  return dv2 === Number(digits[13]);
+}
+
+export function isValidPis(raw: string | null | undefined): boolean {
+  const digits = onlyDigits(raw);
+  if (digits.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(digits)) return false;
+
+  const weights = [3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  let sum = 0;
+  for (let i = 0; i < 10; i += 1) {
+    sum += Number(digits[i]) * weights[i];
+  }
+  const remainder = sum % 11;
+  const expectedDv = remainder < 2 ? 0 : 11 - remainder;
+  return expectedDv === Number(digits[10]);
+}

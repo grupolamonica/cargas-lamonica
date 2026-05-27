@@ -67,6 +67,7 @@ TIPO_PARA_CATEGORIA = {
     "foto_motorista": "motorista",               # foto 3x4 do portador (extraida da CNH)
     "rg_motorista": "motorista",
     "comprovante_motorista": "motorista",
+    "selfie_cnh_motorista": "motorista",         # selfie com CNH (anti-fraude Vision Fase 2)
     # Veiculo (cavalo + carreta)
     "crlv_cavalo": "veiculo",
     "crlv_carreta": "veiculo",
@@ -78,6 +79,8 @@ TIPO_PARA_CATEGORIA = {
     "comprovante_proprietario": "proprietario",
     "cartao_cnpj": "proprietario",
     "cartao_cnpj_carreta": "proprietario",
+    "rntrc_proprietario": "proprietario",        # comprovante ANTT do titular RNTRC (Fase 2)
+    "rntrc_proprietario_carreta": "proprietario",
 }
 TIPOS_VALIDOS = frozenset(TIPO_PARA_CATEGORIA.keys())
 

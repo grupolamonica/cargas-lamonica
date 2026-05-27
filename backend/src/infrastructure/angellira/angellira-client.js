@@ -18,6 +18,13 @@ let tokenCache = {
   expiresAt: 0,
 };
 
+// WK-02 / N-01: serializa aquisicao/refresh do token Angellira.
+// Sem isso, 2+ lookups concorrentes em cold-start (ou apos expiracao) fazem
+// 2+ logins em paralelo, podendo causar rate-limit no provedor e race em
+// tokenCache. Mantemos uma unica promise em voo — chamadas concorrentes
+// reusam o mesmo trabalho.
+let tokenAcquisitionInFlight = null;
+
 const resultCache = new Map();
 const inFlightRequests = new Map();
 const circuitState = {
@@ -267,6 +274,29 @@ async function requestAngelliraToken({ correlationId } = {}) {
     return tokenCache.token;
   }
 
+  // WK-02: serializa aquisicao. Se outra chamada ja esta logando, aguarda.
+  if (tokenAcquisitionInFlight) {
+    logStructuredEvent("info", "driver-validation.angellira.token.serialize", {
+      correlationId: correlationId || null,
+      reason: "join_in_flight",
+    });
+    return tokenAcquisitionInFlight;
+  }
+
+  tokenAcquisitionInFlight = _doRequestAngelliraToken({ correlationId }).finally(() => {
+    tokenAcquisitionInFlight = null;
+  });
+
+  return tokenAcquisitionInFlight;
+}
+
+async function _doRequestAngelliraToken({ correlationId } = {}) {
+  // Re-check cache em caso de race: outro caller pode ter populado o token
+  // entre a checagem inicial e a aquisicao do slot in-flight.
+  if (tokenCache.token && tokenCache.expiresAt > Date.now()) {
+    return tokenCache.token;
+  }
+
   const { username, password, companyId } = getAngelliraCredentials();
 
   // IMPORTANTE: O endpoint de login retorna 302 com cookies de sessao (koa.sess).
@@ -511,8 +541,17 @@ function mapAngelliraRecord(queryFor, queryValue, payload) {
   let vehicleDetails = null;
   for (const v of vehiclePrefixes) {
     if (trimOrNull(history[v.plateField]) || trimOrNull(history[v.brandField])) {
+      // Classificacao cavalo vs carreta deriva do PREFIXO onde os dados batem:
+      //   cab*  -> cavalo (truck/cavalo mecanico)
+      //   tow*  -> carreta (semi-reboque / reboque)
+      // Mais confiavel que parse do `firstMatch.type.description` porque o
+      // prefixo e estrutural na resposta do Angellira (nao depende de tradução).
+      const vehicleClassification = v.prefix === "cab" ? "cavalo" : "carreta";
       vehicleDetails = {
         type: trimOrNull(firstMatch.type?.description),
+        // Classificacao canonical usada pelo pre-check para detectar quando o
+        // motorista candidata uma carreta no slot do cavalo (ou vice-versa).
+        classification: vehicleClassification,
         plate: trimOrNull(history[v.plateField]),
         brand: trimOrNull(history[v.brandField]),
         model: trimOrNull(history[v.modelField]),
@@ -712,6 +751,7 @@ export function resetAngelliraClientStateForTests() {
     token: null,
     expiresAt: 0,
   };
+  tokenAcquisitionInFlight = null;
   resultCache.clear();
   inFlightRequests.clear();
   circuitState.failures = 0;

@@ -17,7 +17,7 @@ export interface ShareCardPreviewData {
   clientLogoUrl?: string | null;
 }
 
-// Hardcoded colors — NO CSS variables so html-to-image captures correctly
+// Hardcoded colors — NO CSS variables so canvas/image export captures correctly
 const C = {
   primary: "#0a37b3",
   accent: "#22c55e",

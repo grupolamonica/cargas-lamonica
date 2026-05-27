@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 
 import AdminPagination from "@/components/AdminPagination";
+import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 import { AspxSyncCard } from "@/components/AspxSyncCard";
 import DashboardHeader from "@/components/DashboardHeader";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
@@ -208,11 +209,223 @@ async function updateDriverProfile(driverId: string, payload: Record<string, unk
   return response.json();
 }
 
+// 2026-05-27 — Render recursivo da ficha do cadastro (painel do operador).
+// O render anterior pulava arrays (carretas, carreta_owners), filtrava objetos
+// aninhados (antt_titular, endereco, cnh, dados_bancarios) e cortava em 10
+// campos — então o operador não via o proprietário ANTT (cavalo/carreta), as
+// carretas, o banco nem os endereços. FichaNode percorre tudo recursivamente.
+const CADASTRO_DADOS_LABELS: Record<string, string> = {
+  motorista: "Motorista",
+  cavalo: "Cavalo",
+  cavalo_owner: "Dono do cavalo",
+  carretas: "Carretas",
+  carreta_owners: "Donos das carretas",
+  antt_titular: "Titular ANTT (RNTRC)",
+  endereco: "Endereço",
+  dados_bancarios: "Dados bancários",
+  banco: "Banco",
+  cnh: "CNH",
+  owner_reuse: "Reuso de proprietário",
+  telefones: "Telefones",
+  nome: "Nome",
+  doc: "CPF/CNPJ",
+  cpf: "CPF",
+  tipo: "Tipo",
+  placa: "Placa",
+  renavam: "RENAVAM",
+  chassi: "Chassi",
+  marca: "Marca / Modelo",
+  modelo: "Modelo",
+  ano: "Ano",
+  cor: "Cor",
+  eixos: "Eixos",
+  carroceria: "Carroceria",
+  owner_doc: "CPF/CNPJ proprietário",
+  owner_doc_type: "Tipo do doc",
+  owner_resolution: "Resolução",
+  rntrc: "RNTRC",
+  telefone: "Telefone",
+  telefone_primario: "Telefone",
+  cep: "CEP",
+  numero: "Número",
+  logradouro: "Logradouro",
+  bairro: "Bairro",
+  cidade: "Cidade",
+  uf: "UF",
+  banco_nome: "Banco",
+  banco_compe: "Cód. banco",
+  agencia: "Agência",
+  conta: "Conta",
+  isento_ie: "Isento de IE",
+  inscricao_estadual: "Inscrição estadual",
+  validade: "Validade",
+  categoria: "Categoria",
+  protocolo: "Protocolo",
+  pis: "PIS / PASEP",
+  estado_civil: "Estado civil",
+  cor_raca: "Cor / raça",
+  rg: "RG",
+  rg_orgao: "Órgão emissor",
+  rg_uf: "UF do RG",
+  nome_mae: "Nome da mãe",
+  nome_pai: "Nome do pai",
+  naturalidade: "Naturalidade",
+  data_nascimento: "Nascimento",
+  tag_pedagio: "Tag de pedágio",
+  pancary_autodeclaration: "Pancary",
+  uf_emplacamento: "UF emplacamento",
+  cidade_emplacamento: "Cidade emplacamento",
+  ano_fabricacao: "Ano de fabricação",
+  ultimo_licenciamento: "Últ. licenciamento",
+  cavalo_owner_is_driver: "Dono = motorista",
+  carreta_owners_reused: "Reuso por carreta",
+  // Arquivos (storage paths / urls) — exibidos como "arquivo enviado".
+  owner_doc_url: "Documento (arquivo)",
+  crlv_url: "CRLV (arquivo)",
+  selfie_cnh_url: "Selfie com CNH (arquivo)",
+  comprovante_url: "Comprovante (arquivo)",
+  comprovanteUrl: "Comprovante (arquivo)",
+  comprovante_storage_path: "Comprovante (arquivo)",
+  documento_storage_path: "Documento (arquivo)",
+  anttOwnerDocStoragePath: "Documento do titular (arquivo)",
+  anttOwnerComprovanteStoragePath: "Comprovante do titular (arquivo)",
+  rntrc_via: "Origem do RNTRC",
+  cpf_owner_manual: "Doc. preenchido manual",
+  ocr_fallback_manual: "OCR manual",
+  ocr_comprovante_fallback_manual: "Comprovante manual",
+};
+
+// Rótulo no singular para itens de array (ex.: "Dono da carreta 1").
+const CADASTRO_ITEM_LABELS: Record<string, string> = {
+  carretas: "Carreta",
+  carreta_owners: "Dono da carreta",
+  carreta_owners_reused: "Carreta",
+  telefones: "Telefone",
+};
+
+function humanizeFichaKey(key: string): string {
+  return (
+    CADASTRO_DADOS_LABELS[key] ??
+    key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+  );
+}
+
+function isFichaEmpty(value: unknown): boolean {
+  return (
+    value === null ||
+    value === undefined ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0)
+  );
+}
+
+function formatFichaScalar(key: string, value: unknown): string {
+  if (typeof value === "boolean") return value ? "Sim" : "Não";
+  const s = String(value);
+  if (/_url$|storage_path$|storagePath$/i.test(key) && s.length > 0) {
+    return "✓ arquivo enviado";
+  }
+  return s;
+}
+
+/** Render recursivo de qualquer nó do JSONB `dados` (escalar, objeto ou array). */
+function FichaNode({
+  nodeKey,
+  value,
+  depth,
+  bare = false,
+}: {
+  nodeKey: string;
+  value: unknown;
+  depth: number;
+  bare?: boolean;
+}) {
+  if (isFichaEmpty(value)) return null;
+
+  // Escalar → linha rótulo/valor.
+  if (typeof value !== "object" || value === null) {
+    const field = (
+      <>
+        <dt className="text-muted-foreground truncate">{humanizeFichaKey(nodeKey)}</dt>
+        <dd className="font-medium text-foreground break-words">
+          {formatFichaScalar(nodeKey, value)}
+        </dd>
+      </>
+    );
+    if (depth === 0) {
+      return (
+        <div className="rounded-xl border border-border/60 p-3">
+          <dl className="text-xs">{field}</dl>
+        </div>
+      );
+    }
+    return <div>{field}</div>;
+  }
+
+  const cardCls =
+    depth === 0
+      ? "rounded-xl border border-border/60 p-3"
+      : "rounded-lg border border-border/40 bg-muted/20 p-2.5 mt-2";
+  const titleCls = "text-xs font-semibold uppercase tracking-wide text-primary/60 mb-2";
+
+  // Array → card com cada item ("Singular N").
+  if (Array.isArray(value)) {
+    const items = value.filter((v) => !isFichaEmpty(v));
+    if (!items.length) return null;
+    const singular = CADASTRO_ITEM_LABELS[nodeKey] ?? humanizeFichaKey(nodeKey).replace(/s$/i, "");
+    return (
+      <div className={cardCls}>
+        <p className={titleCls}>{humanizeFichaKey(nodeKey)}</p>
+        <div className="space-y-2">
+          {items.map((item, i) => (
+            <div key={i} className="rounded-lg border border-border/40 bg-background/60 p-2">
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {singular} {i + 1}
+              </p>
+              <FichaNode nodeKey={nodeKey} value={item} depth={depth + 1} bare />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Objeto → grid de escalares + nós aninhados.
+  const entries = Object.entries(value as Record<string, unknown>).filter(
+    ([, v]) => !isFichaEmpty(v),
+  );
+  const scalars = entries.filter(([, v]) => typeof v !== "object" || v === null);
+  const nested = entries.filter(([, v]) => typeof v === "object" && v !== null);
+  const body = (
+    <>
+      {scalars.length > 0 ? (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+          {scalars.map(([k, v]) => (
+            <FichaNode key={k} nodeKey={k} value={v} depth={depth + 1} />
+          ))}
+        </dl>
+      ) : null}
+      {nested.map(([k, v]) => (
+        <FichaNode key={k} nodeKey={k} value={v} depth={depth + 1} />
+      ))}
+    </>
+  );
+  // bare = item de array (já tem cabeçalho "Singular N") → sem card/título extra.
+  if (bare) return body;
+  return (
+    <div className={cardCls}>
+      <p className={titleCls}>{humanizeFichaKey(nodeKey)}</p>
+      {body}
+    </div>
+  );
+}
+
 
 const PENDENTES_QUERY_KEY = ["operator", "cadastros-pendentes"] as const;
 
 const Motoristas = () => {
   const queryClient = useQueryClient();
+  const permissions = useOperatorPermissions();
   const [mainTab, setMainTab] = useState<"motoristas" | "pendentes">("motoristas");
   const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState("todos");
@@ -339,7 +552,7 @@ const Motoristas = () => {
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
 
-  const { data: pendentesData, isLoading: pendentesLoading, error: pendentesError } = useQuery({
+  const { data: pendentesData, isLoading: pendentesLoading, isFetching: pendentesFetching, error: pendentesError } = useQuery({
     queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, pendentesPage],
     queryFn: () =>
       fetchCadastrosPendentes({
@@ -357,6 +570,7 @@ const Motoristas = () => {
       toast.success("Motorista aprovado. Conta criada com sucesso.");
       if (selectedPendente?.id === id) setSelectedPendente(null);
       queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: MOTORISTAS_QUERY_KEY });
     },
     onError: (error: Error) => {
       toast.error(error.message || "Erro ao aprovar cadastro.");
@@ -372,6 +586,7 @@ const Motoristas = () => {
       setRejectObs("");
       setRejectTarget(null);
       queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: MOTORISTAS_QUERY_KEY });
     },
     onError: (error: Error) => {
       toast.error(error.message || "Erro ao rejeitar cadastro.");
@@ -385,17 +600,17 @@ const Motoristas = () => {
     <div className="min-w-0">
       <DashboardHeader title="Motoristas" />
 
-      {/* Tab switcher */}
-      <div className="border-b border-border bg-background px-6 lg:px-8">
-        <div className="flex gap-1">
+      {/* Tab switcher — segmented control arredondado */}
+      <div className="px-6 pt-3 pb-1 lg:px-8">
+        <div className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 p-1">
           <button
             type="button"
             onClick={() => setMainTab("motoristas")}
             className={cn(
-              "inline-flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition-colors",
+              "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors",
               mainTab === "motoristas"
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground",
+                ? "bg-background text-primary shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
             <UsersRound className="h-4 w-4" />
@@ -405,10 +620,10 @@ const Motoristas = () => {
             type="button"
             onClick={() => setMainTab("pendentes")}
             className={cn(
-              "inline-flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition-colors",
+              "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors",
               mainTab === "pendentes"
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground",
+                ? "bg-background text-primary shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
             <ClipboardList className="h-4 w-4" />
@@ -510,7 +725,12 @@ const Motoristas = () => {
                       <AdminPagination
                         page={pendentesPage}
                         totalPages={pendentesMeta.totalPages}
-                        onPageChange={setPendentesPage}
+                        totalCount={pendentesMeta.totalCount}
+                        pageSize={20}
+                        itemLabel="cadastro(s)"
+                        isFetching={pendentesFetching}
+                        onPrevious={() => setPendentesPage((p) => Math.max(1, p - 1))}
+                        onNext={() => setPendentesPage((p) => Math.min(pendentesMeta.totalPages, p + 1))}
                       />
                     </div>
                   )}
@@ -532,48 +752,43 @@ const Motoristas = () => {
 
                     {selectedPendente.dados && (
                       <div className="mt-4 space-y-3 max-h-[420px] overflow-y-auto pr-1">
-                        {Object.entries(selectedPendente.dados as Record<string, unknown>).map(([section, value]) => {
-                          if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-                          const fields = value as Record<string, unknown>;
-                          const fieldEntries = Object.entries(fields).filter(([, v]) => v !== null && v !== "" && v !== undefined && typeof v !== "object");
-                          if (!fieldEntries.length) return null;
-                          return (
-                            <div key={section} className="rounded-xl border border-border/60 p-3">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-primary/60 mb-2">{section}</p>
-                              <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                                {fieldEntries.slice(0, 10).map(([k, v]) => (
-                                  <div key={k}>
-                                    <dt className="text-muted-foreground truncate">{k}</dt>
-                                    <dd className="font-medium text-foreground truncate">{String(v)}</dd>
-                                  </div>
-                                ))}
-                              </dl>
-                            </div>
-                          );
-                        })}
+                        {Object.entries(selectedPendente.dados as Record<string, unknown>)
+                          .filter(([, v]) => !isFichaEmpty(v))
+                          .map(([section, value]) => (
+                            <FichaNode key={section} nodeKey={section} value={value} depth={0} />
+                          ))}
                       </div>
                     )}
 
                     {(selectedPendente.status === "pendente" || selectedPendente.status === "em_revisao") && (
                       <div className="mt-5 flex gap-3">
-                        <button
-                          type="button"
-                          disabled={aprovarMutation.isPending}
-                          onClick={() => aprovarMutation.mutate(selectedPendente.id)}
-                          className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60 transition-colors"
-                        >
-                          {aprovarMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                          Aprovar
-                        </button>
-                        <button
-                          type="button"
-                          disabled={rejeitarMutation.isPending}
-                          onClick={() => { setRejectTarget(selectedPendente.id); setRejectObs(""); setShowRejectModal(true); }}
-                          className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 transition-colors"
-                        >
-                          <X className="h-4 w-4" />
-                          Rejeitar
-                        </button>
+                        {permissions.canApproveMotoristas ? (
+                          <button
+                            type="button"
+                            disabled={aprovarMutation.isPending}
+                            onClick={() => aprovarMutation.mutate(selectedPendente.id)}
+                            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+                          >
+                            {aprovarMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                            Aprovar
+                          </button>
+                        ) : null}
+                        {permissions.canRejectMotoristas ? (
+                          <button
+                            type="button"
+                            disabled={rejeitarMutation.isPending}
+                            onClick={() => { setRejectTarget(selectedPendente.id); setRejectObs(""); setShowRejectModal(true); }}
+                            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 transition-colors"
+                          >
+                            <X className="h-4 w-4" />
+                            Rejeitar
+                          </button>
+                        ) : null}
+                        {!permissions.canApproveMotoristas && !permissions.canRejectMotoristas ? (
+                          <p className="flex-1 rounded-xl border border-dashed border-border bg-muted/40 px-4 py-2.5 text-center text-xs text-muted-foreground">
+                            Você não tem permissão para aprovar ou rejeitar cadastros.
+                          </p>
+                        ) : null}
                       </div>
                     )}
                   </section>
@@ -805,7 +1020,7 @@ const Motoristas = () => {
                         <span className={cn("inline-flex rounded-full border px-2.5 py-0.5 text-[0.68rem] font-semibold", getDriverBadgeTone(driver))}>
                           {getDriverBadgeLabel(driver)}
                         </span>
-                        {driver.registrationStatus === "REGISTERED" ? (
+                        {driver.registrationStatus === "REGISTERED" && permissions.canEditMotoristas ? (
                           <button
                             type="button"
                             onClick={() => handleEditDriver(driver)}

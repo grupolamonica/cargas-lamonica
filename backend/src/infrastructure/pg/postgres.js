@@ -24,6 +24,14 @@ export function getPostgresPool() {
       connectionTimeoutMillis: 5_000,
       ssl: buildPostgresSslConfig(),
     });
+
+    // O pooler do Supabase (pgBouncer) encerra conexões ociosas; o `pg` emite
+    // 'error' no client ocioso. Sem listener, o Node trata como erro não
+    // capturado e derruba o processo. Logamos e seguimos — o pool descarta o
+    // client morto e abre outro sob demanda.
+    pool.on("error", (error) => {
+      console.error("[postgres] idle client error (conexão ociosa derrubada):", error.message);
+    });
   }
 
   return pool;
