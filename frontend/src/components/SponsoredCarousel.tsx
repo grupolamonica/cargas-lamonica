@@ -110,7 +110,7 @@ export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
                     target="_blank"
                     rel="noreferrer"
                     className="relative block overflow-hidden"
-                    style={{ aspectRatio: "16/7" }}
+                    style={{ aspectRatio: "1536 / 785" }}
                     onClick={() => {
                       void fetch("/api/driver/sponsor-click", {
                         method: "POST",
@@ -119,8 +119,9 @@ export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
                       }).catch(() => {});
                     }}
                   >
-                    {/* Slot 16:7 e imagem PE pre-cortada nativamente em 16:7 (1536x672) =
-                        encaixe perfeito sem letterbox, sem crop dinamico, sem distorcao. */}
+                    {/* Card na proporcao do banner self-contained (1536x785) — a banner
+                        Lamonica Postos preenche 100% sem corte nem barra. As fotos de
+                        patrocinio (Rotula) se adaptam via object-cover sem prejuizo. */}
                     <img
                       src={slide.src}
                       alt={slide.alt}
