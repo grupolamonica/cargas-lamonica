@@ -10,9 +10,25 @@ interface Slide {
   tagline: string;
   cta: string;
   objectPosition?: string;
+  /**
+   * Quando true, a imagem ja contem TODO o conteudo visual (titulo + texto +
+   * CTA renderizados pela equipe de design) e nao deve ganhar overlay extra
+   * por cima. Usa object-contain para preservar a imagem inteira (sem crop)
+   * com letterbox lateral quando o aspect ratio nao bate com 16/7.
+   */
+  selfContained?: boolean;
 }
 
 const SLIDES: Slide[] = [
+  {
+    src: "/sponsors/lamonica-postos-pe.png",
+    alt: "Lamônica Postos — nova parceria: 3 novos postos em Pernambuco com valor diferenciado para agregados e parceiros",
+    href: "https://wa.me/557139950665?text=Ol%C3%A1%2C%20vi%20a%20parceria%20dos%20postos%20em%20PE%20no%20portal%20e%20quero%20saber%20mais%20sobre%20o%20valor%20diferenciado.",
+    brand: "LAMONICA POSTOS",
+    tagline: "Nova parceria — 3 postos em Pernambuco",
+    cta: "Saiba mais",
+    selfContained: true,
+  },
   {
     src: "/sponsors/parabrisa_X4_2407x1607.jpg",
     alt: "Rotula X Parabrisa — instalação profissional de para-brisas",
@@ -103,7 +119,8 @@ export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
                       }).catch(() => {});
                     }}
                   >
-                    {/* background image */}
+                    {/* Slot 16:7 e imagem PE pre-cortada nativamente em 16:7 (1536x672) =
+                        encaixe perfeito sem letterbox, sem crop dinamico, sem distorcao. */}
                     <img
                       src={slide.src}
                       alt={slide.alt}
@@ -111,34 +128,40 @@ export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
                       style={{ objectPosition: slide.objectPosition ?? "center" }}
                     />
 
-                    {/* gradient overlay */}
-                    <div
-                      className="absolute inset-0"
-                      style={{
-                        background:
-                          "linear-gradient(to right, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.38) 55%, rgba(0,0,0,0.10) 100%)",
-                      }}
-                    />
+                    {/* Overlay (gradiente + texto + CTA) so quando a imagem NAO e self-contained.
+                        Slides self-contained ja trazem o copy embutido no design. */}
+                    {!slide.selfContained ? (
+                      <>
+                        {/* gradient overlay */}
+                        <div
+                          className="absolute inset-0"
+                          style={{
+                            background:
+                              "linear-gradient(to right, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.38) 55%, rgba(0,0,0,0.10) 100%)",
+                          }}
+                        />
 
-                    {/* content */}
-                    <div className="relative flex h-full flex-col justify-center px-4 py-3 sm:px-5">
-                      <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/60 sm:text-[10px]">
-                        Parceiro
-                      </p>
-                      <p className="mt-0.5 text-sm font-extrabold leading-tight tracking-wide text-white sm:text-base">
-                        {slide.brand}
-                      </p>
-                      <p className="mt-0.5 text-[11px] text-white/75 sm:text-xs">
-                        {slide.tagline}
-                      </p>
-                      <span className="mt-2.5 inline-flex w-fit items-center gap-1.5 rounded-full bg-green-500 px-3 py-1 text-[11px] font-semibold text-white shadow sm:text-xs">
-                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-current" aria-hidden="true">
-                          <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z" />
-                          <path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.118 1.528 5.852L0 24l6.335-1.508A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.818 9.818 0 01-5.007-1.375l-.36-.214-3.727.977.994-3.634-.235-.373A9.77 9.77 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z" />
-                        </svg>
-                        {slide.cta}
-                      </span>
-                    </div>
+                        {/* content */}
+                        <div className="relative flex h-full flex-col justify-center px-4 py-3 sm:px-5">
+                          <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/60 sm:text-[10px]">
+                            Parceiro
+                          </p>
+                          <p className="mt-0.5 text-sm font-extrabold leading-tight tracking-wide text-white sm:text-base">
+                            {slide.brand}
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-white/75 sm:text-xs">
+                            {slide.tagline}
+                          </p>
+                          <span className="mt-2.5 inline-flex w-fit items-center gap-1.5 rounded-full bg-green-500 px-3 py-1 text-[11px] font-semibold text-white shadow sm:text-xs">
+                            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-current" aria-hidden="true">
+                              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z" />
+                              <path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.118 1.528 5.852L0 24l6.335-1.508A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.818 9.818 0 01-5.007-1.375l-.36-.214-3.727.977.994-3.634-.235-.373A9.77 9.77 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z" />
+                            </svg>
+                            {slide.cta}
+                          </span>
+                        </div>
+                      </>
+                    ) : null}
                   </a>
                 </div>
               ))}
