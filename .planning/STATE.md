@@ -1,23 +1,24 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: executing
-stopped_at: "Completed 07-05-PLAN.md: DriverPortalNavbar component created and integrated"
-last_updated: "2026-04-30T13:55:56.991Z"
+milestone: v1-refactor-arch-docker-vps
+milestone_name: v1 — Refactor + Docker + VPS
+status: milestone-complete
+stopped_at: "Milestone v1 concluído + deploy em produção (cargas.grupolamonica.com). Em modo de entrega de features pós-refactor."
+last_updated: "2026-05-27T18:00:00.000Z"
 progress:
-  total_phases: 3
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 6
-  percent: 0
+  total_phases: 6
+  completed_phases: 6
+  total_plans: 20
+  completed_plans: 20
+  percent: 100
 ---
 
 # Project State — Lamonica Cargas
 
 **Project:** Lamonica Cargas (LMC)
-**Milestone:** v1-refactor-arch-docker-vps
-**Last updated:** 2026-04-25 — Completed quick task 260425-a1b: LH fixo + vigência card
+**Milestone:** v1-refactor-arch-docker-vps — **CONCLUÍDO**
+**Em produção:** https://cargas.grupolamonica.com (VPS + Docker + Traefik)
+**Last updated:** 2026-05-27 — Release #16 (cadastro avulso standalone) em produção + atualização da documentação
 
 ## Project Reference
 
@@ -32,10 +33,9 @@ progress:
 
 ## Current Position
 
-**Phase:** 6 — In progress
-**Plan:** 2/4 executed
-**Status:** Phase 6 executing — 06-01 (GitHub Actions secrets), 06-02 (backup-lamonica.sh + README backup), 06-03 tasks 1+2 done. 06-03 Task 3 (checkpoint:human-verify Prometheus target) pendente. 06-04 (enable-ssl.sh) pending.
-**Progress:** [░░░░░░░░░░] 0%
+**Milestone v1:** ✅ COMPLETO — sistema em produção no VPS (`cargas.grupolamonica.com`).
+**Modo atual:** entrega de features pós-refactor (fora do roadmap GSD original de 6 fases).
+**Progress (milestone v1):** [██████████] 100%
 
 ```
 Phase 1: Structural Split + Clean Architecture   [x] COMPLETE (Plans 1+2+3+4 done)
@@ -43,8 +43,14 @@ Phase 2: Backend Runtime Migration               [x] COMPLETE (Plans 1+2 done)
 Phase 3: Dockerization                           [x] COMPLETE (Plans 1+2+3 done)
 Phase 4: Communication & Env Configuration       [x] COMPLETE (Plan 1 done)
 Phase 5: CI/CD + VPS Deploy + Cleanup            [x] COMPLETE (Plans 1+2+3 done)
-Phase 6: VPS Server Hardening and CI/CD Config   [ ] IN PROGRESS (2/4 done)
+Phase 6: VPS Server Hardening and CI/CD Config   [x] COMPLETE
 ```
+
+**Features pós-refactor entregues** (rastreadas no Jira projeto DC — ver [`docs/JIRA-WORKFLOW.md`](../docs/JIRA-WORKFLOW.md)):
+- **Cadastro v2** (DC-65/DC-89): wizard do motorista, cascata ANTT, OCR via sidecar FastAPI.
+- **Cadastro avulso standalone** (release #16, 2026-05-27): botão "Cadastro" do `/motorista` abre o wizard sem carga (`carga_id = NULL`); rota pública `/cadastro` removida.
+- **Painel operador + Sheet Monitor**: enriquecimento só de pendentes, revisão de ficha completa.
+- **Cargas Casadas** (DC-102): em andamento.
 
 ## Performance Metrics
 
@@ -160,12 +166,12 @@ Validated capabilities from PROJECT.md — todas devem continuar funcionando ao 
 
 ## Session Continuity
 
-**Stopped at:** Completed 07-05-PLAN.md: DriverPortalNavbar component created and integrated
+**Stopped at:** Milestone v1 concluído e em produção. Release #16 (cadastro avulso standalone) deployado em 2026-05-27; documentação do projeto atualizada.
 
-**Next action:** Após verificação no VPS, continuar 06-03 Task 3 e depois executar 06-04-PLAN.md (enable-ssl.sh).
+**Next action:** Trabalho contínuo de features via Jira (projeto DC) — ver Epics DC-89 (cadastro v2 hardening) e DC-102 (cargas casadas). Não há fase GSD pendente do milestone v1.
 
-**Resume hint:** Phase 6 in progress (2.5/4 done). 06-03 tasks 1+2 commitadas (fff521b, 38520d2). Task 3 = checkpoint humano: executar script VPS + verificar Prometheus target.
+**Resume hint:** O roadmap GSD original (6 fases do refactor) está 100% concluído. Novas features são planejadas via `/gsd-quick`/`/gsd-plan-phase` e rastreadas no Jira. Para sincronizar commits → `/jira-sync`.
 
 ---
 
-*Last updated: 2026-04-24 after Phase 5 Plan 3 completion — milestone complete*
+*Milestone v1 (refactor + Docker + VPS) concluído e em produção. Última atualização: 2026-05-27 — release #16 + atualização de documentação.*
