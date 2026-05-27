@@ -279,6 +279,28 @@ const CADASTRO_DADOS_LABELS: Record<string, string> = {
   ultimo_licenciamento: "Últ. licenciamento",
   cavalo_owner_is_driver: "Dono = motorista",
   carreta_owners_reused: "Reuso por carreta",
+  // Arquivos (storage paths / urls) — exibidos como "arquivo enviado".
+  owner_doc_url: "Documento (arquivo)",
+  crlv_url: "CRLV (arquivo)",
+  selfie_cnh_url: "Selfie com CNH (arquivo)",
+  comprovante_url: "Comprovante (arquivo)",
+  comprovanteUrl: "Comprovante (arquivo)",
+  comprovante_storage_path: "Comprovante (arquivo)",
+  documento_storage_path: "Documento (arquivo)",
+  anttOwnerDocStoragePath: "Documento do titular (arquivo)",
+  anttOwnerComprovanteStoragePath: "Comprovante do titular (arquivo)",
+  rntrc_via: "Origem do RNTRC",
+  cpf_owner_manual: "Doc. preenchido manual",
+  ocr_fallback_manual: "OCR manual",
+  ocr_comprovante_fallback_manual: "Comprovante manual",
+};
+
+// Rótulo no singular para itens de array (ex.: "Dono da carreta 1").
+const CADASTRO_ITEM_LABELS: Record<string, string> = {
+  carretas: "Carreta",
+  carreta_owners: "Dono da carreta",
+  carreta_owners_reused: "Carreta",
+  telefones: "Telefone",
 };
 
 function humanizeFichaKey(key: string): string {
@@ -350,7 +372,7 @@ function FichaNode({
   if (Array.isArray(value)) {
     const items = value.filter((v) => !isFichaEmpty(v));
     if (!items.length) return null;
-    const singular = humanizeFichaKey(nodeKey).replace(/s$/i, "");
+    const singular = CADASTRO_ITEM_LABELS[nodeKey] ?? humanizeFichaKey(nodeKey).replace(/s$/i, "");
     return (
       <div className={cardCls}>
         <p className={titleCls}>{humanizeFichaKey(nodeKey)}</p>
@@ -578,17 +600,17 @@ const Motoristas = () => {
     <div className="min-w-0">
       <DashboardHeader title="Motoristas" />
 
-      {/* Tab switcher */}
-      <div className="border-b border-border bg-background px-6 lg:px-8">
-        <div className="flex gap-1">
+      {/* Tab switcher — segmented control arredondado */}
+      <div className="px-6 pt-3 pb-1 lg:px-8">
+        <div className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 p-1">
           <button
             type="button"
             onClick={() => setMainTab("motoristas")}
             className={cn(
-              "inline-flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition-colors",
+              "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors",
               mainTab === "motoristas"
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground",
+                ? "bg-background text-primary shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
             <UsersRound className="h-4 w-4" />
@@ -598,10 +620,10 @@ const Motoristas = () => {
             type="button"
             onClick={() => setMainTab("pendentes")}
             className={cn(
-              "inline-flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition-colors",
+              "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors",
               mainTab === "pendentes"
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground",
+                ? "bg-background text-primary shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
             <ClipboardList className="h-4 w-4" />
