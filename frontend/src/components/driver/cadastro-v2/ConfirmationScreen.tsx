@@ -605,7 +605,9 @@ function ConfirmationScreenImpl({
     onSubmitStart?.();
     submitMutation.mutate(
       {
-        cargaId,
+        // Cadastro standalone (sem carga): cargaId chega vazio → omite o campo
+        // para o backend persistir carga_id=NULL (schema exige min(1) quando presente).
+        cargaId: cargaId.trim() ? cargaId : undefined,
         dados: dadosClean,
         idempotencyKey: stableIdempotencyKey,
       },
@@ -683,7 +685,10 @@ function ConfirmationScreenImpl({
         className="admin-card-surface space-y-4 rounded-2xl border p-4"
       >
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <SummaryRow label="Carga" value={buildCargaLabel(cargaContext, cargaId)} />
+          {/* Cadastro standalone (sem carga) não exibe a linha "Carga". */}
+          {cargaId.trim() ? (
+            <SummaryRow label="Carga" value={buildCargaLabel(cargaContext, cargaId)} />
+          ) : null}
           {motoristaNome ? (
             <SummaryRow label="Motorista" value={motoristaNome} />
           ) : null}

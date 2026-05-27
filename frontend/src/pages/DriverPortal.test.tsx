@@ -236,17 +236,35 @@ describe("DriverPortal", () => {
       </QueryClientProvider>,
     );
 
-    const cadastroLinks = screen.getAllByRole("link", { name: "Cadastro" });
+    // Cadastro agora é um botão (abre o dialog de cadastro avulso), não mais um
+    // link de WhatsApp. Suporte continua sendo link wa.me.
+    const cadastroButtons = screen.getAllByRole("button", { name: "Cadastro" });
     const suporteLinks = screen.getAllByRole("link", { name: "Suporte" });
 
-    expect(cadastroLinks.length).toBeGreaterThan(0);
+    expect(cadastroButtons.length).toBeGreaterThan(0);
     expect(suporteLinks.length).toBeGreaterThan(0);
-    expect(cadastroLinks[0]).toHaveAttribute("href", expect.stringContaining("wa.me/557139950665"));
+    expect(suporteLinks[0]).toHaveAttribute("href", expect.stringContaining("wa.me/557139950665"));
 
     fireEvent.click(screen.getAllByRole("button", { name: "Dúvidas" })[0]);
 
     expect(screen.getByText("Respostas rápidas para usar o portal")).toBeInTheDocument();
     expect(screen.getByText(/Sua candidatura já entra direto na fila operacional/i)).toBeInTheDocument();
+  });
+
+  it("abre o dialog de cadastro avulso ao clicar em Cadastro", async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <DriverPortal />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Cadastro" })[0]);
+
+    expect(await screen.findByText("Fazer cadastro")).toBeInTheDocument();
+    expect(screen.getByLabelText("CPF do motorista")).toBeInTheDocument();
+    expect(screen.getByLabelText("Placa do cavalo")).toBeInTheDocument();
   });
 
   it("troca a pagina no primeiro clique no portal do motorista", async () => {
