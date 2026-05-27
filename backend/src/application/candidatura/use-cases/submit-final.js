@@ -392,26 +392,39 @@ export async function submitCandidaturaFinal({
     // ── 6) Monta colunas dedicadas v2 ────────────────────────────────────
     const pancaryAutodeclaration = dados.motorista?.pancary_autodeclaration || null;
     const corVeiculo = dados.cavalo?.cor || null;
-    const pis = dados.cavalo_owner?.pis || null;
-    const estadoCivil = dados.cavalo_owner?.estado_civil || null;
+    // 2026-05-27 — banco/PIS/estado_civil migraram para `cavalo_owner.antt_titular`
+    // no refator de 2026-05-18 (Lamonica paga o detentor do RNTRC, nao o dono do
+    // CRLV). A extracao das colunas dedicadas ficou lendo o caminho legado e por
+    // isso `dados_bancarios`/`pis`/`estado_civil` saiam SEMPRE NULL. Lemos de
+    // antt_titular primeiro, com fallback ao caminho antigo para drafts legados.
+    const cavaloTitular = dados.cavalo_owner?.antt_titular ?? null;
+    const pis = cavaloTitular?.pis || dados.cavalo_owner?.pis || null;
+    const estadoCivil =
+      cavaloTitular?.estado_civil || dados.cavalo_owner?.estado_civil || null;
     const rastreadorDetalhes = dados.motorista?.rastreador || null;
 
     // dados_bancarios JSONB: array com cavalo_owner + carreta_owners (apenas owners nao-reused).
+    // 2026-05-27 — banco vive em `owner.antt_titular.dados_bancarios`; fallback ao
+    // caminho legado `owner.dados_bancarios` para drafts antigos.
     const dadosBancariosArr = [];
-    if (!reuse.cavalo_owner_is_driver && dados.cavalo_owner?.dados_bancarios) {
+    const cavaloBanco =
+      cavaloTitular?.dados_bancarios ?? dados.cavalo_owner?.dados_bancarios ?? null;
+    if (!reuse.cavalo_owner_is_driver && cavaloBanco) {
       dadosBancariosArr.push({
         owner_doc: dados.cavalo_owner.doc,
         owner_role: "cavalo",
-        ...dados.cavalo_owner.dados_bancarios,
+        ...cavaloBanco,
       });
     }
     if (Array.isArray(dados.carreta_owners)) {
       dados.carreta_owners.forEach((owner, i) => {
-        if (reuse.carreta_owners_reused[i] === "none" && owner?.dados_bancarios) {
+        const ownerBanco =
+          owner?.antt_titular?.dados_bancarios ?? owner?.dados_bancarios ?? null;
+        if (reuse.carreta_owners_reused[i] === "none" && ownerBanco) {
           dadosBancariosArr.push({
             owner_doc: owner.doc,
             owner_role: `carreta_${i}`,
-            ...owner.dados_bancarios,
+            ...ownerBanco,
           });
         }
       });
