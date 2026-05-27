@@ -756,7 +756,8 @@ export async function resolveCandidaturaSubmitResponse(request) {
     return await submitCandidaturaFinal({
       driverUserId,
       driverCpf,
-      cargaId: parsedInput.cargaId,
+      // Cadastro standalone omite cargaId → carga_id=NULL (sem carga associada).
+      cargaId: parsedInput.cargaId ?? null,
       idempotencyKey,
       dados: parsedInput.dados,
       requestIp,
