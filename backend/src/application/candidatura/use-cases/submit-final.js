@@ -220,7 +220,9 @@ async function mintProtocolo(client) {
  * @param {Object} args
  * @param {string} args.driverUserId UUID do motorista (auth.users.id, D-01).
  * @param {string} args.driverCpf CPF do driver (driver_profiles.document_number, D-02).
- * @param {string} args.cargaId  ID da carga em contexto (D-03/D-10).
+ * @param {string|null} [args.cargaId]  ID da carga em contexto (D-03/D-10).
+ *   NULL no cadastro standalone (sem carga) — pula advisory lock + conflito de
+ *   carga e persiste carga_id=NULL.
  * @param {string} args.idempotencyKey Header Idempotency-Key.
  * @param {Object} args.dados Payload validado pelo zod schema.
  * @param {string} [args.requestIp]
@@ -247,13 +249,16 @@ export async function submitCandidaturaFinal({
     // a mesma carga, eliminando race condition no conflict-check abaixo. Lock
     // e auto-released no COMMIT/ROLLBACK (xact scope).
     // Best-effort: se a query falhar (ex.: mock de teste), seguimos sem bloquear.
-    try {
-      await client.query(
-        `SELECT pg_advisory_xact_lock(hashtext('carga:' || $1::text))`,
-        [cargaId],
-      );
-    } catch {
-      /* advisory lock best-effort */
+    // Cadastro standalone (cargaId=null) nao tem carga a serializar — pula o lock.
+    if (cargaId) {
+      try {
+        await client.query(
+          `SELECT pg_advisory_xact_lock(hashtext('carga:' || $1::text))`,
+          [cargaId],
+        );
+      } catch {
+        /* advisory lock best-effort */
+      }
     }
 
     // ── 1) Idempotency check ──────────────────────────────────────────────
@@ -279,27 +284,30 @@ export async function submitCandidaturaFinal({
     }
 
     // ── 2) Conflito de carga (alguem ja aprovado para o mesmo carga_id) ──
-    const conflict = await client.query(
-      `
-        SELECT id
-        FROM public.pending_driver_registrations
-        WHERE carga_id = $1
-          AND status = 'aprovado'
-        LIMIT 1
-      `,
-      [cargaId],
-    );
+    // Cadastro standalone (cargaId=null) nao disputa carga — pula o conflito.
+    if (cargaId) {
+      const conflict = await client.query(
+        `
+          SELECT id
+          FROM public.pending_driver_registrations
+          WHERE carga_id = $1
+            AND status = 'aprovado'
+          LIMIT 1
+        `,
+        [cargaId],
+      );
 
-    if (conflict.rows.length > 0) {
-      return {
-        statusCode: 409,
-        payload: {
-          error: "CargaAlreadyApproved",
-          message:
-            "Esta carga ja foi alocada para outro motorista. Atualize a lista de cargas.",
-          meta: { correlationId },
-        },
-      };
+      if (conflict.rows.length > 0) {
+        return {
+          statusCode: 409,
+          payload: {
+            error: "CargaAlreadyApproved",
+            message:
+              "Esta carga ja foi alocada para outro motorista. Atualize a lista de cargas.",
+            meta: { correlationId },
+          },
+        };
+      }
     }
 
     // ── 2b) Iter #7: Duplicate detection por (cpf, horsePlate) ────────────

@@ -4,7 +4,7 @@ import lamonicaLogo from "@/assets/lamonica-logo-blue.png";
 interface DriverPortalNavbarProps {
   notificationCount: number;
   onNotificationsOpen: () => void;
-  cadastroHref: string;
+  onCadastroClick: () => void;
   onFaqOpen: () => void;
   supportHref: string;
 }
@@ -12,7 +12,7 @@ interface DriverPortalNavbarProps {
 export default function DriverPortalNavbar({
   notificationCount,
   onNotificationsOpen,
-  cadastroHref,
+  onCadastroClick,
   onFaqOpen,
   supportHref,
 }: DriverPortalNavbarProps) {
@@ -34,14 +34,13 @@ export default function DriverPortalNavbar({
 
         {/* Center: nav links */}
         <nav className="flex justify-center gap-8 font-medium text-gray-600">
-          <a
-            href={cadastroHref}
-            target="_blank"
-            rel="noreferrer"
+          <button
+            type="button"
+            onClick={onCadastroClick}
             className="transition-colors hover:text-[hsl(224,94%,37%)]"
           >
             Cadastro
-          </a>
+          </button>
           <a
             href={supportHref}
             target="_blank"

@@ -588,7 +588,12 @@ export function useLookupPis() {
 }
 
 export interface CandidaturaSubmitPayload {
-  cargaId: string;
+  /**
+   * ID da carga. Omitido (undefined) no cadastro standalone (botão "Cadastro"
+   * do /motorista, sem carga) → backend persiste carga_id=NULL. Sempre presente
+   * no fluxo de candidatura a partir de uma carga.
+   */
+  cargaId?: string;
   dados: Record<string, unknown>;
   /**
    * Idempotency-Key v4 estável por sessão do wizard. O caller (ConfirmationScreen)

@@ -486,7 +486,11 @@ export const candidaturaSubmitSchema = z.preprocess(
   stripPrivateKeys,
   z
     .object({
-      cargaId: z.string().trim().min(1, "cargaId obrigatorio."),
+      // cargaId OPCIONAL: candidatura (a partir de uma carga) sempre envia.
+      // Cadastro standalone (botao "Cadastro" do /motorista, sem carga) OMITE
+      // o campo — o use-case persiste carga_id=NULL. Coluna e TEXT nullable
+      // sem FK, entao NULL e estado valido (drafts legacy ja usavam).
+      cargaId: z.string().trim().min(1, "cargaId obrigatorio.").optional(),
       dados: dadosSchema,
     })
     .strict()

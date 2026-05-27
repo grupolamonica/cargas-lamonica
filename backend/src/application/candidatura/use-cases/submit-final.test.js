@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  *   (d) submit com ocr_fallback_manual=true → ANTT roda assim mesmo
  *   (e) submit com carga_id ja aprovada → 409 conflict
  *   (f) sequence falha (nextval throw) → 500 com mensagem clara apontando plan 01
+ *   (g) cadastro standalone (cargaId=null) → 201, carga_id=NULL, sem conflito de carga
  */
 
 // ── DB fake em memoria ──────────────────────────────────────────────────────
@@ -551,5 +552,51 @@ describe("submitCandidaturaFinal — plan 07-04", () => {
     expect(row.dados.carreta_owners[0].owner_doc_url).toBe(
       "cadastro-drafts/driver-1/L-700/carreta_owner_0_1700000006.pdf",
     );
+  });
+
+  it("(g) cadastro standalone (cargaId=null) → 201 com carga_id=NULL, ANTT roda, sem conflito de carga", async () => {
+    // Seed: row aprovada SEM carga (carga_id=null). O guard `if (cargaId)` no
+    // conflict-check deve impedir que este standalone colida com ela.
+    fakeDb.rows.push({
+      id: "row-standalone-pre",
+      id_cadastro: "CAD-V2-standalone-pre",
+      status: "aprovado",
+      versao_cadastro: "v2",
+      carga_id: null,
+      dados: {},
+    });
+
+    const result = await submitCandidaturaFinal({
+      driverUserId: null, // fluxo publico (botao Cadastro sem login)
+      driverCpf: "999.888.777-66",
+      cargaId: null, // standalone — sem carga
+      idempotencyKey: "key-g-standalone-009",
+      dados: basePayload(),
+      correlationId: "corr-g",
+      disableOwnerReuseByDriver: true,
+    });
+
+    expect(result.statusCode).toBe(201);
+    expect(result.payload.protocolo).toMatch(/^\d{4}-\d{5}$/);
+
+    // Nova row inserida com carga_id NULL (alem da seed aprovada).
+    expect(fakeDb.rows).toHaveLength(2);
+    const inserted = fakeDb.rows.find((r) => r.id_cadastro === "CAD-V2-key-g-standalone-009");
+    expect(inserted).toBeTruthy();
+    expect(inserted.carga_id).toBeNull();
+    expect(inserted.status).toBe("pendente");
+    expect(inserted.versao_cadastro).toBe("v2");
+    expect(inserted.driver_user_id).toBeNull();
+
+    // ANTT cascade rodou normalmente (paridade com candidatura).
+    expect(anttCascadeMock).toHaveBeenCalledTimes(1);
+
+    // Audit registrado com carga_id null.
+    const submitAudit = fakeDb.audit.find(
+      (a) => a.params[0] === "driver.candidatura.submitted",
+    );
+    expect(submitAudit).toBeTruthy();
+    const auditMetadata = JSON.parse(submitAudit.params[10]);
+    expect(auditMetadata.carga_id).toBeNull();
   });
 });

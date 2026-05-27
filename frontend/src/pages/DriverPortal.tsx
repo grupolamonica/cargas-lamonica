@@ -37,6 +37,10 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { DriverClaimWorkflow } from "@/components/driver/DriverClaimWorkflow";
 import { DriverRegistrationWizard } from "@/components/driver/cadastro-v2/DriverRegistrationWizard";
+import {
+  StandaloneCadastroDialog,
+  type StandaloneCadastroProceedArgs,
+} from "@/components/driver/StandaloneCadastroDialog";
 import type { PreSubmitInterceptor } from "@/components/driver/DriverClaimPanel";
 import {
   requestCandidaturaPreCheck,
@@ -71,8 +75,6 @@ import lamonicaLogo from "@/assets/lamonica-logo-white.png";
 import { SponsoredCarousel } from "@/components/SponsoredCarousel";
 
 const DRIVER_SUPPORT_WHATSAPP_NUMBER = "557139950665";
-const DRIVER_CADASTRO_MESSAGE =
-  "Olá, quero fazer meu cadastro para receber cargas da Lamonica.";
 const DRIVER_SAC_MESSAGE =
   "Olá, preciso de ajuda no portal do motorista da Lamonica.";
 const DRIVER_FAQ_ITEMS = [
@@ -211,8 +213,11 @@ const DriverPortal = () => {
   //   (a) interceptor em DriverCargoDetails (fluxo original de candidatura)
   //   (b) botão "Completar/Atualizar cadastro" nas notificações (novo fluxo de renovação)
   const [registrationWizardOpen, setRegistrationWizardOpen] = useState(false);
+  // Cadastro avulso (sem carga) acionado pelo botão "Cadastro".
+  const [standaloneCadastroOpen, setStandaloneCadastroOpen] = useState(false);
   const [registrationContext, setRegistrationContext] = useState<{
-    cargaId: string;
+    // Opcional: ausente no cadastro standalone (sem carga associada).
+    cargaId?: string;
     cpf: string;
     horsePlate: string;
     trailerPlates: string[];
@@ -244,6 +249,23 @@ const DriverPortal = () => {
     // garantir que a navegacao ja existente continue valida.
     void ctx;
   };
+
+  // Cadastro avulso: o dialog rodou o pre-check e achou pendências. Abre o
+  // wizard completo SEM cargaId — submit persiste carga_id=NULL.
+  const handleStandaloneProceed = useCallback(
+    ({ cpf, horsePlate, trailerPlates, preCheckResponse }: StandaloneCadastroProceedArgs) => {
+      setRegistrationContext({
+        // cargaId omitido de propósito — cadastro sem carga.
+        cpf,
+        horsePlate,
+        trailerPlates,
+        preCheckResponse,
+      });
+      setStandaloneCadastroOpen(false);
+      setRegistrationWizardOpen(true);
+    },
+    [],
+  );
 
   /**
    * Phase 8 — Fix entry-point "Candidatar-se" quebrado.
@@ -522,7 +544,6 @@ const DriverPortal = () => {
     [handlePageChange, page],
   );
 
-  const cadastroHref = buildDriverSupportWhatsAppUrl(DRIVER_CADASTRO_MESSAGE);
   const supportHref = buildDriverSupportWhatsAppUrl(DRIVER_SAC_MESSAGE);
 
 
@@ -661,7 +682,7 @@ const DriverPortal = () => {
       <DriverPortalNavbar
         notificationCount={totalNotificationCount}
         onNotificationsOpen={openNotifications}
-        cadastroHref={cadastroHref}
+        onCadastroClick={() => setStandaloneCadastroOpen(true)}
         onFaqOpen={openFaq}
         supportHref={supportHref}
       />
@@ -701,14 +722,13 @@ const DriverPortal = () => {
             </div>
 
             <div className="grid grid-cols-3 gap-2">
-              <a
-                href={cadastroHref}
-                target="_blank"
-                rel="noreferrer"
+              <button
+                type="button"
+                onClick={() => setStandaloneCadastroOpen(true)}
                 className="inline-flex items-center justify-center rounded-[18px] border border-white/18 bg-white/[0.12] px-3 py-3 text-center text-[11px] font-semibold uppercase tracking-[0.14em] text-white shadow-[0_18px_34px_-24px_rgba(3,14,42,0.62)] backdrop-blur-md transition-all duration-200 hover:bg-white/[0.18]"
               >
                 Cadastro
-              </a>
+              </button>
               <a
                 href={supportHref}
                 target="_blank"
@@ -1041,6 +1061,12 @@ const DriverPortal = () => {
             void handleContinueDraft(draft);
           }}
           draftLoadingId={draftLoadingId}
+        />
+
+        <StandaloneCadastroDialog
+          open={standaloneCadastroOpen}
+          onOpenChange={setStandaloneCadastroOpen}
+          onProceed={handleStandaloneProceed}
         />
 
         <DriverRegistrationWizard

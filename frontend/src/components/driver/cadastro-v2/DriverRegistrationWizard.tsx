@@ -253,6 +253,13 @@ export function DriverRegistrationWizard({
   // na sessão Supabase (read-only) — apenas no que é persistido como lead.
   const [adoptedCpf, setAdoptedCpf] = useState<string | null>(null);
 
+  // Cadastro standalone (botão "Cadastro" do /motorista, sem carga): cargaId
+  // chega undefined. Geramos um UUID estável por sessão para servir de pasta
+  // dos uploads (bucket exige cargaId UUID) e chave do draft (endpoint exige
+  // cargaId não-vazio). No SUBMIT, porém, enviamos cargaId vazio → carga_id=NULL.
+  const standaloneSessionId = useMemo(() => crypto.randomUUID(), []);
+  const uploadCargaId = cargaId ?? standaloneSessionId;
+
   // Passa cpf pro hook quando NÃO ha sessão Supabase — sem isso o hook trata
   // como "anonimo sem cpf" e pula o save no servidor. Tambem habilita o
   // fallback de chave localStorage `cpf:<cpf>` (cobre F5 no fluxo público).
@@ -266,7 +273,7 @@ export function DriverRegistrationWizard({
     : onlyDigits(adoptedCpf ?? cpf ?? "") || undefined;
   const draft = useDriverRegistrationDraft({
     driverUserId,
-    cargaId: cargaId ?? "",
+    cargaId: uploadCargaId,
     cpf: draftCpf,
   });
   const hasHydratedFromDraftRef = useRef(false);
@@ -784,42 +791,44 @@ export function DriverRegistrationWizard({
    */
   const handleAdoptCnhData = useCallback(
     async ({ cpf: newCpf, nome }: { cpf: string; nome: string }) => {
-      if (!cargaId) {
-        throw new Error("cargaId ausente — não foi possível atualizar candidatura");
-      }
       const normalizedCpf = onlyDigits(newCpf);
       if (normalizedCpf.length !== 11) {
         throw new Error("CPF inválido");
       }
 
-      const stored = readStoredLeadState(cargaId);
-      if (!stored) {
-        // Sem lead persistido localmente não dá pra reconstituir o payload sem
-        // perder dados (phone/vehicleType). Falha cedo — A1Cnh mostra toast.
-        throw new Error("Lead não encontrado no armazenamento local");
+      // Cadastro standalone (sem carga): não existe lead de carga para
+      // atualizar — apenas adotamos o CPF/nome localmente (state + stepA).
+      // Só o fluxo de candidatura (com cargaId) re-emite o lead pre-registration.
+      if (cargaId) {
+        const stored = readStoredLeadState(cargaId);
+        if (!stored) {
+          // Sem lead persistido localmente não dá pra reconstituir o payload sem
+          // perder dados (phone/vehicleType). Falha cedo — A1Cnh mostra toast.
+          throw new Error("Lead não encontrado no armazenamento local");
+        }
+
+        const horseFromProps = (horsePlate ?? "").trim();
+        const trailerFromProps = Array.isArray(trailerPlates) ? trailerPlates : [];
+
+        const payload = {
+          cpf: normalizedCpf,
+          phone: stored.form.phone,
+          horsePlate: horseFromProps || stored.form.horsePlate,
+          trailerPlate: (trailerFromProps[0] ?? stored.form.trailerPlate ?? "").trim(),
+          trailerPlate2: (trailerFromProps[1] ?? stored.form.trailerPlate2 ?? "").trim(),
+          vehicleType: stored.form.vehicleType,
+        };
+
+        const response = await createPublicLoadLeadPreRegistration(cargaId, payload);
+
+        // Persiste localmente o novo CPF + payload alinhado.
+        persistStoredLeadState({
+          ...stored,
+          leadId: response.lead.id ?? stored.leadId,
+          form: { ...stored.form, ...payload },
+          updatedAt: new Date().toISOString(),
+        });
       }
-
-      const horseFromProps = (horsePlate ?? "").trim();
-      const trailerFromProps = Array.isArray(trailerPlates) ? trailerPlates : [];
-
-      const payload = {
-        cpf: normalizedCpf,
-        phone: stored.form.phone,
-        horsePlate: horseFromProps || stored.form.horsePlate,
-        trailerPlate: (trailerFromProps[0] ?? stored.form.trailerPlate ?? "").trim(),
-        trailerPlate2: (trailerFromProps[1] ?? stored.form.trailerPlate2 ?? "").trim(),
-        vehicleType: stored.form.vehicleType,
-      };
-
-      const response = await createPublicLoadLeadPreRegistration(cargaId, payload);
-
-      // Persiste localmente o novo CPF + payload alinhado.
-      persistStoredLeadState({
-        ...stored,
-        leadId: response.lead.id ?? stored.leadId,
-        form: { ...stored.form, ...payload },
-        updatedAt: new Date().toISOString(),
-      });
 
       setAdoptedCpf(normalizedCpf);
 
@@ -1466,7 +1475,7 @@ export function DriverRegistrationWizard({
         phoneMasked,
         checkHorsePlateRegistration: (p) => handleCheckPlateRegistration(p, "horse"),
         checkTrailerPlateRegistration: (p) => handleCheckPlateRegistration(p, "trailer"),
-        draftCargaId: cargaId,
+        draftCargaId: uploadCargaId,
         draftCpf: draftCpfDigits,
         draftAccessToken: accessToken,
       })}
