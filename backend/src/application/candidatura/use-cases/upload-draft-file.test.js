@@ -239,12 +239,14 @@ describe("uploadDraftFile", () => {
     expect(result.payload.error).toBe("FILE_TOO_LARGE");
   });
 
-  it("allowlist VALID_DRAFT_SLOTS contem todos os 15 slots esperados", () => {
-    // 15 = 14 originais + motorista_selfie_cnh (adicionado em 2026-05-16
-    // junto com o feature A1bSelfie do wizard).
-    expect(VALID_DRAFT_SLOTS.size).toBe(15);
+  it("allowlist VALID_DRAFT_SLOTS contem todos os 21 slots esperados", () => {
+    // 21 = 15 (14 originais + motorista_selfie_cnh, 2026-05-16) + 6 slots do
+    // titular ANTT (cavalo/carreta antt owner cnh+comprovante, 2026-05-20).
+    expect(VALID_DRAFT_SLOTS.size).toBe(21);
     expect(VALID_DRAFT_SLOTS.has("motorista_cnh")).toBe(true);
     expect(VALID_DRAFT_SLOTS.has("motorista_selfie_cnh")).toBe(true);
     expect(VALID_DRAFT_SLOTS.has("carreta_owner_comprovante_1")).toBe(true);
+    expect(VALID_DRAFT_SLOTS.has("cavalo_antt_owner_cnh")).toBe(true);
+    expect(VALID_DRAFT_SLOTS.has("carreta_antt_owner_comprovante_1")).toBe(true);
   });
 });
