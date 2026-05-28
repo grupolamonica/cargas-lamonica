@@ -263,7 +263,7 @@ async function stepProprietarioCavalo(ctx) {
     correlationId: ctx.correlationId,
   });
   ctx.state.cavaloOwnerId = result.ownerId;
-  return { externalId: String(result.ownerId), response: result.raw };
+  return { externalId: toExternalId(result.ownerId), response: result.raw };
 }
 
 async function stepProprietarioCarreta(ctx) {
@@ -281,7 +281,7 @@ async function stepProprietarioCarreta(ctx) {
     ctx.state.carretaOwnerId = ctx.state.cavaloOwnerId;
     ctx.state.carretaOwnerDocType = ctx.state.cavaloOwnerDocType;
     ctx.state.carretaOwnerDoc = ctx.state.cavaloOwnerDoc;
-    return { externalId: String(ctx.state.cavaloOwnerId), response: { reused_from_cavalo: true } };
+    return { externalId: toExternalId(ctx.state.cavaloOwnerId), response: { reused_from_cavalo: true } };
   }
 
   // carreta_owners[0].doc_type pode existir; senão usa do veículo
@@ -300,7 +300,7 @@ async function stepProprietarioCarreta(ctx) {
     correlationId: ctx.correlationId,
   });
   ctx.state.carretaOwnerId = result.ownerId;
-  return { externalId: String(result.ownerId), response: result.raw };
+  return { externalId: toExternalId(result.ownerId), response: result.raw };
 }
 
 async function stepVeiculo(ctx, sub) {
@@ -332,7 +332,7 @@ async function stepVeiculo(ctx, sub) {
   });
   if (sub === "cavalo") ctx.state.cavaloVehicleId = result.vehicleId;
   if (sub === "carreta") ctx.state.carretaVehicleId = result.vehicleId;
-  return { externalId: String(result.vehicleId), response: result.raw };
+  return { externalId: toExternalId(result.vehicleId), response: result.raw };
 }
 
 async function stepMotorista(ctx) {
@@ -343,7 +343,20 @@ async function stepMotorista(ctx) {
     correlationId: ctx.correlationId,
   });
   ctx.state.motoristaDriverId = result.driverId;
-  return { externalId: String(result.driverId), response: result.raw };
+  return { externalId: toExternalId(result.driverId), response: result.raw };
+}
+
+/**
+ * Converte um id externo (number|string|null|undefined) em string ou null.
+ * Sem isso, `String(null)` virava a string literal `"null"` no banco.
+ * Test E2E (DC-111 / 2026-05-28): bot Angellira pode retornar vehicleId
+ * null quando o veículo já existia (etapa OK mas sem novo id atribuído).
+ */
+function toExternalId(value) {
+  if (value === null || value === undefined || value === "" || value === "null") {
+    return null;
+  }
+  return String(value);
 }
 
 // ── Atualiza driver_profiles ─────────────────────────────────────────────

@@ -15,7 +15,11 @@ import "../config/load-env.js";
 import { logStructuredEvent } from "../security-log.js";
 
 const DEFAULT_BOT_URL = "http://angelira-bot:8765";
-const DEFAULT_TIMEOUT_MS = 60_000;
+// Test E2E (2026-05-28 / DC-111): cadastro de motorista com store_query do
+// relatorio leva 30-90s em prod Angellira. 60s era apertado e timeoutava
+// mesmo com o motorista sendo criado de fato (driver_id retornado mas nao
+// colhido pelo Node). Subimos pra 180s.
+const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_FAILURE_THRESHOLD = 3;
 const DEFAULT_COOLDOWN_MS = 60_000;
 
