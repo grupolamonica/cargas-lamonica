@@ -21,6 +21,16 @@ services:
     networks:
       - lamonica-net
       - platform_public
+    # Resource caps — nginx é leve; limites previnem que um runaway tome o host
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.50
+    # Rotação de logs — sem isso json-file enche disco em runaway
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:80/"]
       interval: 30s
@@ -35,6 +45,11 @@ services:
       - "traefik.http.routers.lmc-frontend.entrypoints=web"
       - "traefik.http.routers.lmc-frontend.priority=1"
       - "traefik.http.services.lmc-frontend.loadbalancer.server.port=80"
+      # Compression no edge — Traefik recompõe gzip/brotli antes do cliente.
+      # Mesmo que o nginx interno já comprima, o middleware é idempotente e
+      # cobre respostas vindas do backend (api/*) que não passam pelo nginx.
+      - "traefik.http.middlewares.lmc-compress.compress=true"
+      - "traefik.http.routers.lmc-frontend.middlewares=lmc-compress"
     depends_on:
       backend:
         condition: service_healthy
@@ -55,8 +70,21 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3001"
+    # Node ~80-200MB típico + pool pg conexões; sheet sync ETL pode subir.
+    # 768m com reserve 256m dá folga sem permitir leak indefinido.
+    mem_limit: 768m
+    mem_reservation: 256m
+    cpus: 1.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     healthcheck:
-      test: ["CMD", "curl", "-fs", "http://localhost:3001/health"]
+      # ?deep=1 → executa SELECT 1 contra pg; ?deep=0 (default) é shallow ~1ms.
+      # Deep no docker healthcheck garante que falha de conexão é detectada
+      # cedo, sem custo (apenas 1 query/30s).
+      test: ["CMD", "curl", "-fs", "http://localhost:3001/health?deep=1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -69,6 +97,16 @@ services:
       - "traefik.http.routers.lmc-backend.entrypoints=web"
       - "traefik.http.routers.lmc-backend.priority=10"
       - "traefik.http.services.lmc-backend.loadbalancer.server.port=3001"
+      # ── Rate limiting (defesa contra burst / scraping / brute-force) ───────
+      # average=100 req/s sustained, burst=200 instantâneo por origem IP.
+      # Calibrado para 50-100 operadores ativos + portal motorista; ajustar
+      # via override em produção se KPI mudar.
+      - "traefik.http.middlewares.lmc-backend-ratelimit.ratelimit.average=100"
+      - "traefik.http.middlewares.lmc-backend-ratelimit.ratelimit.burst=200"
+      - "traefik.http.middlewares.lmc-backend-ratelimit.ratelimit.period=1s"
+      - "traefik.http.middlewares.lmc-backend-ratelimit.ratelimit.sourcecriterion.ipstrategy.depth=1"
+      # Compression + ratelimit no mesmo chain (ordem importa: ratelimit antes)
+      - "traefik.http.routers.lmc-backend.middlewares=lmc-backend-ratelimit,lmc-compress"
 
   # ── Cadastro-OCR (FastAPI Python — OCR + consultas externas) ────────────
   cadastro-ocr:
@@ -80,6 +118,17 @@ services:
     networks:
       - lamonica-net
       - platform_public
+    # Sidecar OCR — chamadas externas (Infosimples/GPT-4o Vision) + PDF parse
+    # podem consumir RAM em rajadas. 768m cobre processamento concorrente
+    # sem permitir leak indefinido.
+    mem_limit: 768m
+    mem_reservation: 192m
+    cpus: 1.00
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       INFOSIMPLES_TOKEN: ${INFOSIMPLES_TOKEN:-}
       # Fase 3 (2026-05-21): OCR_COMPROVANTE_PROVIDER e OCR_CARTAO_CNPJ_PROVIDER
@@ -128,6 +177,16 @@ services:
     environment:
       ASPX_ALLOW_PLAYWRIGHT_LOGIN: "1"
       PYTHONUNBUFFERED: "1"
+    # Playwright/Chromium é caro em RAM — limites previnem que sessions órfãs
+    # tomem o host. Cap em 512m força reciclagem.
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 # ── Volumes ───────────────────────────────────────────────────────────────
 volumes:

@@ -15,14 +15,32 @@ function getConnectionString() {
   return connectionString;
 }
 
+function parsePositiveInt(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
 export function getPostgresPool() {
   if (!pool) {
+    // Pool sizing — Supabase pgBouncer default permite ~15-20 client conexões
+    // por role. Default 20 cobre tráfego sustentado de operadores + sync,
+    // sobrando margem para circuit-breakers. Tunável via CLAIMS_DB_POOL_MAX.
+    const poolMax = parsePositiveInt(process.env.CLAIMS_DB_POOL_MAX, 20);
+
+    // statement_timeout — defesa contra queries que não-deveriam-terminar
+    // segurando connection slots. 30s cobre operações pesadas legítimas
+    // (sheet-sync ETL, route catalog refresh). Override via PG_STATEMENT_TIMEOUT_MS.
+    const statementTimeoutMs = parsePositiveInt(process.env.PG_STATEMENT_TIMEOUT_MS, 30_000);
+
     pool = new Pool({
       connectionString: getConnectionString(),
-      max: Number(process.env.CLAIMS_DB_POOL_MAX || 10),
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 5_000,
+      max: poolMax,
+      idleTimeoutMillis: parsePositiveInt(process.env.PG_IDLE_TIMEOUT_MS, 30_000),
+      connectionTimeoutMillis: parsePositiveInt(process.env.PG_CONNECT_TIMEOUT_MS, 5_000),
       ssl: buildPostgresSslConfig(),
+      // Aplica statement_timeout em cada checkout — protege contra queries
+      // mortas que vazariam connection slot.
+      statement_timeout: statementTimeoutMs,
     });
 
     // O pooler do Supabase (pgBouncer) encerra conexões ociosas; o `pg` emite
@@ -64,4 +82,17 @@ export async function withPgTransaction(callback) {
       throw error;
     }
   });
+}
+
+// Diagnóstico — expõe stats do pool para endpoint /metrics ou healthcheck.
+export function getPostgresPoolStats() {
+  if (!pool) {
+    return { total: 0, idle: 0, waiting: 0, max: 0 };
+  }
+  return {
+    total: pool.totalCount,
+    idle: pool.idleCount,
+    waiting: pool.waitingCount,
+    max: pool.options?.max ?? 0,
+  };
 }

@@ -5,7 +5,9 @@
 import "./infrastructure/config/load-env.js"; // side-effect: popula process.env
 import crypto from "node:crypto";
 import express from "express";
-import { getPostgresPool } from "./infrastructure/pg/postgres.js";
+import compression from "compression";
+import helmet from "helmet";
+import { getPostgresPool, getPostgresPoolStats } from "./infrastructure/pg/postgres.js";
 import { registerRoutes } from "./interface/http/routes.js";
 
 // ─── Constantes de middleware ─────────────────────────────────────────────────
@@ -37,9 +39,37 @@ if (process.env.TRUST_PROXY_HEADERS === "true") {
   app.set("trust proxy", 1);
 }
 
+// ── Security headers (helmet) ───────────────────────────────────────────────
+// Antes de tudo: HSTS, X-Frame-Options, X-Content-Type-Options, etc.
+// CSP desativado por enquanto — frontend é servido por nginx separado e CSP
+// estrita aqui poderia quebrar páginas servidas em mesmo origin durante deploys.
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  }),
+);
+
+// ── Compression (gzip/brotli via accept-encoding negotiation) ───────────────
+// Comprime respostas >1KB. Threshold default razoável; payloads menores que
+// 1KB não pagam o custo do gzip. Reduz JSON de listagens (cargas, leads) em
+// 60-80%. Skipping bytes pequenos evita CPU overhead em healthcheck.
+app.use(
+  compression({
+    threshold: 1024,
+    // Compressão padrão para JSON; pula respostas já comprimidas (imagens, etc.)
+    filter: (req, res) => {
+      if (req.headers["x-no-compression"]) return false;
+      return compression.filter(req, res);
+    },
+  }),
+);
+
 // Body parsing — express.json() pré-parseia req.body; http-utils.parseJsonBody
 // já faz short-circuit quando req.body é objeto, então é compatível.
-app.use(express.json());
+// Limite de 1MB previne abuse via payloads gigantes (mutations operator-admin
+// hoje cabem em ~50KB; OCR usa endpoint próprio com multer).
+app.use(express.json({ limit: "1mb" }));
 
 // Middleware CORS manual (porta fiel de api/[...route].mjs)
 app.use((req, res, next) => {
@@ -76,35 +106,68 @@ app.use((req, res, next) => {
 });
 
 // ─── Endpoint /health ─────────────────────────────────────────────────────────
-// Usado como Docker healthcheck na Phase 3.
-// Verifica pg Pool com query leve; verifica Supabase via presença da service key
-// (evita round-trip externo no healthcheck — Supabase é serviço gerenciado externo).
+// Docker healthcheck — deve ser rápido e determinístico.
+// "shallow" (default): apenas valida config (sem round-trip pg) — ~1ms.
+// "deep" (`?deep=1`): faz SELECT 1 contra pg — útil em monitoring externo.
+// O healthcheck do Docker (interval 30s) usa shallow; pollings externos podem
+// solicitar deep periodicamente sem sobrecarregar pool.
 
 app.get("/health", async (req, res) => {
+  const wantDeep = req.query.deep === "1" || req.query.deep === "true";
+  const supabaseStatus = process.env.SUPABASE_SERVICE_ROLE_KEY ? "ok" : "error";
   let pgStatus = "ok";
-  let supabaseStatus = "ok";
 
-  try {
-    const pool = getPostgresPool();
-    await pool.query("SELECT 1");
-  } catch {
-    pgStatus = "error";
-  }
-
-  // Supabase: verificação de config (service role key presente = cliente configurado)
-  // Para healthcheck Docker não queremos latência de round-trip para Supabase Auth.
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    supabaseStatus = "error";
+  if (wantDeep) {
+    try {
+      await getPostgresPool().query("SELECT 1");
+    } catch {
+      pgStatus = "error";
+    }
   }
 
   const isOk = pgStatus === "ok" && supabaseStatus === "ok";
-  const httpStatus = isOk ? 200 : 503;
-
-  return res.status(httpStatus).json({
+  return res.status(isOk ? 200 : 503).json({
     status: isOk ? "ok" : "degraded",
     pg: pgStatus,
     supabase: supabaseStatus,
+    deep: wantDeep,
   });
+});
+
+// ─── Endpoint /metrics ────────────────────────────────────────────────────────
+// Métricas mínimas para Prometheus / observabilidade externa: pool pg, memory,
+// uptime. Formato Prometheus text exposition (text/plain). Não exposto via
+// Traefik por padrão (path /metrics não roteado externamente — usar exec ou
+// monitoramento interno via network platform_monitoring).
+app.get("/metrics", (req, res) => {
+  const poolStats = getPostgresPoolStats();
+  const mem = process.memoryUsage();
+  const lines = [
+    "# HELP lamonica_pg_pool_total Total pg connections (idle+active)",
+    "# TYPE lamonica_pg_pool_total gauge",
+    `lamonica_pg_pool_total ${poolStats.total}`,
+    "# HELP lamonica_pg_pool_idle Idle pg connections available",
+    "# TYPE lamonica_pg_pool_idle gauge",
+    `lamonica_pg_pool_idle ${poolStats.idle}`,
+    "# HELP lamonica_pg_pool_waiting Requests queued waiting for a connection",
+    "# TYPE lamonica_pg_pool_waiting gauge",
+    `lamonica_pg_pool_waiting ${poolStats.waiting}`,
+    "# HELP lamonica_pg_pool_max Configured pg pool ceiling",
+    "# TYPE lamonica_pg_pool_max gauge",
+    `lamonica_pg_pool_max ${poolStats.max}`,
+    "# HELP lamonica_process_memory_rss_bytes Resident set size",
+    "# TYPE lamonica_process_memory_rss_bytes gauge",
+    `lamonica_process_memory_rss_bytes ${mem.rss}`,
+    "# HELP lamonica_process_memory_heap_used_bytes V8 heap used",
+    "# TYPE lamonica_process_memory_heap_used_bytes gauge",
+    `lamonica_process_memory_heap_used_bytes ${mem.heapUsed}`,
+    "# HELP lamonica_process_uptime_seconds Process uptime",
+    "# TYPE lamonica_process_uptime_seconds counter",
+    `lamonica_process_uptime_seconds ${process.uptime()}`,
+    "",
+  ];
+  res.setHeader("Content-Type", "text/plain; version=0.0.4");
+  res.status(200).send(lines.join("\n"));
 });
 
 // ─── Rotas de negócio ─────────────────────────────────────────────────────────
@@ -173,23 +236,40 @@ async function bootstrap() {
   // 3. Registrar rotas de negócio (43 endpoints)
   registerRoutes(app);
 
-  // 4. Periodic sheet sync — every 5 min, no-op if GOOGLE_SHEET_ID not set
-  {
+  // 4. Periodic sheet sync — every SHEET_SYNC_INTERVAL_MIN (default 5min).
+  //    No-op se GOOGLE_SHEET_ID ausente OU SHEET_SYNC_INLINE=false (off-load
+  //    para cron / job worker externo em deploys multi-replica). Jitter ±30s
+  //    evita thundering herd em deploys com várias replicas inicializando
+  //    simultaneamente.
+  if (process.env.SHEET_SYNC_INLINE !== "false") {
     let sheetSyncRunning = false;
+    const intervalMin = Number(process.env.SHEET_SYNC_INTERVAL_MIN || 5);
+    const intervalMs = Math.max(1, intervalMin) * 60 * 1000;
+    const jitterMs = Math.floor(Math.random() * 30_000) - 15_000; // ±15s
+
     setInterval(async () => {
       if (sheetSyncRunning || !process.env.GOOGLE_SHEET_ID) return;
       sheetSyncRunning = true;
+      const startedAt = Date.now();
       try {
         const { syncGoogleSheetLoads } = await import("./application/google-sheets/google-sheet-loads.js");
         const { createSupabaseAdminClient } = await import("./infrastructure/supabase/admin-client.js");
         await syncGoogleSheetLoads({ supabaseClient: createSupabaseAdminClient() });
-        console.info("[sheet-sync-periodic] sync concluído");
+        const durationMs = Date.now() - startedAt;
+        console.info(`[sheet-sync-periodic] sync concluído em ${durationMs}ms`);
+        if (durationMs > 30_000) {
+          console.warn(
+            `[sheet-sync-periodic] duração elevada (${durationMs}ms) — considerar mover para worker dedicado (SHEET_SYNC_INLINE=false + cron)`,
+          );
+        }
       } catch (err) {
         console.error("[sheet-sync-periodic] erro:", err?.message);
       } finally {
         sheetSyncRunning = false;
       }
-    }, 5 * 60 * 1000);
+    }, intervalMs + jitterMs);
+  } else {
+    console.info("[sheet-sync-periodic] desabilitado (SHEET_SYNC_INLINE=false) — esperando cron externo");
   }
 
   // 5. Iniciar HTTP server
