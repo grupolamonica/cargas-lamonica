@@ -112,6 +112,10 @@ export async function registerDriverUser({
     email: normalizedEmail,
     password: password,
     email_confirm: true,
+    app_metadata: {
+      role: "driver",
+      source: "driver-portal",
+    },
     user_metadata: {
       role: "driver",
       source: "driver-portal",

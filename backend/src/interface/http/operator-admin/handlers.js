@@ -1082,6 +1082,10 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
         email,
         password: crypto.randomUUID(),
         email_confirm: true,
+        app_metadata: {
+          role: "driver",
+          source: "cadastro-operador",
+        },
         user_metadata: {
           role: "driver",
           source: "cadastro-operador",
