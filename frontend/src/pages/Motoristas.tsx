@@ -35,6 +35,8 @@ import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 import { AspxSyncCard } from "@/components/AspxSyncCard";
 import DashboardHeader from "@/components/DashboardHeader";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
+import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
+import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
 import { Input } from "@/components/ui/input";
 import { buildDisplayDateTime, formatShortDateTime, parseDateStringAsLocal } from "@/lib/dateDisplay";
 import { cn } from "@/lib/utils";
@@ -551,6 +553,8 @@ const Motoristas = () => {
   const [rejectObs, setRejectObs] = useState("");
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+  // Modal de aprovação com checkboxes (Angellira opt-in) — DC-111 / Sprint 1
+  const [showApproveModal, setShowApproveModal] = useState(false);
 
   const { data: pendentesData, isLoading: pendentesLoading, isFetching: pendentesFetching, error: pendentesError } = useQuery({
     queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, pendentesPage],
@@ -565,12 +569,25 @@ const Motoristas = () => {
   });
 
   const aprovarMutation = useMutation({
-    mutationFn: (id: string) => aprovarCadastro(id),
-    onSuccess: (_data, id) => {
-      toast.success("Motorista aprovado. Conta criada com sucesso.");
-      if (selectedPendente?.id === id) setSelectedPendente(null);
+    mutationFn: ({ id, jobs }: { id: string; jobs: ApproveJob[] }) => aprovarCadastro(id, { jobs }),
+    onSuccess: (data, { id, jobs }) => {
+      const angelliraDispatched = jobs.includes("angellira");
+      const angelliraResult = data?.angellira;
+      if (angelliraDispatched && angelliraResult) {
+        if (angelliraResult.ok) {
+          toast.success("Motorista aprovado e cadastrado no Angellira.");
+        } else {
+          toast.warning("Motorista aprovado. Cadastro Angellira com erros — veja o painel.");
+        }
+      } else {
+        toast.success("Motorista aprovado. Conta criada com sucesso.");
+      }
+      // NÃO fechamos selectedPendente — o operador precisa ver o painel
+      // ExternalRegistrationPanel pra acompanhar status.
+      setShowApproveModal(false);
       queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: MOTORISTAS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ["external-jobs", id] });
     },
     onError: (error: Error) => {
       toast.error(error.message || "Erro ao aprovar cadastro.");
@@ -766,7 +783,7 @@ const Motoristas = () => {
                           <button
                             type="button"
                             disabled={aprovarMutation.isPending}
-                            onClick={() => aprovarMutation.mutate(selectedPendente.id)}
+                            onClick={() => setShowApproveModal(true)}
                             className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60 transition-colors"
                           >
                             {aprovarMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
@@ -791,6 +808,12 @@ const Motoristas = () => {
                         ) : null}
                       </div>
                     )}
+
+                    {/* Painel granular de cadastro externo (Angellira) — DC-111 / Sprint 1.
+                        Aparece quando cadastro já foi aprovado (driver_profile criado). */}
+                    {selectedPendente.status === "aprovado" ? (
+                      <ExternalRegistrationPanel cadastroId={selectedPendente.id} />
+                    ) : null}
                   </section>
                 ) : (
                   <section className="admin-panel flex min-h-[200px] flex-col items-center justify-center gap-3 p-8 text-center">
@@ -800,6 +823,23 @@ const Motoristas = () => {
                 )}
               </div>
             )}
+
+            {/* Modal de aprovacao com checkboxes (Angellira opt-in) — DC-111 / Sprint 1 */}
+            {selectedPendente ? (
+              <ApproveCadastroModal
+                open={showApproveModal}
+                onOpenChange={setShowApproveModal}
+                motoristaNome={selectedPendente.nome_motorista || undefined}
+                motoristaCpf={selectedPendente.cpf_motorista || undefined}
+                hasCavalo={Boolean((selectedPendente.dados as Record<string, unknown>)?.cavalo)}
+                hasCarreta={Boolean(
+                  (selectedPendente.dados as Record<string, unknown>)?.carreta ||
+                  Array.isArray((selectedPendente.dados as { carretas?: unknown[] })?.carretas),
+                )}
+                isSubmitting={aprovarMutation.isPending}
+                onConfirm={(jobs) => aprovarMutation.mutate({ id: selectedPendente.id, jobs })}
+              />
+            ) : null}
 
             {/* Modal de rejeicao */}
             {showRejectModal && (
