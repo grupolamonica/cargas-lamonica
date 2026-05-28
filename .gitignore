@@ -12,6 +12,21 @@ scripts/.venv/
 scripts/**/__pycache__/
 scripts/**/*.pyc
 
+# Python bots (cadastro sidecars: angelira, spx, unificada)
+bots/**/.venv/
+bots/**/__pycache__/
+bots/**/*.pyc
+bots/**/data/
+bots/**/logs/
+bots/**/anexos_tmp/
+bots/**/static/img/cache/
+# SPX cookies (sessao SSO Chrome — nunca commit)
+bots/spx/config/spx_cookies.json
+# Build artifacts dos sidecars (PyInstaller / build local)
+bots/**/build/
+bots/**/dist/
+bots/**/*.spec.bak
+
 # Logs
 logs
 *.log

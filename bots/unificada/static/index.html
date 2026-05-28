@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AngelLira | Dossiê Unificado</title>
+    <link rel="stylesheet" href="style.css?v=20260508">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="page">
+
+        <!-- TOPBAR -->
+        <header class="topbar">
+            <div class="topbar-left">
+                <div class="brand-logo" aria-hidden="true">L</div>
+                <div class="brand-block">
+                    <span class="brand-title">DOSSIÊ UNIFICADO</span>
+                    <span class="brand-sub">Grupo Lamônica</span>
+                </div>
+            </div>
+            <nav class="topbar-nav">
+                <a href="#form-card">Gerar</a>
+                <a href="#log-card">Atividade</a>
+                <a href="#stats">Status</a>
+            </nav>
+        </header>
+
+        <!-- HERO -->
+        <section class="hero-card">
+            <svg class="hero-deco" viewBox="0 0 600 220" fill="none" aria-hidden="true">
+                <rect x="40" y="78" width="120" height="92" rx="8"/>
+                <rect x="170" y="56" width="370" height="114" rx="6"/>
+                <line x1="200" y1="80" x2="510" y2="80" stroke-width="1" opacity="0.5"/>
+                <line x1="200" y1="120" x2="510" y2="120" stroke-width="1" opacity="0.5"/>
+                <line x1="200" y1="150" x2="510" y2="150" stroke-width="1" opacity="0.5"/>
+                <circle cx="80" cy="190" r="22"/>
+                <circle cx="140" cy="190" r="22"/>
+                <circle cx="280" cy="190" r="22"/>
+                <circle cx="340" cy="190" r="22"/>
+                <circle cx="460" cy="190" r="22"/>
+                <circle cx="520" cy="190" r="22"/>
+            </svg>
+
+            <div class="hero-content">
+                <span class="hero-badge"><span class="dot"></span> PAINEL DE DOSSIÊS</span>
+                <h1 class="hero-title">Dossiês de motorista <span class="accent">em tempo real</span></h1>
+                <p class="hero-subtitle">Informe o CPF do motorista e as placas do conjunto. O sistema autentica, baixa os PDFs do portal AngelLira e entrega o dossiê unificado direto na pasta Downloads.</p>
+            </div>
+
+            <aside class="status-panel" id="stats">
+                <span class="status-badge"><span class="dot"></span> READY</span>
+                <ul class="status-list">
+                    <li>
+                        <span class="num">1</span>
+                        <span class="label">Sessão</span>
+                        <span class="value">Ativa</span>
+                    </li>
+                    <li>
+                        <span class="num">2</span>
+                        <span class="label">Componentes</span>
+                        <span class="value">3</span>
+                    </li>
+                    <li>
+                        <span class="num">3</span>
+                        <span class="label">Tempo médio</span>
+                        <span class="value">~36s</span>
+                    </li>
+                </ul>
+            </aside>
+        </section>
+
+        <!-- CONTENT -->
+        <main class="content-grid">
+
+            <section class="card form-card" id="form-card">
+                <header class="card-header">
+                    <h2>Dados do dossiê</h2>
+                    <span class="card-tag">Flexível</span>
+                </header>
+
+                <div class="card-body">
+                    <p class="form-hint">Preencha um, dois ou os três campos. Com apenas um, baixa só aquele relatório; com dois ou mais, gera o dossiê unificado.</p>
+
+                    <div class="field-group">
+                        <label for="cpf-input">CPF do Motorista <span class="opt">(opcional)</span></label>
+                        <input type="text" id="cpf-input" placeholder="000.000.000-00" maxlength="14" autocomplete="off">
+                    </div>
+
+                    <div class="grid-fields">
+                        <div class="field-group">
+                            <label for="cavalo-input">Placa Cavalo <span class="opt">(opcional)</span></label>
+                            <input type="text" id="cavalo-input" placeholder="ABC1D23 ou ABC-1234" maxlength="8" autocomplete="off" style="text-transform: uppercase;">
+                        </div>
+                        <div class="field-group">
+                            <label for="carreta-input">Placa Carreta <span class="opt">(opcional)</span></label>
+                            <input type="text" id="carreta-input" placeholder="ABC1D23 ou ABC-1234" maxlength="8" autocomplete="off" style="text-transform: uppercase;">
+                        </div>
+                    </div>
+
+                    <div id="progress-section" class="progress-container">
+                        <div class="timer-row">
+                            <span id="timer-display" class="timer">00:00</span>
+                            <span id="timer-label" class="timer-label"></span>
+                        </div>
+                        <div class="progress-track">
+                            <div id="progress-fill" class="progress-fill"></div>
+                        </div>
+                        <div class="progress-label">
+                            <span id="progress-step" class="step-text">Aguardando...</span>
+                            <span id="progress-pct">0%</span>
+                        </div>
+                    </div>
+
+                    <div class="actions">
+                        <button id="gerar-btn" class="btn-primary">Gerar Unificador</button>
+                        <button id="limpar-btn" class="btn-secondary">Limpar</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card log-card" id="log-card">
+                <header class="card-header">
+                    <h2>Atividade</h2>
+                    <span class="pulse-dot" aria-label="ao vivo"></span>
+                </header>
+                <div id="log-feed" class="log-feed">
+                    <div class="log-entry info"><strong>[--:--:--]</strong> Aguardando preenchimento...</div>
+                </div>
+            </section>
+
+        </main>
+
+        <footer class="page-footer">
+            <p>© 2026 Grupo Lamônica · AngelLira Unificador v2.0</p>
+        </footer>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>

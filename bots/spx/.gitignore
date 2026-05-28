@@ -1,0 +1,18 @@
+# Cookies do operador — NUNCA commitar
+config/spx_cookies.json
+config/*.cookies.json
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Logs
+logs/
+*.log
