@@ -1,7 +1,7 @@
 import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { ocrRntrc, type RntrcExtracted } from "@/pages/cadastro/cadastroApi";
+import { ocrRntrc, type RntrcExtracted } from "@/services/cadastroApi";
 
 import { OcrUploadTile, type OcrTileState } from "./OcrUploadTile";
 
