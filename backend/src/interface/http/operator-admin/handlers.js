@@ -55,14 +55,14 @@ import {
   updateOperatorDriverProfile,
 } from "../../../application/operator-admin/service.js";
 import {
-  fetchOperatorAuditLogsReadModel,
   fetchOperatorCargoListReadModel,
   fetchOperatorClientesListReadModel,
   fetchOperatorDriversListReadModel,
   fetchOperatorRoutesListReadModel,
   fetchOperatorVehiclesListReadModel,
-  fetchPendingDriverRegistrations,
 } from "../../../application/operator-admin/read-models.js";
+import { fetchOperatorAuditLogsReadModel } from "../../../application/operator-admin/use-cases/audit-logs-read-model.js";
+import { fetchPendingDriverRegistrations } from "../../../application/operator-admin/use-cases/pending-driver-registrations-read-model.js";
 import { ensureDriverLoadsSheetFresh } from "../public-loads/handlers.js";
 import { fetchDriverFlowMetrics } from "../../../domain/operator-admin/driver-flow-metrics.js";
 import {
