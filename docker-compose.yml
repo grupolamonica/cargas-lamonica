@@ -176,11 +176,12 @@ services:
     restart: unless-stopped
     networks:
       - lamonica-net
+    # Le credenciais do mesmo backend.env do backend Node (ANGELLIRA_USER,
+    # ANGELLIRA_PASSWORD, ANGELLIRA_EMPRESA_ID — auth.py do bot ja aceita
+    # esses aliases com 2 Ls).
+    env_file:
+      - backend.env
     environment:
-      # Credenciais Angellira (provisionar no .env da VPS — NUNCA no repo)
-      ANGELIRA_API_USERNAME: ${ANGELIRA_API_USERNAME:-}
-      ANGELIRA_API_PASSWORD: ${ANGELIRA_API_PASSWORD:-}
-      ANGELIRA_EMPRESA_ID: ${ANGELIRA_EMPRESA_ID:-876943}
       ANGELIRA_AUTH_BASE: ${ANGELIRA_AUTH_BASE:-https://auth.angellira.com.br}
       ANGELIRA_API_BASE: ${ANGELIRA_API_BASE:-https://api.angellira.com.br/profile}
       ANGELIRA_PRECHECK_DIAS: ${ANGELIRA_PRECHECK_DIAS:-365}
@@ -220,10 +221,10 @@ services:
     restart: unless-stopped
     networks:
       - lamonica-net
+    # Mesma fonte do backend.env (ANGELLIRA_USER/PASSWORD/EMPRESA_ID).
+    env_file:
+      - backend.env
     environment:
-      ANGELIRA_API_USERNAME: ${ANGELIRA_API_USERNAME:-}
-      ANGELIRA_API_PASSWORD: ${ANGELIRA_API_PASSWORD:-}
-      ANGELIRA_COMPANY_ID: ${ANGELIRA_EMPRESA_ID:-876943}
       ANGELIRA_AUTH_BASE: ${ANGELIRA_AUTH_BASE:-https://auth.angellira.com.br}
       UNIFICADA_HOST: "0.0.0.0"
       UNIFICADA_PORT: "8001"

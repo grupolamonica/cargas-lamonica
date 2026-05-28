@@ -26,14 +26,18 @@ def _first_env(*nomes: str) -> str:
 
 
 def get_username() -> str:
+    # Aceita "ANGELIRA" (1 L, grafia interna do bot) e "ANGELLIRA" (2 Ls,
+    # grafia usada no backend Node e no backend.env do monorepo).
     valor = _first_env(
         "ANGELIRA_API_USERNAME",
         "ANGELIRA_USERNAME",
         "ANGELIRA_USER",
+        "ANGELLIRA_USER",
+        "ANGELLIRA_USERNAME",
     )
     if not valor:
         raise RuntimeError(
-            "Credencial do AngelLira ausente. Configure ANGELIRA_API_USERNAME no .env."
+            "Credencial do AngelLira ausente. Configure ANGELIRA_API_USERNAME (ou ANGELLIRA_USER) no .env."
         )
     return valor
 
@@ -43,10 +47,11 @@ def get_password() -> str:
         "ANGELIRA_API_PASSWORD",
         "ANGELIRA_PASSWORD",
         "ANGELIRA_PASS",
+        "ANGELLIRA_PASSWORD",
     )
     if not valor:
         raise RuntimeError(
-            "Senha do AngelLira ausente. Configure ANGELIRA_API_PASSWORD no .env."
+            "Senha do AngelLira ausente. Configure ANGELIRA_API_PASSWORD (ou ANGELLIRA_PASSWORD) no .env."
         )
     return valor
 
@@ -54,10 +59,10 @@ def get_password() -> str:
 def get_empresa_id() -> int:
     """ID numerico da empresa logada na Angellira (usado no /auth/grant).
 
-    Default mantem 876943 (GRIFFI) por compatibilidade historica. Se voce
-    rodar para outra empresa, basta setar ANGELIRA_EMPRESA_ID no .env.
+    Default mantem 876943 (GRIFFI) por compatibilidade historica. Aceita
+    ANGELIRA_EMPRESA_ID (grafia interna) e ANGELLIRA_EMPRESA_ID (backend.env).
     """
-    raw = (os.getenv("ANGELIRA_EMPRESA_ID") or "").strip()
+    raw = (os.getenv("ANGELIRA_EMPRESA_ID") or os.getenv("ANGELLIRA_EMPRESA_ID") or "").strip()
     if not raw:
         return 876943
     try:
@@ -73,10 +78,10 @@ def is_available() -> tuple[bool, str]:
 
     Retorna (disponivel, motivo). Usado pelo /api/status.
     """
-    if not _first_env("ANGELIRA_API_USERNAME", "ANGELIRA_USERNAME", "ANGELIRA_USER"):
-        return False, "ANGELIRA_API_USERNAME nao configurado no .env"
-    if not _first_env("ANGELIRA_API_PASSWORD", "ANGELIRA_PASSWORD", "ANGELIRA_PASS"):
-        return False, "ANGELIRA_API_PASSWORD nao configurado no .env"
+    if not _first_env("ANGELIRA_API_USERNAME", "ANGELIRA_USERNAME", "ANGELIRA_USER", "ANGELLIRA_USER", "ANGELLIRA_USERNAME"):
+        return False, "ANGELIRA_API_USERNAME (ou ANGELLIRA_USER) nao configurado no .env"
+    if not _first_env("ANGELIRA_API_PASSWORD", "ANGELIRA_PASSWORD", "ANGELIRA_PASS", "ANGELLIRA_PASSWORD"):
+        return False, "ANGELIRA_API_PASSWORD (ou ANGELLIRA_PASSWORD) nao configurado no .env"
     try:
         get_empresa_id()
     except RuntimeError as exc:

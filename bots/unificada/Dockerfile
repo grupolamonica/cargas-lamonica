@@ -9,13 +9,20 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# curl pro HEALTHCHECK; libxml2/libxslt sao usados pela svglib via lxml
+# curl pro HEALTHCHECK; build-essential + libxml2/libxslt-dev sao necessarios
+# para compilar lxml (dep transitiva de svglib) em python:3.12-slim.
+# Removemos build-essential apos o pip install pra manter imagem enxuta.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates \
+ && apt-get install -y --no-install-recommends \
+      curl ca-certificates \
+      build-essential libxml2-dev libxslt1-dev \
  && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+RUN pip install -r requirements.txt \
+ && apt-get purge -y build-essential libxml2-dev libxslt1-dev \
+ && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY run.py ./
 COPY backend ./backend
