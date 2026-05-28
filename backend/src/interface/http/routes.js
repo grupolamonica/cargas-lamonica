@@ -64,6 +64,11 @@ import {
   resolveOperatorCadastrosPendentesResponse,
   resolveOperatorAprovarCadastroResponse,
   resolveOperatorRejeitarCadastroResponse,
+  resolveOperatorAngelliraPrecheckResponse,
+  resolveOperatorAngelliraCheckOwnerResponse,
+  resolveOperatorAngelliraCadastrarResponse,
+  resolveOperatorAngelliraCadastrarStepResponse,
+  resolveOperatorListExternalJobsResponse,
 } from "./operator-admin/handlers.js";
 
 import {
@@ -278,6 +283,13 @@ export function registerRoutes(app) {
   router.get("/api/operator/cadastros-pendentes", wrap(resolveOperatorCadastrosPendentesResponse));
   router.post("/api/operator/cadastros/:id/aprovar", wrap(resolveOperatorAprovarCadastroResponse));
   router.post("/api/operator/cadastros/:id/rejeitar", wrap(resolveOperatorRejeitarCadastroResponse));
+
+  // Angellira automation (DC-111 / Sprint 1)
+  router.post("/api/operator/cadastros/:id/angellira/precheck", wrap(resolveOperatorAngelliraPrecheckResponse));
+  router.post("/api/operator/cadastros/:id/angellira/check-owner", wrap(resolveOperatorAngelliraCheckOwnerResponse));
+  router.post("/api/operator/cadastros/:id/angellira/cadastrar", wrap(resolveOperatorAngelliraCadastrarResponse));
+  router.post("/api/operator/cadastros/:id/angellira/cadastrar/:step", wrap(resolveOperatorAngelliraCadastrarStepResponse));
+  router.get("/api/operator/cadastros/:id/external-jobs", wrap(resolveOperatorListExternalJobsResponse));
 
   // Veículos
   router.get("/api/operator/veiculos", wrap(resolveOperatorVehiclesListReadModelResponse));

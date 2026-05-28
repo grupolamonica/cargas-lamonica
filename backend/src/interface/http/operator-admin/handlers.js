@@ -1055,6 +1055,19 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
       return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
     }
 
+    // Body opcional: { jobs: ['angellira'] } — disparo automático de cadastro
+    // externo após criar conta. DC-111 / Sprint 1.
+    let body = {};
+    try {
+      body = await parseJsonBody(request);
+    } catch {
+      // body opcional — segue sem disparo automatico
+    }
+    const requestedJobs = Array.isArray(body?.jobs)
+      ? body.jobs.filter((j) => typeof j === "string").map((j) => j.toLowerCase().trim())
+      : [];
+    const shouldDispatchAngellira = requestedJobs.includes("angellira");
+
     return withPgClient(async (client) => {
       // 1. Busca o registro pendente
       const { rows } = await client.query(
@@ -1149,15 +1162,77 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
         outcome: "success",
         requestIp,
         correlationId,
-        metadata: { driverId, cpf: cpfClean, nome },
+        metadata: { driverId, cpf: cpfClean, nome, jobs: requestedJobs },
       });
+
+      // 7. Opcional: dispara pipeline Angellira em background (DC-111 / Sprint 1)
+      let angellira = null;
+      if (shouldDispatchAngellira) {
+        angellira = await dispatchAngelliraFromApprove({
+          client,
+          cadastroRegistro: registro,
+          driverId,
+          operatorId,
+          correlationId,
+        });
+      }
 
       return {
         statusCode: 200,
-        payload: { ok: true, driverId, meta: { correlationId } },
+        payload: {
+          ok: true,
+          driverId,
+          jobs: requestedJobs,
+          angellira,
+          meta: { correlationId },
+        },
       };
     });
   });
+}
+
+/**
+ * Helper interno: dispara o pipeline Angellira logo após o aprovar.
+ *
+ * Executa síncrono com timeout suave — o tempo médio é ~30-60s (4 chamadas
+ * HTTPS) e a UI granular precisa do snapshot final pra renderizar status.
+ */
+async function dispatchAngelliraFromApprove({ client, cadastroRegistro, driverId, operatorId, correlationId }) {
+  // Import dinâmico evita ciclo de imports e mantém handler carregável mesmo
+  // se o módulo angellira não estiver pronto em algum ambiente de teste.
+  const { runAngelliraPipeline } = await import(
+    "../../../application/operator-admin/use-cases/angellira/dispatch-pipeline.js"
+  );
+  try {
+    const result = await runAngelliraPipeline({
+      client,
+      cadastro: cadastroRegistro,
+      driverUserId: driverId,
+      operatorId,
+      correlationId,
+    });
+    return {
+      ok: result.ok,
+      results: result.results.map(({ step, status, external_id, error }) => ({
+        step, status, external_id: external_id ?? null, error: error ?? null,
+      })),
+    };
+  } catch (err) {
+    logStructuredEvent("error", "operator.cadastro.angellira_dispatch_failed", {
+      cadastroId: cadastroRegistro.id,
+      driverId,
+      correlationId,
+      message: err?.message || String(err),
+    });
+    return {
+      ok: false,
+      error: {
+        code: "PIPELINE_FATAL",
+        message: err?.message || "Falha inesperada ao executar pipeline Angellira",
+      },
+      results: [],
+    };
+  }
 }
 
 /**
@@ -1221,6 +1296,217 @@ export async function resolveOperatorRejeitarCadastroResponse(request) {
         statusCode: 200,
         payload: { ok: true, meta: { correlationId } },
       };
+    });
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Angellira — endpoints granulares para o painel do operador (DC-117).
+//
+// Servem ao painel <ExternalRegistrationPanel /> em /motoristas:
+//   - precheck      → consulta vigência + check_owner
+//   - check-owner   → wrapper passivo (sem cadastrar)
+//   - cadastrar     → dispara pipeline completo
+//   - cadastrar/:step → re-tentativa de uma etapa
+//   - external-jobs → lista jobs do cadastro (audit log)
+// ─────────────────────────────────────────────────────────────────────────
+
+async function loadCadastroAprovado(client, cadastroId) {
+  const { rows } = await client.query(
+    `SELECT id, status, dados FROM public.pending_driver_registrations WHERE id = $1`,
+    [cadastroId],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * POST /api/operator/cadastros/:id/angellira/precheck
+ * Body opcional: { include_check_owner: true }
+ * Retorna: { motorista: {...}, cavalo?: {...}, carreta?: {...}, check_owner?: {...} }
+ */
+export async function resolveOperatorAngelliraPrecheckResponse(request) {
+  return withOperatorSession(request, "angellira-precheck", async ({ correlationId, user }) => {
+    assertOperatorAccessLevel(
+      user, "intermediate",
+      "Apenas operadores com acesso intermediário ou avançado podem consultar Angellira.",
+    );
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+
+    return withPgClient(async (client) => {
+      const cadastro = await loadCadastroAprovado(client, id);
+      if (!cadastro) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+
+      const { performAngelliraPrecheck } = await import(
+        "../../../application/operator-admin/use-cases/angellira/precheck.js"
+      );
+      const result = await performAngelliraPrecheck({ cadastro, correlationId });
+      return { statusCode: 200, payload: { ok: true, ...result, meta: { correlationId } } };
+    });
+  });
+}
+
+/**
+ * POST /api/operator/cadastros/:id/angellira/check-owner
+ * Body: { placa, expected_cpf?, expected_cnpj?, expected_tipo? }
+ */
+export async function resolveOperatorAngelliraCheckOwnerResponse(request) {
+  return withOperatorSession(request, "angellira-check-owner", async ({ correlationId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso negado.");
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+    let body = {};
+    try { body = await parseJsonBody(request); } catch {}
+    const placa = String(body?.placa || "").trim().toUpperCase();
+    if (!placa) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "Campo 'placa' é obrigatório.", meta: { correlationId } } };
+    }
+
+    const { checkOwner } = await import(
+      "../../../infrastructure/cadastro-bots/angellira-bot-client.js"
+    );
+    try {
+      const result = await checkOwner({
+        placa,
+        expectedCpf: body.expected_cpf || "",
+        expectedCnpj: body.expected_cnpj || "",
+        expectedTipo: body.expected_tipo || "",
+        correlationId,
+      });
+      return { statusCode: 200, payload: { ok: true, result, meta: { correlationId } } };
+    } catch (err) {
+      const errJson = typeof err?.toJSON === "function" ? err.toJSON() : { message: err?.message };
+      return { statusCode: 502, payload: { error: "BotError", ...errJson, meta: { correlationId } } };
+    }
+  });
+}
+
+/**
+ * POST /api/operator/cadastros/:id/angellira/cadastrar
+ * Dispara o pipeline completo (proprietario → cavalo → carreta → motorista).
+ */
+export async function resolveOperatorAngelliraCadastrarResponse(request) {
+  return withOperatorSession(request, "angellira-cadastrar", async ({ correlationId, requestIp, operatorId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso negado.");
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+
+    return withPgClient(async (client) => {
+      const cadastro = await loadCadastroAprovado(client, id);
+      if (!cadastro) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      if (cadastro.status !== "aprovado") {
+        return {
+          statusCode: 409,
+          payload: { error: "Conflict", message: "Cadastro precisa ter sido aprovado antes (driver_profile inexistente).", meta: { correlationId } },
+        };
+      }
+
+      // Recupera driver_user_id a partir do CPF (foi criado no /aprovar)
+      const cpfClean = String(cadastro.dados?.motorista?.cpf || "").replace(/\D/g, "");
+      const { rows: dpRows } = await client.query(
+        `SELECT user_id FROM public.driver_profiles WHERE document_number = $1 LIMIT 1`,
+        [cpfClean],
+      );
+      const driverUserId = dpRows[0]?.user_id || null;
+
+      const { runAngelliraPipeline } = await import(
+        "../../../application/operator-admin/use-cases/angellira/dispatch-pipeline.js"
+      );
+      const result = await runAngelliraPipeline({
+        client, cadastro, driverUserId, operatorId, correlationId,
+      });
+
+      await insertSecurityAuditEvent(client, {
+        eventType: "operator.cadastro.angellira_dispatched",
+        actorUserId: operatorId, actorRole: "operator",
+        resourceType: "pending_driver_registration", resourceId: id,
+        action: "angellira_dispatch", outcome: result.ok ? "success" : "partial",
+        requestIp, correlationId,
+        metadata: { steps: result.results.map((r) => ({ step: r.step, status: r.status })) },
+      });
+
+      return { statusCode: 200, payload: { ok: result.ok, results: result.results, meta: { correlationId } } };
+    });
+  });
+}
+
+/**
+ * POST /api/operator/cadastros/:id/angellira/cadastrar/:step
+ * Re-tenta uma única etapa (proprietario_cavalo|cavalo|proprietario_carreta|carreta|motorista).
+ */
+export async function resolveOperatorAngelliraCadastrarStepResponse(request) {
+  return withOperatorSession(request, "angellira-cadastrar-step", async ({ correlationId, requestIp, operatorId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso negado.");
+    const id = getQueryParam(request, "id");
+    const step = getQueryParam(request, "step");
+    const ALLOWED_STEPS = ["proprietario_cavalo", "cavalo", "proprietario_carreta", "carreta", "motorista"];
+    if (!id || !step) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID e step são obrigatórios.", meta: { correlationId } } };
+    }
+    if (!ALLOWED_STEPS.includes(step)) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: `Step inválido. Use um de: ${ALLOWED_STEPS.join(", ")}.`, meta: { correlationId } } };
+    }
+
+    return withPgClient(async (client) => {
+      const cadastro = await loadCadastroAprovado(client, id);
+      if (!cadastro) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      const cpfClean = String(cadastro.dados?.motorista?.cpf || "").replace(/\D/g, "");
+      const { rows: dpRows } = await client.query(
+        `SELECT user_id FROM public.driver_profiles WHERE document_number = $1 LIMIT 1`,
+        [cpfClean],
+      );
+      const driverUserId = dpRows[0]?.user_id || null;
+
+      const { runAngelliraPipeline } = await import(
+        "../../../application/operator-admin/use-cases/angellira/dispatch-pipeline.js"
+      );
+      const result = await runAngelliraPipeline({
+        client, cadastro, driverUserId, operatorId, correlationId, onlySteps: [step],
+      });
+
+      await insertSecurityAuditEvent(client, {
+        eventType: "operator.cadastro.angellira_retry_step",
+        actorUserId: operatorId, actorRole: "operator",
+        resourceType: "pending_driver_registration", resourceId: id,
+        action: "angellira_retry_step", outcome: result.ok ? "success" : "failure",
+        requestIp, correlationId,
+        metadata: { step },
+      });
+
+      return { statusCode: 200, payload: { ok: result.ok, results: result.results, meta: { correlationId } } };
+    });
+  });
+}
+
+/**
+ * GET /api/operator/cadastros/:id/external-jobs
+ * Lista todos os jobs externos do cadastro (angellira/spx/unificada) — audit log.
+ */
+export async function resolveOperatorListExternalJobsResponse(request) {
+  return withOperatorSession(request, "list-external-jobs", async ({ correlationId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso negado.");
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+    return withPgClient(async (client) => {
+      const { listJobsByCadastro } = await import(
+        "../../../application/operator-admin/use-cases/angellira/jobs-repository.js"
+      );
+      const jobs = await listJobsByCadastro({ client, cadastroId: id });
+      return { statusCode: 200, payload: { ok: true, jobs, meta: { correlationId } } };
     });
   });
 }

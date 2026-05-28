@@ -886,17 +886,66 @@ export async function fetchCadastrosPendentes(params: {
   );
 }
 
-export async function aprovarCadastro(id: string) {
+export type AngelliraJobStep =
+  | "proprietario_cavalo"
+  | "cavalo"
+  | "proprietario_carreta"
+  | "carreta"
+  | "motorista";
+
+export type AngelliraStepResult = {
+  step: AngelliraJobStep;
+  status: "OK" | "OK_CACHED" | "ERROR";
+  external_id?: string | null;
+  error?: {
+    code?: string;
+    message?: string;
+    etapa?: string | null;
+    acao?: string | null;
+  } | null;
+};
+
+export type ExternalRegistrationJob = {
+  id: string;
+  cadastro_id: string;
+  driver_user_id?: string | null;
+  target: "angellira" | "spx" | "unificada";
+  step: string;
+  status: "PENDING" | "IN_PROGRESS" | "OK" | "ERROR";
+  external_id?: string | null;
+  attempts?: number;
+  error?: Record<string, unknown> | null;
+  response?: Record<string, unknown> | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+/**
+ * Aprova o cadastro. Opcionalmente dispara cadastro automático nos sistemas
+ * externos via `jobs: ['angellira']`. Quando `jobs` vazio (default), só cria
+ * conta Supabase — comportamento original preservado.
+ *
+ * DC-111 / Sprint 1.
+ */
+export async function aprovarCadastro(id: string, options?: { jobs?: string[] }) {
   const accessToken = await getOperatorAccessToken();
   const response = await fetch(`/api/operator/cadastros/${id}/aprovar`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ jobs: options?.jobs ?? [] }),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new Error((body as { message?: string })?.message || "Erro ao aprovar cadastro.");
   }
-  return response.json() as Promise<{ ok: boolean; driverId: string }>;
+  return response.json() as Promise<{
+    ok: boolean;
+    driverId: string;
+    jobs?: string[];
+    angellira?: { ok: boolean; results: AngelliraStepResult[]; error?: { code?: string; message?: string } } | null;
+  }>;
 }
 
 export async function rejeitarCadastro(id: string, observacoes?: string) {
@@ -911,4 +960,79 @@ export async function rejeitarCadastro(id: string, observacoes?: string) {
     throw new Error((body as { message?: string })?.message || "Erro ao rejeitar cadastro.");
   }
   return response.json() as Promise<{ ok: boolean }>;
+}
+
+// ── Angellira (DC-111 / Sprint 1) ───────────────────────────────────────
+
+async function postOperator<T>(path: string, body?: unknown): Promise<T> {
+  const accessToken = await getOperatorAccessToken();
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: body == null ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    const msg = (errBody as { message?: string })?.message || `HTTP ${response.status}`;
+    const err = new Error(msg) as Error & { code?: string; details?: unknown };
+    err.code = (errBody as { code?: string })?.code;
+    err.details = errBody;
+    throw err;
+  }
+  return response.json() as Promise<T>;
+}
+
+async function getOperator<T>(path: string): Promise<T> {
+  const accessToken = await getOperatorAccessToken();
+  const response = await fetch(path, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    const msg = (errBody as { message?: string })?.message || `HTTP ${response.status}`;
+    throw new Error(msg);
+  }
+  return response.json() as Promise<T>;
+}
+
+export async function precheckAngellira(id: string) {
+  return postOperator<{ ok: boolean; motorista?: unknown; cavalo?: unknown; carreta?: unknown }>(
+    `/api/operator/cadastros/${id}/angellira/precheck`,
+  );
+}
+
+export async function checkOwnerAngellira(id: string, body: {
+  placa: string;
+  expected_cpf?: string;
+  expected_cnpj?: string;
+  expected_tipo?: "PF" | "PJ";
+}) {
+  return postOperator<{
+    ok: boolean;
+    result?: {
+      veiculo_existe: boolean;
+      vehicle_id?: number | null;
+      owner_atual?: { id?: number; name?: string; cpf?: string; cnpj?: string; tipo?: string };
+      divergencia: boolean;
+      motivo?: string | null;
+    };
+  }>(`/api/operator/cadastros/${id}/angellira/check-owner`, body);
+}
+
+export async function cadastrarAngellira(id: string) {
+  return postOperator<{ ok: boolean; results: AngelliraStepResult[] }>(
+    `/api/operator/cadastros/${id}/angellira/cadastrar`,
+  );
+}
+
+export async function retryAngelliraStep(id: string, step: AngelliraJobStep) {
+  return postOperator<{ ok: boolean; results: AngelliraStepResult[] }>(
+    `/api/operator/cadastros/${id}/angellira/cadastrar/${step}`,
+  );
+}
+
+export async function listExternalJobs(id: string) {
+  return getOperator<{ ok: boolean; jobs: ExternalRegistrationJob[] }>(
+    `/api/operator/cadastros/${id}/external-jobs`,
+  );
 }
