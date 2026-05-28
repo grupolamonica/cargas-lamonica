@@ -240,5 +240,3 @@ export function AspxSyncCard() {
     </section>
   );
 }
-
-export default AspxSyncCard;
