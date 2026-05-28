@@ -20,7 +20,7 @@ function safeParseUrl(origin: string) {
   }
 }
 
-export function isProjectManagedVercelHostname(hostname: string) {
+function isProjectManagedVercelHostname(hostname: string) {
   return (
     hostname === TEAM_ALIAS_HOSTNAME ||
     DEPLOYMENT_HOSTNAME_PATTERN.test(hostname) ||

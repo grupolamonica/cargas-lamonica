@@ -1,4 +1,4 @@
-export const CARGO_STATUS_LABELS: Record<string, string> = {
+const CARGO_STATUS_LABELS: Record<string, string> = {
   DRAFT: "Rascunho",
   OPEN: "Aberta",
   RESERVED: "Reservada",
