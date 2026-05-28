@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import "../../infrastructure/config/load-env.js";
 import { logStructuredEvent } from "../../infrastructure/security-log.js";
 import { withPgClient } from "../../infrastructure/pg/postgres.js";
+import { createSupabaseAdminClient } from "../../infrastructure/supabase/admin-client.js";
 import { normalizeVehicleProfile } from "../../domain/vehicle-profiles.js";
 import { baseRouteValues as BASE_ROUTE_VALUES } from "../../domain/operator-admin/base-route-values.js";
 
