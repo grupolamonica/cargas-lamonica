@@ -72,7 +72,8 @@ import {
 } from "../../../domain/load-claims/errors.js";
 import { assertOperatorAccessLevel, assertOperatorPermission, hasOperatorPermission } from "../../../application/load-claims/operator-access.js";
 import { getAdminClient, requireOperatorSession } from "../../../application/load-claims/auth.js";
-import { createSupabaseAdminClient, syncGoogleSheetLoads } from "../../../application/google-sheets/google-sheet-loads.js";
+import { syncGoogleSheetLoads } from "../../../application/google-sheets/google-sheet-loads.js";
+import { createSupabaseAdminClient } from "../../../infrastructure/supabase/admin-client.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 
 const IDEMPOTENCY_TTL_MS = 5 * 60_000;

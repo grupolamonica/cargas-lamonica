@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 import { withPgClient } from "../../infrastructure/pg/postgres.js";
 import { rehydrateStoredValidationSummary } from "../load-claims/public-lead-validation.js";
-import { createSupabaseAdminClient } from "../google-sheets/google-sheet-loads.js";
+import { createSupabaseAdminClient } from "../../infrastructure/supabase/admin-client.js";
 import {
   buildPaginationMeta,
   parseNullableNumber,

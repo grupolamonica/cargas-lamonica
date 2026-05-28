@@ -1,4 +1,4 @@
-import { createSupabaseAdminClient } from "../google-sheets/google-sheet-loads.js";
+import { createSupabaseAdminClient } from "../../infrastructure/supabase/admin-client.js";
 
 // Contrato dos endpoints do card ASPx na tela Motoristas:
 //  - getAspxSyncStatus()  -> metadados da tabela aspx_drivers + TTL dos cookies

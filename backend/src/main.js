@@ -180,7 +180,8 @@ async function bootstrap() {
       if (sheetSyncRunning || !process.env.GOOGLE_SHEET_ID) return;
       sheetSyncRunning = true;
       try {
-        const { syncGoogleSheetLoads, createSupabaseAdminClient } = await import("./application/google-sheets/google-sheet-loads.js");
+        const { syncGoogleSheetLoads } = await import("./application/google-sheets/google-sheet-loads.js");
+        const { createSupabaseAdminClient } = await import("./infrastructure/supabase/admin-client.js");
         await syncGoogleSheetLoads({ supabaseClient: createSupabaseAdminClient() });
         console.info("[sheet-sync-periodic] sync concluído");
       } catch (err) {

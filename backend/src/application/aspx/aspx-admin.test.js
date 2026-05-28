@@ -4,7 +4,7 @@ const { mockCreateSupabaseAdminClient } = vi.hoisted(() => ({
   mockCreateSupabaseAdminClient: vi.fn(),
 }));
 
-vi.mock("../google-sheets/google-sheet-loads.js", () => ({
+vi.mock("../../infrastructure/supabase/admin-client.js", () => ({
   createSupabaseAdminClient: mockCreateSupabaseAdminClient,
 }));
 

@@ -28,8 +28,11 @@ vi.mock("../../../infrastructure/pg/postgres.js", () => ({
 }));
 
 // Bypass do sheet-sync (depende de SUPABASE_*); o handler usa internamente.
-vi.mock("../../../application/google-sheets/google-sheet-loads.js", () => ({
+vi.mock("../../../infrastructure/supabase/admin-client.js", () => ({
   createSupabaseAdminClient: () => null,
+}));
+
+vi.mock("../../../application/google-sheets/google-sheet-loads.js", () => ({
   syncGoogleSheetLoads: vi.fn().mockResolvedValue({ availableLoadsCount: 0, unlinkedLoadsCount: 0 }),
 }));
 
