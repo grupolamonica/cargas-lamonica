@@ -1,5 +1,6 @@
-import { useDeferredValue, useEffect, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import {
   AlertTriangle,
   Copy,
@@ -174,7 +175,10 @@ const OperatorDashboard = () => {
   const [clienteFilter, setClienteFilter] = useState("");
   const [page, setPage] = useState(1);
   const [detailCargo, setDetailCargo] = useState<OperatorDashboardItem | null>(null);
-  const deferredSearch = useDeferredValue(search.trim());
+  // Debounce de busca para evitar disparar um refetch por keystroke. useDeferredValue
+  // só adia render — não gate fetch. 300ms é o sweet spot para typing humano.
+  const debouncedSearch = useDebouncedValue(search.trim(), 300);
+  const deferredSearch = useDeferredValue(debouncedSearch);
   const deferredStatusFilter = useDeferredValue(statusFilter);
   const deferredVisibilityFilter = useDeferredValue(visibilityFilter);
   const deferredClienteFilter = useDeferredValue(clienteFilter);
@@ -236,7 +240,51 @@ const OperatorDashboard = () => {
     }
   }, [routesError]);
 
-  const cargos = data?.items || [];
+  const cargos = useMemo(() => data?.items ?? [], [data?.items]);
+  // Memoiza derivação cargo×routes (route match + publication readiness +
+  // share URLs) — evita recomputação O(N·R) em cada keystroke/render.
+  // Recalcula apenas quando cargos ou routes mudam.
+  const cargoComputed = useMemo(() => {
+    if (typeof window === "undefined") return [];
+    const origin = window.location.origin;
+    return cargos.map((cargo: OperatorDashboardItem) => {
+      const matchedRoute = resolveAssignableRouteForCargo(routes, {
+        route_key: "",
+        origem: cargo.origem,
+        destino: cargo.destino,
+      });
+      const publication = resolveCargoPublicationReadiness(
+        {
+          perfil: cargo.perfil,
+          valor: cargo.valor,
+          bonus: cargo.bonus,
+          distancia_km: cargo.distancia_km,
+          duracao_horas: cargo.duracao_horas,
+        },
+        matchedRoute,
+      );
+      const loadingDate = buildLoadingDateTime(cargo.sheet_data_carregamento, cargo.data, cargo.horario);
+      const sharePath = buildCargoPublicPath(cargo.id);
+      const shareUrl = buildCargoShareUrl(origin, cargo.id);
+      const totalPayment =
+        publication.totalPayment !== null ? publication.totalPayment : buildTotalPayment(cargo.valor, cargo.bonus);
+      const distanceKm = publication.distancia_km;
+      const durationHours = publication.tempo_estimado_horas ?? publication.duracao_horas;
+      const isShareReady = cargo.status === OPEN_STATUS && !cargo.is_template && publication.isReady;
+      return {
+        cargo,
+        matchedRoute,
+        publication,
+        loadingDate,
+        sharePath,
+        shareUrl,
+        totalPayment,
+        distanceKm,
+        durationHours,
+        isShareReady,
+      };
+    });
+  }, [cargos, routes]);
   const summary = data?.summary || {
     activeCount: 0,
     draftCount: 0,
@@ -385,31 +433,7 @@ const OperatorDashboard = () => {
         ) : (
           <>
             <section className="grid gap-4 xl:grid-cols-2">
-              {cargos.map((cargo: OperatorDashboardItem) => {
-                const loadingDate = buildLoadingDateTime(cargo.sheet_data_carregamento, cargo.data, cargo.horario);
-                const sharePath = buildCargoPublicPath(cargo.id);
-                const shareUrl = buildCargoShareUrl(window.location.origin, cargo.id);
-                const matchedRoute = resolveAssignableRouteForCargo(routes, {
-                  route_key: "",
-                  origem: cargo.origem,
-                  destino: cargo.destino,
-                });
-                const publication = resolveCargoPublicationReadiness(
-                  {
-                    perfil: cargo.perfil,
-                    valor: cargo.valor,
-                    bonus: cargo.bonus,
-                    distancia_km: cargo.distancia_km,
-                    duracao_horas: cargo.duracao_horas,
-                  },
-                  matchedRoute,
-                );
-                const totalPayment =
-                  publication.totalPayment !== null ? publication.totalPayment : buildTotalPayment(cargo.valor, cargo.bonus);
-                const distanceKm = publication.distancia_km;
-                const durationHours = publication.tempo_estimado_horas ?? publication.duracao_horas;
-                const isShareReady = cargo.status === OPEN_STATUS && !cargo.is_template && publication.isReady;
-
+              {cargoComputed.map(({ cargo, publication, sharePath, shareUrl, isShareReady }) => {
                 return (
                   <article
                     key={cargo.id}
