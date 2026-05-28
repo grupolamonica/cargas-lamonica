@@ -55,14 +55,14 @@ import {
   updateOperatorDriverProfile,
 } from "../../../application/operator-admin/service.js";
 import {
-  fetchOperatorAuditLogsReadModel,
   fetchOperatorCargoListReadModel,
   fetchOperatorClientesListReadModel,
   fetchOperatorDriversListReadModel,
   fetchOperatorRoutesListReadModel,
   fetchOperatorVehiclesListReadModel,
-  fetchPendingDriverRegistrations,
 } from "../../../application/operator-admin/read-models.js";
+import { fetchOperatorAuditLogsReadModel } from "../../../application/operator-admin/use-cases/audit-logs-read-model.js";
+import { fetchPendingDriverRegistrations } from "../../../application/operator-admin/use-cases/pending-driver-registrations-read-model.js";
 import { ensureDriverLoadsSheetFresh } from "../public-loads/handlers.js";
 import { fetchDriverFlowMetrics } from "../../../domain/operator-admin/driver-flow-metrics.js";
 import {
@@ -72,7 +72,8 @@ import {
 } from "../../../domain/load-claims/errors.js";
 import { assertOperatorAccessLevel, assertOperatorPermission, hasOperatorPermission } from "../../../application/load-claims/operator-access.js";
 import { getAdminClient, requireOperatorSession } from "../../../application/load-claims/auth.js";
-import { createSupabaseAdminClient, syncGoogleSheetLoads } from "../../../application/google-sheets/google-sheet-loads.js";
+import { syncGoogleSheetLoads } from "../../../application/google-sheets/google-sheet-loads.js";
+import { createSupabaseAdminClient } from "../../../infrastructure/supabase/admin-client.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 
 const IDEMPOTENCY_TTL_MS = 5 * 60_000;

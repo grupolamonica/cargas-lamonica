@@ -1,7 +1,7 @@
 import "../config/load-env.js";
 import { logStructuredEvent } from "../security-log.js";
 import { recordDriverValidationIntegrationResult } from "../metrics.js";
-import { createSupabaseAdminClient } from "../../application/google-sheets/google-sheet-loads.js";
+import { createSupabaseAdminClient } from "../supabase/admin-client.js";
 
 // Fonte de verdade: tabela public.aspx_drivers (populada pelo job
 // scripts/aspx-sync/asp.py a cada 1h via GitHub Action). Presença no

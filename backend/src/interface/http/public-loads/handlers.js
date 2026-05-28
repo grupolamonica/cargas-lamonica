@@ -2,10 +2,8 @@ import "../../../infrastructure/config/load-env.js";
 
 import { ZodError } from "zod";
 
-import {
-  createSupabaseAdminClient,
-  syncGoogleSheetLoads,
-} from "../../../application/google-sheets/google-sheet-loads.js";
+import { syncGoogleSheetLoads } from "../../../application/google-sheets/google-sheet-loads.js";
+import { createSupabaseAdminClient } from "../../../infrastructure/supabase/admin-client.js";
 import {
   LoadClaimServiceError,
   NotFoundError,
