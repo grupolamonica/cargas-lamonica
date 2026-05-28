@@ -58,3 +58,15 @@ data-dump-*.json
 
 # User uploads (cadastro-motorista local OCR)
 **/anexos_tmp/
+
+# Local OCR test fixtures (real PDFs / selfies / CRLV / CNH used during dev).
+# Must NEVER be committed: they are served from /public, would leak PII,
+# and would inflate the production bundle. Move them to frontend/test/fixtures/
+# if they need to be versioned anonymously.
+frontend/public/test-fixtures/
+
+# Split branches workspace (local-only commit-splitting notes)
+.split-branches/
+
+# Local generated docs / reports (per-developer)
+docs/reports/
