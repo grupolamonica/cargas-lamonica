@@ -92,17 +92,20 @@ function checkIdempotencyCache(key) {
 
 function setIdempotencyCache(key, response) {
   if (idempotencyCache.size >= MAX_IDEMPOTENCY_CACHE_SIZE) {
-    // MD-01: varre expirados antes de deletar arbitrariamente (FIFO não é LRU)
+    // Sweep completo de expirados antes de fallback FIFO — corrige bug em que
+    // break prematuro mantinha o cache cheio e degradava em FIFO eviction logo
+    // após o primeiro overflow.
     const now = Date.now();
-    let deleted = false;
+    let evicted = 0;
     for (const [k, v] of idempotencyCache) {
       if (v.expiresAt <= now) {
         idempotencyCache.delete(k);
-        deleted = true;
-        break;
+        evicted += 1;
       }
     }
-    if (!deleted) {
+    // Fallback FIFO apenas se sweep não liberou espaço suficiente — garante
+    // bounded memory mesmo sob alta taxa de chaves não-expiradas.
+    if (evicted === 0) {
       idempotencyCache.delete(idempotencyCache.keys().next().value);
     }
   }
