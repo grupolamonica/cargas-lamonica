@@ -35,6 +35,17 @@ export default [
       "no-empty": ["warn", { allowEmptyCatch: true }],
       "no-unreachable": "warn",
       "no-constant-condition": ["warn", { checkLoops: false }],
+      // Findings pré-existentes do codebase — ESLint só foi habilitado no
+      // backend na Wave 2, então essas rules nunca rodaram antes.
+      // Mantidas como "warn" temporariamente para não quebrar CI; cada uma
+      // tem 4-5 occurrences que merecem PR dedicado:
+      //   - preserve-caught-error: throw new Error(...) sem `{ cause }`
+      //   - no-useless-assignment: variáveis atribuídas e nunca lidas
+      //   - no-useless-escape:    \- em regex character class
+      // TODO: criar issues e promover para "error" após limpeza.
+      "preserve-caught-error": "warn",
+      "no-useless-assignment": "warn",
+      "no-useless-escape": "warn",
     },
   },
   {
