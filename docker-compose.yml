@@ -163,6 +163,89 @@ services:
       - "traefik.http.routers.lmc-cadastro-ocr.middlewares=lmc-ocr-strip"
       - "traefik.http.services.lmc-cadastro-ocr.loadbalancer.server.port=8765"
 
+  # ── Angellira bot (sidecar FastAPI :8765) ────────────────────────────────
+  # Cadastra motorista/proprietario/veiculo no AngelLira via API publica.
+  # Sem acesso externo (Traefik) — chamado apenas pelo backend Node via
+  # rede privada lamonica-net (http://angelira-bot:8765).
+  # Epic DC-111 / Sprint 1 / DC-113.
+  angelira-bot:
+    build:
+      context: ./bots/angelira
+      dockerfile: Dockerfile
+    image: lamonica-angelira-bot:latest
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+    environment:
+      # Credenciais Angellira (provisionar no .env da VPS — NUNCA no repo)
+      ANGELIRA_API_USERNAME: ${ANGELIRA_API_USERNAME:-}
+      ANGELIRA_API_PASSWORD: ${ANGELIRA_API_PASSWORD:-}
+      ANGELIRA_EMPRESA_ID: ${ANGELIRA_EMPRESA_ID:-876943}
+      ANGELIRA_AUTH_BASE: ${ANGELIRA_AUTH_BASE:-https://auth.angellira.com.br}
+      ANGELIRA_API_BASE: ${ANGELIRA_API_BASE:-https://api.angellira.com.br/profile}
+      ANGELIRA_PRECHECK_DIAS: ${ANGELIRA_PRECHECK_DIAS:-365}
+      # CORS aberto pra o backend interno; sem exposicao externa o risco e baixo
+      CORS_ORIGINS: ${ANGELIRA_BOT_CORS_ORIGINS:-http://backend:3001,http://localhost:5010,http://127.0.0.1:5010}
+      HOST: "0.0.0.0"
+      PORT: "8765"
+      PYTHONUNBUFFERED: "1"
+    # Cliente HTTP simples — sem Selenium, footprint baixo.
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # /api/status retorna 200 mesmo sem creds; basta o uvicorn responder.
+      test: ["CMD", "curl", "-fs", "http://localhost:8765/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    expose:
+      - "8765"
+
+  # ── Unificada bot (sidecar FastAPI :8001) ────────────────────────────────
+  # Gera Risk Assessment Document (PDF unificado) via ReportLab a partir da
+  # API Angellira. Reusa o JWT do mesmo usuario (ANGELIRA_API_*).
+  # Epic DC-111 / Sprint 1 / DC-113.
+  unificada-bot:
+    build:
+      context: ./bots/unificada
+      dockerfile: Dockerfile
+    image: lamonica-unificada-bot:latest
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+    environment:
+      ANGELIRA_API_USERNAME: ${ANGELIRA_API_USERNAME:-}
+      ANGELIRA_API_PASSWORD: ${ANGELIRA_API_PASSWORD:-}
+      ANGELIRA_COMPANY_ID: ${ANGELIRA_EMPRESA_ID:-876943}
+      ANGELIRA_AUTH_BASE: ${ANGELIRA_AUTH_BASE:-https://auth.angellira.com.br}
+      UNIFICADA_HOST: "0.0.0.0"
+      UNIFICADA_PORT: "8001"
+      PYTHONUNBUFFERED: "1"
+    # ReportLab + svglib podem subir picos em PDFs grandes; 384m cobre.
+    mem_limit: 384m
+    mem_reservation: 96m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    expose:
+      - "8001"
+
   # ── ASPX cookie renewal (persistent container on VPS) ────────────────────
   aspx-renewal:
     build:
