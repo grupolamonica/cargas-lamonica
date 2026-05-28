@@ -15,10 +15,11 @@ interface ApiRequestOptions {
 
 /**
  * Erro estruturado lançado por `requestJson` quando a API responde com erro JSON.
- * Expõe `status`, `code` (HTTP-shape, ex.: "VALIDATION_ERROR") e `details.code`
- * (código de domínio, ex.: "limite_cargas_excedido") para mapeamento em pt-BR.
+ * Mantida como classe interna: o erro com a mesma forma exposto publicamente
+ * vive em `@/services/loadClaims`, que é o ponto de entrada usado pelos
+ * consumidores. Manter as duas pontas evita acoplamento circular.
  */
-export class ApiError extends Error {
+class ApiError extends Error {
   status: number;
   code: string | null;
   details: { code?: string; [k: string]: unknown } | null;
