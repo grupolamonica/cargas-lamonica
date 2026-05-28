@@ -1,0 +1,27 @@
+# Config ruff para os 3 sidecars Python em bots/.
+# Como os arquivos foram extraidos de um projeto externo (api-only-export),
+# adotamos perfil moderado: bloqueamos apenas erros de comportamento (F821
+# undefined-name, F63, F7) e ignoramos regras puramente cosméticas.
+#
+# Sprint 2 endurece (DC-119 do SPX).
+
+line-length = 200
+extend-exclude = [".venv", "__pycache__", "data", "logs", "anexos_tmp", "static"]
+
+[lint]
+select = ["E", "F"]
+ignore = [
+  "E501",   # line too long — pt-BR + comentarios tecnicos excedem facilmente
+  "E701",   # multiple statements on one line (colon) — comum em early returns
+  "E702",   # idem (semicolon)
+  "E401",   # multiple imports on one line
+  "E402",   # imports nao no topo — comum com sys.path.insert antes do import
+  "E731",   # lambda assignment
+  "F401",   # unused imports — comum em __init__.py
+  "F841",   # unused variables — pode ser intencional (debug, sentinela)
+]
+
+[lint.per-file-ignores]
+# SPX entra completo no Sprint 2 (DC-111). Por ora aceitamos resíduo do
+# código original sem refactor.
+"spx/**" = ["F821", "E722"]

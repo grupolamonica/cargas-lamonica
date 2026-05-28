@@ -87,7 +87,8 @@ def _fmt_date(value) -> str:
         try:
             d = datetime.fromisoformat(s.replace('Z', '+00:00'))
             return d.strftime('%d/%m/%Y')
-        except: return s[:10]
+        except (ValueError, TypeError):
+            return s[:10]
     return s
 
 
@@ -100,7 +101,8 @@ def _fmt_datetime(value) -> str:
             # Lê e mantém o relógio UTC (não converte pra timezone local)
             d = datetime.fromisoformat(s.replace('Z', '+00:00')).replace(tzinfo=None)
             return d.strftime('%d/%m/%Y, %H:%M:%S')
-        except: return s[:10]
+        except (ValueError, TypeError):
+            return s[:10]
     return s
 
 

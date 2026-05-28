@@ -76,7 +76,7 @@ Epic (phase do roadmap / objetivo de longo prazo)
        └─ Subtask              (passo interno de uma entrega)
 ```
 
-- **Epic** — grande objetivo (ex.: "Phase 8 — Cadastro v2 Hardening").
+- **Epic** — grande objetivo (ex.: "Phase 8 — Cadastro v2 Hardening", "DC-111 — Automação Aprovar → Angellira+SPX").
 - **Tarefa** — unidade de trabalho rastreável; sempre tem `parent` (Epic).
 - **História** — funcionalidade na ótica do usuário.
 - **Bug** — defeito em comportamento já entregue.
