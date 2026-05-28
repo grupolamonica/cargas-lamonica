@@ -34,7 +34,7 @@ const PII_PATTERNS: Array<{ regex: RegExp; mask: string }> = [
   { regex: /\b\d{11}\b/g, mask: "***********" },
 ];
 
-export function maskPII(msg: string): string {
+function maskPII(msg: string): string {
   let out = msg;
   for (const { regex, mask } of PII_PATTERNS) {
     out = out.replace(regex, mask);

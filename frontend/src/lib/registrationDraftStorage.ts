@@ -7,8 +7,8 @@
  * para recuperação cross-device — este módulo cuida apenas do cache local.
  */
 
-export const DRAFT_STORAGE_PREFIX = "lamonica-cadastro-v2-draft";
-export const TTL_MS = 72 * 60 * 60 * 1000;
+const DRAFT_STORAGE_PREFIX = "lamonica-cadastro-v2-draft";
+const TTL_MS = 72 * 60 * 60 * 1000;
 
 export interface StoredDraft {
   driverUserId: string;
@@ -19,7 +19,7 @@ export interface StoredDraft {
   expiresAt: number;
 }
 
-export function getDraftKey(driverUserId: string): string {
+function getDraftKey(driverUserId: string): string {
   return `${DRAFT_STORAGE_PREFIX}:${driverUserId}`;
 }
 

@@ -1,8 +1,8 @@
 import type { PublicLoadLeadPayload } from "@/services/loadClaims";
 
-export const DRIVER_LEAD_STORAGE_PREFIX = "lamonica-public-load-lead";
+const DRIVER_LEAD_STORAGE_PREFIX = "lamonica-public-load-lead";
 export const DRIVER_LEAD_STORAGE_EVENT = "lamonica-driver-lead-storage-changed";
-export const DRIVER_LEAD_NOTIFICATION_DISMISSALS_KEY = "lamonica-driver-lead-notification-dismissals";
+const DRIVER_LEAD_NOTIFICATION_DISMISSALS_KEY = "lamonica-driver-lead-notification-dismissals";
 
 export interface StoredLeadState {
   loadId: string;
@@ -21,7 +21,7 @@ function emitDriverLeadStorageChange() {
   window.dispatchEvent(new CustomEvent(DRIVER_LEAD_STORAGE_EVENT));
 }
 
-export function getDriverLeadStorageKey(loadId: string) {
+function getDriverLeadStorageKey(loadId: string) {
   return `${DRIVER_LEAD_STORAGE_PREFIX}:${loadId}`;
 }
 

@@ -28,7 +28,7 @@ const CITY_COORDS: Record<string, CityCoord> = {
   "sao paulo": { lat: -23.5505, lon: -46.6333 },
 };
 
-export function normalizeOriginKey(origem: string): string {
+function normalizeOriginKey(origem: string): string {
   return origem
     .toLowerCase()
     .normalize("NFD")

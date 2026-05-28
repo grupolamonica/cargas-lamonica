@@ -261,14 +261,14 @@ RETURNS text
 LANGUAGE sql
 STABLE
 AS $$
+  -- Security: trust ONLY app_metadata.role (server-controlled via service_role).
+  -- user_metadata is writable by the user themselves via supabase.auth.updateUser
+  -- and MUST NEVER be used for authorization decisions. See migration
+  -- 20260528000002_harden_current_app_role_v2.sql.
   SELECT NULLIF(
     lower(
       btrim(
-        COALESCE(
-          auth.jwt() -> 'app_metadata' ->> 'role',
-          auth.jwt() -> 'user_metadata' ->> 'role',
-          ''
-        )
+        COALESCE(auth.jwt() -> 'app_metadata' ->> 'role', '')
       )
     ),
     ''
