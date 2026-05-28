@@ -17,7 +17,7 @@ import {
   onlyDigits,
 } from "@/lib/brazilianValidators";
 import type { BrazilianBank } from "@/lib/brazilianBanks";
-import { ocrRntrc } from "@/pages/cadastro/cadastroApi";
+import { ocrRntrc } from "@/services/cadastroApi";
 
 import { ProgressiveSection } from "./ProgressiveSection";
 import { BankSelector } from "./BankSelector";

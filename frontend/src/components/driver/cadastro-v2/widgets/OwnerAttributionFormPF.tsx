@@ -9,7 +9,7 @@ import {
   isValidBrazilianPhone,
   onlyDigits,
 } from "@/lib/brazilianValidators";
-import { uploadDraftFile } from "@/pages/cadastro/cadastroApi";
+import { uploadDraftFile } from "@/services/cadastroApi";
 
 /**
  * Formulario de identidade complementar do proprietario PF do CRLV.

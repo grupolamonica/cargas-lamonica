@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { DriverAlert } from "@/components/driver/ui/DriverAlert";
 import { isValidCnpj, isValidCpf } from "@/lib/brazilianValidators";
 import { UFS } from "@/lib/ufs";
-import { brDateToIso, ocrCartaoCnpj, ocrCnh } from "@/pages/cadastro/cadastroApi";
+import { brDateToIso, ocrCartaoCnpj, ocrCnh } from "@/services/cadastroApi";
 
 import { OcrUploadTile, type OcrTileState } from "./OcrUploadTile";
 import { ProgressiveSection } from "./ProgressiveSection";

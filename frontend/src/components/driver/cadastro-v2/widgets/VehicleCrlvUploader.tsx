@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { MoreOptionsToggle } from "@/components/driver/ui";
 import { onlyDigits } from "@/lib/brazilianValidators";
 import { formatExpiryLabel } from "@/lib/expiryLabel";
-import { ocrCrlv } from "@/pages/cadastro/cadastroApi";
+import { ocrCrlv } from "@/services/cadastroApi";
 
 import { OcrUploadTile, type OcrTileState } from "./OcrUploadTile";
 import type { OcrResultField } from "./OcrResultReview";
