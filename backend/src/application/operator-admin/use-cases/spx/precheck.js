@@ -19,6 +19,31 @@ function digitsOnly(value) {
   return String(value ?? "").replace(/\D/g, "");
 }
 
+// Cache server-side curto — chave (cadastroId), TTL 60s.
+// Coerente com cache Angellira (mesmo TTL).
+const PRECHECK_CACHE = new Map();
+const PRECHECK_CACHE_TTL_MS = 60_000;
+const PRECHECK_CACHE_MAX_SIZE = 500;
+
+function getCached(cadastroId) {
+  const entry = PRECHECK_CACHE.get(cadastroId);
+  if (!entry) return null;
+  if (entry.expiresAt < Date.now()) {
+    PRECHECK_CACHE.delete(cadastroId);
+    return null;
+  }
+  return entry.value;
+}
+function setCached(cadastroId, value) {
+  if (PRECHECK_CACHE.size >= PRECHECK_CACHE_MAX_SIZE) {
+    PRECHECK_CACHE.delete(PRECHECK_CACHE.keys().next().value);
+  }
+  PRECHECK_CACHE.set(cadastroId, { value, expiresAt: Date.now() + PRECHECK_CACHE_TTL_MS });
+}
+export function invalidateSpxPrecheckCache(cadastroId) {
+  if (cadastroId) PRECHECK_CACHE.delete(cadastroId);
+}
+
 /**
  * Executa precheck SPX para o motorista do cadastro.
  *
@@ -35,7 +60,25 @@ function digitsOnly(value) {
  *   message?: string,
  * }>}
  */
-export async function performSpxPrecheck({ cadastro, correlationId = null }) {
+export async function performSpxPrecheck({ cadastro, correlationId = null, skipCache = false }) {
+  // Cache hit?
+  if (!skipCache && cadastro?.id) {
+    const cached = getCached(cadastro.id);
+    if (cached) return { ...cached, _cached: true, _durationMs: 0 };
+  }
+  const startedAt = Date.now();
+  const result = await _performSpxPrecheckInner({ cadastro, correlationId });
+  result._cached = false;
+  result._durationMs = Date.now() - startedAt;
+  // Cacheia só sucesso (UNAVAILABLE → retry no próximo modal)
+  if (cadastro?.id && result.status !== "UNAVAILABLE") {
+    const { _cached, _durationMs, ...cachable } = result;
+    setCached(cadastro.id, cachable);
+  }
+  return result;
+}
+
+async function _performSpxPrecheckInner({ cadastro, correlationId = null }) {
   const motorista = cadastro?.dados?.motorista || {};
   const cpf = digitsOnly(motorista.cpf);
   const driverName = String(motorista.nome || "").trim().toUpperCase();

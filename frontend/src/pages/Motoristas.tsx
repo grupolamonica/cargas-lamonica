@@ -37,6 +37,20 @@ import DashboardHeader from "@/components/DashboardHeader";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
 import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
+import { precheckAngellira, precheckSpx } from "@/services/readModels";
+
+/**
+ * Pré-fetch dos prechecks Angellira+SPX em background.
+ * Chamado quando operador SELECIONA o cadastro pendente (clique na linha).
+ * Aproveita o cache server-side de 60s — quando o modal abre depois, vem
+ * do cache (response instantânea).
+ */
+function prefetchPrechecks(cadastroId: string) {
+  if (!cadastroId) return;
+  // Fire-and-forget. Erros são silenciados — o modal vai tentar de novo.
+  precheckAngellira(cadastroId).catch(() => {});
+  precheckSpx(cadastroId).catch(() => {});
+}
 import { Input } from "@/components/ui/input";
 import { buildDisplayDateTime, formatShortDateTime, parseDateStringAsLocal } from "@/lib/dateDisplay";
 import { cn } from "@/lib/utils";
@@ -705,7 +719,14 @@ const Motoristas = () => {
                       {pendentesItems.map((item) => (
                         <tr
                           key={item.id}
-                          onClick={() => setSelectedPendente(item)}
+                          onClick={() => {
+                            setSelectedPendente(item);
+                            // Pré-fetch: dispara precheck em background pra
+                            // aquecer o cache server-side (TTL 60s). Quando
+                            // operador clicar "Aprovar", modal abre quase
+                            // instantâneo (cache hit).
+                            prefetchPrechecks(item.id);
+                          }}
                           className={cn(
                             "cursor-pointer border-b border-border/50 transition-colors hover:bg-muted/40",
                             selectedPendente?.id === item.id && "bg-primary/5",
