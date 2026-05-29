@@ -43,18 +43,18 @@ function makeFakeClient() {
     query: vi.fn(async (sql, params = []) => {
       const sqlNorm = sql.replace(/\s+/g, " ").trim();
 
-      // SELECT existing OK job
+      // SELECT existing OK job — params: [cadastroId, target, step]
       if (/SELECT id, status, external_id, response, finished_at FROM public.external_registration_jobs/.test(sqlNorm)) {
-        const [cadastroId, step] = params;
+        const [cadastroId, , step] = params;
         const found = [...jobs.values()].find(
           (j) => j.cadastro_id === cadastroId && j.step === step && j.status === "OK",
         );
         return { rows: found ? [found] : [] };
       }
 
-      // SELECT FOR UPDATE pending/error
-      if (/SELECT id FROM public.external_registration_jobs WHERE cadastro_id = \$1 AND target = 'angellira' AND step = \$2 AND status IN \('PENDING', 'ERROR'\) ORDER BY created_at DESC LIMIT 1 FOR UPDATE/.test(sqlNorm)) {
-        const [cadastroId, step] = params;
+      // SELECT FOR UPDATE pending/error — params: [cadastroId, target, step]
+      if (/SELECT id FROM public.external_registration_jobs WHERE cadastro_id = \$1 AND target = \$2 AND step = \$3 AND status IN \('PENDING', 'ERROR'\) ORDER BY created_at DESC LIMIT 1 FOR UPDATE/.test(sqlNorm)) {
+        const [cadastroId, , step] = params;
         const found = [...jobs.values()].find(
           (j) => j.cadastro_id === cadastroId && j.step === step && ["PENDING", "ERROR"].includes(j.status),
         );
@@ -69,9 +69,9 @@ function makeFakeClient() {
         return { rows: [] };
       }
 
-      // INSERT IN_PROGRESS (sem PENDING prévio)
+      // INSERT IN_PROGRESS (sem PENDING prévio) — params: [cadastroId, target, step, payload]
       if (/INSERT INTO public.external_registration_jobs \(cadastro_id, target, step, status, payload, attempts, started_at\)/.test(sqlNorm)) {
-        const [cadastroId, step, payload] = params;
+        const [cadastroId, , step, payload] = params;
         const id = `job-${jobs.size + 1}`;
         const row = { id, cadastro_id: cadastroId, step, status: "IN_PROGRESS", payload, attempts: 1 };
         jobs.set(id, row);

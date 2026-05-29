@@ -61,7 +61,7 @@ export async function runSpxPipeline({
   });
 
   // Idempotência: se já tem job OK pra spx_motorista, pula
-  const existing = await findExistingOkJob({ client, cadastroId, step: STEP });
+  const existing = await findExistingOkJob({ client, cadastroId, step: STEP, target: "spx" });
   if (existing) {
     logStructuredEvent("info", "spx.pipeline.skipped_already_ok", {
       cadastroId, existingJobId: existing.id,
@@ -79,7 +79,7 @@ export async function runSpxPipeline({
 
   // Cria job IN_PROGRESS
   const jobId = await markJobInProgress({
-    client, cadastroId, step: STEP,
+    client, cadastroId, step: STEP, target: "spx",
     payload: { cadastroId, cpf: cadastro?.dados?.motorista?.cpf || "" },
   });
 

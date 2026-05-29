@@ -30,6 +30,7 @@ export async function createPendingJobs({
   driverUserId = null,
   steps,
   createdBy = null,
+  target = "angellira",
 }) {
   if (!Array.isArray(steps) || steps.length === 0) {
     return [];
@@ -40,10 +41,10 @@ export async function createPendingJobs({
       `
         INSERT INTO public.external_registration_jobs
           (cadastro_id, driver_user_id, target, step, status, created_by)
-        VALUES ($1, $2, 'angellira', $3, 'PENDING', $4)
+        VALUES ($1, $2, $3, $4, 'PENDING', $5)
         RETURNING id, step, status
       `,
-      [cadastroId, stripUuidIfInvalid(driverUserId), step, stripUuidIfInvalid(createdBy)],
+      [cadastroId, stripUuidIfInvalid(driverUserId), target, step, stripUuidIfInvalid(createdBy)],
     );
     rows.push(inserted[0]);
   }
@@ -54,19 +55,19 @@ export async function createPendingJobs({
  * Verifica se já existe um job OK para esta etapa (idempotência).
  * Se sim, devolve a row OK pra caller pular o re-dispatch.
  */
-export async function findExistingOkJob({ client, cadastroId, step }) {
+export async function findExistingOkJob({ client, cadastroId, step, target = "angellira" }) {
   const { rows } = await client.query(
     `
       SELECT id, status, external_id, response, finished_at
       FROM public.external_registration_jobs
       WHERE cadastro_id = $1
-        AND target = 'angellira'
-        AND step = $2
+        AND target = $2
+        AND step = $3
         AND status = 'OK'
       ORDER BY finished_at DESC NULLS LAST
       LIMIT 1
     `,
-    [cadastroId, step],
+    [cadastroId, target, step],
   );
   return rows[0] || null;
 }
@@ -75,18 +76,18 @@ export async function findExistingOkJob({ client, cadastroId, step }) {
  * Marca um job como IN_PROGRESS no início e devolve a row (com attempts + 1).
  * Usa SELECT FOR UPDATE pra evitar 2 workers pegarem o mesmo step.
  */
-export async function markJobInProgress({ client, cadastroId, step, payload = {} }) {
+export async function markJobInProgress({ client, cadastroId, step, payload = {}, target = "angellira" }) {
   // Pega o job PENDING mais recente; se não houver, cria um (re-tentativa
   // manual após OK/ERROR antigo).
   const { rows: pending } = await client.query(
     `
       SELECT id FROM public.external_registration_jobs
-      WHERE cadastro_id = $1 AND target = 'angellira' AND step = $2
+      WHERE cadastro_id = $1 AND target = $2 AND step = $3
         AND status IN ('PENDING', 'ERROR')
       ORDER BY created_at DESC LIMIT 1
       FOR UPDATE
     `,
-    [cadastroId, step],
+    [cadastroId, target, step],
   );
 
   let jobId;
@@ -106,10 +107,10 @@ export async function markJobInProgress({ client, cadastroId, step, payload = {}
       `
         INSERT INTO public.external_registration_jobs
           (cadastro_id, target, step, status, payload, attempts, started_at)
-        VALUES ($1, 'angellira', $2, 'IN_PROGRESS', $3, 1, now())
+        VALUES ($1, $2, $3, 'IN_PROGRESS', $4, 1, now())
         RETURNING id
       `,
-      [cadastroId, step, payload],
+      [cadastroId, target, step, payload],
     );
     jobId = created[0].id;
   }
