@@ -827,6 +827,7 @@ const Motoristas = () => {
             {/* Modal de aprovacao com checkboxes (Angellira opt-in) — DC-111 / Sprint 1 */}
             {selectedPendente ? (
               <ApproveCadastroModal
+                cadastroId={selectedPendente.id}
                 open={showApproveModal}
                 onOpenChange={setShowApproveModal}
                 motoristaNome={selectedPendente.nome_motorista || undefined}
