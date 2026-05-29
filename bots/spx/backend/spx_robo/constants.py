@@ -20,6 +20,8 @@ DRAFT_EXISTS = 271605026         # Ja existe rascunho aberto — editar/compleme
 REQUEST_IN_PROGRESS = 271605028  # Ja existe solicitacao aberta para esse motorista
 DRIVER_REGISTERED_INACTIVE = 271605004  # Driver_profile existe mas esta inativo na agencia — chamar /activation/update
 DRIVER_IN_OTHER_AGENCY = 271605035  # Motorista cadastrado em OUTRA agencia Shopee, telefone diverge
+LICENSE_ALREADY_REGISTERED = 271605059  # CNH ja registrada em algum motorista (cross-agency forte)
+LICENSE_EMPTY = 271605013  # CNH nao pode estar vazia (precheck precisa de placeholder)
 
 # Generic FE-only
 ERR_GENERIC_OPS = (991000001, 991000002, 991000003, 991000004)

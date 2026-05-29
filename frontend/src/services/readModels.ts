@@ -1044,12 +1044,14 @@ export type SpxPrecheckStatus =
   | "IS_MATCHED_NOSSA"
   | "IS_MATCHED_OUTRA"
   | "REQUEST_PENDENTE"
+  | "INATIVO"
   | "BLOQUEADO"
   | "UNAVAILABLE";
 
 export type SpxPrecheckResult = {
   ok: boolean;
   status: SpxPrecheckStatus;
+  retcode?: number | null;
   existingDriverId?: number | null;
   existingRequestId?: number | null;
   driverInfo?: Record<string, unknown> | null;

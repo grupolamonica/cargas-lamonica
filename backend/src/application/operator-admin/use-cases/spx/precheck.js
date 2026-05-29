@@ -44,6 +44,14 @@ export async function performSpxPrecheck({ cadastro, correlationId = null }) {
     || (Array.isArray(motorista.telefones) ? motorista.telefones[0] : "")
     || motorista.telefone,
   );
+  // license_number ajuda o bot a passar pelo validate/basic do SPX
+  // (sem ele, retcode 271605013 "CNH vazia" — perdemos cross-agency).
+  // Wizard salva CNH em dados.motorista.cnh.numero ou dados.cnh.numero.
+  const licenseNumber = digitsOnly(
+    motorista.cnh?.numero
+    || cadastro?.dados?.cnh?.numero
+    || motorista.cnh_numero,
+  );
 
   if (!cpf || cpf.length !== 11) {
     return {
@@ -56,14 +64,14 @@ export async function performSpxPrecheck({ cadastro, correlationId = null }) {
   // Lookup leve: existe? na minha agência ou em outra?
   try {
     const r = await botLookupMotorista({
-      cpf, driverName, contactNumber, correlationId,
+      cpf, driverName, contactNumber, licenseNumber, correlationId,
     });
 
     if (!r.encontrado) {
       return { ok: true, status: "NOT_FOUND" };
     }
 
-    // Existe driver_profile na Shopee.
+    // Já cadastrado na NOSSA agência (LAMONICA) — sem ação
     if (r.na_minha_agencia) {
       return {
         ok: true,
@@ -74,13 +82,51 @@ export async function performSpxPrecheck({ cadastro, correlationId = null }) {
       };
     }
 
-    if (r.is_matched) {
+    // Request pendente (rascunho aberto / em revisão / em progresso)
+    if (r.request_pendente) {
+      return {
+        ok: true,
+        status: "REQUEST_PENDENTE",
+        retcode: r.retcode,
+        message: r.erro_validate || "Já existe request aberta para este motorista — aguarde processamento.",
+      };
+    }
+
+    // Motorista inativo na agência — precisa ativar via /spx/motorista/ativar
+    if (r.inativo) {
+      return {
+        ok: true,
+        status: "INATIVO",
+        retcode: r.retcode,
+        message: "Motorista cadastrado mas inativo. Use 'Ativar' antes de cadastrar de novo.",
+      };
+    }
+
+    // Bloqueado pela Shopee
+    if (r.bloqueado) {
+      return {
+        ok: true,
+        status: "BLOQUEADO",
+        retcode: r.retcode,
+        message: "Motorista bloqueado pela Shopee Express. Contate o suporte.",
+      };
+    }
+
+    // Existe em OUTRA agência (DRIVER_IN_OTHER_AGENCY, LICENSE_ALREADY_REGISTERED,
+    // DRIVER_REPEAT). is_matched=true por validate/basic ou retcode-mapping.
+    if (r.is_matched || r.outra_agencia || r.license_collision) {
+      const motivo = r.outra_agencia
+        ? "Motorista cadastrado em OUTRA agência da Shopee — telefone pode divergir, confirme com o motorista."
+        : r.license_collision
+          ? "CNH deste motorista já registrada (provavelmente em outra agência). Use 'Importar matched' ou confirme via /diagnostico."
+          : "Motorista existe em outra agência. Use 'Importar matched' para criar request nossa.";
       return {
         ok: true,
         status: "IS_MATCHED_OUTRA",
+        retcode: r.retcode,
         existingDriverId: r.existing_driver_id ?? r.driver_info?.driver_id ?? null,
         driverInfo: r.driver_info ?? null,
-        message: "Motorista existe em outra agência. Use 'Importar matched' para criar request nossa.",
+        message: motivo,
       };
     }
 

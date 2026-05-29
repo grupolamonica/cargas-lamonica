@@ -428,12 +428,20 @@ class LookupDriverPayload(BaseModel):
     cpf: str
     driver_name: str = ""
     contact_number: str = ""
+    # license_number ajuda a passar validate/basic — SEM ele o backend
+    # SPX retorna retcode 271605013 ("A CNH não pode estar vazia") e perdemos
+    # a detecção cross-agency. Quando o caller (precheck do painel) tiver
+    # a CNH em mãos, passar aqui. Fallback: placeholder no lookup interno.
+    license_number: str = ""
 
 
 @app.post("/spx/motorista/lookup")
 def lookup_driver(p: LookupDriverPayload):
     """Lookup leve: chama validate/basic e retorna driver_info se is_matched=true.
     NAO faz uploads nem cria/altera requests. Seguro pra chamar a qualquer hora.
+
+    Detecta motorista em QUALQUER agência (não só LAMONICA). Se is_matched=true
+    mas nao_minha_agencia → operador deve usar /importar_matched.
     """
     try:
         cpf_clean = ''.join(c for c in (p.cpf or '') if c.isdigit())
@@ -441,22 +449,109 @@ def lookup_driver(p: LookupDriverPayload):
             raise HTTPException(status_code=400, detail="CPF invalido")
 
         client = get_client()
-        # Primeiro: is_cpf_exist (cheap, sem efeitos colaterais)
-        existe = drivers_mod.is_cpf_exist(client, cpf_clean)
-        if not existe:
-            return {"ok": True, "encontrado": False, "is_matched": False}
 
-        # Existe driver_profile na Shopee — chama validate/basic pra obter driver_info
+        # ESTRATEGIA cross-agency (DC-111 / 2026-05-29):
+        # - is_cpf_exist parece retornar False quando motorista nao esta NA NOSSA
+        #   agencia, mesmo existindo em outras. Nao podemos confiar nele pra
+        #   pular validate/basic.
+        # - validate/basic DETECTA cross-agency via is_matched=true + driver_info,
+        #   mas exige license_number nao-vazio (senao retcode 271605013).
+        # - Solucao: chamamos validate/basic SEMPRE, passando placeholder de CNH
+        #   se o caller nao enviou um. Se mesmo assim falhar, retorna inconclusivo
+        #   com o motivo.
+        license_number = ''.join(c for c in (p.license_number or '') if c.isdigit())
+        license_to_send = license_number or "11111111111"  # placeholder de 11 digitos
+        driver_name_to_send = (p.driver_name or "MOTORISTA LOOKUP").strip().upper()
+        contact_to_send = ''.join(c for c in (p.contact_number or "11999999999") if c.isdigit())
+
+        # is_cpf_exist e read-only e nao trava nada — mantemos por completude
+        existe_local = False
+        try:
+            existe_local = drivers_mod.is_cpf_exist(client, cpf_clean)
+        except (APIErro, SessaoExpirada) as exc:
+            log_alerta(f"[lookup_driver] is_cpf_exist falhou (seguindo com validate): {exc}")
+
+        # validate/basic — detecta cross-agency
         try:
             vb = drivers_mod.validate_basic(
                 client,
                 cpf=cpf_clean,
-                driver_name=p.driver_name or "",
-                contact_number=p.contact_number or "",
+                driver_name=driver_name_to_send,
+                contact_number=contact_to_send,
+                license_number=license_to_send,
             )
         except (APIErro, SessaoExpirada) as exc:
             log_alerta(f"[lookup_driver] validate/basic falhou: {exc}")
-            return {"ok": True, "encontrado": True, "is_matched": False, "erro_validate": str(exc)}
+            retcode = getattr(exc, "retcode", None)
+            erro = str(exc)
+
+            # Mapping cross-agency dos retcodes que ainda assim significam
+            # que MOTORISTA EXISTE (em outra agência, em rascunho, inativo, etc).
+            # Sem isso, perdíamos a info crítica de cross-agency.
+            CROSS_AGENCY_CODES = {
+                K.DRIVER_IN_OTHER_AGENCY,      # 271605035 — explícito "outra agência"
+                K.LICENSE_ALREADY_REGISTERED,  # 271605059 — CNH registrada em algum motorista
+                K.DRIVER_REPEAT,                # 271627140 — CPF ja cadastrado
+            }
+            PENDENTE_CODES = {
+                K.DRAFT_EXISTS,                # 271605026 — rascunho aberto
+                K.REQUEST_IN_PROGRESS,         # 271605028 — solicitacao em andamento
+                getattr(K, "DRIVER_IN_REVIEW", 271605008),  # request em revisão
+            }
+            INATIVO_CODES = {
+                K.DRIVER_REGISTERED_INACTIVE,  # 271605004 — registrado mas inativo
+            }
+            BLOQUEADO_CODES = {
+                K.DRIVER_BLOCKED,              # 271617003 — bloqueado
+            }
+
+            if retcode in CROSS_AGENCY_CODES:
+                # Tenta listar requests nossa agência mesmo assim (pode haver
+                # request residual sem ter passado pelo validate)
+                items_nossa = []
+                try:
+                    rl = drivers_mod.list_requests(client, page=1, count=5, filters={"cpf": cpf_clean})
+                    items_nossa = (rl or {}).get("list") or (rl or {}).get("items") or []
+                except Exception:
+                    pass
+                return {
+                    "ok": True, "encontrado": True, "is_matched": True,
+                    "driver_info": None, "retcode": retcode, "erro_validate": erro,
+                    "na_minha_agencia": len(items_nossa) > 0,
+                    "requests_nossa_agencia_count": len(items_nossa),
+                    "outra_agencia": retcode == K.DRIVER_IN_OTHER_AGENCY,
+                    "license_collision": retcode == K.LICENSE_ALREADY_REGISTERED,
+                }
+
+            if retcode in PENDENTE_CODES:
+                return {
+                    "ok": True, "encontrado": True, "is_matched": True,
+                    "driver_info": None, "retcode": retcode, "erro_validate": erro,
+                    "request_pendente": True,
+                }
+
+            if retcode in INATIVO_CODES:
+                return {
+                    "ok": True, "encontrado": True, "is_matched": True,
+                    "driver_info": None, "retcode": retcode, "erro_validate": erro,
+                    "inativo": True,
+                }
+
+            if retcode in BLOQUEADO_CODES:
+                return {
+                    "ok": True, "encontrado": True, "is_matched": False,
+                    "driver_info": None, "retcode": retcode, "erro_validate": erro,
+                    "bloqueado": True,
+                }
+
+            # Outros erros (CPF inválido, telefone inválido, etc) — propaga
+            return {
+                "ok": True,
+                "encontrado": bool(existe_local),
+                "is_matched": False,
+                "erro_validate": erro,
+                "retcode": retcode,
+            }
 
         is_matched = bool(vb.get("is_matched"))
         driver_info = vb.get("driver_info") if is_matched else None
@@ -469,9 +564,11 @@ def lookup_driver(p: LookupDriverPayload):
         except Exception:
             items_nossa = []
 
+        # encontrado = motorista existe em alguma agência (na nossa OU outra)
+        encontrado = is_matched or bool(existe_local) or len(items_nossa) > 0
         return {
             "ok": True,
-            "encontrado": True,
+            "encontrado": encontrado,
             "is_matched": is_matched,
             "driver_info": driver_info,
             "existing_driver_id": existing_driver_id,

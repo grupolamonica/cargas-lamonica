@@ -372,6 +372,12 @@ export default function ApproveCadastroModal({
 
 function PrecheckRow({ row }: { row: RowInfo }) {
   const config = STATUS_CONFIG[row.status];
+  // Quando há statusText custom (ex: "CADASTRADO EM OUTRA AGÊNCIA"), prioriza
+  // sobre o label genérico do STATUS_CONFIG ("VENCE EM <30 DIAS").
+  const badgeText = row.statusText || config.label;
+  // errorMessage só vira "falha consulta" se for status INDISPONIVEL ou se
+  // não temos statusText custom (preserva contexto rico em IS_MATCHED_OUTRA etc).
+  const showErrorChip = row.errorMessage && (row.status === "INDISPONIVEL" || !row.statusText);
   return (
     <div
       className={cn(
@@ -385,8 +391,10 @@ function PrecheckRow({ row }: { row: RowInfo }) {
         </span>
         <span className="font-medium text-foreground">{row.label}</span>
       </div>
-      <div className="flex flex-col items-end text-right">
-        <span className={cn("text-xs font-semibold", config.text)}>{config.label}</span>
+      <div className="flex flex-col items-end text-right max-w-[60%]">
+        <span className={cn("text-xs font-semibold uppercase", config.text)} title={row.errorMessage ?? undefined}>
+          {badgeText}
+        </span>
         {row.validUntil ? (
           <span className="text-[10px] text-muted-foreground">
             Vigência: {formatDate(row.validUntil)}
@@ -395,8 +403,8 @@ function PrecheckRow({ row }: { row: RowInfo }) {
               : ""}
           </span>
         ) : null}
-        {row.errorMessage ? (
-          <span className="text-[10px] text-rose-700" title={row.errorMessage}>
+        {showErrorChip ? (
+          <span className="text-[10px] text-rose-700" title={row.errorMessage ?? undefined}>
             falha consulta
           </span>
         ) : null}
@@ -584,22 +592,32 @@ function rowFromSpxPrecheck(precheck: SpxPrecheckResult, label: string, icon: Re
   }
   if (precheck.status === "REQUEST_PENDENTE") {
     return {
-      label, icon, status: "VIGENTE",
-      statusText: "Request pendente — aguarde processamento",
+      label, icon, status: "VENCENDO",
+      statusText: "Request pendente no SPX — aguarde ou complete o rascunho",
+      errorMessage: precheck.message,
+      validUntil: null,
+    };
+  }
+  if (precheck.status === "INATIVO") {
+    return {
+      label, icon, status: "VENCENDO",
+      statusText: "Cadastrado mas INATIVO — precisa ativar antes",
+      errorMessage: precheck.message,
       validUntil: null,
     };
   }
   if (precheck.status === "IS_MATCHED_OUTRA") {
     return {
       label, icon, status: "VENCENDO",
-      statusText: "Em outra agência — importar para a nossa",
+      statusText: "⚠ CADASTRADO EM OUTRA AGÊNCIA — importar pra LAMONICA",
+      errorMessage: precheck.message,
       validUntil: null,
     };
   }
   if (precheck.status === "BLOQUEADO") {
     return {
       label, icon, status: "VENCIDO",
-      statusText: "Motorista bloqueado no SPX",
+      statusText: "Motorista BLOQUEADO no SPX",
       errorMessage: precheck.message,
       validUntil: null,
     };

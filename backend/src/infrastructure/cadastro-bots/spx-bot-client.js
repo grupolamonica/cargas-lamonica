@@ -303,11 +303,18 @@ export async function status() {
  *   raw: any
  * }>}
  */
-export async function lookupMotorista({ cpf, driverName = "", contactNumber = "", correlationId }) {
+export async function lookupMotorista({
+  cpf, driverName = "", contactNumber = "", licenseNumber = "", correlationId,
+}) {
   const { httpStatus, body } = await request({
     method: "POST",
     path: "/spx/motorista/lookup",
-    body: { cpf, driver_name: driverName, contact_number: contactNumber },
+    body: {
+      cpf,
+      driver_name: driverName,
+      contact_number: contactNumber,
+      license_number: licenseNumber,
+    },
     correlationId,
   });
   if (httpStatus === 200 && body?.ok != null) {
