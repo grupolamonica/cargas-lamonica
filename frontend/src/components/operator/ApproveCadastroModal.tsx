@@ -20,7 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { precheckAngellira } from "@/services/readModels";
+import { precheckAngellira, precheckSpx, type SpxPrecheckResult } from "@/services/readModels";
 
 export type ApproveJob = "angellira" | "spx";
 
@@ -75,72 +75,105 @@ export default function ApproveCadastroModal({
   onConfirm,
   isSubmitting,
 }: Props) {
-  // 3 linhas: motorista (sempre), cavalo se houver placa, carreta se houver
-  const [rows, setRows] = useState<{ motorista: RowInfo; cavalo?: RowInfo; carreta?: RowInfo }>(() => ({
-    motorista: { label: "Motorista", icon: <UserRound className="h-4 w-4" />, status: "LOADING" },
-    ...(hasCavalo ? { cavalo: { label: "Cavalo", icon: <Truck className="h-4 w-4" />, status: "LOADING" } } : {}),
-    ...(hasCarreta ? { carreta: { label: "Carreta", icon: <Truck className="h-4 w-4" />, status: "LOADING" } } : {}),
+  // 3 linhas Angellira + 1 linha SPX (motorista)
+  const [rows, setRows] = useState<{
+    motorista: RowInfo;
+    cavalo?: RowInfo;
+    carreta?: RowInfo;
+    spx: RowInfo;
+  }>(() => ({
+    motorista: { label: "Angellira • Motorista", icon: <UserRound className="h-4 w-4" />, status: "LOADING" },
+    ...(hasCavalo ? { cavalo: { label: "Angellira • Cavalo", icon: <Truck className="h-4 w-4" />, status: "LOADING" } } : {}),
+    ...(hasCarreta ? { carreta: { label: "Angellira • Carreta", icon: <Truck className="h-4 w-4" />, status: "LOADING" } } : {}),
+    spx: { label: "SPX/Shopee • Motorista", icon: <UserRound className="h-4 w-4" />, status: "LOADING" },
   }));
   const [precheckDone, setPrecheckDone] = useState(false);
   const [angelliraChecked, setAngelliraChecked] = useState(false);
-  /** 2º opt-in: forçar re-cadastro mesmo com tudo vigente */
+  const [spxChecked, setSpxChecked] = useState(false);
+  /** 2º opt-in geral: forçar re-cadastro mesmo com tudo vigente */
   const [forceUpdate, setForceUpdate] = useState(false);
 
-  // Roda precheck assim que o modal abre
+  // Roda precheck (Angellira + SPX em paralelo) assim que o modal abre
   useEffect(() => {
     if (!open || !cadastroId) return;
     let cancelled = false;
     setPrecheckDone(false);
     setForceUpdate(false);
     setRows({
-      motorista: { label: "Motorista", icon: <UserRound className="h-4 w-4" />, status: "LOADING" },
-      ...(hasCavalo ? { cavalo: { label: "Cavalo", icon: <Truck className="h-4 w-4" />, status: "LOADING" } } : {}),
-      ...(hasCarreta ? { carreta: { label: "Carreta", icon: <Truck className="h-4 w-4" />, status: "LOADING" } } : {}),
+      motorista: { label: "Angellira • Motorista", icon: <UserRound className="h-4 w-4" />, status: "LOADING" },
+      ...(hasCavalo ? { cavalo: { label: "Angellira • Cavalo", icon: <Truck className="h-4 w-4" />, status: "LOADING" } } : {}),
+      ...(hasCarreta ? { carreta: { label: "Angellira • Carreta", icon: <Truck className="h-4 w-4" />, status: "LOADING" } } : {}),
+      spx: { label: "SPX/Shopee • Motorista", icon: <UserRound className="h-4 w-4" />, status: "LOADING" },
     });
 
-    precheckAngellira(cadastroId)
-      .then((res) => {
-        if (cancelled) return;
-        const newRows: typeof rows = {
-          motorista: rowFromPrecheck(res.motorista, "Motorista", <UserRound className="h-4 w-4" />),
+    const angP = precheckAngellira(cadastroId);
+    const spxP = precheckSpx(cadastroId).catch((err: Error) => ({
+      ok: false, status: "UNAVAILABLE" as const, message: err.message,
+    }));
+
+    Promise.allSettled([angP, spxP]).then(([angR, spxR]) => {
+      if (cancelled) return;
+      const newRows: typeof rows = {
+        motorista: { label: "Angellira • Motorista", icon: <UserRound className="h-4 w-4" />, status: "INDISPONIVEL" },
+        spx: { label: "SPX/Shopee • Motorista", icon: <UserRound className="h-4 w-4" />, status: "INDISPONIVEL" },
+      };
+
+      if (angR.status === "fulfilled") {
+        const res = angR.value;
+        newRows.motorista = rowFromPrecheck(res.motorista, "Angellira • Motorista", <UserRound className="h-4 w-4" />);
+        if (hasCavalo) newRows.cavalo = rowFromPrecheck(res.cavalo, "Angellira • Cavalo", <Truck className="h-4 w-4" />);
+        if (hasCarreta) newRows.carreta = rowFromPrecheck(res.carreta, "Angellira • Carreta", <Truck className="h-4 w-4" />);
+      } else {
+        newRows.motorista = {
+          label: "Angellira • Motorista", icon: <UserRound className="h-4 w-4" />,
+          status: "INDISPONIVEL",
+          errorMessage: angR.reason instanceof Error ? angR.reason.message : "Falha precheck Angellira",
         };
-        if (hasCavalo) {
-          newRows.cavalo = rowFromPrecheck(res.cavalo, "Cavalo", <Truck className="h-4 w-4" />);
-        }
-        if (hasCarreta) {
-          newRows.carreta = rowFromPrecheck(res.carreta, "Carreta", <Truck className="h-4 w-4" />);
-        }
-        setRows(newRows);
-        setPrecheckDone(true);
-        // Default do checkbox: marcado SE algum item exige ação
-        const needsAction = Object.values(newRows).some((r) =>
-          r && ["VENCENDO", "VENCIDO", "NAO_CADASTRADO"].includes(r.status),
-        );
-        setAngelliraChecked(needsAction);
-      })
-      .catch((err: Error) => {
-        if (cancelled) return;
-        // Falha no precheck → modo permissivo: deixa operador decidir
-        const fallback = (label: string, icon: React.ReactNode): RowInfo => ({
-          label, icon, status: "INDISPONIVEL", errorMessage: err.message,
-        });
-        setRows({
-          motorista: fallback("Motorista", <UserRound className="h-4 w-4" />),
-          ...(hasCavalo ? { cavalo: fallback("Cavalo", <Truck className="h-4 w-4" />) } : {}),
-          ...(hasCarreta ? { carreta: fallback("Carreta", <Truck className="h-4 w-4" />) } : {}),
-        });
-        setPrecheckDone(true);
-        setAngelliraChecked(true); // sem info, default = cadastrar
-      });
+        if (hasCavalo) newRows.cavalo = { ...newRows.motorista, label: "Angellira • Cavalo", icon: <Truck className="h-4 w-4" /> };
+        if (hasCarreta) newRows.carreta = { ...newRows.motorista, label: "Angellira • Carreta", icon: <Truck className="h-4 w-4" /> };
+      }
+
+      if (spxR.status === "fulfilled") {
+        newRows.spx = rowFromSpxPrecheck(spxR.value, "SPX/Shopee • Motorista", <UserRound className="h-4 w-4" />);
+      } else {
+        newRows.spx = {
+          label: "SPX/Shopee • Motorista", icon: <UserRound className="h-4 w-4" />,
+          status: "INDISPONIVEL",
+          errorMessage: spxR.reason instanceof Error ? spxR.reason.message : "Falha precheck SPX",
+        };
+      }
+
+      setRows(newRows);
+      setPrecheckDone(true);
+
+      // Defaults: marca o checkbox SE a linha do respectivo sistema exige ação
+      const angellRows = [newRows.motorista, newRows.cavalo, newRows.carreta].filter(Boolean) as RowInfo[];
+      const angellNeedsAction = angellRows.some((r) =>
+        ["VENCENDO", "VENCIDO", "NAO_CADASTRADO", "INDISPONIVEL"].includes(r.status),
+      );
+      setAngelliraChecked(angellNeedsAction);
+
+      // SPX só dispara quando NÃO está vigente/IS_MATCHED_NOSSA
+      const spxNeedsAction = ["VENCENDO", "VENCIDO", "NAO_CADASTRADO"].includes(newRows.spx.status);
+      setSpxChecked(spxNeedsAction);
+    });
 
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, cadastroId, hasCavalo, hasCarreta]);
 
-  // Análise agregada do precheck
-  const todosVigentes = useMemo(
-    () => precheckDone && Object.values(rows).every((r) => r && r.status === "VIGENTE"),
-    [precheckDone, rows],
+  // Análise agregada do precheck (Angellira separado de SPX)
+  const angellRows = useMemo(
+    () => [rows.motorista, rows.cavalo, rows.carreta].filter(Boolean) as RowInfo[],
+    [rows.motorista, rows.cavalo, rows.carreta],
+  );
+  const angellTodosVigentes = useMemo(
+    () => precheckDone && angellRows.length > 0 && angellRows.every((r) => r.status === "VIGENTE"),
+    [precheckDone, angellRows],
+  );
+  const spxVigenteOuJaNossa = useMemo(
+    () => precheckDone && rows.spx.status === "VIGENTE",
+    [precheckDone, rows.spx],
   );
   const algumVencendo = useMemo(
     () => Object.values(rows).some((r) => r && r.status === "VENCENDO"),
@@ -150,15 +183,22 @@ export default function ApproveCadastroModal({
     () => Object.values(rows).some((r) => r && ["VENCIDO", "NAO_CADASTRADO"].includes(r.status)),
     [rows],
   );
+  const todosVigentes = useMemo(
+    () => angellTodosVigentes && spxVigenteOuJaNossa,
+    [angellTodosVigentes, spxVigenteOuJaNossa],
+  );
 
-  // Quando tudo vigente, o checkbox Angellira só pode ser marcado se o operador
-  // primeiro confirmar "Forçar atualização" (2º opt-in).
-  const angelliraDisabled = todosVigentes && !forceUpdate;
-  const effectiveChecked = todosVigentes ? forceUpdate && angelliraChecked : angelliraChecked;
+  // Disable checkbox quando o sistema correspondente está tudo vigente,
+  // exceto se operador marcou "Forçar atualização" (2º opt-in).
+  const angelliraDisabled = angellTodosVigentes && !forceUpdate;
+  const spxDisabled = spxVigenteOuJaNossa && !forceUpdate;
+  const effectiveAngellira = angellTodosVigentes ? forceUpdate && angelliraChecked : angelliraChecked;
+  const effectiveSpx = spxVigenteOuJaNossa ? forceUpdate && spxChecked : spxChecked;
 
   const handleConfirm = () => {
     const jobs: ApproveJob[] = [];
-    if (effectiveChecked) jobs.push("angellira");
+    if (effectiveAngellira) jobs.push("angellira");
+    if (effectiveSpx) jobs.push("spx");
     onConfirm(jobs);
   };
 
@@ -217,13 +257,13 @@ export default function ApproveCadastroModal({
                   angelliraDisabled
                     ? "cursor-not-allowed border-border bg-muted/30 opacity-70"
                     : "cursor-pointer hover:border-emerald-200",
-                  effectiveChecked && "border-emerald-300 bg-emerald-50/60",
-                  !effectiveChecked && !angelliraDisabled && "border-border bg-background",
+                  effectiveAngellira && "border-emerald-300 bg-emerald-50/60",
+                  !effectiveAngellira && !angelliraDisabled && "border-border bg-background",
                 )}
               >
                 <input
                   type="checkbox"
-                  checked={effectiveChecked}
+                  checked={effectiveAngellira}
                   disabled={angelliraDisabled}
                   onChange={(e) => setAngelliraChecked(e.target.checked)}
                   className="mt-0.5 h-4 w-4 cursor-pointer accent-emerald-600 disabled:cursor-not-allowed"
@@ -231,11 +271,11 @@ export default function ApproveCadastroModal({
                 <div className="flex-1 text-sm">
                   <p className="flex items-center gap-2 font-semibold text-foreground">
                     <Building2 className="h-4 w-4 text-emerald-700" />
-                    {todosVigentes ? "Re-cadastrar/atualizar no Angellira" : "Cadastrar no Angellira"}
+                    {angellTodosVigentes ? "Re-cadastrar/atualizar no Angellira" : "Cadastrar no Angellira"}
                   </p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    {todosVigentes
-                      ? "Tudo já está vigente. Atualização força PATCH em todos os registros."
+                    {angellTodosVigentes
+                      ? "Já vigente. Atualização força PATCH em todos os registros."
                       : "Proprietário + cavalo + carreta + motorista. ~30-60s."}
                   </p>
                 </div>
@@ -266,18 +306,36 @@ export default function ApproveCadastroModal({
                 </label>
               ) : null}
 
-              {/* SPX placeholder */}
+              {/* Checkbox SPX/Shopee */}
               <label
-                className="flex cursor-not-allowed items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 opacity-60"
-                title="Disponível no Sprint 2"
+                className={cn(
+                  "flex items-start gap-3 rounded-lg border p-3 transition-colors",
+                  spxDisabled
+                    ? "cursor-not-allowed border-border bg-muted/30 opacity-70"
+                    : "cursor-pointer hover:border-orange-200",
+                  effectiveSpx && "border-orange-300 bg-orange-50/60",
+                  !effectiveSpx && !spxDisabled && "border-border bg-background",
+                )}
               >
-                <input type="checkbox" disabled className="mt-0.5 h-4 w-4" />
+                <input
+                  type="checkbox"
+                  checked={effectiveSpx}
+                  disabled={spxDisabled}
+                  onChange={(e) => setSpxChecked(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 cursor-pointer accent-orange-500 disabled:cursor-not-allowed"
+                />
                 <div className="flex-1 text-sm">
-                  <p className="flex items-center gap-2 font-semibold text-muted-foreground">
-                    <Truck className="h-4 w-4" />
-                    Cadastrar no SPX/Shopee
+                  <p className="flex items-center gap-2 font-semibold text-foreground">
+                    <Truck className="h-4 w-4 text-orange-600" />
+                    {spxVigenteOuJaNossa ? "Re-cadastrar no SPX/Shopee" : "Cadastrar no SPX/Shopee"}
                   </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">Em breve (Sprint 2 — DC-111).</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {spxVigenteOuJaNossa
+                      ? "Motorista já cadastrado. Re-cadastrar criaria nova request."
+                      : rows.spx.status === "INDISPONIVEL"
+                        ? "SPX indisponível — cookies podem precisar de renovação."
+                        : "Cria driver_request na agência LAMONICA (~30-60s)."}
+                  </p>
                 </div>
               </label>
             </div>
@@ -300,7 +358,7 @@ export default function ApproveCadastroModal({
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60 transition-colors"
           >
             {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            {effectiveChecked ? "Aprovar e cadastrar" : "Aprovar somente"}
+            {effectiveAngellira || effectiveSpx ? "Aprovar e cadastrar" : "Aprovar somente"}
           </button>
         </DialogFooter>
       </DialogContent>
@@ -504,4 +562,53 @@ function formatDate(iso: string | null | undefined): string {
   } catch {
     return iso;
   }
+}
+
+/**
+ * Converte resposta do POST /spx/precheck em RowInfo.
+ *
+ * Mapping de SpxPrecheckStatus → RowStatus visual:
+ *   IS_MATCHED_NOSSA / REQUEST_PENDENTE → VIGENTE (verde, sem ação)
+ *   IS_MATCHED_OUTRA                   → VENCENDO (amarelo, requer importar)
+ *   NOT_FOUND                          → NAO_CADASTRADO (cinza, requer cadastro)
+ *   BLOQUEADO                          → VENCIDO (vermelho)
+ *   UNAVAILABLE                        → INDISPONIVEL
+ */
+function rowFromSpxPrecheck(precheck: SpxPrecheckResult, label: string, icon: React.ReactNode): RowInfo {
+  if (precheck.status === "IS_MATCHED_NOSSA") {
+    return {
+      label, icon, status: "VIGENTE",
+      statusText: "Cadastrado na nossa agência",
+      validUntil: null,
+    };
+  }
+  if (precheck.status === "REQUEST_PENDENTE") {
+    return {
+      label, icon, status: "VIGENTE",
+      statusText: "Request pendente — aguarde processamento",
+      validUntil: null,
+    };
+  }
+  if (precheck.status === "IS_MATCHED_OUTRA") {
+    return {
+      label, icon, status: "VENCENDO",
+      statusText: "Em outra agência — importar para a nossa",
+      validUntil: null,
+    };
+  }
+  if (precheck.status === "BLOQUEADO") {
+    return {
+      label, icon, status: "VENCIDO",
+      statusText: "Motorista bloqueado no SPX",
+      errorMessage: precheck.message,
+      validUntil: null,
+    };
+  }
+  if (precheck.status === "UNAVAILABLE") {
+    return {
+      label, icon, status: "INDISPONIVEL",
+      errorMessage: precheck.message || "SPX indisponível",
+    };
+  }
+  return { label, icon, status: "NAO_CADASTRADO" };
 }

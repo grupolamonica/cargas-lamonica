@@ -455,7 +455,7 @@ def lookup_driver(p: LookupDriverPayload):
                 contact_number=p.contact_number or "",
             )
         except (APIErro, SessaoExpirada) as exc:
-            log.warning("[lookup_driver] validate/basic falhou: %s", exc)
+            log_alerta(f"[lookup_driver] validate/basic falhou: {exc}")
             return {"ok": True, "encontrado": True, "is_matched": False, "erro_validate": str(exc)}
 
         is_matched = bool(vb.get("is_matched"))
@@ -481,7 +481,8 @@ def lookup_driver(p: LookupDriverPayload):
     except HTTPException:
         raise
     except Exception as e:
-        raise _tratar_erro(e, "spx/motorista/lookup")
+        log_erro(f"[main] /lookup falhou: {e!r}")
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
 
 
 @app.post("/spx/motorista/diagnostico")

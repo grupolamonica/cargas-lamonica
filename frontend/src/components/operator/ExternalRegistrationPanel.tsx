@@ -18,8 +18,10 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   cadastrarAngellira,
+  cadastrarSpx,
   listExternalJobs,
   precheckAngellira,
+  precheckSpx,
   retryAngelliraStep,
   type AngelliraJobStep,
   type ExternalRegistrationJob,
@@ -72,6 +74,7 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
 
   const jobs = data?.jobs ?? [];
   const angelliraJobs = jobs.filter((j) => j.target === "angellira");
+  const spxJobs = jobs.filter((j) => j.target === "spx");
 
   // Determina o status agregado da Angellira (cinza/amarelo/verde/vermelho)
   const overallStatus = useMemo(() => {
@@ -81,6 +84,16 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
     if (angelliraJobs.every((j) => j.status === "OK")) return "OK" as const;
     return "PENDING" as const;
   }, [angelliraJobs]);
+
+  // Status agregado SPX (1 step só: spx_motorista)
+  const spxStatus = useMemo(() => {
+    if (!spxJobs.length) return "NONE" as const;
+    const j = spxJobs[spxJobs.length - 1]; // mais recente
+    if (j.status === "IN_PROGRESS") return "IN_PROGRESS" as const;
+    if (j.status === "ERROR") return "ERROR" as const;
+    if (j.status === "OK") return "OK" as const;
+    return "PENDING" as const;
+  }, [spxJobs]);
 
   const cadastrarMutation = useMutation({
     mutationFn: () => cadastrarAngellira(cadastroId),
@@ -119,6 +132,34 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
       toast.success("Verificação concluída.");
     },
     onError: (err: Error) => toast.error(err.message || "Falha na verificação."),
+  });
+
+  // SPX mutations
+  const [spxVerifyResult, setSpxVerifyResult] = useState<string | null>(null);
+  const cadastrarSpxMutation = useMutation({
+    mutationFn: () => cadastrarSpx(cadastroId),
+    onSuccess: (r) => {
+      if (r.ok) toast.success("Cadastro SPX concluído.");
+      else toast.warning("Cadastro SPX concluído com erros. Veja o painel.");
+      queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (err: Error) => toast.error(err.message || "Falha cadastrar SPX."),
+  });
+  const precheckSpxMutation = useMutation({
+    mutationFn: () => precheckSpx(cadastroId),
+    onSuccess: (r) => {
+      const msg = {
+        NOT_FOUND: "Motorista não cadastrado no SPX.",
+        IS_MATCHED_NOSSA: "Já cadastrado na nossa agência.",
+        IS_MATCHED_OUTRA: "Existe em outra agência — pode importar.",
+        REQUEST_PENDENTE: "Request pendente no SPX.",
+        BLOQUEADO: "Motorista bloqueado no SPX.",
+        UNAVAILABLE: "SPX indisponível.",
+      }[r.status] || "Status desconhecido";
+      setSpxVerifyResult(msg);
+      toast.success("Verificação SPX concluída.");
+    },
+    onError: (err: Error) => toast.error(err.message || "Falha verificar SPX."),
   });
 
   return (
@@ -197,19 +238,80 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
         </div>
       </div>
 
-      {/* Linha SPX — placeholder Sprint 2 */}
-      <div className="mt-3 rounded-xl border border-dashed border-border bg-muted/30 p-3 opacity-70">
-        <div className="flex items-center justify-between">
+      {/* Linha SPX/Shopee — funcional (DC-111 / extensão SPX) */}
+      <div className="mt-3 rounded-xl border border-border bg-background p-3">
+        <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <StatusBadge status="NONE" />
+            <StatusBadge status={spxStatus} />
             <span className="font-semibold text-foreground">SPX / Shopee</span>
           </div>
-          <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
-            EM BREVE — SPRINT 2
-          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={precheckSpxMutation.isPending}
+              onClick={() => precheckSpxMutation.mutate()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-60"
+            >
+              {precheckSpxMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+              Verificar
+            </button>
+            <button
+              type="button"
+              disabled={cadastrarSpxMutation.isPending || spxStatus === "IN_PROGRESS"}
+              onClick={() => cadastrarSpxMutation.mutate()}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
+            >
+              {cadastrarSpxMutation.isPending || spxStatus === "IN_PROGRESS"
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <PlayCircle className="h-3 w-3" />}
+              {spxStatus === "OK" ? "Re-cadastrar" : "Cadastrar"}
+            </button>
+          </div>
         </div>
+        {spxVerifyResult ? (
+          <p className="mt-2 rounded-md border border-orange-200 bg-orange-50/60 px-2 py-1 text-xs text-orange-800">
+            {spxVerifyResult}
+          </p>
+        ) : null}
+        {/* Job mais recente — se ERROR, mostra detalhes inline */}
+        {spxJobs.length ? (
+          <div className="mt-2 grid gap-1.5">
+            <SpxJobRow job={spxJobs[spxJobs.length - 1]} />
+          </div>
+        ) : null}
       </div>
     </section>
+  );
+}
+
+function SpxJobRow({ job }: { job: ExternalRegistrationJob }) {
+  const status = job.status;
+  const error = job.error as { code?: string; message?: string; acao?: string } | null | undefined;
+  return (
+    <div className={cn(
+      "flex items-start gap-2 rounded-lg border px-2.5 py-2 text-xs",
+      status === "OK" && "border-emerald-200 bg-emerald-50/40",
+      status === "ERROR" && "border-rose-200 bg-rose-50/40",
+      status === "IN_PROGRESS" && "border-amber-200 bg-amber-50/40",
+      (status === "PENDING") && "border-border bg-background",
+    )}>
+      <StatusDot status={status} />
+      <div className="flex-1 min-w-0">
+        <p className="flex items-center gap-1.5 font-medium text-foreground">
+          <UserRound className="h-3.5 w-3.5" /> SPX • {job.step}
+        </p>
+        {job.external_id ? (
+          <p className="mt-0.5 text-[10px] text-muted-foreground">ID: {job.external_id}</p>
+        ) : null}
+        {error && status === "ERROR" ? (
+          <div className="mt-1 rounded-md border border-rose-200 bg-white p-2 text-[11px] text-rose-900">
+            <p className="font-medium">{error.code || "Erro"}</p>
+            <p>{error.message || "Erro desconhecido."}</p>
+            {error.acao ? <p className="mt-1 italic text-rose-700">→ {error.acao}</p> : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
