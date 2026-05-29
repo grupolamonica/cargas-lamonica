@@ -19,6 +19,7 @@ import requests
 
 from . import auth
 from . import constants as K
+from . import supabase_auth
 from .logger import log_alerta, log_erro, log_info
 
 
@@ -60,14 +61,31 @@ class SPXClient:
         self.timeout = timeout
         self.device_id = device_id or os.getenv("SPX_DEVICE_ID") or ""
         self.version = version or os.getenv("SPX_VERSION") or ""
+
+        self._session = requests.Session()
+
+        # Modo prod (DC-111 / 2026-05-29): lê cookies da tabela aspx_credentials
+        # no Supabase. Renovação é responsabilidade do container aspx-renewal
+        # (Playwright headless a cada 4 dias).
+        # Modo legacy dev: lê arquivo config/spx_cookies.json (fallback).
+        self._use_supabase = supabase_auth.use_supabase()
+        if self._use_supabase:
+            cookies, supabase_device_id = supabase_auth.carregar_cookies_supabase()
+            self._session.cookies.update(cookies)
+            # Supabase é fonte de verdade do device_id também — sobrescreve env
+            if supabase_device_id:
+                self.device_id = supabase_device_id
+            log_info(f"[client] modo Supabase: {len(cookies)} cookies, device_id sincronizado")
+        else:
+            cookies = auth.carregar_sessao_cookies(cookie_file)
+            self._session.cookies.update(cookies)
+            log_info(f"[client] modo arquivo local: {len(cookies)} cookies")
+
         if not self.device_id:
             log_alerta("[client] SPX_DEVICE_ID nao definido — algumas chamadas podem falhar")
         if not self.version:
             log_alerta("[client] SPX_VERSION nao definido — usando placeholder")
 
-        self._session = requests.Session()
-        cookies = auth.carregar_sessao_cookies(cookie_file)
-        self._session.cookies.update(cookies)
         self._session.headers.update(self._base_headers())
 
         # PERSISTENCIA DE COOKIES (2026-05-26): guarda path pra escrita posterior.
@@ -143,11 +161,16 @@ class SPXClient:
                 if resp.status_code in (301, 302, 303, 307, 308):
                     loc = resp.headers.get("Location", "")
                     if "accounts.myagencyservice.com.br" in loc or "/login" in loc:
+                        # Modo Supabase: marca cookies expirados pra aspx-renewal renovar
+                        if self._use_supabase:
+                            supabase_auth.invalidar_cookies()
                         raise SessaoExpirada(
                             f"Sessao expirada (redirect para {urlparse(loc).netloc}). "
-                            f"Reexporte cookies do Chrome."
+                            f"{'aspx-renewal renovara em breve' if self._use_supabase else 'Reexporte cookies do Chrome.'}"
                         )
                 if resp.status_code == 401:
+                    if self._use_supabase:
+                        supabase_auth.invalidar_cookies()
                     raise SessaoExpirada(f"401 em {path} — cookies invalidos/expirados")
                 if resp.status_code >= 500 and tentativa < max_retries:
                     espera = 2 ** (tentativa - 1)
@@ -234,6 +257,9 @@ class SPXClient:
         - Skip-if-unchanged: compara dict {name: value} pra detectar rotacao
         - Defensivo: nunca propaga excecao — falha silenciosa logada
         """
+        # Modo Supabase: não persiste em arquivo local — aspx-renewal cuida.
+        if self._use_supabase:
+            return
         try:
             now = time.time()
             if not force and (now - self._last_cookie_save_ts) < 30:

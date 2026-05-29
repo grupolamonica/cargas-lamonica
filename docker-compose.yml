@@ -247,6 +247,54 @@ services:
     expose:
       - "8001"
 
+  # ── SPX bot (sidecar FastAPI :8766) ──────────────────────────────────────
+  # Cadastra motorista no portal SPX (Shopee Express) via API privada.
+  # Cookies SSO vêm de aspx_credentials.cookies_json no Supabase (renovados
+  # pelo container aspx-renewal a cada 4 dias via Playwright).
+  # Sem acesso externo (Traefik) — chamado pelo backend Node.
+  # Epic DC-111 / Sprint 1 extensão SPX.
+  spx-bot:
+    build:
+      context: ./bots/spx
+      dockerfile: Dockerfile
+    image: lamonica-spx-bot:latest
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+    # Le SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY do backend.env (mesma fonte
+    # do aspx-renewal). Não precisa cookies em texto-claro: lê do Supabase.
+    env_file:
+      - backend.env
+    environment:
+      SPX_BASE_URL: ${SPX_BASE_URL:-https://logistics.myagencyservice.com.br}
+      # SPX_VERSION extraído de qualquer request do portal (header version).
+      # Muda a cada deploy do portal SPX (~mensal) — atualizar manualmente.
+      SPX_VERSION: ${SPX_VERSION:-agencyportal:20260325}
+      SPX_AGENCY_ID: ${SPX_AGENCY_ID:-297}
+      SPX_SIDECAR_HOST: "0.0.0.0"
+      SPX_SIDECAR_PORT: "8766"
+      PYTHONUNBUFFERED: "1"
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # /spx/status valida cookies no Supabase (read-only) — não consome SPX.
+      test: ["CMD", "curl", "-fs", "http://localhost:8766/spx/status"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    expose:
+      - "8766"
+    depends_on:
+      aspx-renewal:
+        condition: service_started
+
   # ── ASPX cookie renewal (persistent container on VPS) ────────────────────
   aspx-renewal:
     build:

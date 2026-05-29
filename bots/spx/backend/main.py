@@ -142,6 +142,29 @@ def health():
         return HealthResponse(ok=False, detail=f"erro: {type(exc).__name__}: {exc}")
 
 
+@app.get("/spx/status")
+def status():
+    """Status detalhado — não tenta ping (caro). Retorna apenas se cookies
+    estão presentes/vigentes no Supabase. Usado pelo backend Node pra UI.
+    """
+    from spx_robo import supabase_auth
+    if not supabase_auth.use_supabase():
+        return {
+            "ok": True,
+            "service": "spx-bot (modo arquivo local)",
+            "supabase": False,
+            "cookies": "arquivo local — sem health do Supabase",
+        }
+    ok, motivo = supabase_auth.is_available()
+    return {
+        "ok": ok,
+        "service": "spx-bot",
+        "supabase": True,
+        "cookies": motivo if ok else None,
+        "motivo": motivo if not ok else None,
+    }
+
+
 @app.get("/spx/lookups/vehicle_types")
 def lookup_vehicle_types():
     try:
