@@ -114,22 +114,36 @@ export function mapProprietarioPayload(owner, ownerDocType, fallbackEndereco = {
     || (Array.isArray(owner.telefones) ? owner.telefones[0] : "")
   );
 
-  const payload = {
-    telefone,
-    endereco: {
-      cep: digitsOnly(endereco.cep),
-      logradouro: String(endereco.logradouro || endereco.rua || "").trim().toUpperCase(),
-      numero: String(endereco.numero || "").trim(),
-      complemento: String(endereco.complemento || "").trim().toUpperCase(),
-      bairro: String(endereco.bairro || "").trim().toUpperCase(),
-      cidade: String(endereco.cidade || endereco.municipio || "").trim().toUpperCase(),
-      uf: String(endereco.uf || endereco.estado || "").trim().toUpperCase(),
-    },
+  const end = {
+    cep: digitsOnly(endereco.cep),
+    logradouro: String(endereco.logradouro || endereco.rua || "").trim().toUpperCase(),
+    numero: String(endereco.numero || "").trim(),
+    complemento: String(endereco.complemento || "").trim().toUpperCase(),
+    bairro: String(endereco.bairro || "").trim().toUpperCase(),
+    cidade: String(endereco.cidade || endereco.municipio || "").trim().toUpperCase(),
+    uf: String(endereco.uf || endereco.estado || "").trim().toUpperCase(),
   };
 
+  // O bot (flow_proprietario.py) lê o endereço FLAT — proprietario.get("cep"),
+  // .get("cidade"), .get("uf") etc. — não aninhado. Mantemos `endereco` aninhado
+  // por compat e espalhamos flat APENAS quando há logradouro real: sem logradouro,
+  // o Angellira monta WHERE por Lgr_Nome com valor vazio → 422 "Lgr_Nome invalid".
+  // Owner sem endereço completo é criado só com nome/doc (operador completa depois).
+  const payload = {
+    telefone,
+    endereco: end,
+  };
+  if (end.logradouro) {
+    Object.assign(payload, end);
+  }
+
   if (tipo === "PJ") {
+    // O bot lê o nome (PF e PJ) de proprietario.get("nome"). Sem `nome`, o
+    // POST /owners da PJ vai com name="" → Angellira 422 "name not allowed empty".
+    const razao = String(owner.razao_social || owner.nome || owner.fantasia || "").trim().toUpperCase();
     payload.cnpj = doc;
-    payload.razao_social = String(owner.razao_social || owner.nome || owner.fantasia || "").trim().toUpperCase();
+    payload.nome = razao;
+    payload.razao_social = razao;
   } else {
     payload.cpf = doc;
     payload.nome = String(owner.nome || owner.razao_social || "").trim().toUpperCase();
