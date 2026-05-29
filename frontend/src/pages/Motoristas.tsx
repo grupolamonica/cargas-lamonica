@@ -41,14 +41,24 @@ import { precheckAngellira, precheckSpx } from "@/services/readModels";
 
 /**
  * Pré-fetch dos prechecks Angellira+SPX em background.
- * Chamado quando operador SELECIONA o cadastro pendente (clique na linha).
  * Aproveita o cache server-side de 60s — quando o modal abre depois, vem
  * do cache (response instantânea).
+ *
+ * Dispara no HOVER (mouseenter) e no CLIQUE da linha. O hover normalmente
+ * acontece 1-3s antes do clique → quando o operador clica "Aprovar", as
+ * queries externas (~6s) já terminaram e o modal abre com cache hit.
+ *
+ * Dedup por cadastroId (Set module-level) evita disparos repetidos enquanto
+ * o cache de 60s está quente.
  */
+const _prefetchedIds = new Set<string>();
 function prefetchPrechecks(cadastroId: string) {
-  if (!cadastroId) return;
+  if (!cadastroId || _prefetchedIds.has(cadastroId)) return;
+  _prefetchedIds.add(cadastroId);
+  // Expira o dedup junto com o cache server-side (60s) pra permitir refresh.
+  setTimeout(() => _prefetchedIds.delete(cadastroId), 55_000);
   // Fire-and-forget. Erros são silenciados — o modal vai tentar de novo.
-  precheckAngellira(cadastroId).catch(() => {});
+  precheckAngellira(cadastroId).catch(() => { _prefetchedIds.delete(cadastroId); });
   precheckSpx(cadastroId).catch(() => {});
 }
 import { Input } from "@/components/ui/input";
@@ -719,12 +729,13 @@ const Motoristas = () => {
                       {pendentesItems.map((item) => (
                         <tr
                           key={item.id}
+                          // Pré-fetch no HOVER: aquece o cache server-side 1-3s
+                          // antes do clique. Dedup interno evita repetição.
+                          onMouseEnter={() => prefetchPrechecks(item.id)}
                           onClick={() => {
                             setSelectedPendente(item);
-                            // Pré-fetch: dispara precheck em background pra
-                            // aquecer o cache server-side (TTL 60s). Quando
-                            // operador clicar "Aprovar", modal abre quase
-                            // instantâneo (cache hit).
+                            // Garante o pré-fetch também no clique (caso o
+                            // hover não tenha disparado — ex: navegação por teclado).
                             prefetchPrechecks(item.id);
                           }}
                           className={cn(

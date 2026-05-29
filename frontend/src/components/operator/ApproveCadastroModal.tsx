@@ -93,7 +93,10 @@ export default function ApproveCadastroModal({
   /** 2º opt-in geral: forçar re-cadastro mesmo com tudo vigente */
   const [forceUpdate, setForceUpdate] = useState(false);
 
-  // Roda precheck (Angellira + SPX em paralelo) assim que o modal abre
+  // Roda precheck (Angellira + SPX em paralelo) assim que o modal abre.
+  // RENDER INCREMENTAL (perf 2026-05-29): cada sistema atualiza suas linhas
+  // assim que responde — não espera o mais lento. SPX (~1s) aparece antes do
+  // Angellira (~6s cold), dando feedback imediato ao operador.
   useEffect(() => {
     if (!open || !cadastroId) return;
     let cancelled = false;
@@ -111,50 +114,61 @@ export default function ApproveCadastroModal({
       ok: false, status: "UNAVAILABLE" as const, message: err.message,
     }));
 
+    // ── Render incremental: Angellira ──────────────────────────────────
+    angP.then((res) => {
+      if (cancelled) return;
+      setRows((prev) => ({
+        ...prev,
+        motorista: rowFromPrecheck(res.motorista, "Angellira • Motorista", <UserRound className="h-4 w-4" />),
+        ...(hasCavalo ? { cavalo: rowFromPrecheck(res.cavalo, "Angellira • Cavalo", <Truck className="h-4 w-4" />) } : {}),
+        ...(hasCarreta ? { carreta: rowFromPrecheck(res.carreta, "Angellira • Carreta", <Truck className="h-4 w-4" />) } : {}),
+      }));
+    }).catch((err: Error) => {
+      if (cancelled) return;
+      const fail = (lbl: string, ic: React.ReactNode): RowInfo => ({
+        label: lbl, icon: ic, status: "INDISPONIVEL", errorMessage: err.message,
+      });
+      setRows((prev) => ({
+        ...prev,
+        motorista: fail("Angellira • Motorista", <UserRound className="h-4 w-4" />),
+        ...(hasCavalo ? { cavalo: fail("Angellira • Cavalo", <Truck className="h-4 w-4" />) } : {}),
+        ...(hasCarreta ? { carreta: fail("Angellira • Carreta", <Truck className="h-4 w-4" />) } : {}),
+      }));
+    });
+
+    // ── Render incremental: SPX ────────────────────────────────────────
+    spxP.then((res) => {
+      if (cancelled) return;
+      setRows((prev) => ({
+        ...prev,
+        spx: rowFromSpxPrecheck(res, "SPX/Shopee • Motorista", <UserRound className="h-4 w-4" />),
+      }));
+    });
+
+    // ── Quando AMBOS terminam: libera botão + calcula defaults dos checkboxes ──
     Promise.allSettled([angP, spxP]).then(([angR, spxR]) => {
       if (cancelled) return;
-      const newRows: typeof rows = {
-        motorista: { label: "Angellira • Motorista", icon: <UserRound className="h-4 w-4" />, status: "INDISPONIVEL" },
-        spx: { label: "SPX/Shopee • Motorista", icon: <UserRound className="h-4 w-4" />, status: "INDISPONIVEL" },
-      };
-
-      if (angR.status === "fulfilled") {
-        const res = angR.value;
-        newRows.motorista = rowFromPrecheck(res.motorista, "Angellira • Motorista", <UserRound className="h-4 w-4" />);
-        if (hasCavalo) newRows.cavalo = rowFromPrecheck(res.cavalo, "Angellira • Cavalo", <Truck className="h-4 w-4" />);
-        if (hasCarreta) newRows.carreta = rowFromPrecheck(res.carreta, "Angellira • Carreta", <Truck className="h-4 w-4" />);
-      } else {
-        newRows.motorista = {
-          label: "Angellira • Motorista", icon: <UserRound className="h-4 w-4" />,
-          status: "INDISPONIVEL",
-          errorMessage: angR.reason instanceof Error ? angR.reason.message : "Falha precheck Angellira",
-        };
-        if (hasCavalo) newRows.cavalo = { ...newRows.motorista, label: "Angellira • Cavalo", icon: <Truck className="h-4 w-4" /> };
-        if (hasCarreta) newRows.carreta = { ...newRows.motorista, label: "Angellira • Carreta", icon: <Truck className="h-4 w-4" /> };
-      }
-
-      if (spxR.status === "fulfilled") {
-        newRows.spx = rowFromSpxPrecheck(spxR.value, "SPX/Shopee • Motorista", <UserRound className="h-4 w-4" />);
-      } else {
-        newRows.spx = {
-          label: "SPX/Shopee • Motorista", icon: <UserRound className="h-4 w-4" />,
-          status: "INDISPONIVEL",
-          errorMessage: spxR.reason instanceof Error ? spxR.reason.message : "Falha precheck SPX",
-        };
-      }
-
-      setRows(newRows);
       setPrecheckDone(true);
 
-      // Defaults: marca o checkbox SE a linha do respectivo sistema exige ação
-      const angellRows = [newRows.motorista, newRows.cavalo, newRows.carreta].filter(Boolean) as RowInfo[];
-      const angellNeedsAction = angellRows.some((r) =>
+      // Recalcula linhas finais pra decidir defaults (mesma lógica do render)
+      const angRows: RowInfo[] = [];
+      if (angR.status === "fulfilled") {
+        const res = angR.value;
+        angRows.push(rowFromPrecheck(res.motorista, "m", null));
+        if (hasCavalo) angRows.push(rowFromPrecheck(res.cavalo, "c", null));
+        if (hasCarreta) angRows.push(rowFromPrecheck(res.carreta, "ct", null));
+      } else {
+        angRows.push({ label: "m", icon: null, status: "INDISPONIVEL" });
+      }
+      const angellNeedsAction = angRows.some((r) =>
         ["VENCENDO", "VENCIDO", "NAO_CADASTRADO", "INDISPONIVEL"].includes(r.status),
       );
       setAngelliraChecked(angellNeedsAction);
 
-      // SPX só dispara quando NÃO está vigente/IS_MATCHED_NOSSA
-      const spxNeedsAction = ["VENCENDO", "VENCIDO", "NAO_CADASTRADO"].includes(newRows.spx.status);
+      const spxRow = spxR.status === "fulfilled"
+        ? rowFromSpxPrecheck(spxR.value, "s", null)
+        : { status: "INDISPONIVEL" as RowStatus };
+      const spxNeedsAction = ["VENCENDO", "VENCIDO", "NAO_CADASTRADO"].includes(spxRow.status);
       setSpxChecked(spxNeedsAction);
     });
 

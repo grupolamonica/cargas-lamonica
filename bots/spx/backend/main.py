@@ -464,14 +464,16 @@ def lookup_driver(p: LookupDriverPayload):
         driver_name_to_send = (p.driver_name or "MOTORISTA LOOKUP").strip().upper()
         contact_to_send = ''.join(c for c in (p.contact_number or "11999999999") if c.isdigit())
 
-        # is_cpf_exist e read-only e nao trava nada — mantemos por completude
-        existe_local = False
-        try:
-            existe_local = drivers_mod.is_cpf_exist(client, cpf_clean)
-        except (APIErro, SessaoExpirada) as exc:
-            log_alerta(f"[lookup_driver] is_cpf_exist falhou (seguindo com validate): {exc}")
+        # PERF (2026-05-29): is_cpf_exist virou LAZY. Antes era chamado SEMPRE
+        # antes do validate/basic (+1 round-trip ~0.5-1s). Mas ele é
+        # não-confiável pra cross-agency (retorna False mesmo existindo em outra
+        # agência) e agora mapeamos todos os retcodes relevantes do validate.
+        # Então só chamamos is_cpf_exist como fallback, quando validate/basic
+        # falha SEM um retcode mapeável (caminho raro). existe_local começa None
+        # = "não consultado".
+        existe_local = None
 
-        # validate/basic — detecta cross-agency
+        # validate/basic — detecta cross-agency (caminho principal)
         try:
             vb = drivers_mod.validate_basic(
                 client,
@@ -544,7 +546,15 @@ def lookup_driver(p: LookupDriverPayload):
                     "bloqueado": True,
                 }
 
-            # Outros erros (CPF inválido, telefone inválido, etc) — propaga
+            # Outros erros (CPF inválido, telefone inválido, etc) — sem retcode
+            # mapeável. Aqui SIM vale a pena o fallback is_cpf_exist (lazy):
+            # confirma se ao menos existe driver_profile na nossa agência.
+            if existe_local is None:
+                try:
+                    existe_local = drivers_mod.is_cpf_exist(client, cpf_clean)
+                except (APIErro, SessaoExpirada) as exc2:
+                    log_alerta(f"[lookup_driver] is_cpf_exist (fallback) falhou: {exc2}")
+                    existe_local = False
             return {
                 "ok": True,
                 "encontrado": bool(existe_local),
