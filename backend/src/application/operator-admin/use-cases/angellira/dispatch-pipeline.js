@@ -37,6 +37,7 @@ import {
   mapVeiculoPayload,
   ownerReusesCavalo,
   resolveVehicleOwner,
+  resolveVehicleRntrc,
 } from "./payload-mapper.js";
 
 const ALL_STEPS = [
@@ -349,10 +350,22 @@ async function stepVeiculo(ctx, sub) {
     sub === "cavalo" ? ctx.state.cavaloOwnerId : ctx.state.carretaOwnerId,
   ) || 0;
 
+  // DC-128 — RNTRC resolvido pela cascata ANTT do wizard vive no proprietário
+  // (cavalo_owner.rntrc / carreta_owners[i].rntrc / antt_titular.rntrc), não no
+  // veículo. Reconectamos aqui pro campo `antt` que o bot Angellira lê — sem
+  // isso veículos ETC bloqueavam o preflight com "Antt obrigatória".
+  const rntrcFallback = resolveVehicleRntrc(ctx.dados, sub, 0);
+  const veiculoTemAnttProprio = !!digitsOnly(veiculoData.antt || veiculoData.rntrc);
+  if (rntrcFallback && !veiculoTemAnttProprio) {
+    logStructuredEvent("info", "angellira.pipeline.rntrc_from_owner", {
+      cadastroId: ctx.cadastroId, sub, rntrc: rntrcFallback,
+    });
+  }
+
   const result = await cadastrarVeiculo({
     idCadastro: ctx.cadastroId,
     sub,
-    payload: mapVeiculoPayload(veiculoData),
+    payload: mapVeiculoPayload(veiculoData, rntrcFallback),
     ownerCpf,
     ownerCnpj,
     ownerId,

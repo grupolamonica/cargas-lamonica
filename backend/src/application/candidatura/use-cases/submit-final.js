@@ -89,6 +89,14 @@ async function applyOwnerReuseAndCascade({ dados, driverCpf, correlationId, disa
       cascade_titular_doc: cascadeTitularDoc || null,
     });
 
+    // DC-128 — grava o RNTRC no campo canonico `antt` do VEICULO (que o bot
+    // Angellira le em /vehicles). Sem isso, veiculos ETC bloqueavam o preflight
+    // com "Antt obrigatoria" mesmo com a cascata OK, porque o RNTRC ficava so
+    // no owner. Nunca sobrescreve um antt ja informado (upload/manual).
+    if (cascadeResult.rntrc && !dados.cavalo.antt) {
+      dados.cavalo.antt = cascadeResult.rntrc;
+    }
+
     // Se ja existe cavalo_owner com rntrc preenchido manualmente (upload), respeitar.
     // Caso contrario, anexar resultado da cascade ao cavalo_owner.
     if (dados.cavalo_owner) {
@@ -136,6 +144,12 @@ async function applyOwnerReuseAndCascade({ dados, driverCpf, correlationId, disa
       reuseFlag = "cavalo_owner";
     }
     reuse.carreta_owners_reused.push(reuseFlag);
+
+    // DC-128 — carreta que reaproveita o owner do cavalo opera sob o MESMO
+    // RNTRC (mesma empresa). Herda o `antt` ja resolvido do cavalo.
+    if (reuseFlag === "cavalo_owner" && dados.cavalo?.antt && !carreta.antt) {
+      carreta.antt = dados.cavalo.antt;
+    }
 
     if (reuseFlag === "none") {
       const cascadeResult = await resolveAnttCascade({

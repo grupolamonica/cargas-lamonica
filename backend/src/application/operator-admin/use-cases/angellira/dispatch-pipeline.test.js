@@ -263,6 +263,30 @@ describe("runAngelliraPipeline / idempotência", () => {
   });
 });
 
+describe("runAngelliraPipeline / RNTRC do owner → antt do veículo (DC-128)", () => {
+  it("injeta o rntrc do cavalo_owner no payload.antt do cavalo quando o veículo não tem antt próprio", async () => {
+    cadastrarProprietario.mockResolvedValue({ ok: true, ownerId: 9001, raw: {} });
+    cadastrarVeiculo.mockResolvedValue({ ok: true, vehicleId: 7001, raw: {} });
+    cadastrarMotorista.mockResolvedValue({ ok: true, driverId: 5001, raw: {} });
+
+    const client = makeFakeClient();
+    const dadosComRntrc = {
+      ...SAMPLE_DADOS,
+      cavalo: { ...SAMPLE_DADOS.cavalo, antt: undefined },
+      cavalo_owner: { ...SAMPLE_DADOS.cavalo_owner, rntrc: "057.984.877" },
+    };
+    await runAngelliraPipeline({
+      client,
+      cadastro: { ...SAMPLE_CADASTRO, dados: dadosComRntrc },
+    });
+
+    expect(cadastrarVeiculo).toHaveBeenCalledOnce();
+    const arg = cadastrarVeiculo.mock.calls[0][0];
+    expect(arg.sub).toBe("cavalo");
+    expect(arg.payload.antt).toBe("057984877"); // só-dígitos, vindo do owner
+  });
+});
+
 describe("runAngelliraPipeline / onlySteps", () => {
   it("executa apenas o step pedido", async () => {
     cadastrarMotorista.mockResolvedValue({ ok: true, driverId: 5001, raw: {} });

@@ -156,9 +156,13 @@ export function mapProprietarioPayload(owner, ownerDocType, fallbackEndereco = {
  * Constrói o payload de cadastro de veículo (cavalo ou carreta).
  *
  * @param {object} veiculo
+ * @param {string} [rntrcFallback]  — RNTRC resolvido do proprietário (cascata
+ *   ANTT) quando o veículo não carrega `antt`/`rntrc` próprio. Ver DC-128 /
+ *   `resolveVehicleRntrc`. Veículos ETC bloqueavam o preflight do Angellira
+ *   com "Antt obrigatória" quando o RNTRC ficava só no owner.
  * @returns {object} payload pronto pro bot (formato flat)
  */
-export function mapVeiculoPayload(veiculo) {
+export function mapVeiculoPayload(veiculo, rntrcFallback = "") {
   if (!veiculo || typeof veiculo !== "object") {
     throw new Error("Veículo payload ausente");
   }
@@ -188,7 +192,7 @@ export function mapVeiculoPayload(veiculo) {
     municipio: String(
       veiculo.municipio || veiculo.cidade || veiculo.cidade_emplacamento || "",
     ).trim(),
-    antt: digitsOnly(veiculo.antt || veiculo.rntrc),
+    antt: digitsOnly(veiculo.antt || veiculo.rntrc) || digitsOnly(rntrcFallback),
     ultimo_licenciamento: String(veiculo.ultimo_licenciamento || "").trim(),
   };
 }
@@ -304,4 +308,68 @@ export function resolveVehicleOwner(dados, vehicleEntry) {
 export function ownerReusesCavalo(dados) {
   const reused = dados?.owner_reuse?.carreta_owners_reused;
   return Array.isArray(reused) && reused.includes("cavalo_owner");
+}
+
+/**
+ * Resolve o RNTRC (registro ANTT) de um veículo (cavalo ou carreta) — DC-128.
+ *
+ * Veículos ETC (Empresa de Transporte de Carga) e demais que exigem ANTT
+ * bloqueiam o preflight do Angellira com "Antt obrigatória" quando o campo
+ * `antt` chega vazio. O RNTRC NÃO vem do CRLV: é resolvido pela cascata ANTT
+ * do wizard (`resolveAnttCascade` no submit-final), que grava o resultado no
+ * PROPRIETÁRIO — `cavalo_owner.rntrc` / `carreta_owners[i].rntrc` (ou em
+ * `owner.antt_titular.rntrc` no caso de arrendamento, quando o detentor do
+ * RNTRC difere do dono do CRLV).
+ *
+ * Esta função reconecta esse RNTRC já resolvido ao veículo, com prioridade:
+ *   1. `veiculo.antt` / `veiculo.rntrc` — RNTRC explícito no próprio veículo
+ *      (ex.: submit-final novo grava aqui, ou entrada manual do operador);
+ *   2. RNTRC do proprietário do veículo (cascata ANTT) — `owner.rntrc`;
+ *   3. RNTRC do titular ANTT (arrendamento) — `owner.antt_titular.rntrc`;
+ *   4. carreta que reaproveita o owner do cavalo herda o RNTRC do cavalo_owner.
+ *
+ * @param {object} dados   — pending_driver_registrations.dados (formato wizard v2)
+ * @param {"cavalo"|"carreta"} sub
+ * @param {number} [idx]   — índice da carreta (default 0; cavalo ignora)
+ * @returns {string} RNTRC só-dígitos, ou "" quando a cascata não resolveu
+ *   (operador precisa informar manualmente — comportamento correto).
+ */
+export function resolveVehicleRntrc(dados, sub = "cavalo", idx = 0) {
+  const pick = (...vals) => {
+    for (const v of vals) {
+      const d = digitsOnly(v);
+      if (d) return d;
+    }
+    return "";
+  };
+
+  if (sub === "cavalo") {
+    const veiculo = dados?.cavalo || {};
+    const owner = dados?.cavalo_owner || {};
+    return pick(
+      veiculo.antt,
+      veiculo.rntrc,
+      owner.rntrc,
+      owner.antt_titular?.rntrc,
+    );
+  }
+
+  // carreta
+  const veiculo = Array.isArray(dados?.carretas)
+    ? dados.carretas[idx] || {}
+    : dados?.carreta || {};
+  const owner = Array.isArray(dados?.carreta_owners)
+    ? dados.carreta_owners[idx] || {}
+    : dados?.carreta_owner || {};
+  const cavaloOwner = dados?.cavalo_owner || {};
+
+  return pick(
+    veiculo.antt,
+    veiculo.rntrc,
+    owner.rntrc,
+    owner.antt_titular?.rntrc,
+    // Carreta reaproveita o owner do cavalo → herda o RNTRC da empresa.
+    ownerReusesCavalo(dados) ? cavaloOwner.rntrc : "",
+    ownerReusesCavalo(dados) ? cavaloOwner.antt_titular?.rntrc : "",
+  );
 }
