@@ -99,6 +99,10 @@ services:
       OCR_RNTRC_STRATEGY: ${OCR_RNTRC_STRATEGY:-vision-only}
       OCR_COMPROVANTE_STRATEGY: ${OCR_COMPROVANTE_STRATEGY:-legacy}
       OCR_SELFIE_CNH_STRATEGY: ${OCR_SELFIE_CNH_STRATEGY:-vision-only}
+      # bind 0.0.0.0 em prod: Traefik (outro container) precisa alcancar uvicorn
+      # via network platform_public. Default do app e 127.0.0.1 (loopback-only).
+      # Em dev o override.yml ja injeta o mesmo HOST.
+      HOST: "0.0.0.0"
     volumes:
       - cadastro_anexos:/app/backend/anexos_tmp
     # Não expõe porta externamente — Traefik roteia /ocr-api/* para este container

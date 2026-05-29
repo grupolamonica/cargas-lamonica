@@ -38,3 +38,17 @@ services:
       - "traefik.http.routers.lmc-backend-http.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || Path(`/health`))"
       - "traefik.http.routers.lmc-backend-http.entrypoints=web"
       - "traefik.http.routers.lmc-backend-http.middlewares=lmc-https-redirect"
+
+  cadastro-ocr:
+    labels:
+      # HTTPS router for /ocr-api/*
+      - "traefik.http.routers.lmc-cadastro-ocr-https.rule=Host(`${DOMAIN}`) && PathPrefix(`/ocr-api`)"
+      - "traefik.http.routers.lmc-cadastro-ocr-https.entrypoints=websecure"
+      - "traefik.http.routers.lmc-cadastro-ocr-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.lmc-cadastro-ocr-https.priority=30"
+      - "traefik.http.routers.lmc-cadastro-ocr-https.middlewares=lmc-ocr-strip"
+      - "traefik.http.services.lmc-cadastro-ocr.loadbalancer.server.port=8765"
+      # HTTP /ocr-api → HTTPS redirect
+      - "traefik.http.routers.lmc-cadastro-ocr-http.rule=Host(`${DOMAIN}`) && PathPrefix(`/ocr-api`)"
+      - "traefik.http.routers.lmc-cadastro-ocr-http.entrypoints=web"
+      - "traefik.http.routers.lmc-cadastro-ocr-http.middlewares=lmc-https-redirect"
