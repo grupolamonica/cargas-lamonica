@@ -342,6 +342,12 @@ async function stepVeiculo(ctx, sub) {
   const ownerCnpj = sub === "cavalo"
     ? (ctx.state.cavaloOwnerDocType === "cnpj" ? ctx.state.cavaloOwnerDoc : "")
     : (ctx.state.carretaOwnerDocType === "cnpj" ? ctx.state.carretaOwnerDoc : "");
+  // Fallback robusto: quando o proprietário veio de job OK em cache, só o ownerId
+  // é restaurado (não o doc/docType) — então passamos owner_id pro bot resolver
+  // direto, evitando resolve_owner com cpf vazio em re-tentativas de veículo.
+  const ownerId = Number(
+    sub === "cavalo" ? ctx.state.cavaloOwnerId : ctx.state.carretaOwnerId,
+  ) || 0;
 
   const result = await cadastrarVeiculo({
     idCadastro: ctx.cadastroId,
@@ -349,6 +355,7 @@ async function stepVeiculo(ctx, sub) {
     payload: mapVeiculoPayload(veiculoData),
     ownerCpf,
     ownerCnpj,
+    ownerId,
     correlationId: ctx.correlationId,
   });
   if (sub === "cavalo") ctx.state.cavaloVehicleId = result.vehicleId;

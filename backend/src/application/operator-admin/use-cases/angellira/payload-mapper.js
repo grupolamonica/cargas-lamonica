@@ -148,15 +148,34 @@ export function mapVeiculoPayload(veiculo) {
   if (!veiculo || typeof veiculo !== "object") {
     throw new Error("Veículo payload ausente");
   }
+  // IMPORTANTE: chaves espelham o que o bot lê em
+  // angelira_robo/api_query/flow_veiculo.py::_construir_payload_veiculo.
+  // O bot resolve plateStateId/plateCityId a partir de `uf` + `municipio`/`cidade`
+  // (origem: emplacamento do CRLV) e marca/modelo SEPARADOS (find_brand/find_model).
+  // Sem `uf`/`municipio` o preflight do veículo bloqueava com
+  // incomplete=['plateCity','plateState']; sem `tipo`/`eixos` o typeId/axles caíam
+  // em fallback. O wizard grava esses dados como uf_emplacamento/cidade_emplacamento.
   return {
     placa: String(veiculo.placa || "").toUpperCase().trim(),
     renavam: digitsOnly(veiculo.renavam),
     chassi: String(veiculo.chassi || "").toUpperCase().trim(),
-    marca_modelo: String(veiculo.marca_modelo || veiculo.marca || "").trim().toUpperCase(),
-    ano_fab: Number(veiculo.ano_fab || veiculo.ano_fabricacao) || null,
-    ano_modelo: Number(veiculo.ano_modelo) || null,
+    marca: String(veiculo.marca || veiculo.marca_modelo || "").trim().toUpperCase(),
+    modelo: String(veiculo.modelo || "").trim().toUpperCase(),
+    tipo: String(veiculo.tipo || "").trim(),
+    eixos: (veiculo.eixos !== null && veiculo.eixos !== undefined && veiculo.eixos !== "")
+      ? String(veiculo.eixos)
+      : "",
     cor: String(veiculo.cor || veiculo.cor_veiculo || "").trim().toUpperCase(),
     carroceria: String(veiculo.carroceria || veiculo.tipo_carroceria || "").trim().toUpperCase(),
+    ano_fabricacao: Number(veiculo.ano_fabricacao || veiculo.ano_fab) || null,
+    ano_modelo: Number(veiculo.ano_modelo || veiculo.ano) || null,
+    // plateState / plateCity (emplacamento do CRLV)
+    uf: String(veiculo.uf || veiculo.uf_emplacamento || "").trim().toUpperCase(),
+    municipio: String(
+      veiculo.municipio || veiculo.cidade || veiculo.cidade_emplacamento || "",
+    ).trim(),
+    antt: digitsOnly(veiculo.antt || veiculo.rntrc),
+    ultimo_licenciamento: String(veiculo.ultimo_licenciamento || "").trim(),
   };
 }
 
