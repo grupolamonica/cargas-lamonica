@@ -1067,6 +1067,7 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
       ? body.jobs.filter((j) => typeof j === "string").map((j) => j.toLowerCase().trim())
       : [];
     const shouldDispatchAngellira = requestedJobs.includes("angellira");
+    const shouldDispatchSpx = requestedJobs.includes("spx");
 
     return withPgClient(async (client) => {
       // 1. Busca o registro pendente
@@ -1165,15 +1166,17 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
         metadata: { driverId, cpf: cpfClean, nome, jobs: requestedJobs },
       });
 
-      // 7. Opcional: dispara pipeline Angellira em background (DC-111 / Sprint 1)
+      // 7. Opcional: dispara pipelines externos (DC-111 / Sprint 1)
       let angellira = null;
       if (shouldDispatchAngellira) {
         angellira = await dispatchAngelliraFromApprove({
-          client,
-          cadastroRegistro: registro,
-          driverId,
-          operatorId,
-          correlationId,
+          client, cadastroRegistro: registro, driverId, operatorId, correlationId,
+        });
+      }
+      let spx = null;
+      if (shouldDispatchSpx) {
+        spx = await dispatchSpxFromApprove({
+          client, cadastroRegistro: registro, driverId, operatorId, correlationId,
         });
       }
 
@@ -1184,6 +1187,7 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
           driverId,
           jobs: requestedJobs,
           angellira,
+          spx,
           meta: { correlationId },
         },
       };
@@ -1229,6 +1233,38 @@ async function dispatchAngelliraFromApprove({ client, cadastroRegistro, driverId
       error: {
         code: "PIPELINE_FATAL",
         message: err?.message || "Falha inesperada ao executar pipeline Angellira",
+      },
+      results: [],
+    };
+  }
+}
+
+/** Helper: dispara pipeline SPX após o aprovar quando 'spx' está em jobs[] */
+async function dispatchSpxFromApprove({ client, cadastroRegistro, driverId, operatorId, correlationId }) {
+  const { runSpxPipeline } = await import(
+    "../../../application/operator-admin/use-cases/spx/dispatch-pipeline.js"
+  );
+  try {
+    const result = await runSpxPipeline({
+      client, cadastro: cadastroRegistro, driverUserId: driverId,
+      operatorId, correlationId,
+    });
+    return {
+      ok: result.ok,
+      results: result.results.map(({ step, status, external_id, error }) => ({
+        step, status, external_id: external_id ?? null, error: error ?? null,
+      })),
+    };
+  } catch (err) {
+    logStructuredEvent("error", "operator.cadastro.spx_dispatch_failed", {
+      cadastroId: cadastroRegistro.id, driverId, correlationId,
+      message: err?.message || String(err),
+    });
+    return {
+      ok: false,
+      error: {
+        code: "SPX_PIPELINE_FATAL",
+        message: err?.message || "Falha inesperada ao executar pipeline SPX",
       },
       results: [],
     };
@@ -1507,6 +1543,96 @@ export async function resolveOperatorListExternalJobsResponse(request) {
       );
       const jobs = await listJobsByCadastro({ client, cadastroId: id });
       return { statusCode: 200, payload: { ok: true, jobs, meta: { correlationId } } };
+    });
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SPX (Shopee Express) — endpoints granulares (DC-111 / extensão SPX)
+//
+// Servem ao painel <ExternalRegistrationPanel /> em /motoristas:
+//   - precheck       → consulta CPF no portal (read-only)
+//   - cadastrar      → dispara pipeline SPX (lookup → cadastrar/importar)
+//   - cadastrar/motorista → re-tentativa do step único (compat com Angellira)
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/operator/cadastros/:id/spx/precheck
+ * Retorna { status: NOT_FOUND | IS_MATCHED_NOSSA | IS_MATCHED_OUTRA |
+ *           REQUEST_PENDENTE | BLOQUEADO | UNAVAILABLE, ... }
+ */
+export async function resolveOperatorSpxPrecheckResponse(request) {
+  return withOperatorSession(request, "spx-precheck", async ({ correlationId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso negado.");
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+    return withPgClient(async (client) => {
+      const cadastro = await loadCadastroAprovado(client, id);
+      if (!cadastro) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      const { performSpxPrecheck } = await import(
+        "../../../application/operator-admin/use-cases/spx/precheck.js"
+      );
+      const result = await performSpxPrecheck({ cadastro, correlationId });
+      return { statusCode: 200, payload: { ok: result.ok, ...result, meta: { correlationId } } };
+    });
+  });
+}
+
+/**
+ * POST /api/operator/cadastros/:id/spx/cadastrar
+ * Dispara pipeline SPX (precheck → cadastrar/importar). Body opcional:
+ *   { overrides: { linehaul_station_name, vehicle_type_name, ... } }
+ */
+export async function resolveOperatorSpxCadastrarResponse(request) {
+  return withOperatorSession(request, "spx-cadastrar", async ({ correlationId, requestIp, operatorId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso negado.");
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+    let body = {};
+    try { body = await parseJsonBody(request); } catch {}
+
+    return withPgClient(async (client) => {
+      const cadastro = await loadCadastroAprovado(client, id);
+      if (!cadastro) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      if (cadastro.status !== "aprovado") {
+        return {
+          statusCode: 409,
+          payload: { error: "Conflict", message: "Cadastro precisa ter sido aprovado antes.", meta: { correlationId } },
+        };
+      }
+      const cpfClean = String(cadastro.dados?.motorista?.cpf || "").replace(/\D/g, "");
+      const { rows: dpRows } = await client.query(
+        `SELECT user_id FROM public.driver_profiles WHERE document_number = $1 LIMIT 1`,
+        [cpfClean],
+      );
+      const driverUserId = dpRows[0]?.user_id || null;
+
+      const { runSpxPipeline } = await import(
+        "../../../application/operator-admin/use-cases/spx/dispatch-pipeline.js"
+      );
+      const result = await runSpxPipeline({
+        client, cadastro, driverUserId, operatorId, correlationId,
+        overrides: body?.overrides || {},
+      });
+
+      await insertSecurityAuditEvent(client, {
+        eventType: "operator.cadastro.spx_dispatched",
+        actorUserId: operatorId, actorRole: "operator",
+        resourceType: "pending_driver_registration", resourceId: id,
+        action: "spx_dispatch", outcome: result.ok ? "success" : "failure",
+        requestIp, correlationId,
+        metadata: { steps: result.results.map((r) => ({ step: r.step, status: r.status })) },
+      });
+
+      return { statusCode: 200, payload: { ok: result.ok, results: result.results, meta: { correlationId } } };
     });
   });
 }

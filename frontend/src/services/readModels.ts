@@ -1036,3 +1036,40 @@ export async function listExternalJobs(id: string) {
     `/api/operator/cadastros/${id}/external-jobs`,
   );
 }
+
+// ── SPX (DC-111 / extensão SPX) ──────────────────────────────────────────
+
+export type SpxPrecheckStatus =
+  | "NOT_FOUND"
+  | "IS_MATCHED_NOSSA"
+  | "IS_MATCHED_OUTRA"
+  | "REQUEST_PENDENTE"
+  | "BLOQUEADO"
+  | "UNAVAILABLE";
+
+export type SpxPrecheckResult = {
+  ok: boolean;
+  status: SpxPrecheckStatus;
+  existingDriverId?: number | null;
+  existingRequestId?: number | null;
+  driverInfo?: Record<string, unknown> | null;
+  message?: string;
+};
+
+export async function precheckSpx(id: string) {
+  return postOperator<SpxPrecheckResult>(
+    `/api/operator/cadastros/${id}/spx/precheck`,
+  );
+}
+
+export async function cadastrarSpx(id: string, overrides?: Record<string, unknown>) {
+  return postOperator<{
+    ok: boolean;
+    results: Array<{
+      step: "spx_motorista";
+      status: "OK" | "OK_CACHED" | "ERROR";
+      external_id?: string | null;
+      error?: { code?: string; message?: string; acao?: string } | null;
+    }>;
+  }>(`/api/operator/cadastros/${id}/spx/cadastrar`, { overrides });
+}

@@ -69,6 +69,8 @@ import {
   resolveOperatorAngelliraCadastrarResponse,
   resolveOperatorAngelliraCadastrarStepResponse,
   resolveOperatorListExternalJobsResponse,
+  resolveOperatorSpxPrecheckResponse,
+  resolveOperatorSpxCadastrarResponse,
 } from "./operator-admin/handlers.js";
 
 import {
@@ -290,6 +292,10 @@ export function registerRoutes(app) {
   router.post("/api/operator/cadastros/:id/angellira/cadastrar", wrap(resolveOperatorAngelliraCadastrarResponse));
   router.post("/api/operator/cadastros/:id/angellira/cadastrar/:step", wrap(resolveOperatorAngelliraCadastrarStepResponse));
   router.get("/api/operator/cadastros/:id/external-jobs", wrap(resolveOperatorListExternalJobsResponse));
+
+  // SPX automation (DC-111 / extensão SPX)
+  router.post("/api/operator/cadastros/:id/spx/precheck", wrap(resolveOperatorSpxPrecheckResponse));
+  router.post("/api/operator/cadastros/:id/spx/cadastrar", wrap(resolveOperatorSpxCadastrarResponse));
 
   // Veículos
   router.get("/api/operator/veiculos", wrap(resolveOperatorVehiclesListReadModelResponse));
