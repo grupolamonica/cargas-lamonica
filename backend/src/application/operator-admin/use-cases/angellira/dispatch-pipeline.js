@@ -35,6 +35,8 @@ import {
   mapMotoristaPayload,
   mapProprietarioPayload,
   mapVeiculoPayload,
+  ownerReusesCavalo,
+  resolveVehicleOwner,
 } from "./payload-mapper.js";
 
 const ALL_STEPS = [
@@ -249,9 +251,18 @@ function restoreStateFromExistingJob(step, existing, state) {
 // ── Steps ────────────────────────────────────────────────────────────────
 
 async function stepProprietarioCavalo(ctx) {
-  const owner = ctx.dados?.cavalo_owner;
-  const docType = extractOwnerDocType(ctx.dados?.cavalo);
-  const { tipo, payload } = mapProprietarioPayload(owner, docType, ctx.dados?.endereco);
+  // Wizard v2: owner embutido em dados.cavalo (owner_doc/owner_doc_type).
+  const owner = resolveVehicleOwner(ctx.dados, ctx.dados?.cavalo);
+  if (!owner || !owner.doc) {
+    throw new AngelliraBotError({
+      code: "OWNER_CAVALO_AUSENTE",
+      message: "Proprietário do cavalo não informado (owner_doc ausente em dados.cavalo).",
+      acao: "Confirme a etapa de veículo/proprietário no wizard de cadastro.",
+    });
+  }
+  const docType = owner.doc_type || extractOwnerDocType(ctx.dados?.cavalo);
+  const fallbackEndereco = ctx.dados?.motorista?.endereco || ctx.dados?.endereco;
+  const { tipo, payload } = mapProprietarioPayload(owner, docType, fallbackEndereco);
 
   ctx.state.cavaloOwnerDocType = docType;
   ctx.state.cavaloOwnerDoc = digitsOnly(payload.cpf || payload.cnpj);
@@ -267,15 +278,26 @@ async function stepProprietarioCavalo(ctx) {
 }
 
 async function stepProprietarioCarreta(ctx) {
-  const owner = extractCarretaOwner(ctx.dados, 0);
-  if (!owner) {
-    // Sem owner explícito da carreta → reaproveita do cavalo (regra do
-    // candidatura submit-final)
+  const carretaEntry = Array.isArray(ctx.dados?.carretas)
+    ? ctx.dados.carretas[0]
+    : ctx.dados?.carreta;
+
+  // 1) owner explícito legado (dados.carreta_owner(s)); 2) embutido no veículo.
+  let owner = extractCarretaOwner(ctx.dados, 0);
+  if (!owner) owner = resolveVehicleOwner(ctx.dados, carretaEntry);
+
+  // Reaproveita o proprietário do cavalo quando: owner_reuse pede, OU é o mesmo
+  // doc do cavalo, OU não há owner próprio identificável na carreta.
+  const sameDocAsCavalo = !!owner?.doc && !!ctx.state.cavaloOwnerDoc
+    && digitsOnly(owner.doc) === ctx.state.cavaloOwnerDoc;
+  const reuseCavalo = ownerReusesCavalo(ctx.dados) || sameDocAsCavalo || !owner?.doc;
+
+  if (reuseCavalo) {
     if (!ctx.state.cavaloOwnerId) {
       throw new AngelliraBotError({
         code: "OWNER_CARRETA_AUSENTE",
-        message: "Proprietário da carreta não informado e cavalo owner não cadastrado.",
-        acao: "Verifique se carreta_owner ou cavalo_owner está presente em dados.",
+        message: "Proprietário da carreta reaproveita o do cavalo, mas o cavalo owner não foi cadastrado.",
+        acao: "Verifique a etapa proprietario_cavalo (deve rodar antes).",
       });
     }
     ctx.state.carretaOwnerId = ctx.state.cavaloOwnerId;
@@ -284,11 +306,10 @@ async function stepProprietarioCarreta(ctx) {
     return { externalId: toExternalId(ctx.state.cavaloOwnerId), response: { reused_from_cavalo: true } };
   }
 
-  // carreta_owners[0].doc_type pode existir; senão usa do veículo
-  const docType = owner.doc_type || extractOwnerDocType(
-    Array.isArray(ctx.dados?.carretas) ? ctx.dados.carretas[0] : ctx.dados?.carreta,
-  );
-  const { tipo, payload } = mapProprietarioPayload(owner, docType, ctx.dados?.endereco);
+  // owner próprio da carreta (doc diferente do cavalo)
+  const docType = owner.doc_type || extractOwnerDocType(carretaEntry);
+  const fallbackEndereco = ctx.dados?.motorista?.endereco || ctx.dados?.endereco;
+  const { tipo, payload } = mapProprietarioPayload(owner, docType, fallbackEndereco);
 
   ctx.state.carretaOwnerDocType = docType;
   ctx.state.carretaOwnerDoc = digitsOnly(payload.cpf || payload.cnpj);

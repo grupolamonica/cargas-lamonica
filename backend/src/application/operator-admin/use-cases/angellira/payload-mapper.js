@@ -18,12 +18,21 @@ function digitsOnly(value) {
   return String(value ?? "").replace(/\D/g, "");
 }
 
-function isoToBrDate(iso) {
-  // "1990-01-15" → "15/01/1990" (formato que o bot espera)
-  if (!iso) return "";
-  const match = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (!match) return String(iso);
-  return `${match[3]}/${match[2]}/${match[1]}`;
+/**
+ * Normaliza data para BR (DD/MM/YYYY). O bot Angellira aplica `_br_para_iso()`
+ * em cima dos campos de data (data_nascimento, validade, primeira_emissao),
+ * então SEMPRE entregamos em BR — independente de a origem ser ISO
+ * (YYYY-MM-DD, como o wizard grava cnh.validade) ou já BR (como
+ * motorista.data_nascimento). Evita o bug de birth/validade chegarem vazios.
+ */
+function toBrDate(value) {
+  if (!value) return "";
+  const s = String(value).trim();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+  const br = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (br) return `${br[1]}/${br[2]}/${br[3]}`;
+  return s;
 }
 
 /**
@@ -37,27 +46,41 @@ export function mapMotoristaPayload(dados) {
   const cnh = dados?.cnh || motorista.cnh || {};
   const endereco = dados?.endereco || motorista.endereco || {};
 
-  const telefonePrimario = motorista.telefone_primario
-    || (Array.isArray(motorista.telefones) ? motorista.telefones[0] : "")
-    || motorista.telefone
-    || "";
+  // telefones: o bot lê motorista.telefones[] (→ _phones_para_api). O wizard v2
+  // grava o array em motorista.telefones; fallback p/ telefone_primario/telefone.
+  const telefonesRaw = Array.isArray(motorista.telefones) && motorista.telefones.length
+    ? motorista.telefones
+    : [motorista.telefone_primario || motorista.telefone].filter(Boolean);
+  const telefones = telefonesRaw.map((t) => digitsOnly(t)).filter(Boolean);
 
+  // IMPORTANTE: as chaves abaixo espelham EXATAMENTE o que o bot lê em
+  // angelira_robo/api_query/flow_motorista.py::_construir_payload_driver
+  // (data_nascimento, nome_mae, nome_pai, naturalidade, rg_orgao, telefones[],
+  // cnh.registro, cnh.uf_emissor, cnh.primeira_emissao). Renomear/dropar essas
+  // chaves fazia o preflight do Angellira bloquear com incomplete=['birth'].
   return {
     motorista: {
       nome: String(motorista.nome || "").trim().toUpperCase(),
       cpf: digitsOnly(motorista.cpf),
-      telefone: digitsOnly(telefonePrimario),
+      // bot faz _br_para_iso(data_nascimento) → entregar em BR DD/MM/YYYY
+      data_nascimento: toBrDate(motorista.data_nascimento || motorista.nascimento),
+      nome_mae: String(motorista.nome_mae || motorista.mae || "").trim().toUpperCase(),
+      nome_pai: String(motorista.nome_pai || motorista.pai || "").trim().toUpperCase(),
+      naturalidade: String(motorista.naturalidade || "").trim(),
       rg: String(motorista.rg || motorista.rg_numero || "").trim(),
+      rg_orgao: String(motorista.rg_orgao || motorista.rg_orgao_emissor || "").trim().toUpperCase(),
       rg_uf: String(motorista.rg_uf || motorista.rg_estado || "").trim().toUpperCase(),
-      nascimento: isoToBrDate(motorista.nascimento || motorista.data_nascimento),
-      mae: String(motorista.mae || motorista.nome_mae || "").trim().toUpperCase(),
+      telefones,
     },
     cnh: {
-      numero: digitsOnly(cnh.numero || cnh.cnh_numero),
+      registro: digitsOnly(cnh.registro || cnh.numero || cnh.cnh_numero || cnh.registro_cnh),
       categoria: String(cnh.categoria || cnh.cnh_categoria || "").trim().toUpperCase(),
-      validade: isoToBrDate(cnh.validade || cnh.cnh_validade),
-      primeira_cnh: isoToBrDate(cnh.primeira_cnh || cnh.primeira_habilitacao),
-      registro: digitsOnly(cnh.registro || cnh.registro_cnh || cnh.numero),
+      codigo_seguranca: digitsOnly(cnh.codigo_seguranca),
+      uf_emissor: String(cnh.uf_emissor || cnh.uf || cnh.estado || "").trim().toUpperCase(),
+      validade: toBrDate(cnh.validade || cnh.cnh_validade),
+      primeira_emissao: toBrDate(
+        cnh.primeira_emissao || cnh.primeira_cnh || cnh.primeira_habilitacao,
+      ),
     },
     endereco: {
       cep: digitsOnly(endereco.cep),
@@ -183,4 +206,69 @@ export function extractCarretaOwner(dados, idx = 0) {
  */
 export function extractOwnerDocType(veiculoEntry) {
   return veiculoEntry?.owner_doc_type === "cnpj" ? "cnpj" : "cpf";
+}
+
+/**
+ * Resolve o proprietário de um veículo no formato do wizard v2, onde o owner
+ * vem EMBUTIDO no veículo (dados.cavalo.owner_doc / owner_doc_type /
+ * owner_nome) — e NÃO num objeto `dados.cavalo_owner` separado (que o pipeline
+ * assumia e nunca existiu, causando PIPELINE_UNEXPECTED em cascata).
+ *
+ * Resolução de nome (o wizard às vezes grava owner_nome=null):
+ *   1. owner_nome explícito;
+ *   2. se owner_doc == CPF do motorista → nome do motorista (mesma pessoa, CPF
+ *      é identificador único — confiável mesmo se a flag owner_reuse divergir);
+ *   3. "" (proprietário terceiro sem nome capturado — gap do wizard).
+ *
+ * Endereço/telefone: do próprio owner se houver; senão herda do motorista.
+ *
+ * @param {object} dados
+ * @param {object} vehicleEntry  — dados.cavalo ou dados.carretas[i]
+ * @returns {null | {doc, doc_type, nome, razao_social?, telefone, endereco, _is_driver}}
+ */
+export function resolveVehicleOwner(dados, vehicleEntry) {
+  if (!vehicleEntry || typeof vehicleEntry !== "object") return null;
+  const ownerDoc = digitsOnly(
+    vehicleEntry.owner_doc || vehicleEntry.owner_cpf || vehicleEntry.owner_cnpj,
+  );
+  if (!ownerDoc) return null;
+
+  const docType = (vehicleEntry.owner_doc_type === "cnpj" || ownerDoc.length === 14)
+    ? "cnpj"
+    : "cpf";
+  const motorista = dados?.motorista || {};
+  const motoristaCpf = digitsOnly(motorista.cpf);
+  const ownerIsDriver = docType === "cpf" && !!motoristaCpf && ownerDoc === motoristaCpf;
+
+  let nome = String(vehicleEntry.owner_nome || vehicleEntry.owner_razao_social || "").trim();
+  if (!nome && ownerIsDriver) nome = String(motorista.nome || "").trim();
+
+  const motoristaEndereco = motorista.endereco || dados?.endereco || {};
+  const endereco = vehicleEntry.owner_endereco
+    || (ownerIsDriver ? motoristaEndereco : null)
+    || motoristaEndereco;
+  const telefones = Array.isArray(motorista.telefones) ? motorista.telefones : [];
+  const telefone = vehicleEntry.owner_telefone
+    || (ownerIsDriver ? (motorista.telefone_primario || telefones[0] || "") : "");
+
+  return {
+    doc: ownerDoc,
+    doc_type: docType,
+    nome,
+    razao_social: docType === "cnpj"
+      ? String(vehicleEntry.owner_razao_social || vehicleEntry.owner_nome || nome).trim()
+      : undefined,
+    telefone,
+    endereco,
+    _is_driver: ownerIsDriver,
+  };
+}
+
+/**
+ * owner_reuse.carreta_owners_reused inclui 'cavalo_owner' → a carreta deve
+ * reaproveitar o proprietário do cavalo (sem cadastrá-lo de novo).
+ */
+export function ownerReusesCavalo(dados) {
+  const reused = dados?.owner_reuse?.carreta_owners_reused;
+  return Array.isArray(reused) && reused.includes("cavalo_owner");
 }
