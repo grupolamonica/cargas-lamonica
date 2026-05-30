@@ -407,9 +407,16 @@ export function buildSubmitDados(data: ConfirmationWizardData): Record<string, u
     }
   });
 
+  // DC-125 — Step A pulado (motorista já conhecido) → buildMotorista=null.
+  // No fluxo SEM LOGIN o backend não tem driver_user_id, então precisa do CPF
+  // em `dados.motorista.cpf` para hidratar o motorista persistido (handler
+  // getExistingMotorista by CPF). Emitimos um partial `{ cpf }` — espelha o
+  // partial `{ placa }` do cavalo. Sem isso o submit ia 422 (motorista vazio).
+  const motoristaPayload =
+    motorista ?? (data.cpf ? { cpf: digitsOnly(data.cpf) } : undefined);
+
   return {
-    // Bug 7 — omite `motorista` quando stepA foi pulado; backend merge do persistido.
-    ...(motorista ? { motorista } : {}),
+    ...(motoristaPayload ? { motorista: motoristaPayload } : {}),
     // Step B pulado (cavalo vigente) — envia partial `{ placa }`; backend merge.
     ...(cavaloPayload ? { cavalo: cavaloPayload } : {}),
     ...(cavalo_owner ? { cavalo_owner } : {}),

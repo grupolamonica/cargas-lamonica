@@ -1364,10 +1364,15 @@ export function DriverRegistrationWizard({
       stepE: stepEDataMap,
       collectedCarretaOwners,
       horsePlate: horsePlate ?? undefined,
+      // DC-125: CPF do pré-check (ou adotado da CNH) para o submit sem-login
+      // quando o Step A foi pulado — backend hidrata o motorista por CPF.
+      cpf: onlyDigits(adoptedCpf ?? cpf ?? "") || undefined,
     }),
     [
+      adoptedCpf,
       cavaloOwnerIsDriver,
       collectedCarretaOwners,
+      cpf,
       horsePlate,
       stepAData,
       stepBData,
