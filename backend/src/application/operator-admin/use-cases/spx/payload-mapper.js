@@ -70,7 +70,13 @@ export function mapSpxMotoristaPayload(dados, overrides = {}) {
   return {
     cpf: ang.motorista.cpf,
     driver_name: ang.motorista.nome,
-    contact_number: ang.motorista.telefone,
+    // mapMotoristaPayload (Angellira) emite `telefones[]` (array) + `cnh.registro`
+    // — NÃO `telefone`/`cnh.numero`. Ler as chaves erradas deixava contact_number
+    // e license_number undefined → SPX 422 "Field required" pra qualquer motorista.
+    contact_number: digitsOnly(
+      (Array.isArray(ang.motorista.telefones) && ang.motorista.telefones[0])
+        || motorista.telefone_primario || motorista.telefone || "",
+    ),
     gender,
     birth_day: birthDayIso(motorista.nascimento || motorista.data_nascimento),
 
@@ -87,7 +93,7 @@ export function mapSpxMotoristaPayload(dados, overrides = {}) {
     delivery_station_name: overrides.delivery_station_name ?? null,
     return_station_name: overrides.return_station_name ?? null,
 
-    license_number: cnh.numero,
+    license_number: digitsOnly(cnh.registro || cnh.numero),
     license_type,
     license_expire_date: cnhValidityIso(motorista.cnh_validade || cnh.validade),
     cnh_remarks: overrides.cnh_remarks ?? [],
