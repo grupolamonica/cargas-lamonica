@@ -90,3 +90,46 @@ jobs:
       - name: Build backend
         run: npm run build --if-present
         working-directory: backend
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # bots/ — sidecars Python (DC-111 / Sprint 1 / DC-119)
+  # Lint Python com ruff + smoke import test (pytest aceita exit 0 mesmo sem
+  # suite). Sprint 2 substitui pytest opcional por suite real.
+  # ─────────────────────────────────────────────────────────────────────────
+  bots-check:
+    name: Bots — ruff + pytest smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ruff + pytest
+        run: pip install ruff pytest
+
+      - name: Lint bots/ with ruff
+        run: ruff check bots/
+
+      - name: Install angelira deps + smoke import
+        run: |
+          pip install -r requirements.txt
+          python -c "import sys; sys.path.insert(0, 'backend'); from main import app; print('angelira OK:', app.title)"
+          pytest -q || echo "no tests yet — ok"
+        working-directory: bots/angelira
+
+      - name: Install unificada system deps (libcairo para svglib/pycairo)
+        run: sudo apt-get install -y libcairo2-dev libgirepository1.0-dev pkg-config
+
+      - name: Install unificada deps + smoke import
+        run: |
+          pip install -r requirements.txt
+          python -c "import sys; sys.path.insert(0, 'backend'); from main import app; print('unificada OK:', app.title)"
+          pytest -q || echo "no tests yet — ok"
+        working-directory: bots/unificada

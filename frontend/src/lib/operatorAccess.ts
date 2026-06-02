@@ -59,14 +59,6 @@ export function getOperatorAccessLevelLabel(accessLevel: OperatorAccessLevel | n
   return "Sem acesso";
 }
 
-export function canWriteOperatorCargos(user: AuthUserLike) {
-  return getOperatorAccessLevel(user) !== null;
-}
-
-export function canWriteOperatorLeads(user: AuthUserLike) {
-  return getOperatorAccessLevel(user) !== null;
-}
-
 export function canWriteOperatorClientes(user: AuthUserLike) {
   return getOperatorAccessLevel(user) === "advanced";
 }

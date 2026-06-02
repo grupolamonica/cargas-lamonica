@@ -448,8 +448,23 @@ async def ocr_cnh(req: OCRRequest):
             _persistir_anexo_basico, f"cnh_{prefixo}", req.imagem, id_efetivo
         )
 
+        # Fase F Bug #2 (CNH): Infosimples /ocr/cnh rejeita PDFs multi-pagina
+        # (igual ao /ocr/crlv). CNHs digitais (e-CNH) costumam vir com 2+
+        # paginas; a frente tem todos os dados extraidos. Extraimos a pagina 1
+        # antes de chamar a Infosimples — mesma logica do CRLV. Calculado uma
+        # vez antes do route() pra nao duplicar trabalho se primary chamar 2x.
+        imagem_para_infosimples = await asyncio.to_thread(
+            _extrair_primeira_pagina_pdf_base64, req.imagem
+        )
+
+        # CNH em PDF: GPT-4o Vision nao aceita PDF direto — rasteriza a pagina 1
+        # para JPEG antes do fallback Vision (mesma logica de comprovante/cnpj/
+        # rntrc). Sem isso o fallback Vision rejeitava CNH PDF com erro de
+        # "PDF nao suportado".
+        imagem_para_vision = await asyncio.to_thread(_pdf_to_jpeg_base64, req.imagem)
+
         async def _primary_infosimples() -> dict:
-            resposta = await infosimples.ocr("ocr/cnh", req.imagem)
+            resposta = await infosimples.ocr("ocr/cnh", imagem_para_infosimples)
             # Recortes (frente/verso/foto) so existem no envelope Infosimples.
             novo_id = await asyncio.to_thread(
                 _extrair_recortes_cnh, resposta, id_efetivo, prefixo
@@ -459,7 +474,7 @@ async def ocr_cnh(req: OCRRequest):
             return resposta
 
         async def _vision_extract() -> dict:
-            return await gpt4o_vision.extract("cnh", req.imagem)
+            return await gpt4o_vision.extract("cnh", imagem_para_vision)
 
         envelope = await ocr_router.route(
             "cnh",
@@ -507,11 +522,17 @@ async def ocr_crlv(req: OCRRequest):
             _extrair_primeira_pagina_pdf_base64, req.imagem
         )
 
+        # CRLV em PDF: GPT-4o Vision nao aceita PDF direto — rasteriza a pagina 1
+        # para JPEG antes do fallback Vision (mesma logica de comprovante/cnpj/
+        # rntrc). Sem isso o fallback Vision rejeitava CRLV PDF com erro de
+        # "PDF nao suportado", anulando a cascata infosimples-with-vision-fallback.
+        imagem_para_vision = await asyncio.to_thread(_pdf_to_jpeg_base64, req.imagem)
+
         async def _primary_infosimples() -> dict:
             return await infosimples.ocr("ocr/crlv", imagem_para_infosimples)
 
         async def _vision_extract() -> dict:
-            return await gpt4o_vision.extract("crlv", req.imagem)
+            return await gpt4o_vision.extract("crlv", imagem_para_vision)
 
         return await ocr_router.route(
             "crlv",

@@ -1,10 +1,9 @@
 import crypto from "node:crypto";
 
-import { createClient } from "@supabase/supabase-js";
-
 import "../../infrastructure/config/load-env.js";
 import { logStructuredEvent } from "../../infrastructure/security-log.js";
 import { withPgClient } from "../../infrastructure/pg/postgres.js";
+import { createSupabaseAdminClient } from "../../infrastructure/supabase/admin-client.js";
 import { normalizeVehicleProfile } from "../../domain/vehicle-profiles.js";
 import { baseRouteValues as BASE_ROUTE_VALUES } from "../../domain/operator-admin/base-route-values.js";
 
@@ -577,27 +576,6 @@ export function getSheetExportUrl() {
   }
 
   return `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${sheetGid}`;
-}
-
-export function createSupabaseAdminClient() {
-  const supabaseUrl = process.env.SUPABASE_URL?.trim() || process.env.VITE_SUPABASE_URL?.trim();
-  const serviceRoleKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || process.env.SUPABASE_SECRET_KEY?.trim();
-
-  if (!supabaseUrl) {
-    throw new Error("Missing required environment variable: SUPABASE_URL");
-  }
-
-  if (!serviceRoleKey) {
-    throw new Error("Missing required environment variable: SUPABASE_SERVICE_ROLE_KEY");
-  }
-
-  return createClient(supabaseUrl, serviceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
 }
 
 /**

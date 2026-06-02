@@ -4,7 +4,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { humanizeOcrMessage, uploadDraftFile } from "@/pages/cadastro/cadastroApi";
+import { humanizeOcrMessage, uploadDraftFile } from "@/services/cadastroApi";
 
 import { OcrResultReview, type OcrResultField } from "./OcrResultReview";
 

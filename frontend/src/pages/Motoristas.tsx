@@ -23,7 +23,9 @@ import {
   Search,
   ShieldCheck,
   ShieldX,
+  Trash2,
   Truck,
+  UserPlus,
   UserRound,
   UsersRound,
   X,
@@ -35,6 +37,38 @@ import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 import { AspxSyncCard } from "@/components/AspxSyncCard";
 import DashboardHeader from "@/components/DashboardHeader";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
+import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
+import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
+import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
+import {
+  StandaloneCadastroDialog,
+  type StandaloneCadastroProceedArgs,
+} from "@/components/driver/StandaloneCadastroDialog";
+import { DriverRegistrationWizard } from "@/components/driver/cadastro-v2/DriverRegistrationWizard";
+import { precheckAngellira, precheckSpx, patchCadastroDados, deleteCadastro } from "@/services/readModels";
+
+/**
+ * Pré-fetch dos prechecks Angellira+SPX em background.
+ * Aproveita o cache server-side de 60s — quando o modal abre depois, vem
+ * do cache (response instantânea).
+ *
+ * Dispara no HOVER (mouseenter) e no CLIQUE da linha. O hover normalmente
+ * acontece 1-3s antes do clique → quando o operador clica "Aprovar", as
+ * queries externas (~6s) já terminaram e o modal abre com cache hit.
+ *
+ * Dedup por cadastroId (Set module-level) evita disparos repetidos enquanto
+ * o cache de 60s está quente.
+ */
+const _prefetchedIds = new Set<string>();
+function prefetchPrechecks(cadastroId: string) {
+  if (!cadastroId || _prefetchedIds.has(cadastroId)) return;
+  _prefetchedIds.add(cadastroId);
+  // Expira o dedup junto com o cache server-side (60s) pra permitir refresh.
+  setTimeout(() => _prefetchedIds.delete(cadastroId), 55_000);
+  // Fire-and-forget. Erros são silenciados — o modal vai tentar de novo.
+  precheckAngellira(cadastroId).catch(() => { _prefetchedIds.delete(cadastroId); });
+  precheckSpx(cadastroId).catch(() => {});
+}
 import { Input } from "@/components/ui/input";
 import { buildDisplayDateTime, formatShortDateTime, parseDateStringAsLocal } from "@/lib/dateDisplay";
 import { cn } from "@/lib/utils";
@@ -549,8 +583,42 @@ const Motoristas = () => {
   const [pendentesPage, setPendentesPage] = useState(1);
   const [selectedPendente, setSelectedPendente] = useState<PendingDriverRegistrationItem | null>(null);
   const [rejectObs, setRejectObs] = useState("");
+  // Cadastro de motorista pelo operador — mesmo fluxo do DriverPortal
+  const [showCadastroRapido, setShowCadastroRapido] = useState(false);
+  const [registrationWizardOpen, setRegistrationWizardOpen] = useState(false);
+  const [registrationContext, setRegistrationContext] = useState<{
+    cpf?: string;
+    horsePlate?: string;
+    trailerPlates?: string[];
+    preCheckResponse?: StandaloneCadastroProceedArgs["preCheckResponse"];
+  } | null>(null);
+
+  const handleCadastroRapidoProceed = ({ cpf, horsePlate, trailerPlates, preCheckResponse }: StandaloneCadastroProceedArgs) => {
+    setRegistrationContext({ cpf, horsePlate, trailerPlates, preCheckResponse });
+    setShowCadastroRapido(false);
+    setRegistrationWizardOpen(true);
+  };
+
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+  // Modal de aprovação com checkboxes (Angellira opt-in) — DC-111 / Sprint 1
+  const [showApproveModal, setShowApproveModal] = useState(false);
+  // Modal de edição de dados do cadastro
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editDadosJson, setEditDadosJson] = useState("");
+  const [editJsonError, setEditJsonError] = useState<string | null>(null);
+  // Confirmação de exclusão
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  // Modal de PROGRESSO ao vivo do disparo externo (Angellira + SPX) — DC-111 / DC-118.
+  // Snapshot dos dados no momento do disparo (selectedPendente pode mudar/limpar).
+  const [dispatchProgress, setDispatchProgress] = useState<{
+    cadastroId: string;
+    nome?: string;
+    jobs: ApproveJob[];
+    hasCavalo: boolean;
+    hasCarreta: boolean;
+  } | null>(null);
 
   const { data: pendentesData, isLoading: pendentesLoading, isFetching: pendentesFetching, error: pendentesError } = useQuery({
     queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, pendentesPage],
@@ -565,15 +633,45 @@ const Motoristas = () => {
   });
 
   const aprovarMutation = useMutation({
-    mutationFn: (id: string) => aprovarCadastro(id),
-    onSuccess: (_data, id) => {
-      toast.success("Motorista aprovado. Conta criada com sucesso.");
-      if (selectedPendente?.id === id) setSelectedPendente(null);
+    mutationFn: ({ id, jobs }: { id: string; jobs: ApproveJob[] }) => aprovarCadastro(id, { jobs }),
+    // Abre o modal de PROGRESSO ANTES da request voltar, para que o polling de
+    // GET /external-jobs comece já no início do disparo síncrono do backend.
+    // (O backend roda o pipeline dentro do POST /aprovar mas faz commit imediato
+    // por etapa — autocommit — então a UI vê o avanço ao vivo.)
+    onMutate: ({ jobs }) => {
+      const dispatchesExternal = jobs.includes("angellira") || jobs.includes("spx");
+      if (dispatchesExternal && selectedPendente) {
+        const dados = selectedPendente.dados as Record<string, unknown> | undefined;
+        setShowApproveModal(false);
+        setDispatchProgress({
+          cadastroId: selectedPendente.id,
+          nome: selectedPendente.nome_motorista || undefined,
+          jobs,
+          hasCavalo: Boolean(dados?.cavalo),
+          hasCarreta: Boolean(
+            dados?.carreta || Array.isArray((dados as { carretas?: unknown[] } | undefined)?.carretas),
+          ),
+        });
+      }
+    },
+    onSuccess: (data, { id, jobs }) => {
+      const dispatchesExternal = jobs.includes("angellira") || jobs.includes("spx");
+      if (!dispatchesExternal) {
+        // Sem disparo externo: só criação de conta — toast simples.
+        toast.success("Motorista aprovado. Conta criada com sucesso.");
+        setShowApproveModal(false);
+      } else {
+        // Com disparo: o resumo aparece no DispatchProgressModal; toast neutro.
+        toast.success("Motorista aprovado. Veja o progresso do cadastro externo.");
+      }
       queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: MOTORISTAS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ["external-jobs", id] });
     },
     onError: (error: Error) => {
       toast.error(error.message || "Erro ao aprovar cadastro.");
+      // Falha na criação de conta/disparo → fecha o modal de progresso (nada a mostrar).
+      setDispatchProgress(null);
     },
   });
 
@@ -593,12 +691,58 @@ const Motoristas = () => {
     },
   });
 
+  const editarDadosMutation = useMutation({
+    mutationFn: ({ id, dados }: { id: string; dados: Record<string, unknown> }) =>
+      patchCadastroDados(id, dados),
+    onSuccess: (_data, { id }) => {
+      toast.success("Dados do cadastro atualizados.");
+      setShowEditModal(false);
+      queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
+      // Atualiza dados locais do selectedPendente para refletir a edição imediatamente
+      if (selectedPendente?.id === id) {
+        try {
+          const novosDados = JSON.parse(editDadosJson) as Record<string, unknown>;
+          setSelectedPendente({ ...selectedPendente, dados: novosDados });
+        } catch { /* ignorar */ }
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Erro ao salvar alterações.");
+    },
+  });
+
+  const excluirCadastroMutation = useMutation({
+    mutationFn: (id: string) => deleteCadastro(id),
+    onSuccess: (_data, id) => {
+      toast.success("Cadastro excluído.");
+      if (selectedPendente?.id === id) setSelectedPendente(null);
+      setShowDeleteConfirm(false);
+      queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Erro ao excluir cadastro.");
+      setShowDeleteConfirm(false);
+    },
+  });
+
   const pendentesItems = pendentesData?.items ?? [];
   const pendentesMeta = pendentesData?.meta;
 
   return (
     <div className="min-w-0">
-      <DashboardHeader title="Motoristas" />
+      <DashboardHeader
+        title="Motoristas"
+        actions={
+          <button
+            type="button"
+            onClick={() => setShowCadastroRapido(true)}
+            className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors"
+          >
+            <UserPlus className="h-4 w-4" />
+            Cadastrar motorista
+          </button>
+        }
+      />
 
       {/* Tab switcher — segmented control arredondado */}
       <div className="px-6 pt-3 pb-1 lg:px-8">
@@ -688,7 +832,15 @@ const Motoristas = () => {
                       {pendentesItems.map((item) => (
                         <tr
                           key={item.id}
-                          onClick={() => setSelectedPendente(item)}
+                          // Pré-fetch no HOVER: aquece o cache server-side 1-3s
+                          // antes do clique. Dedup interno evita repetição.
+                          onMouseEnter={() => prefetchPrechecks(item.id)}
+                          onClick={() => {
+                            setSelectedPendente(item);
+                            // Garante o pré-fetch também no clique (caso o
+                            // hover não tenha disparado — ex: navegação por teclado).
+                            prefetchPrechecks(item.id);
+                          }}
                           className={cn(
                             "cursor-pointer border-b border-border/50 transition-colors hover:bg-muted/40",
                             selectedPendente?.id === item.id && "bg-primary/5",
@@ -766,7 +918,7 @@ const Motoristas = () => {
                           <button
                             type="button"
                             disabled={aprovarMutation.isPending}
-                            onClick={() => aprovarMutation.mutate(selectedPendente.id)}
+                            onClick={() => setShowApproveModal(true)}
                             className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60 transition-colors"
                           >
                             {aprovarMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
@@ -791,6 +943,41 @@ const Motoristas = () => {
                         ) : null}
                       </div>
                     )}
+
+                    {/* Painel granular de cadastro externo (Angellira) — DC-111 / Sprint 1.
+                        Aparece quando cadastro já foi aprovado (driver_profile criado). */}
+                    {selectedPendente.status === "aprovado" ? (
+                      <>
+                        <ExternalRegistrationPanel cadastroId={selectedPendente.id} />
+                        {/* Ações de gerenciamento para cadastros aprovados */}
+                        {permissions.canApproveMotoristas ? (
+                          <div className="mt-4 flex gap-2 border-t border-border pt-4">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditDadosJson(JSON.stringify(selectedPendente.dados ?? {}, null, 2));
+                                setEditJsonError(null);
+                                setShowEditModal(true);
+                              }}
+                              className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                              Editar dados
+                            </button>
+                            {permissions.canRejectMotoristas ? (
+                              <button
+                                type="button"
+                                onClick={() => setShowDeleteConfirm(true)}
+                                className="flex items-center justify-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-100 transition-colors"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                Excluir
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </>
+                    ) : null}
                   </section>
                 ) : (
                   <section className="admin-panel flex min-h-[200px] flex-col items-center justify-center gap-3 p-8 text-center">
@@ -800,6 +987,39 @@ const Motoristas = () => {
                 )}
               </div>
             )}
+
+            {/* Modal de aprovacao com checkboxes (Angellira opt-in) — DC-111 / Sprint 1 */}
+            {selectedPendente ? (
+              <ApproveCadastroModal
+                cadastroId={selectedPendente.id}
+                open={showApproveModal}
+                onOpenChange={setShowApproveModal}
+                motoristaNome={selectedPendente.nome_motorista || undefined}
+                motoristaCpf={selectedPendente.cpf_motorista || undefined}
+                hasCavalo={Boolean((selectedPendente.dados as Record<string, unknown>)?.cavalo)}
+                hasCarreta={Boolean(
+                  (selectedPendente.dados as Record<string, unknown>)?.carreta ||
+                  Array.isArray((selectedPendente.dados as { carretas?: unknown[] })?.carretas),
+                )}
+                isSubmitting={aprovarMutation.isPending}
+                onConfirm={(jobs) => aprovarMutation.mutate({ id: selectedPendente.id, jobs })}
+              />
+            ) : null}
+
+            {/* Modal de PROGRESSO ao vivo do disparo externo (Angellira + SPX) — DC-111 / DC-118.
+                Abre ao confirmar "Aprovar e cadastrar"; pollia GET /external-jobs até terminal. */}
+            {dispatchProgress ? (
+              <DispatchProgressModal
+                cadastroId={dispatchProgress.cadastroId}
+                open={Boolean(dispatchProgress)}
+                onOpenChange={(open) => { if (!open) setDispatchProgress(null); }}
+                motoristaNome={dispatchProgress.nome}
+                dispatchedJobs={dispatchProgress.jobs}
+                hasCavalo={dispatchProgress.hasCavalo}
+                hasCarreta={dispatchProgress.hasCarreta}
+                dispatchPending={aprovarMutation.isPending}
+              />
+            ) : null}
 
             {/* Modal de rejeicao */}
             {showRejectModal && (
@@ -838,6 +1058,94 @@ const Motoristas = () => {
                 </DialogContent>
               </Dialog>
             )}
+
+            {/* Modal de edição de dados do cadastro aprovado */}
+            <Dialog open={showEditModal} onOpenChange={(open) => { if (!open) { setShowEditModal(false); setEditJsonError(null); } }}>
+              <DialogContent className="max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Editar dados do cadastro</DialogTitle>
+                </DialogHeader>
+                <div className="mt-2 space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    Edite os dados do cadastro em formato JSON. As alterações serão salvas e refletidas no próximo cadastro externo.
+                  </p>
+                  <textarea
+                    className="w-full rounded-lg border border-border bg-muted/30 p-3 font-mono text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    rows={18}
+                    value={editDadosJson}
+                    onChange={(e) => {
+                      setEditDadosJson(e.target.value);
+                      setEditJsonError(null);
+                    }}
+                  />
+                  {editJsonError ? (
+                    <p className="text-xs text-rose-600">{editJsonError}</p>
+                  ) : null}
+                </div>
+                <DialogFooter>
+                  <button
+                    type="button"
+                    onClick={() => { setShowEditModal(false); setEditJsonError(null); }}
+                    className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={editarDadosMutation.isPending}
+                    onClick={() => {
+                      if (!selectedPendente) return;
+                      let parsed: Record<string, unknown>;
+                      try {
+                        parsed = JSON.parse(editDadosJson) as Record<string, unknown>;
+                      } catch {
+                        setEditJsonError("JSON inválido. Corrija a sintaxe antes de salvar.");
+                        return;
+                      }
+                      editarDadosMutation.mutate({ id: selectedPendente.id, dados: parsed });
+                    }}
+                    className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+                  >
+                    {editarDadosMutation.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                    Salvar alterações
+                  </button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* Modal de confirmação de exclusão */}
+            <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+              <DialogContent className="max-w-sm">
+                <DialogHeader>
+                  <DialogTitle>Excluir cadastro</DialogTitle>
+                </DialogHeader>
+                <p className="text-sm text-muted-foreground">
+                  Tem certeza que deseja excluir o cadastro de{" "}
+                  <strong>{selectedPendente?.nome_motorista || "—"}</strong>? Esta ação não pode ser desfeita.
+                </p>
+                <p className="mt-1 text-xs text-amber-700">
+                  Se o motorista já foi cadastrado em Angellira ou SPX, os dados <strong>permanecem nesses sistemas</strong> — remova manualmente se necessário.
+                </p>
+                <DialogFooter>
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteConfirm(false)}
+                    className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={excluirCadastroMutation.isPending}
+                    onClick={() => selectedPendente && excluirCadastroMutation.mutate(selectedPendente.id)}
+                    className="flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+                  >
+                    {excluirCadastroMutation.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                    Confirmar exclusão
+                  </button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </>
         ) : (
           <>
@@ -1322,6 +1630,26 @@ const Motoristas = () => {
           </>
         )}
       </main>
+
+      {/* Cadastro de motorista pelo operador — mesmo modal do DriverPortal */}
+      <StandaloneCadastroDialog
+        open={showCadastroRapido}
+        onOpenChange={setShowCadastroRapido}
+        onProceed={handleCadastroRapidoProceed}
+      />
+      <DriverRegistrationWizard
+        open={registrationWizardOpen}
+        onOpenChange={setRegistrationWizardOpen}
+        cpf={registrationContext?.cpf}
+        horsePlate={registrationContext?.horsePlate}
+        trailerPlates={registrationContext?.trailerPlates}
+        initialPreCheckResponse={registrationContext?.preCheckResponse}
+        onPreCheckPassed={() => {
+          // No contexto do operador, apenas fecha o wizard após registro
+          setRegistrationWizardOpen(false);
+          setRegistrationContext(null);
+        }}
+      />
     </div>
   );
 };

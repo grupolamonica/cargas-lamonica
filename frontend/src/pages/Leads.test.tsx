@@ -239,13 +239,19 @@ describe("Leads", () => {
 
     expect(mockUseQuery).toHaveBeenCalledWith(
       expect.objectContaining({
-        refetchInterval: 30_000,
+        // Backoff dinâmico: 30s antes do primeiro response, 60s estável.
+        refetchInterval: expect.any(Function),
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: true,
         refetchOnReconnect: true,
         staleTime: 15_000,
       }),
     );
+
+    // Valida o contrato do interval function: backoff 30s → 60s
+    const callArgs = mockUseQuery.mock.calls[0][0] as { refetchInterval: (query: { state: { data: unknown } }) => number };
+    expect(callArgs.refetchInterval({ state: { data: undefined } })).toBe(30_000);
+    expect(callArgs.refetchInterval({ state: { data: { items: [] } } })).toBe(60_000);
 
     await waitFor(() => {
       expect(mockSupabaseChannel).toHaveBeenCalledWith("operator-public-load-leads");

@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ocrCnh } from "@/pages/cadastro/cadastroApi";
+import { ocrCnh } from "@/services/cadastroApi";
 import { isValidCpf, onlyDigits } from "@/lib/brazilianValidators";
 import { UFS } from "@/lib/ufs";
 
@@ -35,6 +35,8 @@ export interface A1Data {
   rg?: string;
   rg_orgao?: string;
   rg_uf?: string;
+  /** Número de registro da CNH (campo `registro` — o "número" da CNH). */
+  registro?: string;
   cnh_codigo_seguranca?: string;
   cnh_numero_espelho?: string;
   cnh_uf_emissor?: string;
@@ -215,6 +217,7 @@ export function A1Cnh({
         rg: extracted.pessoal.rg || undefined,
         rg_orgao: extracted.pessoal.rg_orgao || undefined,
         rg_uf: extracted.pessoal.rg_uf || undefined,
+        registro: extracted.cnh.registro || undefined,
         cnh_codigo_seguranca: extracted.cnh.codigo_seguranca || undefined,
         cnh_numero_espelho: extracted.cnh.numero_espelho || undefined,
         cnh_uf_emissor: extracted.cnh.uf_emissor || undefined,

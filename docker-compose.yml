@@ -21,6 +21,16 @@ services:
     networks:
       - lamonica-net
       - platform_public
+    # Resource caps — nginx é leve; limites previnem que um runaway tome o host
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.50
+    # Rotação de logs — sem isso json-file enche disco em runaway
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:80/"]
       interval: 30s
@@ -35,6 +45,11 @@ services:
       - "traefik.http.routers.lmc-frontend.entrypoints=web"
       - "traefik.http.routers.lmc-frontend.priority=1"
       - "traefik.http.services.lmc-frontend.loadbalancer.server.port=80"
+      # Compression no edge — Traefik recompõe gzip/brotli antes do cliente.
+      # Mesmo que o nginx interno já comprima, o middleware é idempotente e
+      # cobre respostas vindas do backend (api/*) que não passam pelo nginx.
+      - "traefik.http.middlewares.lmc-compress.compress=true"
+      - "traefik.http.routers.lmc-frontend.middlewares=lmc-compress"
     depends_on:
       backend:
         condition: service_healthy
@@ -55,8 +70,21 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3001"
+    # Node ~80-200MB típico + pool pg conexões; sheet sync ETL pode subir.
+    # 768m com reserve 256m dá folga sem permitir leak indefinido.
+    mem_limit: 768m
+    mem_reservation: 256m
+    cpus: 1.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     healthcheck:
-      test: ["CMD", "curl", "-fs", "http://localhost:3001/health"]
+      # ?deep=1 → executa SELECT 1 contra pg; ?deep=0 (default) é shallow ~1ms.
+      # Deep no docker healthcheck garante que falha de conexão é detectada
+      # cedo, sem custo (apenas 1 query/30s).
+      test: ["CMD", "curl", "-fs", "http://localhost:3001/health?deep=1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -69,6 +97,16 @@ services:
       - "traefik.http.routers.lmc-backend.entrypoints=web"
       - "traefik.http.routers.lmc-backend.priority=10"
       - "traefik.http.services.lmc-backend.loadbalancer.server.port=3001"
+      # ── Rate limiting (defesa contra burst / scraping / brute-force) ───────
+      # average=100 req/s sustained, burst=200 instantâneo por origem IP.
+      # Calibrado para 50-100 operadores ativos + portal motorista; ajustar
+      # via override em produção se KPI mudar.
+      - "traefik.http.middlewares.lmc-backend-ratelimit.ratelimit.average=100"
+      - "traefik.http.middlewares.lmc-backend-ratelimit.ratelimit.burst=200"
+      - "traefik.http.middlewares.lmc-backend-ratelimit.ratelimit.period=1s"
+      - "traefik.http.middlewares.lmc-backend-ratelimit.ratelimit.sourcecriterion.ipstrategy.depth=1"
+      # Compression + ratelimit no mesmo chain (ordem importa: ratelimit antes)
+      - "traefik.http.routers.lmc-backend.middlewares=lmc-backend-ratelimit,lmc-compress"
 
   # ── Cadastro-OCR (FastAPI Python — OCR + consultas externas) ────────────
   cadastro-ocr:
@@ -80,6 +118,17 @@ services:
     networks:
       - lamonica-net
       - platform_public
+    # Sidecar OCR — chamadas externas (Infosimples/GPT-4o Vision) + PDF parse
+    # podem consumir RAM em rajadas. 768m cobre processamento concorrente
+    # sem permitir leak indefinido.
+    mem_limit: 768m
+    mem_reservation: 192m
+    cpus: 1.00
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       INFOSIMPLES_TOKEN: ${INFOSIMPLES_TOKEN:-}
       # Fase 3 (2026-05-21): OCR_COMPROVANTE_PROVIDER e OCR_CARTAO_CNPJ_PROVIDER
@@ -118,6 +167,138 @@ services:
       - "traefik.http.routers.lmc-cadastro-ocr.middlewares=lmc-ocr-strip"
       - "traefik.http.services.lmc-cadastro-ocr.loadbalancer.server.port=8765"
 
+  # ── Angellira bot (sidecar FastAPI :8765) ────────────────────────────────
+  # Cadastra motorista/proprietario/veiculo no AngelLira via API publica.
+  # Sem acesso externo (Traefik) — chamado apenas pelo backend Node via
+  # rede privada lamonica-net (http://angelira-bot:8765).
+  # Epic DC-111 / Sprint 1 / DC-113.
+  angelira-bot:
+    build:
+      context: ./bots/angelira
+      dockerfile: Dockerfile
+    image: lamonica-angelira-bot:latest
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+    # Le credenciais do mesmo backend.env do backend Node (ANGELLIRA_USER,
+    # ANGELLIRA_PASSWORD, ANGELLIRA_EMPRESA_ID — auth.py do bot ja aceita
+    # esses aliases com 2 Ls).
+    env_file:
+      - backend.env
+    environment:
+      ANGELIRA_AUTH_BASE: ${ANGELIRA_AUTH_BASE:-https://auth.angellira.com.br}
+      ANGELIRA_API_BASE: ${ANGELIRA_API_BASE:-https://api.angellira.com.br/profile}
+      ANGELIRA_PRECHECK_DIAS: ${ANGELIRA_PRECHECK_DIAS:-365}
+      # CORS aberto pra o backend interno; sem exposicao externa o risco e baixo
+      CORS_ORIGINS: ${ANGELIRA_BOT_CORS_ORIGINS:-http://backend:3001,http://localhost:5010,http://127.0.0.1:5010}
+      HOST: "0.0.0.0"
+      PORT: "8765"
+      PYTHONUNBUFFERED: "1"
+    # Cliente HTTP simples — sem Selenium, footprint baixo.
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # /api/status retorna 200 mesmo sem creds; basta o uvicorn responder.
+      test: ["CMD", "curl", "-fs", "http://localhost:8765/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    expose:
+      - "8765"
+
+  # ── Unificada bot (sidecar FastAPI :8001) ────────────────────────────────
+  # Gera Risk Assessment Document (PDF unificado) via ReportLab a partir da
+  # API Angellira. Reusa o JWT do mesmo usuario (ANGELIRA_API_*).
+  # Epic DC-111 / Sprint 1 / DC-113.
+  unificada-bot:
+    build:
+      context: ./bots/unificada
+      dockerfile: Dockerfile
+    image: lamonica-unificada-bot:latest
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+    # Mesma fonte do backend.env (ANGELLIRA_USER/PASSWORD/EMPRESA_ID).
+    env_file:
+      - backend.env
+    environment:
+      ANGELIRA_AUTH_BASE: ${ANGELIRA_AUTH_BASE:-https://auth.angellira.com.br}
+      UNIFICADA_HOST: "0.0.0.0"
+      UNIFICADA_PORT: "8001"
+      PYTHONUNBUFFERED: "1"
+    # ReportLab + svglib podem subir picos em PDFs grandes; 384m cobre.
+    mem_limit: 384m
+    mem_reservation: 96m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    expose:
+      - "8001"
+
+  # ── SPX bot (sidecar FastAPI :8766) ──────────────────────────────────────
+  # Cadastra motorista no portal SPX (Shopee Express) via API privada.
+  # Cookies SSO vêm de aspx_credentials.cookies_json no Supabase (renovados
+  # pelo container aspx-renewal a cada 4 dias via Playwright).
+  # Sem acesso externo (Traefik) — chamado pelo backend Node.
+  # Epic DC-111 / Sprint 1 extensão SPX.
+  spx-bot:
+    build:
+      context: ./bots/spx
+      dockerfile: Dockerfile
+    image: lamonica-spx-bot:latest
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+    # Le SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY do backend.env (mesma fonte
+    # do aspx-renewal). Não precisa cookies em texto-claro: lê do Supabase.
+    env_file:
+      - backend.env
+    environment:
+      SPX_BASE_URL: ${SPX_BASE_URL:-https://logistics.myagencyservice.com.br}
+      # SPX_VERSION extraído de qualquer request do portal (header version).
+      # Muda a cada deploy do portal SPX (~mensal) — atualizar manualmente.
+      SPX_VERSION: ${SPX_VERSION:-agencyportal:20260325}
+      SPX_AGENCY_ID: ${SPX_AGENCY_ID:-297}
+      SPX_SIDECAR_HOST: "0.0.0.0"
+      SPX_SIDECAR_PORT: "8766"
+      PYTHONUNBUFFERED: "1"
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # /spx/status valida cookies no Supabase (read-only) — não consome SPX.
+      test: ["CMD", "curl", "-fs", "http://localhost:8766/spx/status"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    expose:
+      - "8766"
+    depends_on:
+      aspx-renewal:
+        condition: service_started
+
   # ── ASPX cookie renewal (persistent container on VPS) ────────────────────
   aspx-renewal:
     build:
@@ -132,6 +313,16 @@ services:
     environment:
       ASPX_ALLOW_PLAYWRIGHT_LOGIN: "1"
       PYTHONUNBUFFERED: "1"
+    # Playwright/Chromium é caro em RAM — limites previnem que sessions órfãs
+    # tomem o host. Cap em 512m força reciclagem.
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 # ── Volumes ───────────────────────────────────────────────────────────────
 volumes:

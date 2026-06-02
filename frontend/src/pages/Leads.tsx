@@ -166,7 +166,10 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   const { data, error, isLoading, isFetching } = useQuery({
     queryKey: LEADS_QUERY_KEY,
     queryFn: fetchOperatorLoadLeads,
-    refetchInterval: 30_000,
+    // Backoff: 30s quando ainda não temos dados; 60s estável uma vez que a
+    // primeira página renderizou. Reduz ~50% do tráfego de polling no fluxo
+    // estável de operador sem perder responsividade no carregamento inicial.
+    refetchInterval: (query) => (query.state.data ? 60_000 : 30_000),
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,

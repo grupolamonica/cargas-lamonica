@@ -20,8 +20,11 @@ vi.mock("../../../application/operator-admin/service.js", () => ({
   getHealthSnapshot: mockGetHealthSnapshot,
 }));
 
-vi.mock("../../../application/google-sheets/google-sheet-loads.js", () => ({
+vi.mock("../../../infrastructure/supabase/admin-client.js", () => ({
   createSupabaseAdminClient: mockCreateSupabaseAdminClient,
+}));
+
+vi.mock("../../../application/google-sheets/google-sheet-loads.js", () => ({
   syncGoogleSheetLoads: mockSyncGoogleSheetLoads,
 }));
 

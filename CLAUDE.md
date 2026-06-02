@@ -68,7 +68,11 @@ Cargas_Lamonica/                    ← Monorepo (um único .git)
 │   │                                  (domain / application / infrastructure / interface)
 │   ├── Dockerfile                  ← node:22-slim, porta 3001
 │   └── supabase/                   ← Migrations + bootstrap RLS
-├── cadastro-motorista/backend/     ← Sidecar FastAPI (Python, :8765) — OCR + consultas externas
+├── cadastro-motorista/backend/     ← Sidecar FastAPI OCR (Python, :8765 legado) — OCR + cascata ANTT
+├── bots/                           ← Sidecars de cadastro externo (DC-111 / Sprint 1+)
+│   ├── angelira/                   ← FastAPI (:8765) — cadastra motorista/proprietário/veículo no Angellira via API
+│   ├── spx/                        ← FastAPI (:8766) — cadastra motorista no portal SPX/Shopee Express
+│   └── unificada/                  ← FastAPI (:8001) — gera Risk Assessment Document (PDF) via ReportLab
 ├── docker-compose.yml              ← frontend + backend + Traefik (overrides: .override dev / .deploy prod)
 ├── .github/workflows/              ← ci.yml + deploy.yml (GHCR → SSH VPS) + rollback.yml
 ├── docs/                           ← README de infra, runbooks, JIRA-WORKFLOW.md
@@ -76,6 +80,8 @@ Cargas_Lamonica/                    ← Monorepo (um único .git)
 ```
 
 > Fluxo de cadastro v2: `frontend` (wizard) → `backend` Express (`/api/candidatura/*`, persistência + cascata ANTT) → sidecar FastAPI (`/api/consulta/*`, OCR + Infosimples/ANTT/ViaCEP). O sidecar FastAPI continua ativo mesmo após a remoção da rota React `/cadastro`.
+
+> **Automação Aprovar → Angellira/SPX** (Epic DC-111): após o operador aprovar um cadastro pendente, backend dispara cadastro automático nos bots `bots/angelira` (Sprint 1 — DC-112..119) e `bots/spx` (Sprint 2). Detalhe técnico dos sidecars em [`bots/RELATORIO_CADASTRO.md`](./bots/RELATORIO_CADASTRO.md).
 
 ## Tech Stack
 

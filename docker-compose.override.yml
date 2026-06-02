@@ -59,6 +59,10 @@ services:
     environment:
       NODE_ENV: development
       PORT: "3001"
+      # DC-128/local-fix: o sidecar OCR roda em outro container — 127.0.0.1 (default
+      # do .env) aponta o backend pra ele mesmo. Aqui sobrescreve com o nome de
+      # serviço docker pra a cascata ANTT/OCR alcançar o sidecar em dev.
+      CADASTRO_OCR_URL: "http://cadastro-ocr:8765"
     # In dev load env from local .env file (not backend.env which may not exist yet)
     env_file:
       - backend/.env

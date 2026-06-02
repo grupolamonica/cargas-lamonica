@@ -886,17 +886,66 @@ export async function fetchCadastrosPendentes(params: {
   );
 }
 
-export async function aprovarCadastro(id: string) {
+export type AngelliraJobStep =
+  | "proprietario_cavalo"
+  | "cavalo"
+  | "proprietario_carreta"
+  | "carreta"
+  | "motorista";
+
+export type AngelliraStepResult = {
+  step: AngelliraJobStep;
+  status: "OK" | "OK_CACHED" | "ERROR";
+  external_id?: string | null;
+  error?: {
+    code?: string;
+    message?: string;
+    etapa?: string | null;
+    acao?: string | null;
+  } | null;
+};
+
+export type ExternalRegistrationJob = {
+  id: string;
+  cadastro_id: string;
+  driver_user_id?: string | null;
+  target: "angellira" | "spx" | "unificada";
+  step: string;
+  status: "PENDING" | "IN_PROGRESS" | "OK" | "ERROR";
+  external_id?: string | null;
+  attempts?: number;
+  error?: Record<string, unknown> | null;
+  response?: Record<string, unknown> | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+/**
+ * Aprova o cadastro. Opcionalmente dispara cadastro automático nos sistemas
+ * externos via `jobs: ['angellira']`. Quando `jobs` vazio (default), só cria
+ * conta Supabase — comportamento original preservado.
+ *
+ * DC-111 / Sprint 1.
+ */
+export async function aprovarCadastro(id: string, options?: { jobs?: string[] }) {
   const accessToken = await getOperatorAccessToken();
   const response = await fetch(`/api/operator/cadastros/${id}/aprovar`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ jobs: options?.jobs ?? [] }),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new Error((body as { message?: string })?.message || "Erro ao aprovar cadastro.");
   }
-  return response.json() as Promise<{ ok: boolean; driverId: string }>;
+  return response.json() as Promise<{
+    ok: boolean;
+    driverId: string;
+    jobs?: string[];
+    angellira?: { ok: boolean; results: AngelliraStepResult[]; error?: { code?: string; message?: string } } | null;
+  }>;
 }
 
 export async function rejeitarCadastro(id: string, observacoes?: string) {
@@ -911,4 +960,191 @@ export async function rejeitarCadastro(id: string, observacoes?: string) {
     throw new Error((body as { message?: string })?.message || "Erro ao rejeitar cadastro.");
   }
   return response.json() as Promise<{ ok: boolean }>;
+}
+
+// ── Angellira (DC-111 / Sprint 1) ───────────────────────────────────────
+
+async function postOperator<T>(path: string, body?: unknown): Promise<T> {
+  const accessToken = await getOperatorAccessToken();
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: body == null ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    const msg = (errBody as { message?: string })?.message || `HTTP ${response.status}`;
+    const err = new Error(msg) as Error & { code?: string; details?: unknown };
+    err.code = (errBody as { code?: string })?.code;
+    err.details = errBody;
+    throw err;
+  }
+  return response.json() as Promise<T>;
+}
+
+async function getOperator<T>(path: string): Promise<T> {
+  const accessToken = await getOperatorAccessToken();
+  const response = await fetch(path, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    const msg = (errBody as { message?: string })?.message || `HTTP ${response.status}`;
+    throw new Error(msg);
+  }
+  return response.json() as Promise<T>;
+}
+
+async function patchOperator<T>(path: string, body: unknown): Promise<T> {
+  const accessToken = await getOperatorAccessToken();
+  const response = await fetch(path, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    const msg = (errBody as { message?: string })?.message || `HTTP ${response.status}`;
+    throw new Error(msg);
+  }
+  return response.json() as Promise<T>;
+}
+
+async function deleteOperator<T>(path: string): Promise<T> {
+  const accessToken = await getOperatorAccessToken();
+  const response = await fetch(path, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    const msg = (errBody as { message?: string })?.message || `HTTP ${response.status}`;
+    throw new Error(msg);
+  }
+  return response.json() as Promise<T>;
+}
+
+export async function precheckAngellira(id: string) {
+  return postOperator<{ ok: boolean; motorista?: unknown; cavalo?: unknown; carreta?: unknown }>(
+    `/api/operator/cadastros/${id}/angellira/precheck`,
+  );
+}
+
+export async function checkOwnerAngellira(id: string, body: {
+  placa: string;
+  expected_cpf?: string;
+  expected_cnpj?: string;
+  expected_tipo?: "PF" | "PJ";
+}) {
+  return postOperator<{
+    ok: boolean;
+    result?: {
+      veiculo_existe: boolean;
+      vehicle_id?: number | null;
+      owner_atual?: { id?: number; name?: string; cpf?: string; cnpj?: string; tipo?: string };
+      divergencia: boolean;
+      motivo?: string | null;
+    };
+  }>(`/api/operator/cadastros/${id}/angellira/check-owner`, body);
+}
+
+export async function cadastrarAngellira(id: string) {
+  return postOperator<{ ok: boolean; results: AngelliraStepResult[] }>(
+    `/api/operator/cadastros/${id}/angellira/cadastrar`,
+  );
+}
+
+export async function retryAngelliraStep(id: string, step: AngelliraJobStep) {
+  return postOperator<{ ok: boolean; results: AngelliraStepResult[] }>(
+    `/api/operator/cadastros/${id}/angellira/cadastrar/${step}`,
+  );
+}
+
+export async function listExternalJobs(id: string) {
+  return getOperator<{ ok: boolean; jobs: ExternalRegistrationJob[] }>(
+    `/api/operator/cadastros/${id}/external-jobs`,
+  );
+}
+
+// ── SPX (DC-111 / extensão SPX) ──────────────────────────────────────────
+
+export type SpxPrecheckStatus =
+  | "NOT_FOUND"
+  | "IS_MATCHED_NOSSA"
+  | "IS_MATCHED_OUTRA"
+  | "REQUEST_PENDENTE"
+  | "INATIVO"
+  | "BLOQUEADO"
+  | "UNAVAILABLE";
+
+export type SpxPrecheckResult = {
+  ok: boolean;
+  status: SpxPrecheckStatus;
+  retcode?: number | null;
+  existingDriverId?: number | null;
+  existingRequestId?: number | null;
+  driverInfo?: Record<string, unknown> | null;
+  message?: string;
+};
+
+export async function precheckSpx(id: string) {
+  return postOperator<SpxPrecheckResult>(
+    `/api/operator/cadastros/${id}/spx/precheck`,
+  );
+}
+
+export async function cadastrarSpx(id: string, overrides?: Record<string, unknown>) {
+  return postOperator<{
+    ok: boolean;
+    results: Array<{
+      step: "spx_motorista";
+      status: "OK" | "OK_CACHED" | "ERROR";
+      external_id?: string | null;
+      error?: { code?: string; message?: string; acao?: string } | null;
+    }>;
+  }>(`/api/operator/cadastros/${id}/spx/cadastrar`, { overrides });
+}
+
+// ── Gerenciamento de cadastros (editar/excluir) ───────────────────────────
+
+export async function getCadastro(id: string) {
+  return getOperator<{
+    cadastro: {
+      id: string;
+      status: string;
+      dados: Record<string, unknown>;
+      observacoes?: string | null;
+      created_at: string;
+      reviewed_at?: string | null;
+    };
+  }>(`/api/operator/cadastros/${id}`);
+}
+
+export async function patchCadastroDados(id: string, dados: Record<string, unknown>) {
+  return patchOperator<{ ok: boolean }>(`/api/operator/cadastros/${id}/dados`, { dados });
+}
+
+export async function deleteCadastro(id: string) {
+  return deleteOperator<{ ok: boolean }>(`/api/operator/cadastros/${id}`);
+}
+
+// ── Cadastro rápido de motorista pelo operador ────────────────────────────
+
+export interface CadastroRapidoInput {
+  cpf: string;
+  nome: string;
+  telefone?: string;
+  placa_cavalo?: string;
+}
+
+export interface CadastroRapidoResult {
+  ok: boolean;
+  driverId: string;
+  email: string;
+  nome: string;
+  cpf: string;
+}
+
+export async function cadastrarMotoristaRapido(data: CadastroRapidoInput) {
+  return postOperator<CadastroRapidoResult>("/api/operator/motoristas/cadastrar", data);
 }

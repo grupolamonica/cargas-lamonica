@@ -12,6 +12,21 @@ scripts/.venv/
 scripts/**/__pycache__/
 scripts/**/*.pyc
 
+# Python bots (cadastro sidecars: angelira, spx, unificada)
+bots/**/.venv/
+bots/**/__pycache__/
+bots/**/*.pyc
+bots/**/data/
+bots/**/logs/
+bots/**/anexos_tmp/
+bots/**/static/img/cache/
+# SPX cookies (sessao SSO Chrome — nunca commit)
+bots/spx/config/spx_cookies.json
+# Build artifacts dos sidecars (PyInstaller / build local)
+bots/**/build/
+bots/**/dist/
+bots/**/*.spec.bak
+
 # Logs
 logs
 *.log
@@ -58,3 +73,15 @@ data-dump-*.json
 
 # User uploads (cadastro-motorista local OCR)
 **/anexos_tmp/
+
+# Local OCR test fixtures (real PDFs / selfies / CRLV / CNH used during dev).
+# Must NEVER be committed: they are served from /public, would leak PII,
+# and would inflate the production bundle. Move them to frontend/test/fixtures/
+# if they need to be versioned anonymously.
+frontend/public/test-fixtures/
+
+# Split branches workspace (local-only commit-splitting notes)
+.split-branches/
+
+# Local generated docs / reports (per-developer)
+docs/reports/

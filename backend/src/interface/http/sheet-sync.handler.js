@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 
 import "../../infrastructure/config/load-env.js";
 
-import { createSupabaseAdminClient, syncGoogleSheetLoads } from "../../application/google-sheets/google-sheet-loads.js";
+import { syncGoogleSheetLoads } from "../../application/google-sheets/google-sheet-loads.js";
+import { createSupabaseAdminClient } from "../../infrastructure/supabase/admin-client.js";
 
 function getErrorPayload(error) {
   return {

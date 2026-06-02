@@ -49,10 +49,23 @@ function buildMotorista(data: ConfirmationWizardData) {
     nome: a1.nome,
     cpf: digitsOnly(a1.cpf) || undefined,
     data_nascimento: a1.dataNascimento || undefined,
-    cnh:
-      a1.categoria || a1.validade
-        ? { categoria: a1.categoria || undefined, validade: a1.validade || undefined }
-        : undefined,
+    // CNH — contrato completo p/ Angellira (bot lê cnh.registro / categoria /
+    // codigo_seguranca / uf_emissor / validade / primeira_emissao). Schema
+    // backend (motoristaSchema.cnh) é .passthrough(), aceita as chaves extras.
+    // 2026-06-01 (DC OCR fix): expandido além de {categoria,validade} —
+    // antes registro/codigo_seguranca/numero_espelho/uf_emissor/primeira_emissao
+    // eram extraídos pelo A1Cnh mas DROPADOS aqui (perda de dado provider-indep).
+    cnh: (() => {
+      const cnhObj: Record<string, string> = {};
+      if (a1.categoria) cnhObj.categoria = a1.categoria;
+      if (a1.validade) cnhObj.validade = a1.validade;
+      if (a1.registro) cnhObj.registro = a1.registro;
+      if (a1.cnh_codigo_seguranca) cnhObj.codigo_seguranca = a1.cnh_codigo_seguranca;
+      if (a1.cnh_numero_espelho) cnhObj.numero_espelho = a1.cnh_numero_espelho;
+      if (a1.cnh_uf_emissor) cnhObj.uf_emissor = a1.cnh_uf_emissor;
+      if (a1.cnh_primeira_emissao) cnhObj.primeira_emissao = a1.cnh_primeira_emissao;
+      return Object.keys(cnhObj).length > 0 ? cnhObj : undefined;
+    })(),
     telefones: a.a2.telefones,
     telefone_primario: a.a2.telefone_primario,
     endereco: {
@@ -300,6 +313,7 @@ function buildOwnerFromStepC(stepC: StepCData) {
     ...(ccPJ && typeof ccPJ.isento_ie === "boolean"
       ? { isento_ie: ccPJ.isento_ie }
       : {}),
+    ...(ccPJ?.telefone ? { telefone: ccPJ.telefone.replace(/\D/g, "") } : {}),
     // 19/05 — storage_path do documento (CNH PF / cartao CNPJ PJ) do owner.
     ...(stepC.ownerDocStoragePath
       ? { owner_doc_url: stepC.ownerDocStoragePath }
@@ -355,6 +369,7 @@ function buildOwnerFromCollected(
       ...(ccPJ && typeof ccPJ.isento_ie === "boolean"
         ? { isento_ie: ccPJ.isento_ie }
         : {}),
+      ...(ccPJ?.telefone ? { telefone: ccPJ.telefone.replace(/\D/g, "") } : {}),
       // 19/05 — storage_path do documento do proprietario desta carreta.
       ...(stepE.ownerDocStoragePath
         ? { owner_doc_url: stepE.ownerDocStoragePath }
@@ -407,9 +422,16 @@ export function buildSubmitDados(data: ConfirmationWizardData): Record<string, u
     }
   });
 
+  // DC-125 — Step A pulado (motorista já conhecido) → buildMotorista=null.
+  // No fluxo SEM LOGIN o backend não tem driver_user_id, então precisa do CPF
+  // em `dados.motorista.cpf` para hidratar o motorista persistido (handler
+  // getExistingMotorista by CPF). Emitimos um partial `{ cpf }` — espelha o
+  // partial `{ placa }` do cavalo. Sem isso o submit ia 422 (motorista vazio).
+  const motoristaPayload =
+    motorista ?? (data.cpf ? { cpf: digitsOnly(data.cpf) } : undefined);
+
   return {
-    // Bug 7 — omite `motorista` quando stepA foi pulado; backend merge do persistido.
-    ...(motorista ? { motorista } : {}),
+    ...(motoristaPayload ? { motorista: motoristaPayload } : {}),
     // Step B pulado (cavalo vigente) — envia partial `{ placa }`; backend merge.
     ...(cavaloPayload ? { cavalo: cavaloPayload } : {}),
     ...(cavalo_owner ? { cavalo_owner } : {}),

@@ -24,7 +24,12 @@ from __future__ import annotations
 import logging
 from typing import Awaitable, Callable, Optional
 
-from . import gpt4o_vision
+# Import robusto: cobre o contexto de teste (pacote `backend`) e o runtime
+# via run.py (módulo flat, sem pacote pai). Ver nota em gpt4o_vision.py.
+try:  # contexto de teste (pacote `backend`)
+    from . import gpt4o_vision
+except ImportError:  # runtime via run.py (módulo flat)
+    import gpt4o_vision  # type: ignore[no-redef]
 
 
 log = logging.getLogger("cadastro-motorista.ocr_router")
@@ -154,7 +159,10 @@ def strategy_for(doc_type: str) -> str:
 
     Reutilizado pelos endpoints em main.py e por testes.
     """
-    from . import config
+    try:
+        from . import config
+    except ImportError:  # run.py launcher importa flat (sem pacote pai)
+        import config  # type: ignore[no-redef]
 
     return {
         "cnh": config.OCR_CNH_STRATEGY,

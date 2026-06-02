@@ -46,8 +46,20 @@ except ImportError:  # pragma: no cover — Fase 1 garante install
     AsyncOpenAI = None  # type: ignore[assignment, misc]
     APIError = APITimeoutError = RateLimitError = Exception  # type: ignore[misc, assignment]
 
-from . import config
-from .prompts import OCR_PROMPTS, PROMPT_VERSION
+# Import robusto: o sidecar roda em DOIS contextos de sys.path incompatíveis.
+#   - run.py: insere `backend/` em sys.path e importa flat (`import gpt4o_vision`
+#     via main.py), então este módulo NÃO tem pacote pai → `from . import ...`
+#     quebra com "attempted relative import with no known parent package"
+#     (crash no boot do sidecar).
+#   - tests/conftest.py: insere o root do sidecar e importa `from backend import
+#     gpt4o_vision`, então o pacote é `backend` e os módulos flat não existem.
+# A relativa cobre o contexto de teste; a flat cobre o runtime do run.py.
+try:  # contexto de teste (pacote `backend`)
+    from . import config
+    from .prompts import OCR_PROMPTS, PROMPT_VERSION
+except ImportError:  # runtime via run.py (módulo flat, sem pacote pai)
+    import config  # type: ignore[no-redef]
+    from prompts import OCR_PROMPTS, PROMPT_VERSION
 
 
 log = logging.getLogger("cadastro-motorista.gpt4o_vision")

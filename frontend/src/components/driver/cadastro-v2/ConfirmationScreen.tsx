@@ -39,6 +39,12 @@ export interface ConfirmationWizardData {
    * informar a placa para que o backend faça merge com o veiculo persistido.
    */
   horsePlate?: string;
+  /**
+   * CPF do motorista (do pré-check, só dígitos). Necessário no submit SEM
+   * LOGIN quando o Step A foi pulado (motorista já conhecido → buildMotorista
+   * retorna null): o backend hidrata o motorista persistido por CPF (DC-125).
+   */
+  cpf?: string;
 }
 
 /**

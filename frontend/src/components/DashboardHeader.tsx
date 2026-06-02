@@ -4,9 +4,11 @@ import { getOperatorDisplayName, getOperatorInitials } from "@/lib/operatorIdent
 interface DashboardHeaderProps {
   title: string;
   subtitle?: string;
+  /** Botões/ações renderizados entre o título e o avatar do operador, dentro do header panel. */
+  actions?: React.ReactNode;
 }
 
-const DashboardHeader = ({ title, subtitle }: DashboardHeaderProps) => {
+const DashboardHeader = ({ title, subtitle, actions }: DashboardHeaderProps) => {
   const { user } = useAuth();
   const operatorName = getOperatorDisplayName(user?.email);
   const operatorInitials = getOperatorInitials(operatorName);
@@ -31,16 +33,20 @@ const DashboardHeader = ({ title, subtitle }: DashboardHeaderProps) => {
               )}
             </div>
 
-            <div className="admin-card-surface flex shrink-0 items-center gap-3 rounded-2xl border px-3.5 py-2.5 shadow-[0_12px_28px_-20px_rgba(2,36,131,0.28)] backdrop-blur-xl">
-              <div className="hidden flex-col items-end sm:flex">
-                <span className="text-xs font-semibold text-foreground leading-tight">{operatorName}</span>
-                <span className="text-[0.65rem] font-medium uppercase tracking-[0.2em] text-muted-foreground">
-                  Operador
-                </span>
-              </div>
-              <div className="relative flex h-10 w-10 items-center justify-center rounded-full bg-[linear-gradient(135deg,#3b5fe8,#0d47d9)] text-sm font-bold text-white shadow-[0_8px_18px_rgba(2,36,131,0.22)]">
-                {operatorInitials}
-                <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-emerald-500" />
+            <div className="flex shrink-0 items-center gap-3">
+              {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
+
+              <div className="admin-card-surface flex shrink-0 items-center gap-3 rounded-2xl border px-3.5 py-2.5 shadow-[0_12px_28px_-20px_rgba(2,36,131,0.28)] backdrop-blur-xl">
+                <div className="hidden flex-col items-end sm:flex">
+                  <span className="text-xs font-semibold text-foreground leading-tight">{operatorName}</span>
+                  <span className="text-[0.65rem] font-medium uppercase tracking-[0.2em] text-muted-foreground">
+                    Operador
+                  </span>
+                </div>
+                <div className="relative flex h-10 w-10 items-center justify-center rounded-full bg-[linear-gradient(135deg,#3b5fe8,#0d47d9)] text-sm font-bold text-white shadow-[0_8px_18px_rgba(2,36,131,0.22)]">
+                  {operatorInitials}
+                  <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-emerald-500" />
+                </div>
               </div>
             </div>
           </div>
