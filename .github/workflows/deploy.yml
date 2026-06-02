@@ -7,8 +7,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  FRONTEND_IMAGE: ghcr.io/antoniocesar-dev/lamonica-frontend
-  BACKEND_IMAGE: ghcr.io/antoniocesar-dev/lamonica-backend
+  FRONTEND_IMAGE: ghcr.io/grupolamonica/lamonica-frontend
+  BACKEND_IMAGE: ghcr.io/grupolamonica/lamonica-backend
 
 jobs:
   # ── Gate: tests must pass before any build ──────────────────────────────────
@@ -177,12 +177,12 @@ jobs:
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
             # Pull new images (tagged by SHA)
-            docker pull ghcr.io/antoniocesar-dev/lamonica-frontend:sha-${{ github.sha }}
-            docker pull ghcr.io/antoniocesar-dev/lamonica-backend:sha-${{ github.sha }}
+            docker pull ghcr.io/grupolamonica/lamonica-frontend:sha-${{ github.sha }}
+            docker pull ghcr.io/grupolamonica/lamonica-backend:sha-${{ github.sha }}
 
             # Update docker-compose.yml to pin exact SHA tags
-            export FRONTEND_TAG="ghcr.io/antoniocesar-dev/lamonica-frontend:sha-${{ github.sha }}"
-            export BACKEND_TAG="ghcr.io/antoniocesar-dev/lamonica-backend:sha-${{ github.sha }}"
+            export FRONTEND_TAG="ghcr.io/grupolamonica/lamonica-frontend:sha-${{ github.sha }}"
+            export BACKEND_TAG="ghcr.io/grupolamonica/lamonica-backend:sha-${{ github.sha }}"
 
             # Write a deploy-override that pins the SHA tags
             cat > docker-compose.deploy.yml << EOF
