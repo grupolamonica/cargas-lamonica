@@ -56,6 +56,9 @@ function mockRequest({ params = {}, query: q = {}, headers = {} } = {}) {
  * Wrapper para seedCarga que inclui as route metrics necessarias para que
  * buildDriverLoadPublicationState marque a carga como publishable
  * (isReady=true) — sem isso, o driver-portal listing filtra ela fora.
+ *
+ * origem/destino são obrigatórios: buildRouteLabelMap retorna null quando
+ * ausentes, o que faz routeLabel=null e isReady=false no publication state.
  */
 async function seedPublishableCarga(overrides = {}) {
   return seedCarga({
@@ -64,6 +67,11 @@ async function seedPublishableCarga(overrides = {}) {
     valor: overrides.valor ?? 4000,
     bonus: overrides.bonus ?? 200,
     perfil: overrides.perfil ?? "CARRETA",
+    origem: overrides.origem ?? "Sao Paulo / SP",
+    destino: overrides.destino ?? "Salvador / BA",
+    // data futura garante que a carga passa o filtro de date da query
+    // independente do dia em que o teste roda.
+    data: overrides.data !== undefined ? overrides.data : "2099-12-31",
     ...overrides,
   });
 }
