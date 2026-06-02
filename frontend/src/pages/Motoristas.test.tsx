@@ -46,6 +46,16 @@ vi.mock("@/hooks/useOperatorPermissions", () => ({
   }),
 }));
 
+// DriverRegistrationWizard usa useDriverAuth (DriverAuthProvider) que não existe
+// no contexto de operador — mockar evita o erro de provider ausente.
+vi.mock("@/components/driver/cadastro-v2/DriverRegistrationWizard", () => ({
+  DriverRegistrationWizard: () => null,
+}));
+
+vi.mock("@/components/driver/StandaloneCadastroDialog", () => ({
+  StandaloneCadastroDialog: () => null,
+}));
+
 const mockMutate = vi.fn();
 
 describe("Motoristas", () => {
