@@ -169,8 +169,8 @@ jobs:
             set -euo pipefail
             cd /opt/apps/lamonica
 
-            # Garante que o remote aponta para o novo org (repo migrou antoniocesar-dev → grupolamonica)
-            git remote set-url origin https://github.com/grupolamonica/cargas-lamonica.git
+            # Garante que o remote aponta para o novo org com token (repo migrou antoniocesar-dev → grupolamonica)
+            git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/grupolamonica/cargas-lamonica.git"
 
             # Sync repo config (compose files, scripts, Dockerfiles) to this commit
             git fetch origin main
