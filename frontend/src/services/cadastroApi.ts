@@ -380,21 +380,150 @@ export type CnhExtracted = {
   };
 };
 
-function splitFiliacao(filiacao: string): { pai: string; mae: string } {
+/**
+ * Largura de quebra do campo `filiacao` da Infosimples. A OCR da CNH quebra
+ * nomes longos numa coluna fixa (~26-27 chars) — quando uma linha atinge essa
+ * largura ela está TRUNCADA e a linha seguinte é a continuação dela (quebra no
+ * meio da palavra, ex. "...DOS SA" + "NTOS" = "...DOS SANTOS"). Usamos um piso
+ * conservador (24) para nunca tratar um nome curto e completo como truncado.
+ */
+const FILIACAO_WRAP_MIN = 24;
+
+/**
+ * Reconstrói nomes quebrados em múltiplas linhas pela OCR juntando cada linha
+ * de CONTINUAÇÃO à anterior. Uma linha é continuação quando a linha anterior
+ * estava truncada (atingiu a wrap width) E a linha atual NÃO inicia um novo
+ * nome (não é um nome completo com 2+ palavras). Continuações mono-token são o
+ * caso típico ("NTOS", "ANTOS"); linhas com 2+ palavras iniciam novo nome.
+ *
+ * Ex.: ["FRANCISCO DE ASSIS R DOS SA"(27), "NTOS"(4),
+ *       "AILANA DO CARMO SILVA DOS S"(27), "ANTOS"(5)]
+ *   -> ["FRANCISCO DE ASSIS R DOS SANTOS", "AILANA DO CARMO SILVA DOS SANTOS"]
+ *
+ * Caso não-quebrado (linhas todas curtas, um nome completo por linha) cada
+ * linha vira um nome — robusto para CNHs que já retornam pai/mãe limpos.
+ */
+function reconstruirNomesQuebrados(linhas: string[]): string[] {
+  const nomes: string[] = [];
+  let buffer = "";
+  let bufferTruncado = false; // a última linha do buffer atingiu a wrap width
+
+  const flush = () => {
+    const t = buffer.trim();
+    if (t) nomes.push(t);
+    buffer = "";
+    bufferTruncado = false;
+  };
+
+  // Um fragmento de continuação NÃO parece um nome completo: tipicamente um
+  // único token (sem espaço). Linhas com 2+ palavras iniciam um novo nome,
+  // mesmo após uma linha cheia (evita colar a mãe num pai longo de ~27 chars).
+  const ehFragmento = (linha: string) => !/\s/.test(linha.trim());
+
+  for (const linha of linhas) {
+    if (!buffer) {
+      buffer = linha;
+    } else if (bufferTruncado && ehFragmento(linha)) {
+      // Continuação de um nome truncado. Junta sem espaço quando a quebra foi
+      // no meio da palavra (linha anterior termina em letra e atual começa em
+      // letra); senão preserva o espaço do limite de palavra.
+      const midWord = /[A-Za-zÀ-ÿ]$/.test(buffer) && /^[A-Za-zÀ-ÿ]/.test(linha);
+      buffer += midWord ? linha : ` ${linha}`;
+    } else {
+      // Fim de um nome → esta linha inicia o próximo.
+      flush();
+      buffer = linha;
+    }
+    bufferTruncado = linha.length >= FILIACAO_WRAP_MIN;
+  }
+  flush();
+  return nomes;
+}
+
+/**
+ * Separa o campo `filiacao` (Infosimples) ou texto livre em {pai, mae}.
+ *
+ * Ordem de tentativa:
+ *   1. Rótulos explícitos ("PAI:", "MÃE:", "Filiação Paterna/Materna").
+ *   2. Reconstrução de nomes quebrados em múltiplas linhas (Infosimples quebra
+ *      nomes longos numa largura fixa, às vezes no meio da palavra). Pai = 1º
+ *      nome reconstruído, mãe = 2º (excedentes anexados à mãe).
+ *   3. Fallback: se a reconstrução colapsou para 1 nome mas havia 2+ linhas
+ *      cruas, usa as duas primeiras linhas cruas (degradação segura).
+ *
+ * Exportado para teste unitário.
+ */
+export function splitFiliacao(filiacao: string): { pai: string; mae: string } {
   if (!filiacao) return { pai: "", mae: "" };
   const paiLbl = filiacao.match(/(?:PAI|FILIA(?:C|Ç)AO\s+PATERNA)[\s:]+([^\n;|]+?)(?=\n|;|\||$|M[AÃ]E\b)/i);
   const maeLbl = filiacao.match(/(?:M[AÃ]E|FILIA(?:C|Ç)AO\s+MATERNA)[\s:]+([^\n;|]+)/i);
   if (paiLbl && maeLbl) return { pai: paiLbl[1].trim(), mae: maeLbl[1].trim() };
+
   const linhas = filiacao.split(/\n|;|\|/).map((s) => s.trim()).filter(Boolean);
+  if (linhas.length === 0) return { pai: "", mae: "" };
+
+  const nomes = reconstruirNomesQuebrados(linhas);
+  if (nomes.length >= 2) {
+    // Pai = 1º nome; mãe = 2º. Qualquer excedente (raro) anexa à mãe.
+    return { pai: nomes[0], mae: nomes.slice(1).join(" ") };
+  }
+  // Reconstrução colapsou (ex. ambos os nomes vieram em 1 linha sem quebra).
   if (linhas.length >= 2) return { pai: linhas[0], mae: linhas[1] };
-  return { pai: linhas[0] || "", mae: "" };
+  return { pai: nomes[0] || "", mae: "" };
 }
 
-function splitRG(texto: string): { numero: string; orgao: string; uf: string } {
+const UF_SET = new Set([
+  "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS",
+  "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC",
+  "SP", "SE", "TO",
+]);
+
+/**
+ * Quebra um RG impresso em {numero, orgao, uf}. Lida com os formatos mais
+ * comuns na CNH/Infosimples/Vision:
+ *   - "12.345.678-9"                  -> numero apenas
+ *   - "MG9014856 SSP MG"              -> numero "MG9014856", orgao "SSP", uf "MG"
+ *   - "9014856 SSP/MG"                -> numero "9014856", orgao "SSP", uf "MG"
+ *   - "12345678 SSP-SP"               -> numero "12345678", orgao "SSP", uf "SP"
+ * Estratégia: tokeniza por espaço/barra/traço/vírgula; o último token de 2
+ * letras que seja UF válida vira `uf`; tokens alfabéticos remanescentes (>=2)
+ * viram `orgao`; o restante (com dígitos/X) vira `numero`.
+ *
+ * Exportado para teste unitário.
+ */
+export function splitRG(texto: string): { numero: string; orgao: string; uf: string } {
   if (!texto) return { numero: "", orgao: "", uf: "" };
-  const m = texto.match(/^([\d.\-Xx]+)\s*([A-Za-z]{2,})?[\s\-/,]*([A-Z]{2})?$/);
-  if (m) return { numero: (m[1] || "").trim(), orgao: (m[2] || "").trim(), uf: (m[3] || "").trim() };
-  return { numero: texto.trim(), orgao: "", uf: "" };
+  const tokens = texto
+    .trim()
+    .split(/[\s\-/,]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (tokens.length <= 1) {
+    return { numero: texto.trim(), orgao: "", uf: "" };
+  }
+
+  let uf = "";
+  let orgao = "";
+  const numeroParts: string[] = [];
+
+  for (const token of tokens) {
+    const upper = token.toUpperCase();
+    if (!uf && upper.length === 2 && UF_SET.has(upper)) {
+      uf = upper;
+      continue;
+    }
+    // Órgão = token só-letras com 2+ chars que NÃO seja UF (ex. SSP, DETRAN, PC).
+    if (!orgao && /^[A-Za-z]{2,}$/.test(token)) {
+      orgao = upper;
+      continue;
+    }
+    numeroParts.push(token);
+  }
+
+  const numero = numeroParts.join(" ").trim();
+  // Se não sobrou número (tudo virou orgão/uf), devolve o texto cru no numero.
+  if (!numero) return { numero: texto.trim(), orgao, uf };
+  return { numero, orgao, uf };
 }
 
 function splitLocal(texto: string): { cidade: string; uf: string } {
@@ -415,6 +544,43 @@ export function brDateToIso(date: string): string {
   return date;
 }
 
+/**
+ * Extrai o nº de segurança puro do campo COMBINADO `seguranca_renach` da
+ * Infosimples ("<nº segurança>\n<código renach>", ex.
+ * "51531458216\nMG607554835"). O nº de segurança é a parte puramente numérica;
+ * o código Renach é alfanumérico ("MG607554835"). Pega o 1º token de só-dígitos
+ * (ignora tokens que misturam letras). Exportado para teste unitário.
+ */
+export function parseSegurancaRenach(combinado: string): string {
+  if (!combinado) return "";
+  const tokens = combinado.split(/[\s\n;|/]+/).map((t) => t.trim()).filter(Boolean);
+  // 1º token 100% dígitos = nº de segurança (descarta o Renach alfanumérico).
+  const numerico = tokens.find((t) => /^\d+$/.test(t));
+  return numerico ?? "";
+}
+
+/**
+ * Resolve o código de segurança (nº de segurança) da CNH a partir do envelope.
+ *
+ * A Infosimples devolve esse dado no VERSO da CNH (`data[1]`, tipo cnh_verso) —
+ * não no anverso (`data[0]`). Como `ocrValor` varre TODAS as seções, o campo
+ * `seguranca` (titulo "Nº de Segurança") é alcançado normalmente.
+ *
+ * Aliases:
+ *   - `codigo_seguranca` / `seguranca` / `numero_seguranca`: número de segurança
+ *     puro (ex. "51531458216"). Preferencial.
+ *   - `seguranca_renach`: campo COMBINADO "<nº segurança>\n<código renach>"
+ *     (ex. "51531458216\nMG607554835"). Fallback — extraímos só a parte
+ *     numérica do nº de segurança, descartando o código Renach alfanumérico.
+ *     Sem isso, `digitsOnly` no backend concatenaria o nº de segurança com os
+ *     dígitos do Renach (valor corrompido).
+ */
+function cnhCodigoSeguranca(v: (...k: string[]) => string): string {
+  const direto = v("codigo_seguranca", "seguranca", "numero_seguranca");
+  if (direto) return direto;
+  return parseSegurancaRenach(v("seguranca_renach", "numero_seguranca_renach"));
+}
+
 export async function ocrCnh(
   file: File,
   idCadastro?: string,
@@ -425,7 +591,13 @@ export async function ocrCnh(
   const v = (...k: string[]) => ocrValor(data, ...k);
 
   const filiacao = splitFiliacao(v("filiacao"));
+  // Vision (PROMPT_VERSION v2) já devolve rg_numero/rg_orgao/rg_uf separados.
+  // Preferimos esses; fallback p/ splitRG do RG concatenado (Infosimples e
+  // Vision v1 devolvem "rg" cru, às vezes UF-prefixado tipo "MG9014856 SSP MG").
   const rg = splitRG(v("identidade", "rg"));
+  const rgNumero = v("rg_numero") || rg.numero;
+  const rgOrgao = v("rg_orgao", "identidade_orgao") || rg.orgao;
+  const rgUf = v("rg_uf", "identidade_uf") || rg.uf;
   const localCnh = splitLocal(v("local_expedicao", "local", "local_emissao"));
   const localNasc = splitLocal(v("local_nascimento", "naturalidade_local"));
 
@@ -441,19 +613,21 @@ export async function ocrCnh(
       nome: v("nome"),
       cpf: v("cpf", "numero_cpf"),
       data_nascimento: v("nascimento", "data_nascimento"),
-      nome_pai: filiacao.pai,
-      nome_mae: filiacao.mae,
+      // Vision v2 devolve nome_pai/nome_mae diretos; fallback p/ splitFiliacao
+      // do campo `filiacao` concatenado (Infosimples).
+      nome_pai: v("nome_pai", "pai", "filiacao_pai") || filiacao.pai,
+      nome_mae: v("nome_mae", "mae", "filiacao_mae") || filiacao.mae,
       naturalidade: v("naturalidade") || localNasc.cidade || localCnh.cidade,
-      rg: rg.numero,
-      rg_orgao: rg.orgao || v("identidade_orgao", "rg_orgao"),
-      rg_uf: rg.uf || v("identidade_uf", "rg_uf"),
+      rg: rgNumero,
+      rg_orgao: rgOrgao,
+      rg_uf: rgUf,
     },
     cnh: {
       registro: v("registro", "numero_registro"),
       categoria: v("categoria"),
-      codigo_seguranca: v("seguranca", "codigo_seguranca", "numero_seguranca"),
-      numero_espelho: v("espelho", "numero_espelho"),
-      uf_emissor: localCnh.uf || v("uf_expedicao", "uf_emissao", "estado_emissor"),
+      codigo_seguranca: cnhCodigoSeguranca(v),
+      numero_espelho: v("numero_espelho", "espelho"),
+      uf_emissor: v("uf_emissor") || localCnh.uf || v("uf_expedicao", "uf_emissao", "estado_emissor"),
       validade,
       primeira_emissao: primeira,
     },

@@ -67,10 +67,16 @@ TIPO_TO_ID: dict[str, int] = {
 
 
 def carreta_type_id_por_eixos(eixos: int | None) -> int:
-    """Map eixos -> typeId pra carreta (Angellira: 3=CARRETA 1, 5=CARRETA 2, 8=CARRETA 3)."""
-    if eixos and eixos >= 3: return 8
-    if eixos == 2: return 5
-    return 3  # default CARRETA 1
+    """Map eixos -> typeId pra carreta (Angellira: 3=CARRETA 1, 5=CARRETA 2, 8=CARRETA 3).
+
+    Mapeamento ajustado para classificação real BR:
+    - 1-2 eixos → CARRETA 1 (semi-reboque leve)
+    - 3 eixos   → CARRETA 2 (semi-reboque tri-eixo, mais comum no Brasil)
+    - 4+ eixos  → CARRETA 3 (semi-reboque pesado/bitrem)
+    """
+    if eixos and eixos >= 4: return 8   # CARRETA 3 — 4+ eixos (bi-trem etc)
+    if eixos and eixos == 3: return 5   # CARRETA 2 — tri-eixo (padrão BR)
+    return 3  # default CARRETA 1 — até 2 eixos
 
 
 def _profile_url(client: AngellraAPIClient, path: str) -> str:
@@ -268,14 +274,13 @@ def find_brand(client: AngellraAPIClient, busca: str) -> dict | None:
     if not busca:
         return None
     # Normaliza a busca: upper, sem prefixos DENATRAN:
-    #   I/  = importado (ex: I/MERCEDES)
+    #   I/  = importado (ex: I/MERCEDES ou I / IVECO STRALIS 490S46T)
     #   SR/ = semi-reboque (ex: SR/RANDONSP)
     #   R/  = reboque
+    # O formato do CRLV pode vir com ou sem espaços ao redor da barra:
+    #   "I/IVECO" ou "I / IVECO STRALIS 490S46T" — ambos tratados via regex.
     busca_orig = busca.strip().upper()
-    for prefixo in ("I/", "SR/", "R/"):
-        if busca_orig.startswith(prefixo):
-            busca_orig = busca_orig[len(prefixo):].strip()
-            break
+    busca_orig = re.sub(r'^(?:I|SR|R)\s*/\s*', '', busca_orig).strip()
 
     # Aplica alias se houver
     busca_canonica = ALIAS_MARCAS.get(busca_orig, busca_orig)

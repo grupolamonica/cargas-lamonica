@@ -71,6 +71,10 @@ import {
   resolveOperatorListExternalJobsResponse,
   resolveOperatorSpxPrecheckResponse,
   resolveOperatorSpxCadastrarResponse,
+  resolveOperatorGetCadastroResponse,
+  resolveOperatorPatchCadastroDadosResponse,
+  resolveOperatorDeleteCadastroResponse,
+  resolveOperatorCadastrarMotoristaResponse,
 } from "./operator-admin/handlers.js";
 
 import {
@@ -280,6 +284,8 @@ export function registerRoutes(app) {
   // Motoristas
   router.get("/api/operator/motoristas", wrap(resolveOperatorDriversListReadModelResponse));
   router.patch("/api/operator/motoristas/:driverId", wrap(resolveUpdateOperatorDriverProfileResponse));
+  // Cadastro rápido de motorista pelo operador (sem wizard público)
+  router.post("/api/operator/motoristas/cadastrar", wrap(resolveOperatorCadastrarMotoristaResponse));
 
   // Cadastros pendentes de motoristas (rota fixa antes da parametrizada)
   router.get("/api/operator/cadastros-pendentes", wrap(resolveOperatorCadastrosPendentesResponse));
@@ -296,6 +302,11 @@ export function registerRoutes(app) {
   // SPX automation (DC-111 / extensão SPX)
   router.post("/api/operator/cadastros/:id/spx/precheck", wrap(resolveOperatorSpxPrecheckResponse));
   router.post("/api/operator/cadastros/:id/spx/cadastrar", wrap(resolveOperatorSpxCadastrarResponse));
+
+  // Gerenciamento de cadastros (editar/excluir)
+  router.get("/api/operator/cadastros/:id", wrap(resolveOperatorGetCadastroResponse));
+  router.patch("/api/operator/cadastros/:id/dados", wrap(resolveOperatorPatchCadastroDadosResponse));
+  router.delete("/api/operator/cadastros/:id", wrap(resolveOperatorDeleteCadastroResponse));
 
   // Veículos
   router.get("/api/operator/veiculos", wrap(resolveOperatorVehiclesListReadModelResponse));

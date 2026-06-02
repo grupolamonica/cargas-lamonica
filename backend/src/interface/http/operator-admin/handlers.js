@@ -1112,15 +1112,26 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
         },
       });
 
+      let driverId;
       if (authError) {
-        // Já existe: retorna 409 para que o operador saiba
+        // Motorista já tem conta (mesmo CPF aprovado anteriormente).
+        // Re-aprovação: reutiliza o usuário existente em vez de bloquear.
         if (authError.status === 422 || /already registered/i.test(authError.message || "")) {
-          return { statusCode: 409, payload: { error: "Conflict", message: `Email ${email} já registrado. Motorista pode já ter conta.`, meta: { correlationId } } };
+          // Usa query direta em auth.users (listUsers() pagina a 50 e perde usuários)
+          const { rows: existingRows } = await client.query(
+            `SELECT id FROM auth.users WHERE email = $1`,
+            [email],
+          );
+          if (!existingRows.length) {
+            return { statusCode: 409, payload: { error: "Conflict", message: `Email ${email} já registrado mas usuário não encontrado. Contate o suporte.`, meta: { correlationId } } };
+          }
+          driverId = existingRows[0].id;
+        } else {
+          throw authError;
         }
-        throw authError;
+      } else {
+        driverId = authData.user.id;
       }
-
-      const driverId = authData.user.id;
 
       // 4. Insere driver_profile
       const cavaloPlaca = String(registro.dados?.cavalo?.placa || "").trim() || null;
@@ -1633,6 +1644,222 @@ export async function resolveOperatorSpxCadastrarResponse(request) {
       });
 
       return { statusCode: 200, payload: { ok: result.ok, results: result.results, meta: { correlationId } } };
+    });
+  });
+}
+
+/**
+ * GET /api/operator/cadastros/:id
+ * Retorna dados completos de um cadastro (para modal de edição).
+ */
+export async function resolveOperatorGetCadastroResponse(request) {
+  return withOperatorSession(request, "get-cadastro", async ({ correlationId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso intermediário necessário.");
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID obrigatório.", meta: { correlationId } } };
+    }
+    return withPgClient(async (client) => {
+      const { rows } = await client.query(
+        `SELECT id, status, dados, observacoes, created_at, reviewed_at FROM public.pending_driver_registrations WHERE id = $1`,
+        [id],
+      );
+      if (!rows.length) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      return { statusCode: 200, payload: { cadastro: rows[0], meta: { correlationId } } };
+    });
+  });
+}
+
+/**
+ * PATCH /api/operator/cadastros/:id/dados
+ * Body: { dados: object } — atualiza o JSONB de dados do cadastro.
+ */
+export async function resolveOperatorPatchCadastroDadosResponse(request) {
+  return withOperatorSession(request, "patch-cadastro-dados", async ({ correlationId, requestIp, operatorId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso intermediário necessário.");
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID obrigatório.", meta: { correlationId } } };
+    }
+    let body;
+    try {
+      body = await parseJsonBody(request);
+    } catch {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "Body JSON inválido.", meta: { correlationId } } };
+    }
+    if (!body?.dados || typeof body.dados !== "object" || Array.isArray(body.dados)) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "Campo 'dados' deve ser um objeto JSON.", meta: { correlationId } } };
+    }
+    return withPgClient(async (client) => {
+      const { rows } = await client.query(
+        `SELECT id, status FROM public.pending_driver_registrations WHERE id = $1`,
+        [id],
+      );
+      if (!rows.length) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      if (!["aprovado", "pendente", "em_revisao"].includes(rows[0].status)) {
+        return { statusCode: 409, payload: { error: "Conflict", message: "Apenas cadastros pendentes ou aprovados podem ser editados.", meta: { correlationId } } };
+      }
+      await client.query(
+        `UPDATE public.pending_driver_registrations SET dados = $1 WHERE id = $2`,
+        [JSON.stringify(body.dados), id],
+      );
+      await insertSecurityAuditEvent(client, {
+        eventType: "operator.cadastro.dados_updated",
+        actorUserId: operatorId, actorRole: "operator",
+        resourceType: "pending_driver_registration", resourceId: id,
+        action: "update_dados", outcome: "success",
+        requestIp, correlationId,
+      });
+      return { statusCode: 200, payload: { ok: true, meta: { correlationId } } };
+    });
+  });
+}
+
+/**
+ * POST /api/operator/motoristas/cadastrar
+ * Cadastro rápido de motorista pelo operador — sem wizard público.
+ * Cria conta Supabase Auth + driver_profile + registro de auditoria.
+ *
+ * Body: { cpf, nome, telefone, placa_cavalo? }
+ * Retorna: { ok, driverId, email }
+ */
+export async function resolveOperatorCadastrarMotoristaResponse(request) {
+  return withOperatorSession(request, "cadastrar-motorista", async ({ correlationId, requestIp, operatorId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Apenas operadores com acesso intermediário ou avançado podem cadastrar motoristas.");
+
+    let body = {};
+    try {
+      body = await parseJsonBody(request);
+    } catch {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "Body JSON inválido.", meta: { correlationId } } };
+    }
+
+    const cpfClean = String(body.cpf || "").replace(/\D/g, "");
+    const nome = String(body.nome || "").trim();
+    const telefone = String(body.telefone || "").replace(/\D/g, "") || null;
+    const placaCavalo = String(body.placa_cavalo || "").toUpperCase().trim() || null;
+
+    if (!cpfClean || cpfClean.length !== 11) {
+      return { statusCode: 422, payload: { error: "ValidationError", message: "CPF inválido ou ausente (deve ter 11 dígitos).", meta: { correlationId } } };
+    }
+    if (!nome) {
+      return { statusCode: 422, payload: { error: "ValidationError", message: "Nome completo é obrigatório.", meta: { correlationId } } };
+    }
+
+    const adminClient = getAdminClient();
+    const email = `${cpfClean}@motorista.lmc.internal`;
+
+    return withPgClient(async (client) => {
+      // 1. Cria (ou reutiliza) usuário Supabase Auth
+      const { data: authData, error: authError } = await adminClient.auth.admin.createUser({
+        email,
+        password: crypto.randomUUID(),
+        email_confirm: true,
+        app_metadata: { role: "driver", source: "cadastro-operador" },
+        user_metadata: { role: "driver", source: "cadastro-operador", full_name: nome, cpf: cpfClean },
+      });
+
+      let driverId;
+      if (authError) {
+        if (authError.status === 422 || /already registered/i.test(authError.message || "")) {
+          const { rows: existing } = await client.query(
+            `SELECT id FROM auth.users WHERE email = $1`, [email],
+          );
+          if (!existing.length) {
+            return { statusCode: 409, payload: { error: "Conflict", message: `CPF ${cpfClean} já tem conta, mas usuário não encontrado. Contate o suporte.`, meta: { correlationId } } };
+          }
+          driverId = existing[0].id;
+        } else {
+          throw authError;
+        }
+      } else {
+        driverId = authData.user.id;
+      }
+
+      // 2. Upsert driver_profile
+      await client.query(
+        `
+          INSERT INTO public.driver_profiles (
+            user_id, full_name, phone, document_number,
+            vehicle_profile, active, documents_valid
+          )
+          VALUES ($1, $2, $3, $4, $5, true, false)
+          ON CONFLICT (user_id) DO UPDATE SET
+            full_name = EXCLUDED.full_name,
+            phone = COALESCE(EXCLUDED.phone, driver_profiles.phone),
+            document_number = EXCLUDED.document_number,
+            vehicle_profile = COALESCE(EXCLUDED.vehicle_profile, driver_profiles.vehicle_profile),
+            updated_at = now()
+        `,
+        [driverId, nome, telefone, cpfClean, placaCavalo ? "cavalo" : "none"],
+      );
+
+      // 3. Audit log
+      await insertSecurityAuditEvent(client, {
+        eventType: "operator.motorista.cadastro_rapido",
+        actorUserId: operatorId,
+        actorRole: "operator",
+        resourceType: "driver_profile",
+        resourceId: driverId,
+        action: "create",
+        outcome: "success",
+        requestIp,
+        correlationId,
+        metadata: { cpf: cpfClean, placa_cavalo: placaCavalo },
+      });
+
+      return {
+        statusCode: 201,
+        payload: {
+          ok: true,
+          driverId,
+          email,
+          nome,
+          cpf: cpfClean,
+          meta: { correlationId },
+        },
+      };
+    });
+  });
+}
+
+/**
+ * DELETE /api/operator/cadastros/:id
+ * Exclui um cadastro (qualquer status, incluindo aprovado e com jobs externos).
+ * Jobs em external_registration_jobs são removidos via ON DELETE CASCADE.
+ * Requer acesso avançado.
+ */
+export async function resolveOperatorDeleteCadastroResponse(request) {
+  return withOperatorSession(request, "delete-cadastro", async ({ correlationId, requestIp, operatorId, user }) => {
+    assertOperatorAccessLevel(user, "advanced", "Apenas operadores com acesso avançado podem excluir cadastros.");
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID obrigatório.", meta: { correlationId } } };
+    }
+    return withPgClient(async (client) => {
+      const { rows } = await client.query(
+        `SELECT id, status FROM public.pending_driver_registrations WHERE id = $1`,
+        [id],
+      );
+      if (!rows.length) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      // Permite exclusão mesmo com jobs OK — o operador assumiu a responsabilidade
+      // no modal de confirmação. Dados no Angellira/SPX devem ser removidos manualmente
+      // pelo operador nesses sistemas se necessário.
+      await client.query(`DELETE FROM public.pending_driver_registrations WHERE id = $1`, [id]);
+      await insertSecurityAuditEvent(client, {
+        eventType: "operator.cadastro.deleted",
+        actorUserId: operatorId, actorRole: "operator",
+        resourceType: "pending_driver_registration", resourceId: id,
+        action: "delete", outcome: "success",
+        requestIp, correlationId,
+      });
+      return { statusCode: 200, payload: { ok: true, meta: { correlationId } } };
     });
   });
 }

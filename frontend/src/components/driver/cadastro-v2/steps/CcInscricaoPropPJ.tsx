@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 export interface CcPropPJData {
   inscricao_estadual?: string;
   isento_ie?: boolean;
+  telefone?: string;
 }
 
 export interface CcInscricaoPropPJProps {
@@ -25,6 +26,7 @@ export interface CcInscricaoPropPJProps {
 const EMPTY_DATA: CcPropPJData = {
   inscricao_estadual: "",
   isento_ie: false,
+  telefone: "",
 };
 
 export function CcInscricaoPropPJ({
@@ -65,6 +67,17 @@ export function CcInscricaoPropPJ({
       </header>
 
       <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="cc-pj-tel">Telefone da empresa (opcional)</Label>
+          <Input
+            id="cc-pj-tel"
+            type="tel"
+            inputMode="tel"
+            placeholder="(00) 00000-0000"
+            value={data.telefone ?? ""}
+            onChange={(event) => update({ telefone: event.target.value })}
+          />
+        </div>
         <div className="space-y-1.5">
           <Label htmlFor="cc-pj-ie">Inscrição estadual</Label>
           <Input

@@ -181,6 +181,38 @@ function mapBotError({ httpStatus, body, fallbackMessage }) {
     });
   }
 
+  // ── Erros específicos de veículo (etapa=write, 502) ──────────────────────
+
+  // 422 modelId required: marca/modelo do CRLV não encontrado no catálogo Angellira.
+  // Causas: modelo desconhecido, prefixo DENATRAN não normalizado (ex: "I / IVECO ..."),
+  // ou marca sem catálogo no Angellira. O bot já usa fallback para o primeiro modelo
+  // disponível da marca — se ainda falhar, o modelo precisa ser cadastrado manualmente.
+  if (httpStatus === 502 && etapa === "write" && /modelId.*required/i.test(erroMsg || "")) {
+    return new AngelliraBotError({
+      code: "VEICULO_MODELO_NENHUM_ENCONTRADO",
+      message: erroMsg || "modelId obrigatório — modelo do veículo não encontrado no Angellira.",
+      acao: "O modelo do veículo não está no catálogo Angellira. Cadastre o veículo manualmente no portal Angellira e re-tente.",
+      etapa,
+      httpStatus,
+      raw: body,
+    });
+  }
+
+  // 409 renavam conflict: renavam já cadastrado em outro veículo no Angellira.
+  // O bot retenta o PATCH sem renavam para salvar os outros campos (plateCity,
+  // plateState, relationship). O renavam duplicado precisa ser resolvido
+  // manualmente no portal Angellira (remover do outro veículo ou corrigir).
+  if (httpStatus === 502 && etapa === "write" && /renavam.*cadastrado.*outro/i.test(erroMsg || "")) {
+    return new AngelliraBotError({
+      code: "VEICULO_RENAVAM_DUPLICADO",
+      message: erroMsg || "Renavam já cadastrado em outro veículo no Angellira.",
+      acao: "Acesse o portal Angellira, localize o veículo com o mesmo RENAVAM e remova-o ou corrija. Depois re-tente.",
+      etapa,
+      httpStatus,
+      raw: body,
+    });
+  }
+
   if (httpStatus === 502) {
     return new AngelliraBotError({
       code: "BOT_DOWNSTREAM_FAIL",

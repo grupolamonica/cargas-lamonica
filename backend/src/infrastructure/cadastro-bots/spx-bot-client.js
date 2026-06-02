@@ -381,6 +381,7 @@ export async function importarMatched({
   vehicleTypeName, licensePlate, renavam, vehicleManufacturer, vehicleManufacturingYear,
   vehicleOwnerName,
   crlvPath, riskDocPath, radExpireDate,
+  cityNameFallback,
   dryRun = false, doDraftSave = false,
   idempotencyKey, correlationId,
 }) {
@@ -407,6 +408,7 @@ export async function importarMatched({
       rad_expire_date: radExpireDate,
       dry_run: dryRun,
       do_draft_save: doDraftSave,
+      city_name_fallback: cityNameFallback || null,
     },
     idempotencyKey,
     correlationId,

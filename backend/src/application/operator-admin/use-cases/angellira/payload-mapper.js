@@ -18,6 +18,78 @@ function digitsOnly(value) {
   return String(value ?? "").replace(/\D/g, "");
 }
 
+const _UF_SET = new Set([
+  "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS",
+  "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC",
+  "SP", "SE", "TO",
+]);
+
+/**
+ * Quebra um RG concatenado em {numero, orgao, uf} para recuperar dados já
+ * persistidos onde o wizard antigo gravou tudo num campo `rg` só (ex.
+ * "MG9014856 SSP MG" — o splitRG do frontend falhava com RG UF-prefixado).
+ * Espelha a lógica de splitRG em frontend/src/services/cadastroApi.ts.
+ *
+ * Tokeniza por espaço/barra/traço/vírgula: último token de 2 letras que seja
+ * UF válida vira `uf`; primeiro token só-letras (>=2) que não seja UF vira
+ * `orgao`; o restante (com dígitos/X) vira `numero`.
+ *
+ * @param {string} rg
+ * @returns {{numero:string, orgao:string, uf:string}}
+ */
+function parseRgConcatenado(rg) {
+  const texto = String(rg ?? "").trim();
+  if (!texto) return { numero: "", orgao: "", uf: "" };
+  const tokens = texto.split(/[\s\-/,]+/).map((t) => t.trim()).filter(Boolean);
+  if (tokens.length <= 1) return { numero: texto, orgao: "", uf: "" };
+
+  let uf = "";
+  let orgao = "";
+  const numeroParts = [];
+  for (const token of tokens) {
+    const upper = token.toUpperCase();
+    if (!uf && upper.length === 2 && _UF_SET.has(upper)) {
+      uf = upper;
+      continue;
+    }
+    if (!orgao && /^[A-Za-z]{2,}$/.test(token)) {
+      orgao = upper;
+      continue;
+    }
+    numeroParts.push(token);
+  }
+  const numero = numeroParts.join(" ").trim();
+  if (!numero) return { numero: texto, orgao, uf };
+  return { numero, orgao, uf };
+}
+
+/**
+ * Resolve {rg, rg_orgao, rg_uf} a partir de um source. Quando rg_orgao/rg_uf
+ * já vêm preenchidos, respeita; caso contrário, deriva do `rg` concatenado.
+ * Recupera cadastros existentes sem re-submit (ex.: JACKSON, cujo rg foi salvo
+ * como "MG9014856 SSP MG" com rg_orgao/rg_uf vazios).
+ *
+ * @param {object} src — motorista | owner
+ * @returns {{rg:string, rg_orgao:string, rg_uf:string}}
+ */
+function resolveRg(src) {
+  const rawRg = String(src.rg || src.rg_numero || "").trim();
+  let rgOrgao = String(src.rg_orgao || src.rg_orgao_emissor || "").trim().toUpperCase();
+  let rgUf = String(src.rg_uf || src.rg_estado || "").trim().toUpperCase();
+  let rgNumero = rawRg;
+
+  if (rawRg && (!rgOrgao || !rgUf)) {
+    const parsed = parseRgConcatenado(rawRg);
+    // Só sobrescreve quando o parse de fato separou número de orgão/uf.
+    if (parsed.orgao || parsed.uf) {
+      rgNumero = parsed.numero || rawRg;
+      if (!rgOrgao) rgOrgao = parsed.orgao;
+      if (!rgUf) rgUf = parsed.uf;
+    }
+  }
+  return { rg: rgNumero, rg_orgao: rgOrgao, rg_uf: rgUf };
+}
+
 /**
  * Normaliza data para BR (DD/MM/YYYY). O bot Angellira aplica `_br_para_iso()`
  * em cima dos campos de data (data_nascimento, validade, primeira_emissao),
@@ -53,6 +125,10 @@ export function mapMotoristaPayload(dados) {
     : [motorista.telefone_primario || motorista.telefone].filter(Boolean);
   const telefones = telefonesRaw.map((t) => digitsOnly(t)).filter(Boolean);
 
+  // RG-parse fallback: recupera rg_orgao/rg_uf de cadastros antigos onde o
+  // wizard gravou tudo num `rg` concatenado (ex. "MG9014856 SSP MG").
+  const rgResolved = resolveRg(motorista);
+
   // IMPORTANTE: as chaves abaixo espelham EXATAMENTE o que o bot lê em
   // angelira_robo/api_query/flow_motorista.py::_construir_payload_driver
   // (data_nascimento, nome_mae, nome_pai, naturalidade, rg_orgao, telefones[],
@@ -67,9 +143,9 @@ export function mapMotoristaPayload(dados) {
       nome_mae: String(motorista.nome_mae || motorista.mae || "").trim().toUpperCase(),
       nome_pai: String(motorista.nome_pai || motorista.pai || "").trim().toUpperCase(),
       naturalidade: String(motorista.naturalidade || "").trim(),
-      rg: String(motorista.rg || motorista.rg_numero || "").trim(),
-      rg_orgao: String(motorista.rg_orgao || motorista.rg_orgao_emissor || "").trim().toUpperCase(),
-      rg_uf: String(motorista.rg_uf || motorista.rg_estado || "").trim().toUpperCase(),
+      rg: rgResolved.rg,
+      rg_orgao: rgResolved.rg_orgao,
+      rg_uf: rgResolved.rg_uf,
       telefones,
     },
     cnh: {
@@ -102,16 +178,18 @@ export function mapMotoristaPayload(dados) {
  * @param {object} fallbackEndereco  — usa endereco do motorista se owner não tiver
  * @returns {{tipo:"PF"|"PJ", payload:object}}
  */
-export function mapProprietarioPayload(owner, ownerDocType, fallbackEndereco = {}) {
+export function mapProprietarioPayload(owner, ownerDocType, fallbackEndereco = {}, fallbackTelefone = "") {
   if (!owner || typeof owner !== "object") {
     throw new Error("Owner payload ausente — não é possível cadastrar proprietário");
   }
   const tipo = ownerDocType === "cnpj" ? "PJ" : "PF";
   const doc = digitsOnly(owner.doc || owner.cpf || owner.cnpj);
   const endereco = owner.endereco || fallbackEndereco || {};
+  // fallbackTelefone usado quando PJ não tem telefone próprio (wizard não coleta para PJ)
   const telefone = digitsOnly(
     owner.telefone || owner.telefone_primario
     || (Array.isArray(owner.telefones) ? owner.telefones[0] : "")
+    || fallbackTelefone
   );
 
   const end = {
@@ -147,6 +225,21 @@ export function mapProprietarioPayload(owner, ownerDocType, fallbackEndereco = {
   } else {
     payload.cpf = doc;
     payload.nome = String(owner.nome || owner.razao_social || "").trim().toUpperCase();
+    // Angellira POST /owners (PF) exige `birth`; o bot lê data_nascimento e
+    // aplica _br_para_iso (flow_proprietario.py::_br_iso). Sem isso → 422
+    // "birth is required". nome_mae/nome_pai/naturalidade/rg evitam que o bot
+    // caia no fallback rg=cpf e completam a ficha do proprietário.
+    payload.data_nascimento = toBrDate(owner.data_nascimento || owner.nascimento);
+    payload.nome_mae = String(owner.nome_mae || owner.mae || "").trim().toUpperCase();
+    payload.nome_pai = String(owner.nome_pai || owner.pai || "").trim().toUpperCase();
+    payload.naturalidade = String(owner.naturalidade || "").trim();
+    // RG-parse fallback: deriva número/órgão/UF de um `rg` concatenado
+    // ("MG9014856 SSP MG") quando rg_orgao/rg_uf vierem vazios. Recupera
+    // proprietários PF de cadastros antigos sem re-submit.
+    const ownerRg = resolveRg(owner);
+    payload.rg = ownerRg.rg;
+    payload.rg_orgao = ownerRg.rg_orgao;
+    payload.rg_uf = ownerRg.rg_uf;
   }
 
   return { tipo, payload };
@@ -288,6 +381,31 @@ export function resolveVehicleOwner(dados, vehicleEntry) {
   const telefone = vehicleEntry.owner_telefone
     || (ownerIsDriver ? (motorista.telefone_primario || telefones[0] || "") : "");
 
+  // PF: o Angellira POST /owners exige `birth` (data_nascimento) e lê também
+  // nome_mae/nome_pai/naturalidade/rg (flow_proprietario.py). Quando o
+  // proprietário é o próprio motorista, herda esses campos do cadastro do
+  // motorista; senão usa o que o wizard capturou do doc do proprietário
+  // (owner_*). Sem birth o bot recebia 422 "birth is required". DC-128 follow-up.
+  const ownerBirth = vehicleEntry.owner_data_nascimento
+    || (ownerIsDriver ? (motorista.data_nascimento || motorista.nascimento) : "") || "";
+  const ownerMae = vehicleEntry.owner_nome_mae
+    || (ownerIsDriver ? (motorista.nome_mae || motorista.mae) : "") || "";
+  const ownerPai = vehicleEntry.owner_nome_pai
+    || (ownerIsDriver ? (motorista.nome_pai || motorista.pai) : "") || "";
+  const ownerNaturalidade = vehicleEntry.owner_naturalidade
+    || (ownerIsDriver ? motorista.naturalidade : "") || "";
+  const ownerRg = vehicleEntry.owner_rg
+    || (ownerIsDriver ? motorista.rg : "") || "";
+  // RG órgão/UF: herda do motorista quando o owner É o motorista (mesma pessoa),
+  // senão usa o que o wizard capturou do doc do proprietário. Sem isso o
+  // proprietário PF perdia rgOrgan/rgState — o `resolveRg` não consegue derivá-los
+  // de um RG UF-prefixado sem separador (ex. "MG9014856", token único), e o owner
+  // ficava sem órgão/UF mesmo quando o motorista os tinha (caso JACKSON 649).
+  const ownerRgOrgao = vehicleEntry.owner_rg_orgao
+    || (ownerIsDriver ? (motorista.rg_orgao || motorista.rg_orgao_emissor) : "") || "";
+  const ownerRgUf = vehicleEntry.owner_rg_uf
+    || (ownerIsDriver ? (motorista.rg_uf || motorista.rg_estado) : "") || "";
+
   return {
     doc: ownerDoc,
     doc_type: docType,
@@ -297,6 +415,13 @@ export function resolveVehicleOwner(dados, vehicleEntry) {
       : undefined,
     telefone,
     endereco,
+    data_nascimento: ownerBirth,
+    nome_mae: ownerMae,
+    nome_pai: ownerPai,
+    naturalidade: ownerNaturalidade,
+    rg: ownerRg,
+    rg_orgao: ownerRgOrgao,
+    rg_uf: ownerRgUf,
     _is_driver: ownerIsDriver,
   };
 }

@@ -150,14 +150,18 @@ export async function markJobError({ client, jobId, error }) {
  * Lista todos os jobs de um cadastro (paginação simples).
  */
 export async function listJobsByCadastro({ client, cadastroId, limit = 100, offset = 0 }) {
+  // DISTINCT ON (target, step) — retorna apenas o job mais recente por step.
+  // Sem isso, re-tentativas criam múltiplos jobs por step e o frontend vê jobs
+  // antigos (ERROR) mesmo quando o step mais recente já está OK.
   const { rows } = await client.query(
     `
-      SELECT id, cadastro_id, driver_user_id, target, step, status,
+      SELECT DISTINCT ON (target, step)
+             id, cadastro_id, driver_user_id, target, step, status,
              payload, response, error, external_id, attempts,
              started_at, finished_at, created_at, updated_at
       FROM public.external_registration_jobs
       WHERE cadastro_id = $1
-      ORDER BY created_at ASC
+      ORDER BY target, step, created_at DESC
       LIMIT $2 OFFSET $3
     `,
     [cadastroId, limit, offset],

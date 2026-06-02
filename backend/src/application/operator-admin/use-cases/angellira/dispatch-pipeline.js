@@ -21,6 +21,7 @@ import {
 import { insertSecurityAuditEvent } from "../../../../infrastructure/security-audit.js";
 import { logStructuredEvent } from "../../../../infrastructure/security-log.js";
 
+import { stageAnexosForEntity } from "./anexos-stager.js";
 import { stripUuidIfInvalid } from "./_utils.js";
 import {
   findExistingOkJob,
@@ -41,11 +42,14 @@ import {
 } from "./payload-mapper.js";
 
 const ALL_STEPS = [
+  // Ordem de cadastro (regra do negócio / Angellira): proprietários + motorista
+  // PRIMEIRO; veículos (cavalo, carreta) POR ÚLTIMO — o cadastro de veículo
+  // depende do owner e do driver já existirem no Angellira.
   "proprietario_cavalo",
-  "cavalo",
   "proprietario_carreta",
-  "carreta",
   "motorista",
+  "cavalo",
+  "carreta",
 ];
 
 /**
@@ -105,6 +109,21 @@ export async function runAngelliraPipeline({
     },
   };
 
+  // Pré-deriva owner doc/docType do cavalo e carreta no estado inicial,
+  // para que stepVeiculo funcione mesmo quando o step do proprietário vem
+  // do cache (OK_CACHED) — restoreStateFromExistingJob só restaura o ownerId.
+  const cavaloOwner = resolveVehicleOwner(dados, dados?.cavalo);
+  if (cavaloOwner?.doc) {
+    ctx.state.cavaloOwnerDoc = digitsOnly(cavaloOwner.doc);
+    ctx.state.cavaloOwnerDocType = cavaloOwner.doc_type || "cpf";
+  }
+  const carretaEntry = Array.isArray(dados?.carretas) ? dados.carretas[0] : dados?.carreta;
+  const carretaOwner = extractCarretaOwner(dados, 0) || resolveVehicleOwner(dados, carretaEntry);
+  if (carretaOwner?.doc) {
+    ctx.state.carretaOwnerDoc = digitsOnly(carretaOwner.doc);
+    ctx.state.carretaOwnerDocType = carretaOwner.doc_type || (digitsOnly(carretaOwner.doc).length === 14 ? "cnpj" : "cpf");
+  }
+
   const results = [];
   for (const step of steps) {
     const stepResult = await runStep(step, ctx);
@@ -143,10 +162,11 @@ export async function runAngelliraPipeline({
 }
 
 /**
- * Decide quais steps rodar baseado nos dados do cadastro:
- *   - cavalo presente? → proprietario_cavalo + cavalo
- *   - carreta presente? → proprietario_carreta + carreta
- *   - sempre motorista
+ * Decide quais steps rodar baseado nos dados do cadastro, na ORDEM correta de
+ * cadastro: proprietários + motorista PRIMEIRO, veículos POR ÚLTIMO.
+ *   1) proprietario_cavalo (se cavalo) + proprietario_carreta (se carreta)
+ *   2) motorista (sempre; se é dono do cavalo, vincula via owner=True)
+ *   3) cavalo (se cavalo) + carreta (se carreta) — dependem dos passos 1 e 2
  *
  * Se motorista é dono do cavalo, ainda cadastramos owner explícito (mais
  * seguro pra reutilização em outras situações).
@@ -154,15 +174,14 @@ export async function runAngelliraPipeline({
 function determineStepsFromDados(dados) {
   const steps = [];
   const { cavalo, carreta } = extractPlacas(dados);
-  if (cavalo) {
-    steps.push("proprietario_cavalo");
-    steps.push("cavalo");
-  }
-  if (carreta) {
-    steps.push("proprietario_carreta");
-    steps.push("carreta");
-  }
+  // 1) Proprietários primeiro.
+  if (cavalo) steps.push("proprietario_cavalo");
+  if (carreta) steps.push("proprietario_carreta");
+  // 2) Motorista (cria o driver; se dono do cavalo, vincula como proprietário).
   steps.push("motorista");
+  // 3) Veículos por último — dependem de proprietários + motorista já cadastrados.
+  if (cavalo) steps.push("cavalo");
+  if (carreta) steps.push("carreta");
   return steps;
 }
 
@@ -263,15 +282,18 @@ async function stepProprietarioCavalo(ctx) {
   }
   const docType = owner.doc_type || extractOwnerDocType(ctx.dados?.cavalo);
   const fallbackEndereco = ctx.dados?.motorista?.endereco || ctx.dados?.endereco;
-  const { tipo, payload } = mapProprietarioPayload(owner, docType, fallbackEndereco);
+  const fallbackTelefone = resolveMotoristaPhone(ctx.dados);
+  const { tipo, payload } = mapProprietarioPayload(owner, docType, fallbackEndereco, fallbackTelefone);
 
   ctx.state.cavaloOwnerDocType = docType;
   ctx.state.cavaloOwnerDoc = digitsOnly(payload.cpf || payload.cnpj);
 
+  const anexos = await stageEntityAnexos(ctx, "cavalo_owner");
   const result = await cadastrarProprietario({
     idCadastro: ctx.cadastroId,
     tipo,
     payload,
+    anexos,
     correlationId: ctx.correlationId,
   });
   ctx.state.cavaloOwnerId = result.ownerId;
@@ -310,15 +332,18 @@ async function stepProprietarioCarreta(ctx) {
   // owner próprio da carreta (doc diferente do cavalo)
   const docType = owner.doc_type || extractOwnerDocType(carretaEntry);
   const fallbackEndereco = ctx.dados?.motorista?.endereco || ctx.dados?.endereco;
-  const { tipo, payload } = mapProprietarioPayload(owner, docType, fallbackEndereco);
+  const fallbackTelefone = resolveMotoristaPhone(ctx.dados);
+  const { tipo, payload } = mapProprietarioPayload(owner, docType, fallbackEndereco, fallbackTelefone);
 
   ctx.state.carretaOwnerDocType = docType;
   ctx.state.carretaOwnerDoc = digitsOnly(payload.cpf || payload.cnpj);
 
+  const anexos = await stageEntityAnexos(ctx, "carreta_owner", 0);
   const result = await cadastrarProprietario({
     idCadastro: ctx.cadastroId,
     tipo,
     payload,
+    anexos,
     correlationId: ctx.correlationId,
   });
   ctx.state.carretaOwnerId = result.ownerId;
@@ -362,10 +387,12 @@ async function stepVeiculo(ctx, sub) {
     });
   }
 
+  const anexos = await stageEntityAnexos(ctx, sub, 0);
   const result = await cadastrarVeiculo({
     idCadastro: ctx.cadastroId,
     sub,
     payload: mapVeiculoPayload(veiculoData, rntrcFallback),
+    anexos,
     ownerCpf,
     ownerCnpj,
     ownerId,
@@ -376,11 +403,43 @@ async function stepVeiculo(ctx, sub) {
   return { externalId: toExternalId(result.vehicleId), response: result.raw };
 }
 
+/**
+ * Estaga (best-effort) os anexos de uma entidade no sandbox do bot e devolve o
+ * mapa `anexos` pros flows do cadastro. Wrapper resiliente: qualquer falha do
+ * stager vira `{}` (cadastro segue sem os documentos) — nunca propaga erro pro
+ * step, que falharia o cadastro inteiro por causa de um anexo.
+ *
+ * @param {object} ctx
+ * @param {'motorista'|'cavalo_owner'|'carreta_owner'|'cavalo'|'carreta'} entity
+ * @param {number} [idx]
+ * @returns {Promise<object>}
+ */
+async function stageEntityAnexos(ctx, entity, idx = 0) {
+  try {
+    return await stageAnexosForEntity({
+      dados: ctx.dados,
+      entity,
+      cadastroId: ctx.cadastroId,
+      idx,
+      correlationId: ctx.correlationId,
+    });
+  } catch (err) {
+    logStructuredEvent("warn", "angellira.anexos.stager_unexpected", {
+      cadastroId: ctx.cadastroId,
+      entity,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return {};
+  }
+}
+
 async function stepMotorista(ctx) {
   const payload = mapMotoristaPayload(ctx.dados);
+  const anexos = await stageEntityAnexos(ctx, "motorista");
   const result = await cadastrarMotorista({
     idCadastro: ctx.cadastroId,
     payload,
+    anexos,
     correlationId: ctx.correlationId,
   });
   ctx.state.motoristaDriverId = result.driverId;
@@ -450,4 +509,16 @@ async function updateDriverProfileFromResults({ client, driverUserId, results })
 
 function digitsOnly(value) {
   return String(value ?? "").replace(/\D/g, "");
+}
+
+/** Extrai o primeiro telefone do motorista dos dados (fallback para proprietários sem contato). */
+function resolveMotoristaPhone(dados) {
+  const m = dados?.motorista || {};
+  return digitsOnly(
+    m.telefone_primario
+    || (Array.isArray(m.telefones) && m.telefones.length ? m.telefones[0] : "")
+    || m.telefone
+    || "",
+  );
+
 }

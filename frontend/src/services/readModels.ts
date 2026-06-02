@@ -995,6 +995,35 @@ async function getOperator<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function patchOperator<T>(path: string, body: unknown): Promise<T> {
+  const accessToken = await getOperatorAccessToken();
+  const response = await fetch(path, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    const msg = (errBody as { message?: string })?.message || `HTTP ${response.status}`;
+    throw new Error(msg);
+  }
+  return response.json() as Promise<T>;
+}
+
+async function deleteOperator<T>(path: string): Promise<T> {
+  const accessToken = await getOperatorAccessToken();
+  const response = await fetch(path, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    const msg = (errBody as { message?: string })?.message || `HTTP ${response.status}`;
+    throw new Error(msg);
+  }
+  return response.json() as Promise<T>;
+}
+
 export async function precheckAngellira(id: string) {
   return postOperator<{ ok: boolean; motorista?: unknown; cavalo?: unknown; carreta?: unknown }>(
     `/api/operator/cadastros/${id}/angellira/precheck`,
@@ -1074,4 +1103,48 @@ export async function cadastrarSpx(id: string, overrides?: Record<string, unknow
       error?: { code?: string; message?: string; acao?: string } | null;
     }>;
   }>(`/api/operator/cadastros/${id}/spx/cadastrar`, { overrides });
+}
+
+// ── Gerenciamento de cadastros (editar/excluir) ───────────────────────────
+
+export async function getCadastro(id: string) {
+  return getOperator<{
+    cadastro: {
+      id: string;
+      status: string;
+      dados: Record<string, unknown>;
+      observacoes?: string | null;
+      created_at: string;
+      reviewed_at?: string | null;
+    };
+  }>(`/api/operator/cadastros/${id}`);
+}
+
+export async function patchCadastroDados(id: string, dados: Record<string, unknown>) {
+  return patchOperator<{ ok: boolean }>(`/api/operator/cadastros/${id}/dados`, { dados });
+}
+
+export async function deleteCadastro(id: string) {
+  return deleteOperator<{ ok: boolean }>(`/api/operator/cadastros/${id}`);
+}
+
+// ── Cadastro rápido de motorista pelo operador ────────────────────────────
+
+export interface CadastroRapidoInput {
+  cpf: string;
+  nome: string;
+  telefone?: string;
+  placa_cavalo?: string;
+}
+
+export interface CadastroRapidoResult {
+  ok: boolean;
+  driverId: string;
+  email: string;
+  nome: string;
+  cpf: string;
+}
+
+export async function cadastrarMotoristaRapido(data: CadastroRapidoInput) {
+  return postOperator<CadastroRapidoResult>("/api/operator/motoristas/cadastrar", data);
 }

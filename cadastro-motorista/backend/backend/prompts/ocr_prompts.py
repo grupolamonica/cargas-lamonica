@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 
 @dataclass(frozen=True)
@@ -49,14 +49,25 @@ _CNH = OcrPrompt(
         "Retorne JSON com EXATAMENTE estas chaves (use null se ausente):\n"
         "- nome: nome completo do condutor\n"
         "- cpf: digits only (11 dígitos)\n"
-        "- rg: número do RG conforme impresso (pode ter dígito + UF)\n"
+        "- rg: número do RG completo conforme impresso (pode incluir órgão "
+        "emissor + UF, ex. 'MG9014856 SSP MG')\n"
+        "- rg_numero: SOMENTE o número do RG, sem órgão/UF (ex. 'MG9014856' "
+        "ou '9014856')\n"
+        "- rg_orgao: órgão emissor do RG (ex. 'SSP', 'DETRAN', 'PC') ou null\n"
+        "- rg_uf: UF emissora do RG, 2 letras (ex. 'MG') ou null\n"
         "- data_nascimento: formato DD/MM/AAAA\n"
         "- numero_registro: número de registro da CNH (digits only)\n"
         "- categoria: ex. 'AB', 'D', 'E'\n"
         "- validade: formato DD/MM/AAAA\n"
         "- primeira_habilitacao: formato DD/MM/AAAA\n"
-        "- nome_pai: nome do pai\n"
-        "- nome_mae: nome da mãe\n"
+        "- codigo_seguranca: número de segurança da CNH (digits only; fica no "
+        "verso/canto, também chamado 'nº de segurança')\n"
+        "- uf_emissor: UF de emissão da CNH, 2 letras (ex. 'SP', 'MG')\n"
+        "- numero_espelho: número do espelho/registro do documento (se "
+        "impresso) ou null\n"
+        "- naturalidade: cidade/UF de nascimento (naturalidade) ou null\n"
+        "- nome_pai: nome do pai (filiação paterna)\n"
+        "- nome_mae: nome da mãe (filiação materna)\n"
         "- observacoes: anotações do verso (EAR, exerce ativ. remunerada, "
         "lentes, etc.) ou null se não houver"
     ),

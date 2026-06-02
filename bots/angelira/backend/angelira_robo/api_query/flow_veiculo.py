@@ -117,6 +117,32 @@ def _construir_payload_veiculo(
         m = vehicles.find_model(client, brand_id, modelo)
         if m:
             model_id = int(m["id"])
+        else:
+            # Fallback: tenta buscar pelo modelo sem o prefixo de marca.
+            # Ex: "IVECO STRALIS 490S46T" -> "STRALIS 490S46T"
+            modelo_sem_marca = " ".join(modelo.split()[1:]) if len(modelo.split()) > 1 else ""
+            if modelo_sem_marca:
+                m2 = vehicles.find_model(client, brand_id, modelo_sem_marca)
+                if m2:
+                    model_id = int(m2["id"])
+                    log_alerta(
+                        f"[flow_veiculo_api] modelId: modelo '{modelo}' sem match, "
+                        f"encontrado com '{modelo_sem_marca}' -> id={model_id}"
+                    )
+            # Se ainda None, usa primeiro modelo da marca para nao bloquear o POST.
+            # Angellira exige modelId; operador pode corrigir depois no portal.
+            if model_id is None and brand_id:
+                try:
+                    primeiros = vehicles._query_modelos_api(client, brand_id, "")
+                    if primeiros:
+                        model_id = int(primeiros[0]["id"])
+                        log_alerta(
+                            f"[flow_veiculo_api] modelId fallback: '{modelo}' nao encontrado "
+                            f"pra brand={brand_id}, usando primeiro disponivel id={model_id} "
+                            f"({primeiros[0].get('description', '')}). Corrija no portal."
+                        )
+                except Exception as exc_fb:
+                    log_alerta(f"[flow_veiculo_api] falha buscando modelos fallback: {exc_fb}")
 
     # Eixos / anos / antt como int
     def _int(v, default=0):
@@ -190,7 +216,11 @@ def _construir_payload_veiculo(
         "typeId": type_id,
         "plate": plate_norm,
         "color": (limpar_texto(veiculo.get("cor") or "") or "").upper() or None,
-        "renavam": extrair_numeros(veiculo.get("renavam") or "") or None,
+        # RENAVAM BR tem sempre 11 dígitos com zeros à esquerda. Garantimos o
+        # zero-pad para que a API do Angellira receba "00340589973" e não
+        # 340589973 (int) — alguns gateways dropam zeros se não recebem string
+        # de tamanho fixo. zfill(11) é idempotente se já tiver 11 chars.
+        "renavam": (extrair_numeros(veiculo.get("renavam") or "") or "").zfill(11) or None,
         "chassis": (limpar_texto(veiculo.get("chassi") or "") or "").upper() or None,
         "axles": _int(veiculo.get("eixos"), 0) or None,
         "ownerId": owner_id,
@@ -407,7 +437,27 @@ def cadastrar_veiculo(
                 try:
                     vehicles.patch(client, vehicle_id, body_safe)
                 except Exception as exc:
-                    log_alerta(f"[flow_veiculo_api] PATCH veiculo falhou (best-effort, segue): {exc}")
+                    # 409 no PATCH: Angellira rejeita quando algum campo único já existe em
+                    # outro veículo (mais comum: renavam duplicado). A exception do requests
+                    # tem o status_code em exc.response, não no texto da mensagem.
+                    # Retenta sem renavam para salvar plateCity/plateState/relationship/ownerId.
+                    status_409 = getattr(getattr(exc, "response", None), "status_code", None) == 409
+                    if status_409:
+                        body_sem_renavam = {k: v for k, v in body_safe.items() if k != "renavam"}
+                        if body_sem_renavam:
+                            try:
+                                vehicles.patch(client, vehicle_id, body_sem_renavam)
+                                log_alerta(
+                                    f"[flow_veiculo_api] PATCH retentado sem renavam (409 conflito): "
+                                    f"campos salvos={list(body_sem_renavam.keys())}. "
+                                    f"Renavam duplicado no Angellira — corrija manualmente."
+                                )
+                            except Exception as exc2:
+                                log_alerta(f"[flow_veiculo_api] PATCH sem renavam tambem falhou: {exc2}")
+                        else:
+                            log_alerta(f"[flow_veiculo_api] PATCH veiculo falhou (best-effort, segue): {exc}")
+                    else:
+                        log_alerta(f"[flow_veiculo_api] PATCH veiculo falhou (best-effort, segue): {exc}")
         else:
             log_info("[flow_veiculo_api] criando POST /vehicles")
             try:
@@ -461,10 +511,23 @@ def cadastrar_veiculo(
                     try:
                         vehicles.patch(client, vehicle_id, body_safe)
                     except Exception as patch_exc:
-                        log_alerta(
-                            f"[flow_veiculo_api] PATCH apos 409 falhou "
-                            f"(best-effort, segue): {patch_exc}"
-                        )
+                        status_409_alt = getattr(getattr(patch_exc, "response", None), "status_code", None) == 409
+                        if status_409_alt:
+                            body_sem_renavam = {k: v for k, v in body_safe.items() if k != "renavam"}
+                            if body_sem_renavam:
+                                try:
+                                    vehicles.patch(client, vehicle_id, body_sem_renavam)
+                                    log_alerta(
+                                        f"[flow_veiculo_api] PATCH (via 409) retentado sem renavam: "
+                                        f"campos={list(body_sem_renavam.keys())}. Renavam duplicado."
+                                    )
+                                except Exception as exc3:
+                                    log_alerta(f"[flow_veiculo_api] PATCH sem renavam (via 409) falhou: {exc3}")
+                        else:
+                            log_alerta(
+                                f"[flow_veiculo_api] PATCH apos 409 falhou "
+                                f"(best-effort, segue): {patch_exc}"
+                            )
     except Exception as exc:
         return _erro("write", f"POST/PATCH /vehicles falhou: {exc}", inicio)
 

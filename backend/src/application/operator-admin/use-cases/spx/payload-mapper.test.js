@@ -36,7 +36,31 @@ describe("mapSpxMotoristaPayload — contact_number + license_number (DC-111)", 
     expect(p.cpf).toBe("01972412639");
     expect(p.driver_name).toBe("JORGE FERNANDO SILVA FERREIRA");
     expect(p.license_plate).toBe("NLN8428");
-    expect(p.license_type).toBe(9); // AE
+    expect(p.license_type).toBe(29); // AE → SPX CNHType.AE = 29
     expect(p.birth_day).toBe("1997-08-10");
+  });
+});
+
+describe("mapSpxMotoristaPayload — license_type espelha K.CNHType do bot SPX", () => {
+  // IDs autoritativos de bots/spx/backend/spx_robo/constants.py::CNHType.
+  // O bot repassa license_type CRU ao SPX (sem re-mapear), então o mapper
+  // DEVE emitir o id correto da Shopee, não um inteiro sequencial.
+  const CNHTYPE = { A: 3, B: 23, C: 0, D: 24, E: 25, AB: 26, AC: 27, AD: 28, AE: 29 };
+  for (const [cat, id] of Object.entries(CNHTYPE)) {
+    it(`categoria ${cat} → ${id}`, () => {
+      const p = mapSpxMotoristaPayload({
+        motorista: { cpf: "01972412639", nome: "X", telefones: ["38999990000"], cnh: { registro: "1", categoria: cat } },
+        cavalo: { placa: "ABC1D23" },
+      });
+      expect(p.license_type).toBe(id);
+    });
+  }
+
+  it("categoria AD do 649 (JACKSON) → 28", () => {
+    const p = mapSpxMotoristaPayload({
+      motorista: { cpf: "01230714618", nome: "JACKSON", telefones: ["71995626565"], cnh: { registro: "03577860007", categoria: "AD" } },
+      cavalo: { placa: "HNX0E60" },
+    });
+    expect(p.license_type).toBe(28);
   });
 });

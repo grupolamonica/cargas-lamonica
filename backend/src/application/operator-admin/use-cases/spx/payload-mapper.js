@@ -59,9 +59,17 @@ export function mapSpxMotoristaPayload(dados, overrides = {}) {
   const generoRaw = String(motorista.genero || motorista.sexo || "").toUpperCase();
   const gender = generoRaw.startsWith("F") ? 2 : (generoRaw.startsWith("M") ? 1 : DEFAULTS.gender);
 
-  // CNH category SPX (mapeamento simples; bot tem enum K.CNHType)
-  const cnhCategoryMap = { A: 1, B: 2, C: 3, D: 4, E: 5, AB: 6, AC: 7, AD: 8, AE: 9 };
-  const license_type = cnhCategoryMap[cnh.categoria?.toUpperCase()] || cnhCategoryMap.E;
+  // CNH category → SPX CNHType id. DEVE espelhar `K.CNHType` do bot
+  // (bots/spx/backend/spx_robo/constants.py): a Pydantic MotoristaPayload
+  // recebe `license_type: int` e o repassa CRU ao SPX (drivers.py
+  // build_payload_normal_driver não re-mapeia). Usar ids sequenciais
+  // arbitrários (A=1..AE=9) enviava o int errado → SPX rejeita a categoria.
+  const cnhCategoryMap = {
+    A: 3, B: 23, C: 0, D: 24, E: 25, AB: 26, AC: 27, AD: 28, AE: 29,
+  };
+  const cnhCategoria = String(cnh.categoria || "").toUpperCase().replace(/\s/g, "");
+  // C tem id 0 (válido) — usar `??` em vez de `||` p/ não cair no fallback.
+  const license_type = cnhCategoryMap[cnhCategoria] ?? cnhCategoryMap.E;
 
   // Veículo principal (cavalo)
   const cavalo = dados?.cavalo || {};

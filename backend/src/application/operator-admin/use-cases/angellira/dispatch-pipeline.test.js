@@ -176,7 +176,7 @@ afterEach(() => {
 });
 
 describe("runAngelliraPipeline / happy path", () => {
-  it("cadastra proprietario_cavalo → cavalo → motorista quando só cavalo presente", async () => {
+  it("cadastra proprietario_cavalo → motorista → cavalo quando só cavalo presente", async () => {
     cadastrarProprietario.mockResolvedValue({ ok: true, ownerId: 9001, raw: {} });
     cadastrarVeiculo.mockResolvedValue({ ok: true, vehicleId: 7001, raw: {} });
     cadastrarMotorista.mockResolvedValue({ ok: true, driverId: 5001, raw: {} });
@@ -191,7 +191,9 @@ describe("runAngelliraPipeline / happy path", () => {
 
     expect(result.ok).toBe(true);
     const steps = result.results.map((r) => r.step);
-    expect(steps).toEqual(["proprietario_cavalo", "cavalo", "motorista"]);
+    // Ordem de cadastro (DC reorder): proprietários + motorista PRIMEIRO,
+    // veículos POR ÚLTIMO (cadastro de veículo depende de owner + driver).
+    expect(steps).toEqual(["proprietario_cavalo", "motorista", "cavalo"]);
 
     // Bot client invocado exatamente uma vez por etapa
     expect(cadastrarProprietario).toHaveBeenCalledOnce();

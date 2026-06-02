@@ -112,6 +112,10 @@ export async function runSpxPipeline({
         vehicleManufacturer: payload.vehicle_manufacturer,
         vehicleManufacturingYear: payload.vehicle_manufacturing_year,
         vehicleOwnerName: payload.vehicle_owner_name,
+        // Fallback: quando driver_info do SPX não tem city_name/city_id
+        // resolvível (ex: motorista de outra agência sem cidade mapeada),
+        // usa a cidade do endereço do nosso cadastro.
+        cityNameFallback: payload.city_name || null,
         dryRun: false,
         idempotencyKey: `${cadastroId}:spx_motorista`,
         correlationId,

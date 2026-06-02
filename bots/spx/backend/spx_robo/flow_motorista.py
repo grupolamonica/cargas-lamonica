@@ -1072,6 +1072,8 @@ def importar_motorista_matched(
     # Behavior
     dry_run: bool = True,
     do_draft_save: bool = False,
+    # Fallback de cidade quando driver_info nao traz city_name/city_id resolvivel
+    city_name_fallback: str | None = None,
 ) -> dict[str, Any]:
     """Cria uma driver_request NOSSA reusando um driver_profile existente na Shopee
     que foi detectado via `is_matched=True` no validate/basic.
@@ -1097,11 +1099,14 @@ def importar_motorista_matched(
     function_type_list = function_type_list or [K.FunctionType.LINEHAUL]
 
     # ── 1. Resolve IDs (igual cadastrar_motorista_normal) ─────────────
-    # City: prioriza driver_info (locked); senao tenta resolver pelo nome
+    # City: prioriza driver_info (locked); senao tenta resolver pelo nome;
+    # fallback final: city_name_fallback do nosso payload (ex: endereco do wizard).
     city_id = driver_info.get("city_id")
     city_name_di = driver_info.get("city_name", "")
     if not city_id and city_name_di:
         city_id = lookups.find_city_id(client, city_name_di)
+    if not city_id and city_name_fallback:
+        city_id = lookups.find_city_id(client, city_name_fallback)
     if not city_id:
         return {"ok": False, "etapa": "lookup_cidade", "erro": "city_id ausente no driver_info e nao foi possivel resolver"}
 

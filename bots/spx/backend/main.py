@@ -670,6 +670,9 @@ class ImportarMatchedPayload(BaseModel):
     rad_expire_date: str | int | None = None
     dry_run: bool = True
     do_draft_save: bool = False
+    # Fallback quando driver_info não traz city_name/city_id (ex: motorista
+    # veio de outra agência e o profile SPX não tem cidade resolvida).
+    city_name_fallback: str | None = None
 
 
 @app.post("/spx/motorista/importar_matched")
@@ -699,6 +702,7 @@ def importar_matched_endpoint(p: ImportarMatchedPayload):
             rad_expire_date=p.rad_expire_date,
             dry_run=p.dry_run,
             do_draft_save=p.do_draft_save,
+            city_name_fallback=p.city_name_fallback,
         )
     except (APIErro, SessaoExpirada) as exc:
         raise HTTPException(status_code=502, detail=str(exc))
