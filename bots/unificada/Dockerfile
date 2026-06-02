@@ -11,11 +11,13 @@ WORKDIR /app
 
 # curl pro HEALTHCHECK; build-essential + libxml2/libxslt-dev sao necessarios
 # para compilar lxml (dep transitiva de svglib) em python:3.12-slim.
+# libcairo2-dev + pkg-config necessarios para pycairo (dep de svglib>=1.5).
 # Removemos build-essential apos o pip install pra manter imagem enxuta.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       curl ca-certificates \
       build-essential libxml2-dev libxslt1-dev \
+      libcairo2-dev pkg-config \
  && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
