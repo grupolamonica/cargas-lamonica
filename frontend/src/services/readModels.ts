@@ -886,6 +886,40 @@ export async function fetchCadastrosPendentes(params: {
   );
 }
 
+// ─── Rascunhos de cadastro (draft rescue) ────────────────────────────────────
+
+export type DraftRegistrationItem = {
+  id: string;
+  carga_id: string | null;
+  created_at: string;
+  updated_at: string | null;
+  current_step: string;
+  step_label: string;
+  progress_pct: number;
+  at_confirmation: boolean;
+  has_submit_key: boolean;
+  cpf: string | null;
+  nome: string | null;
+  placa_cavalo: string | null;
+  cnh_categoria: string | null;
+  steps_done: { a: boolean; b: boolean; c: boolean; d: boolean; e: boolean };
+};
+
+export async function fetchDraftRegistrations(
+  accessToken: string,
+  opts: { page?: number; pageSize?: number } = {},
+): Promise<{ items: DraftRegistrationItem[]; meta: { page: number; pageSize: number; total: number } }> {
+  const query = new URLSearchParams(
+    Object.entries({ page: opts.page, pageSize: opts.pageSize })
+      .filter(([, v]) => v !== undefined && v !== null)
+      .map(([k, v]) => [k, String(v)]),
+  ).toString();
+  return requestJson<{ items: DraftRegistrationItem[]; meta: { page: number; pageSize: number; total: number } }>(
+    `/api/operator/cadastros/rascunhos${query ? `?${query}` : ""}`,
+    { accessToken },
+  );
+}
+
 export type AngelliraJobStep =
   | "proprietario_cavalo"
   | "cavalo"

@@ -866,6 +866,11 @@ function ConfirmationScreenImpl({
         >
           {isSubmitting ? "Enviando…" : "Confirmar e enviar"}
         </Button>
+        {!veracityChecked && !isSubmitting ? (
+          <p className="text-center text-xs text-muted-foreground">
+            ↑ Marque a confirmação acima para habilitar o envio
+          </p>
+        ) : null}
         <Button
           type="button"
           variant="ghost"
