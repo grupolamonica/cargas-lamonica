@@ -1705,7 +1705,6 @@ function renderState({
           currentStep={baseStep}
           totalSteps={totalSteps}
           value={stepCValue}
-          cascadeResult={null}
           ownerDocFromCrlv={ownerDocFromCrlv}
           ownerNomeFromCrlv={stepCValue.owner?.nome}
           onChange={onStepCProgress}
@@ -1714,7 +1713,6 @@ function renderState({
           cargaId={draftCargaId}
           cpf={draftCpf}
           accessToken={draftAccessToken}
-          noCascadeMode
         />
       );
     }
