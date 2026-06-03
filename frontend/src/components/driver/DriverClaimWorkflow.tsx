@@ -72,10 +72,13 @@ export function DriverClaimWorkflow({
                 Cadastros pendentes ({draftCount})
               </p>
               {incompleteDrafts.map((draft) => {
+                const cargaAtiva = draft.cargaDisponivel !== false;
                 const routeLabel =
                   draft.origem && draft.destino
-                    ? `${draft.origem} -> ${draft.destino}`
-                    : "Carga sem rota disponivel";
+                    ? `${draft.origem} → ${draft.destino}`
+                    : cargaAtiva
+                      ? "Carga sem rota disponivel"
+                      : "Carga não disponível";
                 const updatedLabel = formatShortDateTime(draft.updatedAt, "Agora");
                 const isLoading = draftLoadingId === draft.cargaId;
                 return (
@@ -90,15 +93,16 @@ export function DriverClaimWorkflow({
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                           <p className="text-sm font-semibold text-foreground sm:text-base">
-                            Completar cadastro pendente
+                            {cargaAtiva ? "Completar cadastro pendente" : "Cadastro incompleto salvo"}
                           </p>
                           <span className="max-w-full rounded-full bg-white/72 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                             {routeLabel}
                           </span>
                         </div>
                         <p className="mt-2 text-[13px] leading-6 text-muted-foreground sm:text-sm sm:leading-relaxed">
-                          Voce comecou o cadastro pra essa carga e nao terminou. Continue de onde parou
-                          antes que o rascunho expire.
+                          {cargaAtiva
+                            ? "Voce comecou o cadastro pra essa carga e nao terminou. Continue de onde parou antes que o rascunho expire."
+                            : "Essa carga foi para outro motorista, mas seu cadastro ficou salvo. Você ainda pode finalizar e enviar — vai entrar na fila para outras cargas."}
                         </p>
                         <p className="mt-2 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                           Salvo em {updatedLabel}
@@ -119,17 +123,20 @@ export function DriverClaimWorkflow({
                               ) : (
                                 <ClipboardList className="h-4 w-4" aria-hidden="true" />
                               )}
-                              Continuar cadastro
+                              {cargaAtiva ? "Continuar cadastro" : "Finalizar e enviar cadastro"}
                             </button>
                           ) : null}
-                          <Link
-                            to={buildCargoPublicPath(draft.cargaId)}
-                            className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-amber-300 bg-white/85 px-4 py-2.5 text-sm font-semibold text-amber-900 transition-colors hover:bg-amber-100 sm:w-auto"
-                            onClick={() => onOpenChange(false)}
-                          >
-                            Abrir carga
-                            <ArrowRight className="h-4 w-4" />
-                          </Link>
+                          {/* "Abrir carga" só faz sentido quando a carga ainda está ativa */}
+                          {cargaAtiva ? (
+                            <Link
+                              to={buildCargoPublicPath(draft.cargaId)}
+                              className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-amber-300 bg-white/85 px-4 py-2.5 text-sm font-semibold text-amber-900 transition-colors hover:bg-amber-100 sm:w-auto"
+                              onClick={() => onOpenChange(false)}
+                            >
+                              Abrir carga
+                              <ArrowRight className="h-4 w-4" />
+                            </Link>
+                          ) : null}
                         </div>
                       </div>
                     </div>
