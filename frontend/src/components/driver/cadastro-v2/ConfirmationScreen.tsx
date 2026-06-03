@@ -1,7 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { AlertCircle, Loader2, Pencil } from "lucide-react";
 
 import { CandidaturaApiError, useCandidaturaSubmit } from "@/api/candidaturaApi";
+import { submitCadastroRascunho } from "@/services/readModels";
 import {
   Accordion,
   AccordionContent,
@@ -84,6 +86,12 @@ export interface ConfirmationScreenProps {
    * volte ao estado `confirmation` e o motorista possa retentar.
    */
   onSubmitError?: () => void;
+  /**
+   * Modo operador (resgate): quando presente, o submit completa o rascunho em
+   * nome do motorista via POST /api/operator/cadastros/:id/submeter (reusa o
+   * pipeline do motorista no backend) em vez do submit do motorista.
+   */
+  operatorCadastroId?: string;
 }
 
 const CPF_MASK = (value: string) => {
@@ -533,7 +541,9 @@ function ConfirmationScreenImpl({
   onIdempotencyKeyGenerated,
   onSubmitStart,
   onSubmitError,
+  operatorCadastroId,
 }: ConfirmationScreenProps) {
+  const isOperatorSubmit = !!operatorCadastroId;
   // Reusa key persistida no draft; só gera nova se não houver.
   // Evita duplicate-submit em rede instável: re-mount após POST em vôo
   // re-envia com mesma key → servidor trata como idempotent.
@@ -557,6 +567,11 @@ function ConfirmationScreenImpl({
   }, [idempotencyKey, onIdempotencyKeyGenerated]);
 
   const submitMutation = useCandidaturaSubmit();
+  // Modo operador: submit por ID via endpoint do operador (token interno).
+  const operatorSubmitMutation = useMutation({
+    mutationFn: (dados: Record<string, unknown>) =>
+      submitCadastroRascunho(operatorCadastroId as string, dados),
+  });
   const [veracityChecked, setVeracityChecked] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   // true quando o backend retornou 409 (carga alocada para outro motorista) —
@@ -594,7 +609,7 @@ function ConfirmationScreenImpl({
   const bankingSummary = buildBankingSummary(data.stepC);
 
   const handleSubmit = (forceStandalone = false) => {
-    if (!veracityChecked || submitMutation.isPending) return;
+    if (!veracityChecked || submitMutation.isPending || operatorSubmitMutation.isPending) return;
     setErrorMessage(null);
     setCargaAllocatedToOther(false);
     let dadosClean: Record<string, unknown>;
@@ -613,6 +628,25 @@ function ConfirmationScreenImpl({
     // BUG-WALK-04: avisa pai que o submit está em vôo. Pai transita FSM
     // para `submitting` (copy distinta de `loading`/pre-check).
     onSubmitStart?.();
+
+    // Modo operador: completa o rascunho em nome do motorista. cargaId/idempotency
+    // são derivados no backend a partir da row de origem.
+    if (isOperatorSubmit) {
+      operatorSubmitMutation.mutate(dadosClean, {
+        onSuccess: (result) => {
+          onSuccess({ protocolo: result.protocolo });
+        },
+        onError: (err) => {
+          setErrorMessage(
+            err instanceof Error && err.message
+              ? err.message
+              : "Erro ao submeter o cadastro. Tente novamente.",
+          );
+          onSubmitError?.();
+        },
+      });
+      return;
+    }
     // forceStandalone=true quando o motorista escolhe "Enviar sem esta carga"
     // após receber 409 CargaAlreadyApproved.
     const effectiveCargaId = forceStandalone ? undefined : (cargaId.trim() ? cargaId : undefined);
@@ -645,7 +679,7 @@ function ConfirmationScreenImpl({
     );
   };
 
-  const isSubmitting = submitMutation.isPending;
+  const isSubmitting = submitMutation.isPending || operatorSubmitMutation.isPending;
 
   // Default-open list calculado para quando o usuário expandir "Ver todos os dados".
   // Mantém todos os accordions abertos para facilitar edição (mesmo comportamento

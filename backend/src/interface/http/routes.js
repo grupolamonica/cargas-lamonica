@@ -63,6 +63,7 @@ import {
   resolveOperatorOverviewDigestResponse,
   resolveOperatorCadastrosPendentesResponse,
   resolveOperatorListDraftRegistrationsResponse,
+  resolveOperatorSubmitDraftResponse,
   resolveOperatorAprovarCadastroResponse,
   resolveOperatorRejeitarCadastroResponse,
   resolveOperatorAngelliraPrecheckResponse,
@@ -293,6 +294,8 @@ export function registerRoutes(app) {
   router.get("/api/operator/cadastros-pendentes", wrap(resolveOperatorCadastrosPendentesResponse));
   router.post("/api/operator/cadastros/:id/aprovar", wrap(resolveOperatorAprovarCadastroResponse));
   router.post("/api/operator/cadastros/:id/rejeitar", wrap(resolveOperatorRejeitarCadastroResponse));
+  // Resgate de rascunho: operador completa e submete em nome do motorista
+  router.post("/api/operator/cadastros/:id/submeter", wrap(resolveOperatorSubmitDraftResponse));
 
   // Angellira automation (DC-111 / Sprint 1)
   router.post("/api/operator/cadastros/:id/angellira/precheck", wrap(resolveOperatorAngelliraPrecheckResponse));

@@ -8,7 +8,10 @@
  * Usa o mesmo DriverRegistrationWizard que o motorista vê,
  * com restauração automática via draft (cpf + cargaId).
  */
+import { useQuery } from "@tanstack/react-query";
+
 import { DriverRegistrationWizard } from "@/components/driver/cadastro-v2/DriverRegistrationWizard";
+import { getOperatorAccessToken } from "@/services/apiClient";
 import type { DraftRegistrationItem } from "@/services/readModels";
 
 interface CadastroRascunhoResgateModalProps {
@@ -17,16 +20,6 @@ interface CadastroRascunhoResgateModalProps {
   onOpenChange: (open: boolean) => void;
   onSubmitSuccess?: () => void;
 }
-
-const STEP_ORDER = [
-  "tela0",
-  "step-a",
-  "step-b",
-  "step-c",
-  "step-d",
-  "step-e",
-  "confirmation",
-];
 
 function derivePlacas(draft: DraftRegistrationItem): {
   horsePlate: string;
@@ -50,6 +43,15 @@ export function CadastroRascunhoResgateModal({
   onOpenChange,
   onSubmitSuccess,
 }: CadastroRascunhoResgateModalProps) {
+  // Token do operador para as chamadas autenticadas do wizard (antt-precheck,
+  // uploads). O load/save/submit do draft usam o token internamente (readModels).
+  const { data: operatorAccessToken } = useQuery({
+    queryKey: ["operator-access-token"],
+    queryFn: getOperatorAccessToken,
+    enabled: open && !!draft,
+    staleTime: 60_000,
+  });
+
   if (!draft) return null;
 
   const { horsePlate, trailerPlates } = derivePlacas(draft);
@@ -62,6 +64,9 @@ export function CadastroRascunhoResgateModal({
       cpf={draft.cpf ?? undefined}
       horsePlate={horsePlate || undefined}
       trailerPlates={trailerPlates}
+      // Modo operador: carrega/salva o draft por ID e submete em nome do
+      // motorista (reusa o pipeline do motorista no backend).
+      operatorMode={{ cadastroId: draft.id, accessToken: operatorAccessToken ?? null }}
       // Operador não precisa do callback de pré-check — o wizard restaura
       // direto do draft (rascunho já passou pelo pré-check na sessão do motorista).
       onPreCheckPassed={() => {

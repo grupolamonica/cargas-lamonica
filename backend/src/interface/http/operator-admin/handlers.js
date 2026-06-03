@@ -64,6 +64,8 @@ import {
 import { fetchOperatorAuditLogsReadModel } from "../../../application/operator-admin/use-cases/audit-logs-read-model.js";
 import { fetchPendingDriverRegistrations } from "../../../application/operator-admin/use-cases/pending-driver-registrations-read-model.js";
 import { listDraftRegistrations } from "../../../application/operator-admin/use-cases/list-draft-registrations.js";
+import { submitDraftAsOperator } from "../../../application/operator-admin/use-cases/submit-draft-as-operator.js";
+import { candidaturaSubmitSchema } from "../schemas/candidatura-schemas.js";
 import { ensureDriverLoadsSheetFresh } from "../public-loads/handlers.js";
 import { fetchDriverFlowMetrics } from "../../../domain/operator-admin/driver-flow-metrics.js";
 import {
@@ -1732,6 +1734,53 @@ export async function resolveOperatorPatchCadastroDadosResponse(request) {
       });
       return { statusCode: 200, payload: { ok: true, meta: { correlationId } } };
     });
+  });
+}
+
+/**
+ * POST /api/operator/cadastros/:id/submeter
+ * Submete um rascunho (status='draft') em nome do motorista, a partir do wizard
+ * de resgate no painel. Reusa o pipeline canônico do motorista (submit-final):
+ * gera 'pendente' com protocolo/cascata ANTT/owner-reuse e consome o rascunho.
+ *
+ * Body: { dados } — estado final do wizard. cargaId vem da própria row de draft.
+ */
+export async function resolveOperatorSubmitDraftResponse(request) {
+  return withOperatorSession(request, "submeter-rascunho", async ({ correlationId, requestIp, operatorId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso intermediário necessário para submeter cadastros.");
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do rascunho é obrigatório.", meta: { correlationId } } };
+    }
+
+    let body;
+    try {
+      body = await parseJsonBody(request);
+    } catch {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "Body JSON inválido.", meta: { correlationId } } };
+    }
+
+    // Valida o payload com o MESMO schema do submit do motorista, garantindo
+    // que o 'pendente' gerado seja consistente. cargaId é opcional no schema.
+    let parsedInput;
+    try {
+      parsedInput = candidaturaSubmitSchema.parse({ dados: body?.dados });
+    } catch (err) {
+      if (err instanceof ZodError) {
+        return zodErrorToHttpResponse(err, correlationId);
+      }
+      throw err;
+    }
+
+    const result = await submitDraftAsOperator({
+      cadastroId: id,
+      dados: parsedInput.dados,
+      operatorId,
+      requestIp,
+      correlationId,
+    });
+
+    return result;
   });
 }
 

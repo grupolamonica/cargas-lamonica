@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 
 import { ForbiddenError, UnauthorizedError } from "../../../domain/load-claims/errors.js";
 import { requireDriverSession } from "../../../application/load-claims/auth.js";
+import { resolveCandidaturaActor } from "../../../application/load-claims/candidatura-actor.js";
 import { getDriverProfileByUserId } from "../../../application/load-claims/profile-service.js";
 import { candidaturaPreCheck } from "../../../application/candidatura/use-cases/pre-check.js";
 import { saveCandidaturaDraft } from "../../../application/candidatura/use-cases/save-draft.js";
@@ -818,8 +819,24 @@ export async function resolveCandidaturaAnttPrecheckResponse(request) {
     };
   }
 
-  const { errorResponse } = await resolveDriverSessionOrError(request, correlationId);
+  // Aceita sessão de motorista OU de operador (resgate de rascunho pelo painel).
+  // Fluxo público (sem token) é rejeitado: a cascata consome quota Infosimples,
+  // então exige requisição autenticada e atribuível.
+  const { actor, errorResponse } = await resolveCandidaturaActor(
+    getAuthorizationHeader(request),
+    correlationId,
+  );
   if (errorResponse) return errorResponse;
+  if (actor.type === "public") {
+    return {
+      statusCode: 401,
+      payload: {
+        error: "Unauthorized",
+        message: "Autenticação obrigatória para consultar a ANTT.",
+        meta: { correlationId },
+      },
+    };
+  }
 
   let body;
   try {

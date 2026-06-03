@@ -1162,6 +1162,18 @@ export async function deleteCadastro(id: string) {
   return deleteOperator<{ ok: boolean }>(`/api/operator/cadastros/${id}`);
 }
 
+/**
+ * Resgate de rascunho: o operador completa e submete um draft em nome do
+ * motorista. Reusa o pipeline canônico (gera 'pendente' + protocolo) e consome
+ * a row de rascunho de origem. Espelha o submit do wizard do motorista.
+ */
+export async function submitCadastroRascunho(id: string, dados: Record<string, unknown>) {
+  return postOperator<{ id: string; protocolo: string; meta?: { correlationId?: string } }>(
+    `/api/operator/cadastros/${id}/submeter`,
+    { dados },
+  );
+}
+
 // ── Cadastro rápido de motorista pelo operador ────────────────────────────
 
 export interface CadastroRapidoInput {

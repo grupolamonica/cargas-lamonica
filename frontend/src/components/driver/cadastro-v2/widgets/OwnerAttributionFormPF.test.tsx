@@ -13,10 +13,9 @@ import {
 } from "./OwnerAttributionFormPF";
 
 /**
- * Apos refatoracao 2026-05-18, o OwnerAttributionFormPF coleta apenas
- * identidade basica do owner CRLV: telefone, CEP, numero, comprovante. Banco,
- * PIS, cor/raca, estado civil migraram para AnttTitularPrompt (kind=cavalo,
- * tipo=pf). Os testes abaixo cobrem somente o escopo atual.
+ * Após refatoração 2026-06-03, o OwnerAttributionFormPF coleta APENAS o
+ * telefone do owner CRLV. CEP, número e comprovante migraram para
+ * OwnerEnderecoComprovante (card dedicado abaixo no Step C).
  */
 
 vi.mock("sonner", () => ({
@@ -33,16 +32,13 @@ const DRIVER_PROFILE: OwnerAttributionFormPFDriverProfile = {
   endereco: { cep: "01310-100", numero: "100" },
 };
 
-const CPF_OWNER = "08656693689"; // CPF valido
+const CPF_OWNER = "08656693689"; // CPF válido
 
 function renderWidget(
   overrides: Partial<OwnerAttributionFormPFProps> = {},
   initialValue?: OwnerPFData,
 ) {
   let value: OwnerPFData = initialValue ?? buildEmptyOwnerPFData();
-  // `utilsRef` permite que o callback `onChange` (chamado dentro de useEffect
-  // do mount) acesse `utils.rerender` sem TDZ — o render inicial pode disparar
-  // o pre-fill que chama onChange antes da const `utils` ser atribuida.
   const utilsRef: { rerender?: (ui: ReactElement) => void } = {};
   const onChange = vi.fn((next: OwnerPFData) => {
     value = next;
@@ -55,7 +51,6 @@ function renderWidget(
     driverProfile: DRIVER_PROFILE,
     ownerDoc: CPF_OWNER,
     context: "cavalo",
-    expandOptional: true,
     ...overrides,
   });
 
@@ -75,7 +70,7 @@ function renderWidget(
   };
 }
 
-describe("OwnerAttributionFormPF — identidade basica (pos refatoracao 2026-05-18)", () => {
+describe("OwnerAttributionFormPF — apenas telefone (refatoração 2026-06-03)", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
   });
@@ -99,36 +94,31 @@ describe("OwnerAttributionFormPF — identidade basica (pos refatoracao 2026-05-
     expect(screen.queryByLabelText(/Estado civil/i)).not.toBeInTheDocument();
   });
 
-  it("renderiza telefone, CEP, numero e comprovante", () => {
+  it("renderiza apenas o campo Telefone (CEP/numero/comprovante migraram para OwnerEnderecoComprovante)", () => {
     renderWidget();
     expect(screen.getByLabelText(/Telefone/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/^CEP/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/^Número/i)).toBeInTheDocument();
-    expect(
-      screen.getByLabelText(/Comprovante de residência/i),
-    ).toBeInTheDocument();
+    // Estes campos não devem mais existir neste componente
+    expect(screen.queryByLabelText(/^CEP/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Número/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Comprovante de residência/i)).not.toBeInTheDocument();
   });
 
-  it("D-13 pre-fill: quando ownerDoc === driverCpf, dispara onChange com telefone/CEP/numero", async () => {
+  it("D-13 pre-fill: quando ownerDoc === driverCpf, dispara onChange apenas com telefone", async () => {
     const { onChange } = renderWidget({
       ownerDoc: DRIVER_PROFILE.document_number,
     });
 
-    // useEffect roda apos commit; advance timers + flush microtasks.
     await act(async () => {
       vi.advanceTimersByTime(10);
     });
 
-    // O componente chama onChange uma vez com o patch consolidado (telefone +
-    // CEP + numero) — verifica os 3 campos no payload.
     expect(onChange).toHaveBeenCalled();
     const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
     expect(lastCall.telefone).toMatch(/\(11\)/);
-    expect(lastCall.cep).toMatch(/01310-100/);
-    expect(lastCall.numero).toBe("100");
+    // CEP e número não são mais gerenciados por este componente
   });
 
-  it("aceita edicao manual de telefone, CEP, numero via onChange", () => {
+  it("aceita edicao manual de telefone via onChange", () => {
     const { onChange } = renderWidget();
     const tel = screen.getByLabelText(/Telefone/i) as HTMLInputElement;
     fireEvent.change(tel, { target: { value: "11988887777" } });
@@ -139,37 +129,36 @@ describe("OwnerAttributionFormPF — identidade basica (pos refatoracao 2026-05-
 });
 
 describe("isValidOwnerPFData / describeOwnerPFFieldIssues", () => {
-  it("isValidOwnerPFData false quando faltam campos basicos", () => {
+  it("isValidOwnerPFData false quando telefone está vazio", () => {
     expect(isValidOwnerPFData(buildEmptyOwnerPFData())).toBe(false);
   });
 
-  it("isValidOwnerPFData true com telefone + CEP + numero + comprovante validos (iter #7)", () => {
+  it("isValidOwnerPFData true com telefone válido", () => {
     expect(
       isValidOwnerPFData({
         telefone: "(11) 99999-8888",
-        cep: "01310-100",
-        numero: "100",
-        comprovanteFileName: "comprov.jpg",
       }),
     ).toBe(true);
   });
 
-  it("[iter#7] isValidOwnerPFData FALSE sem comprovante mesmo com demais validos", () => {
+  it("isValidOwnerPFData true independente de CEP/numero (migraram para OwnerEnderecoComprovante)", () => {
+    // CEP e número não são mais requisitos deste componente
     expect(
       isValidOwnerPFData({
         telefone: "(11) 99999-8888",
-        cep: "01310-100",
-        numero: "100",
+        cep: "",
+        numero: "",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("describeOwnerPFFieldIssues lista campos faltantes (incluindo comprovante - iter #7)", () => {
+  it("describeOwnerPFFieldIssues lista apenas Telefone como campo obrigatório", () => {
     const { missing } = describeOwnerPFFieldIssues(buildEmptyOwnerPFData());
     expect(missing).toContain("Telefone");
-    expect(missing).toContain("CEP");
-    expect(missing).toContain("Número");
-    expect(missing).toContain("Comprovante de residência");
+    // CEP, número e comprovante não são mais responsabilidade deste componente
+    expect(missing).not.toContain("CEP");
+    expect(missing).not.toContain("Número");
+    expect(missing).not.toContain("Comprovante de residência");
   });
 
   it("describeOwnerPFFieldIssues nao referencia campos removidos (PIS, banco, etc)", () => {
