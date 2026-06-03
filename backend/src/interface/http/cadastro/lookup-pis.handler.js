@@ -9,8 +9,7 @@ import "../../../infrastructure/config/load-env.js";
 
 import { ZodError } from "zod";
 
-import { ForbiddenError, UnauthorizedError } from "../../../domain/load-claims/errors.js";
-import { requireDriverSession } from "../../../application/load-claims/auth.js";
+import { resolveCandidaturaActor } from "../../../application/load-claims/candidatura-actor.js";
 import { lookupPis } from "../../../application/cadastro/use-cases/lookup-pis.js";
 import {
   getAuthorizationHeader,
@@ -50,39 +49,6 @@ function checkRateLimit(ip) {
   return { limited: false, retryAfterSeconds: 0 };
 }
 
-async function resolveDriverSessionOrError(request, correlationId) {
-  try {
-    const session = await requireDriverSession(getAuthorizationHeader(request));
-    return { session };
-  } catch (err) {
-    if (err instanceof UnauthorizedError) {
-      return {
-        errorResponse: {
-          statusCode: 401,
-          payload: {
-            error: "Unauthorized",
-            message: err.message,
-            meta: { correlationId },
-          },
-        },
-      };
-    }
-    if (err instanceof ForbiddenError) {
-      return {
-        errorResponse: {
-          statusCode: 403,
-          payload: {
-            error: "Forbidden",
-            message: err.message,
-            meta: { correlationId },
-          },
-        },
-      };
-    }
-    throw err;
-  }
-}
-
 export async function resolveLookupPisResponse(request) {
   const correlationId = getCorrelationId(request);
   const requestIp = getRequestIp(request);
@@ -100,8 +66,23 @@ export async function resolveLookupPisResponse(request) {
     };
   }
 
-  const { errorResponse } = await resolveDriverSessionOrError(request, correlationId);
+  // Aceita sessão de motorista OU de operador (resgate de rascunho). Público
+  // (sem token) é rejeitado — a consulta CNIS/Infosimples exige autenticação.
+  const { actor, errorResponse } = await resolveCandidaturaActor(
+    getAuthorizationHeader(request),
+    correlationId,
+  );
   if (errorResponse) return errorResponse;
+  if (actor.type === "public") {
+    return {
+      statusCode: 401,
+      payload: {
+        error: "Unauthorized",
+        message: "Autenticação obrigatória para consultar o PIS.",
+        meta: { correlationId },
+      },
+    };
+  }
 
   let body;
   try {
