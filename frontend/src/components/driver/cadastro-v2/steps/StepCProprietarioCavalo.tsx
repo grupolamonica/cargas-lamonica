@@ -172,14 +172,9 @@ export interface StepCProprietarioCavaloProps {
 }
 
 function buildInitialPFData(value: StepCData | undefined): OwnerPFData {
-  const base = buildEmptyOwnerPFData();
-  if (!value?.pf) return base;
-  return {
-    telefone: value.pf.telefone ?? "",
-    cep: value.pf.cep ?? "",
-    numero: value.pf.numero ?? "",
-    comprovanteFileName: value.pf.comprovanteFileName,
-  };
+  if (!value?.pf) return buildEmptyOwnerPFData();
+  // Apenas telefone — CEP/número/comprovante migraram para OwnerEnderecoComprovante.
+  return { telefone: value.pf.telefone ?? "" };
 }
 
 function buildInitialPJData(_value: StepCData | undefined): OwnerPJData {
@@ -556,7 +551,9 @@ function StepCProprietarioCavaloImpl({
     (driverIsOwner || ownerData.nome.trim().length > 0) &&
     ownerDocValid &&
     anttFulfilled &&
-    complementaryFulfilled;
+    complementaryFulfilled &&
+    // Endereço (CEP/número/comprovante) agora é coletado exclusivamente em OwnerEnderecoComprovante.
+    ownerEnderecoCompleted;
 
   const handleContinue = () => {
     if (!continueEnabled) {
@@ -804,13 +801,8 @@ function StepCProprietarioCavaloImpl({
                         onChange={setPfData}
                         driverProfile={driverProfile}
                         ownerDoc={ownerDocDigits}
-                        prefillFromOcr={{ nome: ownerData.nome }}
                         context="cavalo"
                         attemptedSubmit={attemptedSubmit}
-                        comprovanteSlot="cavalo_owner_comprovante"
-                        cargaId={cargaId}
-                        cpf={cpf}
-                        accessToken={accessToken}
                       />
                     </WizardStepCard>
                   );
@@ -1055,12 +1047,8 @@ function buildStepCPayload(
     ...(ownerEndereco ? { ownerEndereco } : {}),
   };
   if (ownerDocType === "cpf") {
-    payload.pf = {
-      telefone: pfData.telefone,
-      cep: pfData.cep,
-      numero: pfData.numero,
-      comprovanteFileName: pfData.comprovanteFileName,
-    };
+    // Apenas telefone — CEP/número/comprovante migraram para ownerEndereco.
+    payload.pf = { telefone: pfData.telefone };
   }
   if (anttTitular) {
     payload.anttTitular = anttTitular;

@@ -1,15 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { MoreOptionsToggle } from "@/components/driver/ui";
 import {
   isValidBrazilianPhone,
   onlyDigits,
 } from "@/lib/brazilianValidators";
-import { uploadDraftFile } from "@/services/cadastroApi";
 
 /**
  * Formulario de identidade complementar do proprietario PF do CRLV.
@@ -25,6 +22,7 @@ import { uploadDraftFile } from "@/services/cadastroApi";
  *     (cavalo) e Step E (carreta).
  */
 
+/** @deprecated Mantido apenas para compat com drafts antigos persistidos. */
 export interface OwnerPFEndereco {
   cep: string;
   numero: string;
@@ -33,8 +31,12 @@ export interface OwnerPFEndereco {
 
 export interface OwnerPFData {
   telefone: string;
-  cep: string;
-  numero: string;
+  /**
+   * @deprecated CEP, número e comprovante migraram para OwnerEnderecoComprovante.
+   * Mantidos na interface apenas para leitura de drafts antigos.
+   */
+  cep?: string;
+  numero?: string;
   comprovanteFileName?: string;
 }
 
@@ -50,41 +52,19 @@ export interface OwnerAttributionFormPFProps {
   driverProfile: OwnerAttributionFormPFDriverProfile;
   /** Documento do proprietario (digits only) — usado para detectar driver==owner. */
   ownerDoc: string;
-  /** Preencher campos a partir do OCR (nome lido). */
-  prefillFromOcr?: { nome?: string };
   /** Dados de um owner ja coletado nesta sessao (cavalo ou outra carreta). */
   prefilledFromCavaloOwner?: OwnerPFData;
   /** Contexto: usado para namespacing aria/id. */
   context: "cavalo" | "carreta";
-  /** Quando true, força expansão de "Dados de contato" (toggle StepC/E). */
+  /** @deprecated Sem efeito — campo único não precisa de toggle. */
   expandOptional?: boolean;
-  /**
-   * Quando true, o motorista tentou avançar com o form invalido. Usado para
-   * sinalizar erros (auto-expand + badge) na seção progressive.
-   */
+  /** @deprecated Sem efeito — mantido para compat de callers existentes. */
   attemptedSubmit?: boolean;
-  /**
-   * Slot p/ persistência draft do comprovante opcional. Caller decide
-   * (cavalo_owner_comprovante | carreta_owner_comprovante_{idx}). Quando
-   * ausente, o comprovante segue best-effort apenas com fileName local.
-   */
-  comprovanteSlot?: string;
-  cargaId?: string;
-  cpf?: string;
-  accessToken?: string | null;
-  /**
-   * Iter #7 — Callback invocado apos upload bem-sucedido do comprovante
-   * (Supabase Storage). Wizard pode usar pra disparar `flushDraftImmediate`
-   * e persistir o file path no draft sem aguardar o debounce.
-   */
-  onUploadComplete?: (storagePath: string) => void;
 }
 
 export function buildEmptyOwnerPFData(): OwnerPFData {
   return {
     telefone: "",
-    cep: "",
-    numero: "",
   };
 }
 
@@ -123,13 +103,6 @@ export function OwnerAttributionFormPF({
   ownerDoc,
   prefilledFromCavaloOwner,
   context,
-  expandOptional,
-  attemptedSubmit = false,
-  comprovanteSlot,
-  cargaId,
-  cpf,
-  accessToken,
-  onUploadComplete,
 }: OwnerAttributionFormPFProps) {
   const ownerDocDigits = useMemo(() => onlyDigits(ownerDoc), [ownerDoc]);
   const driverCpfDigits = useMemo(
@@ -144,73 +117,29 @@ export function OwnerAttributionFormPF({
   const hasReusedData = Boolean(prefilledFromCavaloOwner);
   const [editingReuse, setEditingReuse] = useState<boolean>(!hasReusedData);
 
-  // Inicializacao: prefilled from cavalo > driver pre-fill > value vazio
+  // Pre-fill por reuso de owner já coletado nesta sessão.
   useEffect(() => {
     if (hasReusedData && !editingReuse) {
-      // garante que o valor reflita o reuso (mesmo se caller passou um value vazio)
       const reused = prefilledFromCavaloOwner as OwnerPFData;
-      const isEqual =
-        value.telefone === reused.telefone &&
-        value.cep === reused.cep &&
-        value.numero === reused.numero;
-      if (!isEqual) {
+      if (value.telefone !== reused.telefone) {
         onChange(reused);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasReusedData, editingReuse]);
 
-  // D-13 pre-fill (somente se nao for reuse e os campos ainda estiverem vazios)
+  // D-13 pre-fill: quando o motorista é o próprio proprietário, preenche telefone.
   useEffect(() => {
     if (hasReusedData) return;
     if (!ownerEqualsDriver) return;
-    const patch: Partial<OwnerPFData> = {};
     if (!value.telefone && driverProfile.phone) {
-      patch.telefone = formatPhoneMask(driverProfile.phone);
-    }
-    if (!value.cep && driverProfile.endereco?.cep) {
-      patch.cep = formatCepMask(driverProfile.endereco.cep);
-    }
-    if (!value.numero && driverProfile.endereco?.numero) {
-      patch.numero = driverProfile.endereco.numero;
-    }
-    if (Object.keys(patch).length > 0) {
-      onChange({ ...value, ...patch });
+      onChange({ ...value, telefone: formatPhoneMask(driverProfile.phone) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerEqualsDriver]);
 
   const readOnly = hasReusedData && !editingReuse;
   const idPrefix = `owner-pf-${context}`;
-
-  const update = (patch: Partial<OwnerPFData>) => {
-    onChange({ ...value, ...patch });
-  };
-
-  // Progressive disclosure: campos de contato atrás de toggle.
-  // Default aberto se já existe algum valor preenchido (reuso/prefill) ou em modo readonly.
-  const hasAdditionalData =
-    Boolean(value.telefone) ||
-    Boolean(value.cep) ||
-    Boolean(value.numero) ||
-    Boolean(value.comprovanteFileName);
-
-  // Detectar campos OBRIGATORIOS pendentes dentro da seção progressive.
-  // Alimenta o badge no toggle (colapsado) e força expansão quando o motorista
-  // tenta clicar em Continuar com erros.
-  const hiddenSectionInvalid = useMemo(() => {
-    const invalid: string[] = [];
-    if (!isValidBrazilianPhone(value.telefone)) invalid.push("telefone");
-    if (onlyDigits(value.cep).length !== 8) invalid.push("cep");
-    if (!value.numero.trim()) invalid.push("numero");
-    // Iter #7: comprovante obrigatorio.
-    if (!value.comprovanteFileName) invalid.push("comprovante");
-    return invalid;
-  }, [value.telefone, value.cep, value.numero, value.comprovanteFileName]);
-
-  const hiddenErrorCount = hiddenSectionInvalid.length;
-  const hasHiddenError =
-    attemptedSubmit && hiddenErrorCount > 0 && !readOnly;
 
   return (
     <div className="space-y-3">
@@ -237,164 +166,53 @@ export function OwnerAttributionFormPF({
         </div>
       ) : null}
 
-      <MoreOptionsToggle
-        label="Contato do proprietário"
-        collapseLabel="Esconder contato"
-        defaultOpen={hasAdditionalData || readOnly}
-        forceOpen={expandOptional || hasHiddenError}
-        hasError={hasHiddenError}
-        errorCount={hasHiddenError ? hiddenErrorCount : undefined}
-      >
-        <div className="space-y-1.5">
-          <Label htmlFor={`${idPrefix}-telefone`}>
-            Telefone <span className="text-destructive">*</span>
-          </Label>
-          <Input
-            id={`${idPrefix}-telefone`}
-            inputMode="tel"
-            value={value.telefone}
-            onChange={(event) =>
-              update({ telefone: formatPhoneMask(event.target.value) })
-            }
-            placeholder="(00) 00000-0000"
-            aria-invalid={
-              value.telefone.length > 0 &&
-              !isValidBrazilianPhone(value.telefone)
-            }
-            disabled={readOnly}
-            required
-          />
-          {value.telefone.length > 0 &&
-          !isValidBrazilianPhone(value.telefone) ? (
-            <p className="text-xs text-destructive">
-              Telefone inválido. Confira o DDD e número.
-            </p>
-          ) : null}
-        </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}-cep`}>
-              CEP <span className="text-destructive">*</span>
-            </Label>
-            <Input
-              id={`${idPrefix}-cep`}
-              inputMode="numeric"
-              value={value.cep}
-              onChange={(event) =>
-                update({ cep: formatCepMask(event.target.value) })
-              }
-              placeholder="00000-000"
-              disabled={readOnly}
-              required
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}-numero`}>
-              Número <span className="text-destructive">*</span>
-            </Label>
-            <Input
-              id={`${idPrefix}-numero`}
-              inputMode="numeric"
-              value={value.numero}
-              onChange={(event) => update({ numero: event.target.value.trim() })}
-              disabled={readOnly}
-              required
-            />
-          </div>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor={`${idPrefix}-comprovante`}>
-            Comprovante de residência <span className="text-destructive">*</span> — foto ou arquivo
-          </Label>
-          <Input
-            id={`${idPrefix}-comprovante`}
-            type="file"
-            accept="image/*,application/pdf"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (!file) return;
-              update({ comprovanteFileName: file.name });
-              // Best-effort persistência draft. Falha silenciosa — apenas log
-              // em DEV. Não bloqueia o submit (comprovante é opcional).
-              if (comprovanteSlot && cargaId) {
-                // Iter #7 — apos upload bem-sucedido, dispara onUploadComplete
-                // pra que o wizard chame flushDraftImmediate e persista o
-                // storage_path imediatamente (nao espera debounce 200ms).
-                void uploadDraftFile(file, comprovanteSlot, cargaId, {
-                  cpf,
-                  accessToken,
-                })
-                  .then((result) => {
-                    if (onUploadComplete && result?.storage_path) {
-                      onUploadComplete(result.storage_path);
-                    }
-                  })
-                  .catch((err) => {
-                    if (import.meta.env.DEV) {
-                      console.warn(
-                        `[OwnerAttributionFormPF/${comprovanteSlot}] upload failed`,
-                        err,
-                      );
-                    }
-                    toast.message(
-                      "Não conseguimos guardar esse arquivo agora — refaça depois se precisar.",
-                    );
-                  });
-              }
-            }}
-            disabled={readOnly}
-          />
-          {value.comprovanteFileName ? (
-            <p className="text-xs text-muted-foreground">
-              Arquivo selecionado: {value.comprovanteFileName}
-            </p>
-          ) : null}
-        </div>
-      </MoreOptionsToggle>
+      {/* Contato: apenas telefone — endereço e comprovante ficam no card "Endereço do proprietário" */}
+      <div className="space-y-1.5">
+        <Label htmlFor={`${idPrefix}-telefone`}>
+          Telefone <span className="text-destructive">*</span>
+        </Label>
+        <Input
+          id={`${idPrefix}-telefone`}
+          inputMode="tel"
+          value={value.telefone}
+          onChange={(event) =>
+            onChange({ ...value, telefone: formatPhoneMask(event.target.value) })
+          }
+          placeholder="(00) 00000-0000"
+          aria-invalid={value.telefone.length > 0 && !isValidBrazilianPhone(value.telefone)}
+          disabled={readOnly}
+          required
+          className="h-12"
+        />
+        {value.telefone.length > 0 && !isValidBrazilianPhone(value.telefone) ? (
+          <p className="text-xs text-destructive">
+            Telefone inválido. Confira o DDD e número.
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }
 
 /**
- * Helper: classifica campos do PF entre "missing" (vazio) e "invalid" (preenchido
- * mas com formato/checksum incorreto). Usado pelo banner de validação no step
- * pai para gerar mensagens específicas em vez do genérico "Faltam campos
- * obrigatórios" (BUG-WALK-03).
+ * Helper: classifica campos do PF entre "missing" e "invalid".
+ * Após refactor 2026-06-03: apenas Telefone é coletado aqui.
+ * CEP/número/comprovante migraram para OwnerEnderecoComprovante.
  */
 export interface OwnerPFFieldIssues {
   missing: string[];
   invalid: string[];
 }
 
-const PF_FIELD_LABELS: Record<string, string> = {
-  telefone: "Telefone",
-  cep: "CEP",
-  numero: "Número",
-  comprovante: "Comprovante de residência",
-};
-
 export function describeOwnerPFFieldIssues(data: OwnerPFData): OwnerPFFieldIssues {
   const missing: string[] = [];
   const invalid: string[] = [];
-  if (!data.telefone) missing.push(PF_FIELD_LABELS.telefone);
-  else if (!isValidBrazilianPhone(data.telefone))
-    invalid.push(PF_FIELD_LABELS.telefone);
-  const cepDigits = onlyDigits(data.cep);
-  if (cepDigits.length === 0) missing.push(PF_FIELD_LABELS.cep);
-  else if (cepDigits.length !== 8) invalid.push(PF_FIELD_LABELS.cep);
-  if (!data.numero.trim()) missing.push(PF_FIELD_LABELS.numero);
-  // Iter #7: comprovante obrigatorio (PF cavalo + carreta).
-  if (!data.comprovanteFileName) missing.push(PF_FIELD_LABELS.comprovante);
+  if (!data.telefone) missing.push("Telefone");
+  else if (!isValidBrazilianPhone(data.telefone)) invalid.push("Telefone");
   return { missing, invalid };
 }
 
 /** Helper: determina se os dados do PF estão completos para habilitar Continuar. */
 export function isValidOwnerPFData(data: OwnerPFData): boolean {
-  return Boolean(
-    isValidBrazilianPhone(data.telefone) &&
-      onlyDigits(data.cep).length === 8 &&
-      data.numero.trim().length > 0 &&
-      // Iter #7: comprovante obrigatorio.
-      data.comprovanteFileName,
-  );
+  return isValidBrazilianPhone(data.telefone);
 }
