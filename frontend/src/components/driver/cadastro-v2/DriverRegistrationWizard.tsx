@@ -83,6 +83,18 @@ export interface DriverRegistrationWizardProps {
    */
   initialPreCheckResponse?: PreCheckResponse;
   onPreCheckPassed: (ctx: DriverRegistrationWizardContext) => void;
+  /**
+   * Modo operador (resgate de rascunho pelo painel). Quando definido, o wizard:
+   * - carrega/salva o draft por ID via endpoints do operador (não draft/me por CPF);
+   * - usa `operatorAccessToken` como Bearer nas chamadas autenticadas
+   *   (antt-precheck, lookup-pis, uploads/OCR) em vez do token do motorista;
+   * - no submit final, completa o rascunho em nome do motorista
+   *   (POST /api/operator/cadastros/:id/submeter) em vez do submit do motorista.
+   */
+  operatorMode?: {
+    cadastroId: string;
+    accessToken: string | null;
+  };
 }
 
 interface PendingCarretaForOwner {
@@ -229,10 +241,17 @@ export function DriverRegistrationWizard({
   cpf,
   initialPreCheckResponse,
   onPreCheckPassed,
+  operatorMode,
 }: DriverRegistrationWizardProps) {
   const driverAuth = useDriverAuth();
   const driverUserId = driverAuth.user?.id ?? "";
-  const accessToken = driverAuth.session?.access_token ?? null;
+  // Token efetivo: no modo operador, todas as chamadas autenticadas
+  // (antt-precheck, lookup-pis, uploads) usam o Bearer do operador, propagado
+  // aos steps via `draftAccessToken`. No fluxo normal, usa o token do motorista.
+  const accessToken = operatorMode
+    ? operatorMode.accessToken ?? null
+    : driverAuth.session?.access_token ?? null;
+  const isOperatorMode = !!operatorMode;
   const preCheck = useCandidaturaPreCheck();
 
   const [state, setState] = useState<WizardState>({ kind: "idle" });
@@ -275,6 +294,7 @@ export function DriverRegistrationWizard({
     driverUserId,
     cargaId: uploadCargaId,
     cpf: draftCpf,
+    operatorCadastroId: operatorMode?.cadastroId,
   });
   const hasHydratedFromDraftRef = useRef(false);
 
@@ -498,7 +518,9 @@ export function DriverRegistrationWizard({
     if (!accessToken) {
       setState({
         kind: "error",
-        message: "Sessão expirou. Faça login novamente para continuar.",
+        message: isOperatorMode
+          ? "Sessão do operador indisponível. Recarregue a página e tente novamente."
+          : "Sessão expirou. Faça login novamente para continuar.",
         status: 401,
       });
       return;
@@ -558,7 +580,7 @@ export function DriverRegistrationWizard({
         },
       },
     );
-  }, [accessToken, draft, handoffContext, horsePlate, onOpenChange, onPreCheckPassed, preCheck, safeTrailerPlates]);
+  }, [accessToken, draft, handoffContext, horsePlate, isOperatorMode, onOpenChange, onPreCheckPassed, preCheck, safeTrailerPlates]);
 
   // Quando o wizard abre com contexto válido, usa o pre-check já feito pelo interceptor
   // (initialPreCheckResponse) ou dispara um novo — exceto se temos rascunho válido.
@@ -1468,6 +1490,7 @@ export function DriverRegistrationWizard({
         confirmationCargaId: cargaId ?? "",
         confirmationCargaContext: cargaContext,
         confirmationIdempotencyKey: persistedSubmitIdempotencyKey,
+        confirmationOperatorCadastroId: operatorMode?.cadastroId,
         onConfirmationIdempotencyKeyGenerated: handleIdempotencyKeyGenerated,
         onConfirmationBack: handleConfirmationBack,
         onConfirmationSuccess: handleConfirmationSuccess,
@@ -1544,6 +1567,7 @@ interface RenderStateArgs {
   confirmationCargaId: string;
   confirmationCargaContext?: ConfirmationCargaContext;
   confirmationIdempotencyKey?: string;
+  confirmationOperatorCadastroId?: string;
   onConfirmationIdempotencyKeyGenerated?: (key: string) => void;
   onConfirmationBack: (stepKey?: string) => void;
   onConfirmationSuccess: (result: { protocolo: string }) => void;
@@ -1607,6 +1631,7 @@ function renderState({
   confirmationCargaId,
   confirmationCargaContext,
   confirmationIdempotencyKey,
+  confirmationOperatorCadastroId,
   onConfirmationIdempotencyKeyGenerated,
   onConfirmationBack,
   onConfirmationSuccess,
@@ -1705,7 +1730,6 @@ function renderState({
           currentStep={baseStep}
           totalSteps={totalSteps}
           value={stepCValue}
-          cascadeResult={null}
           ownerDocFromCrlv={ownerDocFromCrlv}
           ownerNomeFromCrlv={stepCValue.owner?.nome}
           onChange={onStepCProgress}
@@ -1815,6 +1839,7 @@ function renderState({
           cargaId={confirmationCargaId}
           cargaContext={confirmationCargaContext}
           idempotencyKey={confirmationIdempotencyKey}
+          operatorCadastroId={confirmationOperatorCadastroId}
           onIdempotencyKeyGenerated={onConfirmationIdempotencyKeyGenerated}
           onBack={onConfirmationBack}
           onSuccess={onConfirmationSuccess}

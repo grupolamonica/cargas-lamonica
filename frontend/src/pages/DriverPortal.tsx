@@ -230,6 +230,8 @@ const DriverPortal = () => {
   } | null>(null);
   /** loadId com pre-check em progresso — controla spinner no botão da notificação. */
   const [registrationLoadingId, setRegistrationLoadingId] = useState<string | null>(null);
+  /** loadId com "cadastrar mesmo assim" em progresso (carga alocada para outro). */
+  const [standaloneLoadingId, setStandaloneLoadingId] = useState<string | null>(null);
 
   // PERF-02: handlers estáveis para hotspots — evita re-render em cascata
   // quando setShowStickyBar/scroll dispara render do root.
@@ -482,17 +484,76 @@ const DriverPortal = () => {
   };
 
   /**
-   * Iter #7 — Abre o wizard a partir de um draft incompleto. Reusa o snapshot
-   * salvo em driverLeadStorage (cpf + placas) — se nao existir, usa apenas o
-   * cargaId + cpf da sessao do motorista (sem placas, wizard reabre na Tela 0).
+   * Abre o wizard em modo standalone para carga que foi alocada para outro
+   * motorista. O cadastro é enviado sem vínculo à carga (carga_id=NULL).
+   * Usa snapshot local para pré-popular CPF + placas; sem snapshot usa apenas
+   * o CPF da sessão e o wizard restaura do rascunho mais recente do servidor.
+   */
+  const handleContinueRegistrationStandalone = async (loadId: string) => {
+    setStandaloneLoadingId(loadId);
+    setIsNotificationsOpen(false);
+
+    try {
+      const stored = readStoredLeadState(loadId);
+
+      if (stored) {
+        const { cpf, horsePlate, trailerPlate, trailerPlate2 } = stored.form;
+        const trailerPlates = [trailerPlate, trailerPlate2].filter(Boolean);
+        // Roda pre-check para identificar pendências do cadastro.
+        const response = await requestCandidaturaPreCheck({ cpf, horsePlate, trailerPlates });
+        setRegistrationContext({
+          // SEM cargaId → submit com carga_id=NULL (sem conflito)
+          cpf,
+          horsePlate,
+          trailerPlates,
+          preCheckResponse: response,
+        });
+      } else {
+        // Sem snapshot — abre wizard sem cargaId; draft restaura pelo driverUserId.
+        const sessionCpf = (driverAuth.user?.user_metadata?.document_number as string | undefined) ?? "";
+        setRegistrationContext({
+          cpf: sessionCpf,
+          horsePlate: "",
+          trailerPlates: [],
+          preCheckResponse: { pendencias: [], completos: [], meta: { correlationId: "" } },
+        });
+      }
+      setRegistrationWizardOpen(true);
+    } catch {
+      toast({
+        title: "Erro ao abrir o cadastro",
+        description: "Não foi possível iniciar. Tente novamente.",
+        variant: "destructive",
+      });
+      setIsNotificationsOpen(true);
+    } finally {
+      setStandaloneLoadingId(null);
+    }
+  };
+
+  /**
+   * Iter #7 — Abre o wizard a partir de um draft incompleto.
+   *
+   * Fluxo:
+   *   A) Snapshot local existe → roda pre-check + abre com contexto completo.
+   *   B) Snapshot ausente → abre wizard com cargaId + cpf da sessão. O wizard
+   *      busca o draft do servidor (GET /draft/me?cargaId=XXX) e restaura o
+   *      passo salvo automaticamente (draft tem preCheckResponse persistido).
+   *   C) Carga não disponível (cancelada/alocada) → abre sem cargaId (standalone).
+   *      Wizard restaura pelo driverUserId, submit usa carga_id=NULL.
    */
   const handleContinueDraft = async (draft: IncompleteCadastroDraft) => {
     setDraftLoadingId(draft.cargaId);
     setIsNotificationsOpen(false);
 
+    // Carga disponível = ainda está ativa e não foi alocada para outro
+    const cargaAtiva = draft.cargaDisponivel !== false;
+
     try {
       const stored = readStoredLeadState(draft.cargaId);
-      if (stored) {
+
+      if (stored && cargaAtiva) {
+        // Caminho A: snapshot local + carga ativa → pre-check + context completo
         const { cpf, horsePlate, trailerPlate, trailerPlate2 } = stored.form;
         const trailerPlates = [trailerPlate, trailerPlate2].filter(Boolean);
         const response = await requestCandidaturaPreCheck({ cpf, horsePlate, trailerPlates });
@@ -508,13 +569,40 @@ const DriverPortal = () => {
             : undefined,
         });
         setRegistrationWizardOpen(true);
-      } else {
-        // Sem snapshot local — direciona pra pagina da carga, motorista clica
-        // candidatar e o wizard reabre com o draft existente do server.
-        toast({
-          title: "Reabra a carga para continuar",
-          description: "Toque em Candidatar-se na pagina da carga para retomar o cadastro.",
+      } else if (cargaAtiva) {
+        // Caminho B: sem snapshot local, carga ainda ativa.
+        // Abre o wizard com cargaId — ele busca o draft do servidor e restaura
+        // para o passo salvo (preCheckResponse está persistido no draft).
+        const sessionCpf = (driverAuth.user?.user_metadata?.document_number as string | undefined) ?? "";
+        const cargaSnap = cargas.find((c) => c.id === draft.cargaId);
+        setRegistrationContext({
+          cargaId: draft.cargaId,
+          cpf: sessionCpf,
+          horsePlate: "",
+          trailerPlates: [],
+          // Sem initialPreCheckResponse: wizard usa o persistido no draft.
+          preCheckResponse: { pendencias: [], completos: [], meta: { correlationId: "" } },
+          cargaSummary: cargaSnap
+            ? { origem: cargaSnap.origem, destino: cargaSnap.destino, routeLabel: cargaSnap.routeLabel }
+            : undefined,
         });
+        setRegistrationWizardOpen(true);
+      } else {
+        // Caminho C: carga cancelada/alocada → modo standalone (sem cargaId).
+        // O wizard restaura pelo driverUserId (draft mais recente do servidor).
+        // No submit: carga_id=NULL (sem conflito de carga).
+        const sessionCpf = (driverAuth.user?.user_metadata?.document_number as string | undefined) ?? "";
+        setRegistrationContext({
+          // cargaId omitido → standalone, carga_id=NULL no submit
+          cpf: sessionCpf,
+          horsePlate: "",
+          trailerPlates: [],
+          preCheckResponse: { pendencias: [], completos: [], meta: { correlationId: "" } },
+          cargaSummary: draft.origem && draft.destino
+            ? { origem: draft.origem, destino: draft.destino }
+            : undefined,
+        });
+        setRegistrationWizardOpen(true);
       }
     } catch {
       toast({
@@ -1056,6 +1144,10 @@ const DriverPortal = () => {
             void handleCompleteRegistrationFromNotification(loadId);
           }}
           registrationLoadingId={registrationLoadingId}
+          onContinueRegistrationStandalone={(loadId) => {
+            void handleContinueRegistrationStandalone(loadId);
+          }}
+          standaloneLoadingId={standaloneLoadingId}
           incompleteDrafts={incompleteDrafts}
           onContinueDraft={(draft) => {
             void handleContinueDraft(draft);

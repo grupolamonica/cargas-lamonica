@@ -1,7 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { AlertCircle, Loader2, Pencil } from "lucide-react";
 
 import { CandidaturaApiError, useCandidaturaSubmit } from "@/api/candidaturaApi";
+import { submitCadastroRascunho } from "@/services/readModels";
 import {
   Accordion,
   AccordionContent,
@@ -84,6 +86,12 @@ export interface ConfirmationScreenProps {
    * volte ao estado `confirmation` e o motorista possa retentar.
    */
   onSubmitError?: () => void;
+  /**
+   * Modo operador (resgate): quando presente, o submit completa o rascunho em
+   * nome do motorista via POST /api/operator/cadastros/:id/submeter (reusa o
+   * pipeline do motorista no backend) em vez do submit do motorista.
+   */
+  operatorCadastroId?: string;
 }
 
 const CPF_MASK = (value: string) => {
@@ -533,7 +541,9 @@ function ConfirmationScreenImpl({
   onIdempotencyKeyGenerated,
   onSubmitStart,
   onSubmitError,
+  operatorCadastroId,
 }: ConfirmationScreenProps) {
+  const isOperatorSubmit = !!operatorCadastroId;
   // Reusa key persistida no draft; só gera nova se não houver.
   // Evita duplicate-submit em rede instável: re-mount após POST em vôo
   // re-envia com mesma key → servidor trata como idempotent.
@@ -557,8 +567,16 @@ function ConfirmationScreenImpl({
   }, [idempotencyKey, onIdempotencyKeyGenerated]);
 
   const submitMutation = useCandidaturaSubmit();
+  // Modo operador: submit por ID via endpoint do operador (token interno).
+  const operatorSubmitMutation = useMutation({
+    mutationFn: (dados: Record<string, unknown>) =>
+      submitCadastroRascunho(operatorCadastroId as string, dados),
+  });
   const [veracityChecked, setVeracityChecked] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // true quando o backend retornou 409 (carga alocada para outro motorista) —
+  // oferece botão "Enviar sem esta carga" para submeter em modo standalone.
+  const [cargaAllocatedToOther, setCargaAllocatedToOther] = useState(false);
 
   const motoristaFields = buildMotoristaFields(data.stepA);
   const cavaloFields = buildCavaloFields(data.stepB);
@@ -590,9 +608,10 @@ function ConfirmationScreenImpl({
   const carretaPlacas = carretas.length > 0 ? carretas.map((c) => c.plate).join(", ") : null;
   const bankingSummary = buildBankingSummary(data.stepC);
 
-  const handleSubmit = () => {
-    if (!veracityChecked || submitMutation.isPending) return;
+  const handleSubmit = (forceStandalone = false) => {
+    if (!veracityChecked || submitMutation.isPending || operatorSubmitMutation.isPending) return;
     setErrorMessage(null);
+    setCargaAllocatedToOther(false);
     let dadosClean: Record<string, unknown>;
     try {
       dadosClean = buildSubmitDados(data);
@@ -609,11 +628,31 @@ function ConfirmationScreenImpl({
     // BUG-WALK-04: avisa pai que o submit está em vôo. Pai transita FSM
     // para `submitting` (copy distinta de `loading`/pre-check).
     onSubmitStart?.();
+
+    // Modo operador: completa o rascunho em nome do motorista. cargaId/idempotency
+    // são derivados no backend a partir da row de origem.
+    if (isOperatorSubmit) {
+      operatorSubmitMutation.mutate(dadosClean, {
+        onSuccess: (result) => {
+          onSuccess({ protocolo: result.protocolo });
+        },
+        onError: (err) => {
+          setErrorMessage(
+            err instanceof Error && err.message
+              ? err.message
+              : "Erro ao submeter o cadastro. Tente novamente.",
+          );
+          onSubmitError?.();
+        },
+      });
+      return;
+    }
+    // forceStandalone=true quando o motorista escolhe "Enviar sem esta carga"
+    // após receber 409 CargaAlreadyApproved.
+    const effectiveCargaId = forceStandalone ? undefined : (cargaId.trim() ? cargaId : undefined);
     submitMutation.mutate(
       {
-        // Cadastro standalone (sem carga): cargaId chega vazio → omite o campo
-        // para o backend persistir carga_id=NULL (schema exige min(1) quando presente).
-        cargaId: cargaId.trim() ? cargaId : undefined,
+        cargaId: effectiveCargaId,
         dados: dadosClean,
         idempotencyKey: stableIdempotencyKey,
       },
@@ -622,7 +661,13 @@ function ConfirmationScreenImpl({
           onSuccess({ protocolo: result.protocolo });
         },
         onError: (err) => {
-          if (err instanceof CandidaturaApiError) {
+          if (err instanceof CandidaturaApiError && err.status === 409) {
+            // Carga alocada para outro motorista — oferece envio standalone.
+            setCargaAllocatedToOther(true);
+            setErrorMessage(
+              "Esta carga foi alocada para outro motorista. Você ainda pode enviar seu cadastro sem vínculo a ela.",
+            );
+          } else if (err instanceof CandidaturaApiError) {
             setErrorMessage(err.message);
           } else {
             setErrorMessage("Erro ao enviar a candidatura. Tente novamente.");
@@ -634,7 +679,7 @@ function ConfirmationScreenImpl({
     );
   };
 
-  const isSubmitting = submitMutation.isPending;
+  const isSubmitting = submitMutation.isPending || operatorSubmitMutation.isPending;
 
   // Default-open list calculado para quando o usuário expandir "Ver todos os dados".
   // Mantém todos os accordions abertos para facilitar edição (mesmo comportamento
@@ -839,18 +884,43 @@ function ConfirmationScreenImpl({
             />
             <div className="space-y-2">
               <p className="text-sm font-semibold text-foreground">
-                Não rolou enviar agora. Seus dados estão salvos. Tenta de novo.
+                {errorMessage}
               </p>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={handleSubmit}
-                disabled={!veracityChecked || isSubmitting}
-                className="min-h-[44px]"
-              >
-                Tentar novamente
-              </Button>
+              {cargaAllocatedToOther ? (
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="cta"
+                    onClick={() => handleSubmit(true)}
+                    disabled={!veracityChecked || isSubmitting}
+                    className="min-h-[44px]"
+                  >
+                    Enviar cadastro sem a carga
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleSubmit(false)}
+                    disabled={!veracityChecked || isSubmitting}
+                    className="min-h-[44px]"
+                  >
+                    Tentar novamente
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleSubmit(false)}
+                  disabled={!veracityChecked || isSubmitting}
+                  className="min-h-[44px]"
+                >
+                  Tentar novamente
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -860,7 +930,7 @@ function ConfirmationScreenImpl({
         <Button
           type="button"
           variant="cta"
-          onClick={handleSubmit}
+          onClick={() => handleSubmit(false)}
           disabled={!veracityChecked || isSubmitting}
           className="min-h-[48px] w-full py-3.5"
         >
