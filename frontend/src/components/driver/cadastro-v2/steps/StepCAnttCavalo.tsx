@@ -46,6 +46,12 @@ export interface StepCAnttCavaloProps {
   cargaId?: string;
   cpf?: string;
   accessToken?: string | null;
+  /**
+   * Quando true, mostra o toggle "É o mesmo proprietário do CRLV?"
+   * em vez do aviso "Não conseguimos confirmar". Usar quando a cascade
+   * ANTT roda somente no backend (submit) e o frontend não possui o resultado.
+   */
+  noCascadeMode?: boolean;
 }
 
 function StepCAnttCavaloImpl({
@@ -61,6 +67,7 @@ function StepCAnttCavaloImpl({
   cargaId,
   cpf,
   accessToken,
+  noCascadeMode = false,
 }: StepCAnttCavaloProps) {
   const [anttTitular, setAnttTitular] = useState<AnttTitularData | null>(
     value.anttTitular ?? null,
@@ -113,10 +120,29 @@ function StepCAnttCavaloImpl({
   // 2026-05-26 — Comprovante só obrigatório p/ titular ANTT PF. PJ usa o
   // endereço do cartão CNPJ (Infosimples), sem conta de luz.
   const anttIsPJ = anttTitular?.tipo === "pj";
+
+  // Banco obrigatório para titular PF ou PJ (Lamônica precisa pagar o RNTRC).
+  const anttBancoComplete =
+    !anttTitular ||
+    (!!anttTitular.banco?.bank &&
+      (anttTitular.banco?.agencia ?? "").trim().length > 0 &&
+      (anttTitular.banco?.conta ?? "").trim().length > 0 &&
+      !!anttTitular.banco?.tipo);
+
+  // Campos sociais obrigatórios para titular PF (PIS, estado civil, cor/raça).
+  const anttSocialComplete =
+    !anttTitular ||
+    anttIsPJ ||
+    ((anttTitular.pis ?? "").replace(/\D/g, "").length >= 11 &&
+      !!(anttTitular.estado_civil ?? "").trim() &&
+      !!(anttTitular.cor_raca ?? "").trim());
+
   const canContinue =
     !!anttTitular &&
     anttTitular.doc.length >= 11 &&
     anttTitular.nome.trim().length > 0 &&
+    anttBancoComplete &&
+    anttSocialComplete &&
     (anttIsPJ ? true : !!enderecoAnttOwner.comprovanteUrl) &&
     enderecoAnttOwner.cep.replace(/\D/g, "").length === 8 &&
     enderecoAnttOwner.numero.trim().length > 0 &&
@@ -143,7 +169,7 @@ function StepCAnttCavaloImpl({
           Identidade do titular ANTT
         </h3>
         <AnttTitularPrompt
-          cascadeResult={cascadeResult ?? null}
+          cascadeResult={noCascadeMode ? null : (cascadeResult ?? null)}
           ownerDoc={ownerDocFromCrlv}
           ownerNome={ownerNomeFromCrlv}
           value={anttTitular}
@@ -155,6 +181,11 @@ function StepCAnttCavaloImpl({
           }}
           context="cavalo"
           kind="cavalo"
+          cargaId={cargaId}
+          cpf={cpf}
+          accessToken={accessToken}
+          titularDocSlot="cavalo_antt_owner_cnh"
+          noCascadeMode={noCascadeMode}
         />
       </div>
 

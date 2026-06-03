@@ -373,15 +373,31 @@ export function AnttTitularPrompt({
 
   const docValid = isValidDoc(data.tipo, data.doc);
   const nomeValid = data.nome.trim().length >= 2;
-  const formComplete = docValid && nomeValid;
 
   const showBankBlock = kind === "cavalo";
   const showSocialBlock = kind === "cavalo" && data.tipo === "pf";
 
+  // Banco obrigatório para cavalo (é quem a Lamônica paga).
+  const bankComplete =
+    !showBankBlock ||
+    (!!data.banco?.bank &&
+      (data.banco?.agencia ?? "").trim().length > 0 &&
+      (data.banco?.conta ?? "").trim().length > 0 &&
+      !!data.banco?.tipo);
+
+  // Campos sociais obrigatórios para titular PF cavalo (PIS, estado civil, cor/raça).
+  const socialComplete =
+    !showSocialBlock ||
+    ((data.pis ?? "").replace(/\D/g, "").length >= 11 &&
+      !!(data.estado_civil ?? "").trim() &&
+      !!(data.cor_raca ?? "").trim());
+
+  const formComplete = docValid && nomeValid && bankComplete && socialComplete;
+
   const sectionTitle =
     kind === "cavalo"
-      ? "Endereço, telefone e banco (opcional)"
-      : "Endereço e telefone (opcional)";
+      ? "Endereço, telefone e banco"
+      : "Endereço e telefone";
 
   const handleField = useCallback(
     <K extends keyof AnttTitularData>(key: K, next: AnttTitularData[K]) => {
@@ -669,7 +685,8 @@ export function AnttTitularPrompt({
 
       <ProgressiveSection
         title={sectionTitle}
-        description="Ajuda a gente a pagar e contactar o titular se precisar."
+        description={showBankBlock ? "Conta para receber o frete + contato do titular." : "Contato do titular para a Lamônica."}
+        defaultExpanded
       >
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1">
@@ -729,7 +746,7 @@ export function AnttTitularPrompt({
           <div className="grid grid-cols-1 gap-3 pt-2 sm:grid-cols-2">
             <div className="space-y-1">
               <Label htmlFor={`antt-tit-pis-${context}`}>
-                PIS / PASEP (opcional)
+                PIS / PASEP
               </Label>
               <Input
                 id={`antt-tit-pis-${context}`}
@@ -749,7 +766,7 @@ export function AnttTitularPrompt({
 
             <div className="space-y-1">
               <Label htmlFor={`antt-tit-civil-${context}`}>
-                Estado civil (opcional)
+                Estado civil
               </Label>
               <Select
                 value={data.estado_civil ?? ""}
@@ -773,7 +790,7 @@ export function AnttTitularPrompt({
 
             <div className="space-y-1 sm:col-span-2">
               <Label htmlFor={`antt-tit-raca-${context}`}>
-                Cor / raça (opcional)
+                Cor / raça
               </Label>
               <Select
                 value={data.cor_raca ?? ""}
@@ -799,7 +816,7 @@ export function AnttTitularPrompt({
 
         {showBankBlock ? (
           <div className="space-y-2 pt-2">
-            <Label>Banco para pagamento (opcional)</Label>
+            <Label>Banco para pagamento</Label>
             <BankSelector
               value={data.banco?.bank ?? null}
               onChange={(bank) => handleBankField("bank", bank)}
@@ -857,9 +874,17 @@ export function AnttTitularPrompt({
         <p className="text-xs text-emerald-700 dark:text-emerald-300">
           ✓ Dados do titular ANTT confirmados.
         </p>
+      ) : docValid && nomeValid && !bankComplete ? (
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          Preencha os dados bancários para continuar.
+        </p>
+      ) : docValid && nomeValid && !socialComplete ? (
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          Preencha PIS, estado civil e cor/raça para continuar.
+        </p>
       ) : (
         <p className="text-xs text-muted-foreground">
-          Preencha tipo, documento e nome para confirmar.
+          Preencha tipo, documento e nome para continuar.
         </p>
       )}
     </div>

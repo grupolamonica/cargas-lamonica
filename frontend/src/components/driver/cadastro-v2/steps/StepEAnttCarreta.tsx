@@ -35,6 +35,8 @@ export interface StepEAnttCarretaProps {
   cargaId?: string;
   cpf?: string;
   accessToken?: string | null;
+  /** Quando true, mostra toggle "É o mesmo?" em vez do aviso de cascade. */
+  noCascadeMode?: boolean;
 }
 
 function StepEAnttCarretaImpl({
@@ -51,6 +53,7 @@ function StepEAnttCarretaImpl({
   cargaId,
   cpf,
   accessToken,
+  noCascadeMode = false,
 }: StepEAnttCarretaProps) {
   const [anttTitular, setAnttTitular] = useState<AnttTitularData | null>(
     value.anttTitular ?? null,
@@ -144,7 +147,7 @@ function StepEAnttCarretaImpl({
           Identidade do titular ANTT
         </h3>
         <AnttTitularPrompt
-          cascadeResult={cascadeResult ?? null}
+          cascadeResult={noCascadeMode ? null : (cascadeResult ?? null)}
           ownerDoc={ownerDocFromCrlv}
           ownerNome={ownerNomeFromCrlv}
           value={anttTitular}
@@ -156,6 +159,7 @@ function StepEAnttCarretaImpl({
           }}
           context={`carreta_${trailerIdx}`}
           kind="carreta"
+          noCascadeMode={noCascadeMode}
         />
       </div>
 
