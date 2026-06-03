@@ -54,7 +54,7 @@ export async function listIncompleteCadastroDrafts({ driverUserId, correlationId
           -- carga_disponivel: true quando a carga ainda existe e não foi
           -- cancelada/arquivada. false = carga deletada ou alocada para outro
           -- motorista. O driver ainda pode continuar o cadastro no modo standalone.
-          (c.id IS NOT NULL AND c.status NOT IN ('inativo', 'cancelado', 'arquivado')) AS carga_disponivel
+          (c.id IS NOT NULL AND c.status NOT IN ('inativo', 'cancelado', 'arquivado', 'BOOKED')) AS carga_disponivel
         FROM public.pending_driver_registrations pdr
         LEFT JOIN public.cargas c ON c.id::text = pdr.carga_id
         WHERE pdr.driver_user_id = $1

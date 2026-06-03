@@ -17,6 +17,13 @@ interface DriverClaimWorkflowProps {
   onCompleteRegistration?: (loadId: string) => void;
   /** loadId que está sendo carregado (pre-check em progresso) — exibe spinner no botão. */
   registrationLoadingId?: string | null;
+  /**
+   * Callback para "Fazer cadastro mesmo assim" em notificações
+   * ALLOCATED_TO_OTHER_DRIVER — abre wizard em modo standalone (sem carga).
+   */
+  onContinueRegistrationStandalone?: (loadId: string) => void;
+  /** loadId cujo cadastro standalone está em progresso. */
+  standaloneLoadingId?: string | null;
   /** Iter #7: lista de drafts incompletos do motorista — 1 card por draft. */
   incompleteDrafts?: IncompleteCadastroDraft[];
   /** Iter #7: callback ao clicar em "Continuar cadastro" — abre o wizard daquela carga. */
@@ -33,6 +40,8 @@ export function DriverClaimWorkflow({
   onDismissNotification,
   onCompleteRegistration,
   registrationLoadingId,
+  onContinueRegistrationStandalone,
+  standaloneLoadingId,
   incompleteDrafts = [],
   onContinueDraft,
   draftLoadingId,
@@ -238,6 +247,27 @@ export function DriverClaimWorkflow({
                                 <ClipboardList className="h-4 w-4" aria-hidden="true" />
                               )}
                               Completar cadastro
+                            </button>
+                          ) : null}
+
+                          {/* Carga foi para outro motorista: botão para enviar cadastro mesmo assim (sem a carga) */}
+                          {notification.kind === "ALLOCATED_TO_OTHER_DRIVER" &&
+                            onContinueRegistrationStandalone ? (
+                            <button
+                              type="button"
+                              disabled={standaloneLoadingId === notification.loadId}
+                              onClick={() => onContinueRegistrationStandalone(notification.loadId)}
+                              className={cn(
+                                "inline-flex w-full items-center justify-center gap-2 rounded-full bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-amber-600 sm:w-auto",
+                                standaloneLoadingId === notification.loadId && "cursor-not-allowed opacity-60",
+                              )}
+                            >
+                              {standaloneLoadingId === notification.loadId ? (
+                                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                              ) : (
+                                <ClipboardList className="h-4 w-4" aria-hidden="true" />
+                              )}
+                              Finalizar e enviar cadastro
                             </button>
                           ) : null}
 

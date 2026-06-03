@@ -230,6 +230,8 @@ const DriverPortal = () => {
   } | null>(null);
   /** loadId com pre-check em progresso — controla spinner no botão da notificação. */
   const [registrationLoadingId, setRegistrationLoadingId] = useState<string | null>(null);
+  /** loadId com "cadastrar mesmo assim" em progresso (carga alocada para outro). */
+  const [standaloneLoadingId, setStandaloneLoadingId] = useState<string | null>(null);
 
   // PERF-02: handlers estáveis para hotspots — evita re-render em cascata
   // quando setShowStickyBar/scroll dispara render do root.
@@ -478,6 +480,54 @@ const DriverPortal = () => {
       setIsNotificationsOpen(true); // reabre o painel se falhar
     } finally {
       setRegistrationLoadingId(null);
+    }
+  };
+
+  /**
+   * Abre o wizard em modo standalone para carga que foi alocada para outro
+   * motorista. O cadastro é enviado sem vínculo à carga (carga_id=NULL).
+   * Usa snapshot local para pré-popular CPF + placas; sem snapshot usa apenas
+   * o CPF da sessão e o wizard restaura do rascunho mais recente do servidor.
+   */
+  const handleContinueRegistrationStandalone = async (loadId: string) => {
+    setStandaloneLoadingId(loadId);
+    setIsNotificationsOpen(false);
+
+    try {
+      const stored = readStoredLeadState(loadId);
+
+      if (stored) {
+        const { cpf, horsePlate, trailerPlate, trailerPlate2 } = stored.form;
+        const trailerPlates = [trailerPlate, trailerPlate2].filter(Boolean);
+        // Roda pre-check para identificar pendências do cadastro.
+        const response = await requestCandidaturaPreCheck({ cpf, horsePlate, trailerPlates });
+        setRegistrationContext({
+          // SEM cargaId → submit com carga_id=NULL (sem conflito)
+          cpf,
+          horsePlate,
+          trailerPlates,
+          preCheckResponse: response,
+        });
+      } else {
+        // Sem snapshot — abre wizard sem cargaId; draft restaura pelo driverUserId.
+        const sessionCpf = (driverAuth.user?.user_metadata?.document_number as string | undefined) ?? "";
+        setRegistrationContext({
+          cpf: sessionCpf,
+          horsePlate: "",
+          trailerPlates: [],
+          preCheckResponse: { pendencias: [], completos: [], meta: { correlationId: "" } },
+        });
+      }
+      setRegistrationWizardOpen(true);
+    } catch {
+      toast({
+        title: "Erro ao abrir o cadastro",
+        description: "Não foi possível iniciar. Tente novamente.",
+        variant: "destructive",
+      });
+      setIsNotificationsOpen(true);
+    } finally {
+      setStandaloneLoadingId(null);
     }
   };
 
@@ -1094,6 +1144,10 @@ const DriverPortal = () => {
             void handleCompleteRegistrationFromNotification(loadId);
           }}
           registrationLoadingId={registrationLoadingId}
+          onContinueRegistrationStandalone={(loadId) => {
+            void handleContinueRegistrationStandalone(loadId);
+          }}
+          standaloneLoadingId={standaloneLoadingId}
           incompleteDrafts={incompleteDrafts}
           onContinueDraft={(draft) => {
             void handleContinueDraft(draft);
