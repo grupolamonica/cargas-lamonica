@@ -385,6 +385,12 @@ export interface IncompleteCadastroDraft {
   destino: string | null;
   dataColeta: string | null;
   horarioColeta: string | null;
+  /**
+   * true = carga ainda ativa e disponível para candidatura.
+   * false = carga cancelada, arquivada ou alocada para outro motorista.
+   * O draft pode ser continuado no modo standalone (sem carga) mesmo quando false.
+   */
+  cargaDisponivel?: boolean;
 }
 
 export interface IncompleteCadastroDraftsResponse {

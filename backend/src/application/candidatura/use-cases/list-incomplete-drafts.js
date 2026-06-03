@@ -46,11 +46,15 @@ export async function listIncompleteCadastroDrafts({ driverUserId, correlationId
           pdr.id,
           pdr.carga_id,
           pdr.updated_at,
-          pdr.dados->>'__currentStep'      AS current_step,
-          c.origem                          AS origem,
-          c.destino                         AS destino,
-          c.data                            AS data_coleta,
-          c.horario                         AS horario_coleta
+          pdr.dados->>'__currentStep'          AS current_step,
+          c.origem                              AS origem,
+          c.destino                             AS destino,
+          c.data                                AS data_coleta,
+          c.horario                             AS horario_coleta,
+          -- carga_disponivel: true quando a carga ainda existe e não foi
+          -- cancelada/arquivada. false = carga deletada ou alocada para outro
+          -- motorista. O driver ainda pode continuar o cadastro no modo standalone.
+          (c.id IS NOT NULL AND c.status NOT IN ('inativo', 'cancelado', 'arquivado', 'BOOKED')) AS carga_disponivel
         FROM public.pending_driver_registrations pdr
         LEFT JOIN public.cargas c ON c.id::text = pdr.carga_id
         WHERE pdr.driver_user_id = $1
@@ -73,6 +77,9 @@ export async function listIncompleteCadastroDrafts({ driverUserId, correlationId
       destino: row.destino ?? null,
       dataColeta: toIsoString(row.data_coleta),
       horarioColeta: row.horario_coleta ?? null,
+      // true = carga ainda ativa e disponível; false = carga cancelada/alocada/deletada.
+      // Mesmo false, o motorista pode continuar o cadastro no modo standalone.
+      cargaDisponivel: row.carga_disponivel === true || row.carga_disponivel === 'true',
     }));
 
     return {
