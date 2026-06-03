@@ -63,6 +63,7 @@ import {
 } from "../../../application/operator-admin/read-models.js";
 import { fetchOperatorAuditLogsReadModel } from "../../../application/operator-admin/use-cases/audit-logs-read-model.js";
 import { fetchPendingDriverRegistrations } from "../../../application/operator-admin/use-cases/pending-driver-registrations-read-model.js";
+import { listDraftRegistrations } from "../../../application/operator-admin/use-cases/list-draft-registrations.js";
 import { ensureDriverLoadsSheetFresh } from "../public-loads/handlers.js";
 import { fetchDriverFlowMetrics } from "../../../domain/operator-admin/driver-flow-metrics.js";
 import {
@@ -1022,6 +1023,21 @@ export async function resolveOperatorOverviewDigestResponse(request) {
 }
 
 // ─── Cadastros pendentes de motoristas ───────────────────────────────────────
+
+/**
+ * GET /api/operator/cadastros/rascunhos?page=1&pageSize=50
+ * Lista rascunhos em andamento (status=draft) para o operador resgatar.
+ */
+export async function resolveOperatorListDraftRegistrationsResponse(request) {
+  return withOperatorSession(request, "list-draft-registrations", async ({ correlationId }) => {
+    const query = request.query || {};
+    return listDraftRegistrations({
+      page: query.page,
+      pageSize: query.pageSize,
+      correlationId,
+    });
+  });
+}
 
 /**
  * GET /api/operator/cadastros-pendentes?status=pendente&page=1&pageSize=20

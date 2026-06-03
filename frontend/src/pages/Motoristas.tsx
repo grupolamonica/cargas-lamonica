@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   ClipboardList,
   FileBadge2,
+  FileEdit,
   Pencil,
   Phone,
   RefreshCw,
@@ -40,12 +41,13 @@ import DriverDetailModal, { type DriverDetailModalData } from "@/components/Driv
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
 import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
 import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
+import { CadastroRascunhoResgateModal } from "@/components/operator/CadastroRascunhoResgateModal";
 import {
   StandaloneCadastroDialog,
   type StandaloneCadastroProceedArgs,
 } from "@/components/driver/StandaloneCadastroDialog";
 import { DriverRegistrationWizard } from "@/components/driver/cadastro-v2/DriverRegistrationWizard";
-import { precheckAngellira, precheckSpx, patchCadastroDados, deleteCadastro } from "@/services/readModels";
+import { precheckAngellira, precheckSpx, patchCadastroDados, deleteCadastro, fetchDraftRegistrations, type DraftRegistrationItem } from "@/services/readModels";
 
 /**
  * Pré-fetch dos prechecks Angellira+SPX em background.
@@ -456,11 +458,12 @@ function FichaNode({
 
 
 const PENDENTES_QUERY_KEY = ["operator", "cadastros-pendentes"] as const;
+const RASCUNHOS_QUERY_KEY = ["operator", "cadastros-rascunhos"] as const;
 
 const Motoristas = () => {
   const queryClient = useQueryClient();
   const permissions = useOperatorPermissions();
-  const [mainTab, setMainTab] = useState<"motoristas" | "pendentes">("motoristas");
+  const [mainTab, setMainTab] = useState<"motoristas" | "pendentes" | "rascunhos">("motoristas");
   const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState("todos");
   const [applicationStatusFilter, setApplicationStatusFilter] = useState("todos");
@@ -632,6 +635,20 @@ const Motoristas = () => {
     ...queryOptions,
   });
 
+  // ─── Rascunhos ───────────────────────────────────────────────────────────────
+  const [rascunhoResgate, setRascunhoResgate] = useState<DraftRegistrationItem | null>(null);
+  const [rascunhoResgateOpen, setRascunhoResgateOpen] = useState(false);
+
+  const { data: rascunhosData, isLoading: rascunhosLoading, isFetching: rascunhosFetching, refetch: rascunhosRefetch } = useQuery({
+    queryKey: RASCUNHOS_QUERY_KEY,
+    queryFn: () => fetchDraftRegistrations(permissions.accessToken ?? ""),
+    enabled: mainTab === "rascunhos" && !!permissions.accessToken,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+
+  const rascunhosItems = rascunhosData?.items ?? [];
+
   const aprovarMutation = useMutation({
     mutationFn: ({ id, jobs }: { id: string; jobs: ApproveJob[] }) => aprovarCadastro(id, { jobs }),
     // Abre o modal de PROGRESSO ANTES da request voltar, para que o polling de
@@ -773,11 +790,150 @@ const Motoristas = () => {
             <ClipboardList className="h-4 w-4" />
             Pendentes
           </button>
+          <button
+            type="button"
+            onClick={() => setMainTab("rascunhos")}
+            className={cn(
+              "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors",
+              mainTab === "rascunhos"
+                ? "bg-background text-primary shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <FileEdit className="h-4 w-4" />
+            Rascunhos
+            {rascunhosItems.length > 0 && (
+              <span className="ml-0.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-100 px-1.5 text-[10px] font-bold text-amber-700">
+                {rascunhosItems.length}
+              </span>
+            )}
+          </button>
         </div>
       </div>
 
       <main className="min-w-0 space-y-5 p-6 lg:p-8">
-        {mainTab === "pendentes" ? (
+        {mainTab === "rascunhos" ? (
+          <section className="admin-panel overflow-hidden p-5 lg:p-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">Cadastros em andamento</p>
+                <h2 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">Rascunhos</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Cadastros iniciados pelo motorista mas ainda não enviados. Clique em Retomar para completar e submeter.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => rascunhosRefetch()}
+                disabled={rascunhosFetching}
+                className="inline-flex items-center gap-2 rounded-xl border border-border/80 bg-white/92 px-3 py-2 text-sm font-medium text-foreground hover:bg-muted/40 disabled:opacity-50"
+              >
+                <RefreshCw className={cn("h-4 w-4", rascunhosFetching && "animate-spin")} />
+                Atualizar
+              </button>
+            </div>
+
+            <div className="mt-5">
+              {rascunhosLoading ? (
+                <p className="py-8 text-center text-sm text-muted-foreground">Carregando rascunhos…</p>
+              ) : rascunhosItems.length === 0 ? (
+                <p className="py-8 text-center text-sm text-muted-foreground">Nenhum rascunho em andamento.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                        <th className="pb-3 pr-4 text-left">Motorista / CPF</th>
+                        <th className="pb-3 pr-4 text-left">Cavalo</th>
+                        <th className="pb-3 pr-4 text-left">Etapa atual</th>
+                        <th className="pb-3 pr-4 text-left">Progresso</th>
+                        <th className="pb-3 pr-4 text-left">Início</th>
+                        <th className="pb-3 text-left">Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/60">
+                      {rascunhosItems.map((draft) => (
+                        <tr key={draft.id} className="group hover:bg-muted/20">
+                          <td className="py-3 pr-4">
+                            <p className="font-medium text-foreground">
+                              {draft.nome ?? <span className="italic text-muted-foreground">Nome não preenchido</span>}
+                            </p>
+                            {draft.cpf && (
+                              <p className="text-xs text-muted-foreground">
+                                {draft.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}
+                              </p>
+                            )}
+                          </td>
+                          <td className="py-3 pr-4">
+                            {draft.placa_cavalo ? (
+                              <span className="font-mono font-semibold text-foreground">{draft.placa_cavalo}</span>
+                            ) : (
+                              <span className="italic text-muted-foreground">—</span>
+                            )}
+                          </td>
+                          <td className="py-3 pr-4">
+                            <div className="flex items-center gap-1.5">
+                              {draft.at_confirmation && (
+                                <span className="h-2 w-2 rounded-full bg-amber-400" title="Na confirmação final" />
+                              )}
+                              <span className={cn("text-xs", draft.at_confirmation ? "font-semibold text-amber-700" : "text-muted-foreground")}>
+                                {draft.step_label}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-3 pr-4">
+                            <div className="flex items-center gap-2">
+                              <div className="h-1.5 w-20 overflow-hidden rounded-full bg-muted">
+                                <div
+                                  className={cn("h-full rounded-full transition-all", draft.at_confirmation ? "bg-amber-400" : "bg-primary/60")}
+                                  style={{ width: `${draft.progress_pct}%` }}
+                                />
+                              </div>
+                              <span className="text-xs tabular-nums text-muted-foreground">{draft.progress_pct}%</span>
+                            </div>
+                            <div className="mt-1 flex gap-1">
+                              {(["a", "b", "c", "d", "e"] as const).map((s) => (
+                                <span
+                                  key={s}
+                                  className={cn(
+                                    "inline-flex h-4 w-4 items-center justify-center rounded text-[9px] font-bold uppercase",
+                                    draft.steps_done[s]
+                                      ? "bg-primary/15 text-primary"
+                                      : "bg-muted text-muted-foreground/50",
+                                  )}
+                                >
+                                  {s}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="py-3 pr-4 text-xs text-muted-foreground">
+                            {new Date(draft.created_at).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                          </td>
+                          <td className="py-3">
+                            <button
+                              type="button"
+                              disabled={!draft.carga_id || !draft.cpf}
+                              onClick={() => {
+                                setRascunhoResgate(draft);
+                                setRascunhoResgateOpen(true);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
+                              title={!draft.cpf ? "CPF não disponível — não é possível retomar" : "Retomar cadastro no wizard"}
+                            >
+                              <FileEdit className="h-3.5 w-3.5" />
+                              Retomar
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </section>
+        ) : mainTab === "pendentes" ? (
           <>
             {/* Pendentes section */}
             <section className="admin-panel overflow-hidden p-5 lg:p-6">
@@ -1648,6 +1804,26 @@ const Motoristas = () => {
           // No contexto do operador, apenas fecha o wizard após registro
           setRegistrationWizardOpen(false);
           setRegistrationContext(null);
+        }}
+      />
+
+      {/* Resgate de rascunho — operador retoma cadastro em draft pelo mesmo wizard do motorista */}
+      <CadastroRascunhoResgateModal
+        draft={rascunhoResgate}
+        open={rascunhoResgateOpen}
+        onOpenChange={(open) => {
+          setRascunhoResgateOpen(open);
+          if (!open) {
+            // Ao fechar, recarrega a lista de rascunhos (pode ter sido submetido)
+            queryClient.invalidateQueries({ queryKey: RASCUNHOS_QUERY_KEY });
+            queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
+          }
+        }}
+        onSubmitSuccess={() => {
+          setRascunhoResgateOpen(false);
+          setRascunhoResgate(null);
+          queryClient.invalidateQueries({ queryKey: RASCUNHOS_QUERY_KEY });
+          queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
         }}
       />
     </div>

@@ -62,6 +62,7 @@ import {
   resolveDriverSponsorClicksResponse,
   resolveOperatorOverviewDigestResponse,
   resolveOperatorCadastrosPendentesResponse,
+  resolveOperatorListDraftRegistrationsResponse,
   resolveOperatorAprovarCadastroResponse,
   resolveOperatorRejeitarCadastroResponse,
   resolveOperatorAngelliraPrecheckResponse,
@@ -288,6 +289,7 @@ export function registerRoutes(app) {
   router.post("/api/operator/motoristas/cadastrar", wrap(resolveOperatorCadastrarMotoristaResponse));
 
   // Cadastros pendentes de motoristas (rota fixa antes da parametrizada)
+  router.get("/api/operator/cadastros/rascunhos", wrap(resolveOperatorListDraftRegistrationsResponse));
   router.get("/api/operator/cadastros-pendentes", wrap(resolveOperatorCadastrosPendentesResponse));
   router.post("/api/operator/cadastros/:id/aprovar", wrap(resolveOperatorAprovarCadastroResponse));
   router.post("/api/operator/cadastros/:id/rejeitar", wrap(resolveOperatorRejeitarCadastroResponse));
