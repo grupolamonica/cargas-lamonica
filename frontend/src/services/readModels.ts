@@ -906,9 +906,9 @@ export type DraftRegistrationItem = {
 };
 
 export async function fetchDraftRegistrations(
-  accessToken: string,
   opts: { page?: number; pageSize?: number } = {},
 ): Promise<{ items: DraftRegistrationItem[]; meta: { page: number; pageSize: number; total: number } }> {
+  const accessToken = await getOperatorAccessToken();
   const query = new URLSearchParams(
     Object.entries({ page: opts.page, pageSize: opts.pageSize })
       .filter(([, v]) => v !== undefined && v !== null)

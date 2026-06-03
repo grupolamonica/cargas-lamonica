@@ -641,8 +641,8 @@ const Motoristas = () => {
 
   const { data: rascunhosData, isLoading: rascunhosLoading, isFetching: rascunhosFetching, refetch: rascunhosRefetch } = useQuery({
     queryKey: RASCUNHOS_QUERY_KEY,
-    queryFn: () => fetchDraftRegistrations(permissions.accessToken ?? ""),
-    enabled: mainTab === "rascunhos" && !!permissions.accessToken,
+    queryFn: () => fetchDraftRegistrations(),
+    enabled: mainTab === "rascunhos",
     staleTime: 30_000,
     placeholderData: keepPreviousData,
   });
