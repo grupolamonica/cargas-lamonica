@@ -1714,6 +1714,7 @@ function renderState({
           cargaId={draftCargaId}
           cpf={draftCpf}
           accessToken={draftAccessToken}
+          noCascadeMode
         />
       );
     }
@@ -1803,6 +1804,7 @@ function renderState({
           cargaId={draftCargaId}
           cpf={draftCpf}
           accessToken={draftAccessToken}
+          noCascadeMode
         />
       );
     }
