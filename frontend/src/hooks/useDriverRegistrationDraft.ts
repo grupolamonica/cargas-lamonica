@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import {
   useCandidaturaDraftGet,
   useCandidaturaDraftSave,
 } from "@/api/candidaturaApi";
+import { getCadastro, patchCadastroDados } from "@/services/readModels";
 import {
   clearDraft,
   readDraft,
@@ -27,6 +29,13 @@ interface UseDriverRegistrationDraftArgs {
    * "salvo so nesse aparelho" e exibido uma vez.
    */
   cpf?: string;
+  /**
+   * Modo operador (resgate de rascunho pelo painel). Quando presente, o draft é
+   * carregado e salvo por ID via endpoints do operador
+   * (GET/PATCH /api/operator/cadastros/:id) em vez do fluxo motorista/CPF.
+   * O token do operador é resolvido internamente pelos services (readModels).
+   */
+  operatorCadastroId?: string;
 }
 
 export interface UseDriverRegistrationDraftReturn {
@@ -65,7 +74,9 @@ export function useDriverRegistrationDraft({
   driverUserId,
   cargaId,
   cpf,
+  operatorCadastroId,
 }: UseDriverRegistrationDraftArgs): UseDriverRegistrationDraftReturn {
+  const isOperator = !!operatorCadastroId;
   const localInitialRef = useRef(readDraft(driverUserId));
   const localInitial = localInitialRef.current;
 
@@ -82,6 +93,27 @@ export function useDriverRegistrationDraft({
   // Iter #7: passa cargaId pra escopar o draft a esta carga (multi-draft).
   const serverDraftQuery = useCandidaturaDraftGet(driverUserId || null, cpf ?? null, cargaId);
   const saveMutation = useCandidaturaDraftSave();
+
+  // Modo operador: carrega o draft por ID via endpoint do operador (full dados).
+  // `enabled` só quando há cadastroId — caso contrário a query fica inerte e o
+  // fluxo motorista/CPF acima permanece intocado.
+  const operatorQuery = useQuery({
+    queryKey: ["operator-cadastro-draft", operatorCadastroId],
+    queryFn: () => getCadastro(operatorCadastroId as string),
+    enabled: isOperator,
+    staleTime: 30_000,
+  });
+
+  // Salva o draft do operador por ID (PATCH /api/operator/cadastros/:id/dados).
+  const operatorSave = useCallback(
+    (next: Record<string, unknown>) => {
+      if (!operatorCadastroId) return Promise.resolve();
+      return patchCadastroDados(operatorCadastroId, next).catch(() => {
+        /* autosave best-effort — estado local preservado */
+      });
+    },
+    [operatorCadastroId],
+  );
 
   // True quando NAO ha session Supabase do motorista. Nesse fluxo (Bug-8 P1)
   // o backend aceita o draft via CPF; sem CPF o save fica so localStorage.
@@ -109,9 +141,36 @@ export function useDriverRegistrationDraft({
     };
   }, [isRestoring]);
 
+  // Reconciliação modo operador: hidrata data + currentStep a partir do
+  // cadastro carregado por ID. Roda uma vez quando a query resolve.
+  useEffect(() => {
+    if (!isOperator || hasReconciledRef.current) {
+      return;
+    }
+    if (operatorQuery.isLoading) {
+      return;
+    }
+    if (!operatorQuery.isSuccess && !operatorQuery.isError) {
+      return;
+    }
+
+    hasReconciledRef.current = true;
+
+    const dados = (operatorQuery.data?.cadastro?.dados ?? {}) as Record<string, unknown>;
+    setDataState(dados);
+    setCurrentStepState(extractStep(dados));
+    setIsRestoring(false);
+  }, [
+    isOperator,
+    operatorQuery.data,
+    operatorQuery.isError,
+    operatorQuery.isLoading,
+    operatorQuery.isSuccess,
+  ]);
+
   // Reconciliação com o servidor (ocorre uma vez quando a query resolve).
   useEffect(() => {
-    if (hasReconciledRef.current) {
+    if (isOperator || hasReconciledRef.current) {
       return;
     }
 
@@ -172,6 +231,7 @@ export function useDriverRegistrationDraft({
     cargaId,
     cpf,
     driverUserId,
+    isOperator,
     localInitial,
     serverDraftQuery.data,
     serverDraftQuery.isError,
@@ -191,6 +251,18 @@ export function useDriverRegistrationDraft({
 
   const scheduleServerSave = useCallback(
     (nextData: Record<string, unknown>) => {
+      // Modo operador: salva por ID (PATCH), debounced. Independe de cargaId
+      // (rascunho standalone tem carga_id NULL).
+      if (isOperator) {
+        if (debounceTimer.current) {
+          clearTimeout(debounceTimer.current);
+        }
+        debounceTimer.current = setTimeout(() => {
+          void operatorSave(nextData);
+        }, AUTOSAVE_DEBOUNCE_MS);
+        return;
+      }
+
       if (!cargaId) {
         return;
       }
@@ -215,7 +287,7 @@ export function useDriverRegistrationDraft({
         });
       }, AUTOSAVE_DEBOUNCE_MS);
     },
-    [cargaId, cpf, isAnonymous, saveMutation],
+    [cargaId, cpf, isAnonymous, isOperator, operatorSave, saveMutation],
   );
 
   const setData = useCallback(
@@ -258,6 +330,12 @@ export function useDriverRegistrationDraft({
       debounceTimer.current = null;
     }
 
+    // Modo operador: flush imediato via PATCH por ID. Sem toast (UX operador).
+    if (isOperator) {
+      await operatorSave({ ...data, __currentStep: currentStep });
+      return;
+    }
+
     if (!cargaId) {
       return;
     }
@@ -286,7 +364,7 @@ export function useDriverRegistrationDraft({
         { duration: 5000 },
       );
     }
-  }, [cargaId, cpf, currentStep, data, isAnonymous, saveMutation]);
+  }, [cargaId, cpf, currentStep, data, isAnonymous, isOperator, operatorSave, saveMutation]);
 
   const clearAndReset = useCallback(() => {
     if (debounceTimer.current) {
@@ -310,6 +388,10 @@ export function useDriverRegistrationDraft({
       clearTimeout(debounceTimer.current);
       debounceTimer.current = null;
     }
+    if (isOperator) {
+      await operatorSave(data);
+      return;
+    }
     if (!cargaId) return;
     if (isAnonymous && !cpf) {
       // Sem chave server-side, localStorage ja foi atualizado em setData.
@@ -324,7 +406,7 @@ export function useDriverRegistrationDraft({
     } catch {
       // Erro de rede aqui nao bloqueia o flow — localStorage ainda tem o draft.
     }
-  }, [cargaId, cpf, data, isAnonymous, saveMutation]);
+  }, [cargaId, cpf, data, isAnonymous, isOperator, operatorSave, saveMutation]);
 
   // Iter #7 — beforeunload + visibilitychange: flush antes de fechar/trocar
   // de aba garante que uploads recem-feitos nao se percam no debounce.
@@ -332,6 +414,7 @@ export function useDriverRegistrationDraft({
   // fetch sincrono (keepalive: true) que sobrevive ao unload.
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (isOperator) return; // operador salva via PATCH debounced; sem sync driver
     if (!cargaId) return;
     if (isAnonymous && !cpf) return; // sem chave server-side, sem flush
 
@@ -385,7 +468,7 @@ export function useDriverRegistrationDraft({
       window.removeEventListener("beforeunload", handleBeforeUnload);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [cargaId, cpf, data, isAnonymous]);
+  }, [cargaId, cpf, data, isAnonymous, isOperator]);
 
   return {
     data,
