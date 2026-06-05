@@ -232,14 +232,13 @@ const ManageCargas = () => {
   const deferredDateFrom = useDeferredValue(dateFrom);
   const deferredDateTo = useDeferredValue(dateTo);
   const deferredClienteFilter = useDeferredValue(clienteFilter);
-  const todayIsoDate = new Date().toISOString().slice(0, 10);
-  const defaultDateToIso = useMemo(() => {
-    const future = new Date();
-    future.setDate(future.getDate() + 90);
-    return future.toISOString().slice(0, 10);
-  }, []);
-  // hasActiveFilters: range default (hoje .. hoje+90d) NAO conta como filtro
-  // ativo — o operador so ve "Limpar filtros" habilitado se mexer em algo.
+  // hasActiveFilters reflete se o estado atual difere do estado LIMPO (o que o
+  // botão "Limpar filtros" aplica). "Limpar" zera as datas (dateFrom/dateTo = "")
+  // para mostrar todas as cargas ativas sem janela de data. Logo, o range
+  // default de entrada (hoje .. hoje+90d) JÁ é um filtro ativo — ele esconde
+  // cargas fora da janela — e o botão precisa estar habilitado na entrada para
+  // o operador poder removê-lo. (Antes o default de data não contava, então o
+  // botão ficava bloqueado ao entrar na tela — bug reportado.)
   const hasActiveFilters =
     deferredSearch.trim().length > 0 ||
     deferredStatusFilter !== "ativas" ||
@@ -248,8 +247,8 @@ const ManageCargas = () => {
     deferredOrigemFilter.trim().length > 0 ||
     deferredDestinoFilter.trim().length > 0 ||
     deferredPerfilFilter !== "todos" ||
-    (deferredDateFrom.length > 0 && deferredDateFrom !== todayIsoDate) ||
-    (deferredDateTo.length > 0 && deferredDateTo !== defaultDateToIso) ||
+    deferredDateFrom.length > 0 ||
+    deferredDateTo.length > 0 ||
     deferredClienteFilter.length > 0;
 
   useEffect(() => {
