@@ -2,8 +2,7 @@ import "../../../infrastructure/config/load-env.js";
 
 import { ZodError } from "zod";
 
-import { ForbiddenError, UnauthorizedError } from "../../../domain/load-claims/errors.js";
-import { requireDriverSession } from "../../../application/load-claims/auth.js";
+import { resolveCandidaturaActor } from "../../../application/load-claims/candidatura-actor.js";
 import { uploadDraftFile } from "../../../application/candidatura/use-cases/upload-draft-file.js";
 import {
   getAuthorizationHeader,
@@ -42,26 +41,12 @@ export async function resolveUploadDraftFileResponse(request) {
     };
   }
 
-  // ─── Auth: opcional ───────────────────────────────────────────────────
-  let session = null;
-  try {
-    session = await requireDriverSession(getAuthorizationHeader(request));
-  } catch (err) {
-    if (err instanceof ForbiddenError) {
-      return {
-        statusCode: 403,
-        payload: {
-          error: "Forbidden",
-          message: err.message,
-          meta: { correlationId },
-        },
-      };
-    }
-    // UnauthorizedError -> segue como anonimo (precisara CPF abaixo).
-    if (!(err instanceof UnauthorizedError)) {
-      throw err;
-    }
-  }
+  // ─── Auth: driver | operador (resgate) | público por CPF ──────────────
+  const { actor, errorResponse } = await resolveCandidaturaActor(
+    getAuthorizationHeader(request),
+    correlationId,
+  );
+  if (errorResponse) return errorResponse;
 
   // ─── Zod (cargaId, slot, cpf optional) ────────────────────────────────
   let parsedInput;
@@ -78,8 +63,10 @@ export async function resolveUploadDraftFileResponse(request) {
     throw err;
   }
 
-  // ─── Resolve ownerKey (session.user.id ou cpf anonimo) ────────────────
-  let ownerKey = session?.user?.id ?? null;
+  // ─── Resolve ownerKey ─────────────────────────────────────────────────
+  // Driver autenticado → user.id. Operador (resgate) e público → CPF do body
+  // (a pasta de uploads é escopada pelo CPF do motorista, não pelo operador).
+  let ownerKey = actor.type === "driver" ? actor.driverUserId : null;
   if (!ownerKey) {
     if (!parsedInput.cpf) {
       return {
