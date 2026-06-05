@@ -313,10 +313,11 @@ services:
     environment:
       ASPX_ALLOW_PLAYWRIGHT_LOGIN: "1"
       PYTHONUNBUFFERED: "1"
-    # Playwright/Chromium é caro em RAM — limites previnem que sessions órfãs
-    # tomem o host. Cap em 512m força reciclagem.
-    mem_limit: 512m
-    mem_reservation: 128m
+    # Playwright/Chromium é caro em RAM. 512m era apertado para o launch do
+    # Chromium durante o login (risco de OOM-kill no meio da renovação). 768m dá
+    # folga ao headless single-page sem soltar a rédea no host.
+    mem_limit: 768m
+    mem_reservation: 192m
     cpus: 0.50
     logging:
       driver: json-file
