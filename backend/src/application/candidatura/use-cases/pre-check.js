@@ -245,6 +245,7 @@ export async function candidaturaPreCheck({
   horsePlate,
   trailerPlates = [],
   correlationId,
+  cacheOnly = false,
 }) {
   const candidateSubmittedAt = new Date().toISOString();
   const normalizedTrailerPlates = Array.isArray(trailerPlates) ? trailerPlates : [];
@@ -262,6 +263,7 @@ export async function candidaturaPreCheck({
     payload,
     candidateSubmittedAt,
     correlationId,
+    cacheOnly,
   });
 
   const pendencias = [];

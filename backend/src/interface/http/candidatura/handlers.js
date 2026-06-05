@@ -287,6 +287,7 @@ export async function resolveCandidaturaPreCheckResponse(request) {
       horsePlate: parsedInput.horsePlate,
       trailerPlates: parsedInput.trailerPlates,
       correlationId,
+      cacheOnly: parsedInput.preferCache === true,
     });
 
     // A5 fix — audit estruturado por requisicao (sucesso).

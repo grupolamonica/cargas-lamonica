@@ -588,6 +588,9 @@ export function DriverRegistrationWizard({
         horsePlate,
         trailerPlates: safeTrailerPlates,
         accessToken,
+        // Resgate pelo operador: pré-check cache-only (sem chamadas ao vivo do
+        // Angellira de 8-15s) — senão a tela trava 30-45s. O submit valida.
+        preferCache: isOperatorMode,
       },
       {
         onSuccess: (response) => {
