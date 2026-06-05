@@ -1,0 +1,35 @@
+name: Deploy auto-retry
+
+# Re-dispara automaticamente o job de deploy que falha por timeout intermitente
+# de SSH no VPS (`dial tcp :22: i/o timeout`). O bloqueio é por IP (fail2ban /
+# filtro de porta 22 do provedor) — um novo runner costuma sair por outro IP e
+# conecta. Empiricamente, o re-run manual em runner novo resolvia; isto apenas
+# automatiza esse re-run, com teto de tentativas.
+#
+# OBS: isto é mitigação. A correção definitiva é no VPS (liberar/whitelistar a
+# porta 22 para os IPs do GitHub Actions, ou afrouxar o fail2ban do sshd).
+
+on:
+  workflow_run:
+    workflows: ["Deploy"]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  rerun-on-failure:
+    # Só re-tenta quando o Deploy falhou e ainda não estourou o teto de 3 attempts.
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt < 3
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-run failed deploy jobs (transient VPS SSH timeout)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Deploy run ${{ github.event.workflow_run.id }} falhou (attempt ${{ github.event.workflow_run.run_attempt }}). Aguardando o ban/timeout expirar antes do re-run em runner novo..."
+          sleep 90
+          gh run rerun ${{ github.event.workflow_run.id }} --failed -R ${{ github.repository }}
