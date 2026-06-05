@@ -535,10 +535,26 @@ export function DriverRegistrationWizard({
       return;
     }
 
+    // pre-check é público e exige cpf no body (o backend não deriva de token).
+    // No fluxo do motorista logado o wizard normalmente recebe
+    // `initialPreCheckResponse` e pula este caminho; aqui (fallback + modo
+    // operador) precisamos enviar o cpf explicitamente.
+    const preCheckCpf = onlyDigits(adoptedCpf ?? cpf ?? "");
+    if (preCheckCpf.length !== 11) {
+      setState({
+        kind: "error",
+        message:
+          "CPF do motorista não disponível neste rascunho. Não é possível verificar o cadastro automaticamente.",
+        status: 400,
+      });
+      return;
+    }
+
     setState({ kind: "loading" });
 
     preCheck.mutate(
       {
+        cpf: preCheckCpf,
         horsePlate,
         trailerPlates: safeTrailerPlates,
         accessToken,
@@ -580,7 +596,7 @@ export function DriverRegistrationWizard({
         },
       },
     );
-  }, [accessToken, draft, handoffContext, horsePlate, isOperatorMode, onOpenChange, onPreCheckPassed, preCheck, safeTrailerPlates]);
+  }, [accessToken, adoptedCpf, cpf, draft, handoffContext, horsePlate, isOperatorMode, onOpenChange, onPreCheckPassed, preCheck, safeTrailerPlates]);
 
   // Quando o wizard abre com contexto válido, usa o pre-check já feito pelo interceptor
   // (initialPreCheckResponse) ou dispara um novo — exceto se temos rascunho válido.
