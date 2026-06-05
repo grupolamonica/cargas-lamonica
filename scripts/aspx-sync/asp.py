@@ -197,48 +197,76 @@ def _login_playwright(email: str, senha: str, device_id: str) -> dict:
 
     from playwright.sync_api import sync_playwright
 
-    print("Cache expirado - renovando sessao via browser headless local...")
+    print("Cache expirado - renovando sessao via browser headless...")
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/136.0.0.0 Safari/537.36"
-            )
-        )
-        page = ctx.new_page()
+    # Flags OBRIGATORIAS para Chromium headless em container rodando como root
+    # (python:3.12-slim no aspx-renewal). Sem elas o launch FALHA no container e
+    # a renovacao automatica nunca acontece (so funcionava manual, em maquina
+    # nao-root):
+    #   --no-sandbox / --disable-setuid-sandbox : Chromium recusa rodar como root
+    #     com sandbox ligado.
+    #   --disable-dev-shm-usage : o /dev/shm padrao de 64MB do Docker faz o
+    #     Chromium crashar (usa /tmp em disco em vez da memoria compartilhada).
+    launch_args = [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+    ]
 
-        page.goto(
-            f"{BASE}/#/workforce/driver-profile/list",
-            wait_until="networkidle",
-            timeout=30000,
-        )
+    last_err: Exception | None = None
+    for attempt in range(1, 3):  # ate 2 tentativas (login transitorio)
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True, args=launch_args)
+                try:
+                    ctx = browser.new_context(
+                        user_agent=(
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/136.0.0.0 Safari/537.36"
+                        )
+                    )
+                    page = ctx.new_page()
 
-        email_sel = "input[type='email'], input[placeholder='Email'], input[name='email']"
-        page.wait_for_selector(email_sel, timeout=20000)
+                    page.goto(
+                        f"{BASE}/#/workforce/driver-profile/list",
+                        wait_until="networkidle",
+                        timeout=30000,
+                    )
 
-        page.fill(email_sel, email)
-        page.wait_for_timeout(500)
-        page.fill("input[type='password']", senha)
-        page.wait_for_timeout(300)
-        page.keyboard.press("Enter")
+                    email_sel = "input[type='email'], input[placeholder='Email'], input[name='email']"
+                    page.wait_for_selector(email_sel, timeout=20000)
 
-        page.wait_for_load_state("networkidle", timeout=30000)
-        page.wait_for_timeout(3000)
+                    page.fill(email_sel, email)
+                    page.wait_for_timeout(500)
+                    page.fill("input[type='password']", senha)
+                    page.wait_for_timeout(300)
+                    page.keyboard.press("Enter")
 
-        raw = ctx.cookies()
-        browser.close()
+                    page.wait_for_load_state("networkidle", timeout=30000)
+                    page.wait_for_timeout(3000)
 
-    cookies = {c["name"]: c["value"] for c in raw}
-    if "spx_cid" not in cookies:
-        raise SystemExit(
-            f"FALHA: login nao emitiu spx_cid. Cookies capturados: {sorted(cookies.keys())}"
-        )
-    _salvar_cookies(cookies)
-    print(f"Sessao renovada - {len(cookies)} cookies salvos.")
-    return cookies
+                    raw = ctx.cookies()
+                finally:
+                    browser.close()
+
+            cookies = {c["name"]: c["value"] for c in raw}
+            if "spx_cid" not in cookies:
+                raise RuntimeError(
+                    f"login nao emitiu spx_cid. Cookies capturados: {sorted(cookies.keys())}"
+                )
+            _salvar_cookies(cookies)
+            print(f"Sessao renovada (tentativa {attempt}) - {len(cookies)} cookies salvos.")
+            return cookies
+        except Exception as exc:  # noqa: BLE001 — relogamos e retentamos
+            last_err = exc
+            print(f"[login] tentativa {attempt} falhou: {exc}", file=sys.stderr)
+            time.sleep(3)
+
+    raise SystemExit(
+        f"FALHA: login Playwright falhou apos retries. Ultimo erro: {last_err}"
+    )
 
 
 # ==============================
