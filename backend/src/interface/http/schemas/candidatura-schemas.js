@@ -40,6 +40,10 @@ export const candidaturaPreCheckSchema = z.object({
   cpf: cpfSchema,
   horsePlate: plateSchema,
   trailerPlates: z.array(plateSchema).max(2, "Maximo de 2 carretas permitidas.").default([]),
+  // preferCache: pula chamadas ao vivo do Angellira (usa só cache/DB). Resgate
+  // de rascunho pelo operador usa isto para a tela não travar 30-45s; a
+  // validação autoritativa ocorre no submit.
+  preferCache: z.boolean().optional().default(false),
 });
 
 /**

@@ -63,6 +63,14 @@ export interface PreCheckRequestPayload {
   cpf: string;
   horsePlate: string;
   trailerPlates: string[];
+  /** Token (ignorado pelo backend público; mantido por compat de chamada). */
+  accessToken?: string | null;
+  /**
+   * Resgate pelo operador: pede ao backend para pular as chamadas ao vivo do
+   * Angellira (usa só cache/DB) — evita a tela de pré-check travar 30-45s. A
+   * validação autoritativa ocorre no submit.
+   */
+  preferCache?: boolean;
 }
 
 export type PreCheckMutationInput = PreCheckRequestPayload;
@@ -211,10 +219,10 @@ async function requestJson<T>(url: string, options: ApiRequestOptions = {}): Pro
  */
 export function useCandidaturaPreCheck() {
   return useMutation<PreCheckResponse, CandidaturaApiError, PreCheckMutationInput>({
-    mutationFn: ({ cpf, horsePlate, trailerPlates }) =>
+    mutationFn: ({ cpf, horsePlate, trailerPlates, preferCache }) =>
       requestJson<PreCheckResponse>("/api/candidatura/pre-check", {
         method: "POST",
-        body: { cpf, horsePlate, trailerPlates },
+        body: { cpf, horsePlate, trailerPlates, ...(preferCache ? { preferCache: true } : {}) },
       }),
   });
 }

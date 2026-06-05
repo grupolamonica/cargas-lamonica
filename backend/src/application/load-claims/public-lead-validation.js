@@ -357,11 +357,32 @@ export function rehydrateStoredValidationSummary(rawSummary, fallback = {}) {
   };
 }
 
+// Resultado sintético "indisponível" para o modo cacheOnly: quando não há cache
+// fresco e não queremos disparar a chamada ao vivo (8-15s) ao Angellira. O
+// pipeline trata UNAVAILABLE de forma graciosa (warnings + fallback stale 7d).
+function makeUnavailableAngellira(queryFor, queryValue) {
+  return {
+    queryFor,
+    queryValue,
+    availability: "UNAVAILABLE",
+    status: "UNAVAILABLE",
+    found: false,
+    displayName: null,
+    validUntil: null,
+    lastSeenAt: null,
+    statusText: null,
+  };
+}
+
 export async function validatePublicLeadPreRegistration({
   loadId,
   payload,
   candidateSubmittedAt = new Date().toISOString(),
   correlationId,
+  // cacheOnly: pula chamadas ao vivo do Angellira (usa só cache/DB). Usado no
+  // pré-check do resgate pelo operador, onde a latência de 8-15s/chamada torna
+  // a tela inutilizável. A validação autoritativa ocorre no submit (cascata ANTT).
+  cacheOnly = false,
 }) {
   const resolvedCandidateSubmittedAt = toIsoTimestamp(candidateSubmittedAt);
   const validationStartedAt = Date.now();
@@ -428,9 +449,11 @@ export async function validatePublicLeadPreRegistration({
   const [angeliraRaw, aspxDriverLookup, ...plateResults] = await Promise.all([
     useCachedAngellira
       ? Promise.resolve(cachedAngellira.angelliraResult)
-      : lookupAngelliraDriverByCpf(payload.cpf, {
-          correlationId,
-        }),
+      : cacheOnly
+        ? Promise.resolve(makeUnavailableAngellira("cpf", payload.cpf))
+        : lookupAngelliraDriverByCpf(payload.cpf, {
+            correlationId,
+          }),
     lookupAspxDriverByCpf(payload.cpf, {
       correlationId,
     }),
@@ -438,7 +461,9 @@ export async function validatePublicLeadPreRegistration({
       const cacheHit = cache?.found && cache?.cached;
       const lookupPromise = cacheHit
         ? Promise.resolve({ ...cache.angelliraResult, fromCache: true })
-        : lookupAngelliraPlate(plateLookup.value, { correlationId });
+        : cacheOnly
+          ? Promise.resolve(makeUnavailableAngellira("plate", plateLookup.value))
+          : lookupAngelliraPlate(plateLookup.value, { correlationId });
 
       return lookupPromise.then((lookupResult) => ({
         ...plateLookup,
