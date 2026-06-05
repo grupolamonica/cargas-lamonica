@@ -79,37 +79,43 @@ export function AspxSyncCard() {
     },
   });
 
-  // Para o polling quando lastSyncAt avancar, ou depois de POLL_MAX_ATTEMPTS.
+  // Para o polling quando lastSyncAt avancar (sucesso) OU após um teto de tempo
+  // GARANTIDO. Bug anterior (render infinito em produção): o contador só
+  // incrementava quando `lastSyncAt` mudava (dep do effect), então se o sync
+  // disparado nunca avançasse o `lastSyncAt` (workflow não roda / sincroniza
+  // outro projeto), o teto nunca era atingido e o polling/refetch rodava pra
+  // sempre — spinner infinito. Agora o stop é por timer, independente disso.
   const lastSyncAt = data?.drivers?.lastSyncAt || null;
   const [baselineSyncAt, setBaselineSyncAt] = useState<string | null>(null);
-  const [pollAttempts, setPollAttempts] = useState(0);
 
+  // Captura o baseline assim que o polling começa.
   useEffect(() => {
-    if (pollingAfterTrigger && baselineSyncAt === null && lastSyncAt !== undefined) {
-      setBaselineSyncAt(lastSyncAt);
-      setPollAttempts(0);
+    if (pollingAfterTrigger && baselineSyncAt === null) {
+      setBaselineSyncAt(lastSyncAt ?? "");
     }
   }, [pollingAfterTrigger, baselineSyncAt, lastSyncAt]);
 
+  // Sucesso: lastSyncAt avançou em relação ao baseline → para o polling.
   useEffect(() => {
-    if (!pollingAfterTrigger) return;
-    setPollAttempts((prev) => prev + 1);
-    if (lastSyncAt && baselineSyncAt !== null && lastSyncAt !== baselineSyncAt) {
+    if (!pollingAfterTrigger || baselineSyncAt === null) return;
+    if (lastSyncAt && lastSyncAt !== baselineSyncAt) {
       setPollingAfterTrigger(false);
       setBaselineSyncAt(null);
       toast.success(`ASPX atualizado: ${data?.drivers?.total ?? 0} motoristas no portal.`);
       queryClient.invalidateQueries({ queryKey: ["operator", "motoristas-read-model"] });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastSyncAt]);
+  }, [lastSyncAt, pollingAfterTrigger, baselineSyncAt, data?.drivers?.total, queryClient]);
 
+  // Teto de tempo garantido (~90s): para o polling mesmo que lastSyncAt nunca mude.
   useEffect(() => {
-    if (pollingAfterTrigger && pollAttempts >= POLL_MAX_ATTEMPTS) {
+    if (!pollingAfterTrigger) return;
+    const timer = setTimeout(() => {
       setPollingAfterTrigger(false);
       setBaselineSyncAt(null);
-      toast.info("Sync ainda em execução. Atualize manualmente em alguns minutos.");
-    }
-  }, [pollingAfterTrigger, pollAttempts]);
+      toast.info("Sync ainda em execução. Atualize o status manualmente em alguns minutos.");
+    }, POLL_AFTER_TRIGGER_MS * POLL_MAX_ATTEMPTS);
+    return () => clearTimeout(timer);
+  }, [pollingAfterTrigger]);
 
   const tone = data ? cookieTone(data.cookies) : "ok";
   const toneClasses = {
