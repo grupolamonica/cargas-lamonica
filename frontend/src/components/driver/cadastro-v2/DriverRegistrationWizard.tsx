@@ -220,6 +220,36 @@ function isPersistedStepKind(value: string): value is WizardStepKind {
 }
 
 /**
+ * Mapeia o passo persistido (`__currentStep`) para o estado do FSM ao restaurar
+ * um rascunho. Retorna null quando não há restauração direta (tela0, step-e —
+ * que exige PendingCarreta em memória — e success). Compartilhado entre o efeito
+ * de hidratação e o resgate pelo operador.
+ */
+function buildRestoredWizardState(
+  step: string,
+  response: PreCheckResponse,
+): WizardState | null {
+  switch (step) {
+    case "step-a":
+      return { kind: "step-a", response };
+    case "step-b":
+      return { kind: "step-b" };
+    case "step-c":
+      return { kind: "step-c" };
+    case "step-c-antt":
+      return { kind: "step-c-antt" };
+    case "step-d":
+      return { kind: "step-d" };
+    case "step-e-antt":
+      return { kind: "step-e-antt" };
+    case "confirmation":
+      return { kind: "confirmation" };
+    default:
+      return null;
+  }
+}
+
+/**
  * Wizard root do cadastro v2.
  *
  * Fluxo:
@@ -535,10 +565,26 @@ export function DriverRegistrationWizard({
       return;
     }
 
+    // pre-check é público e exige cpf no body (o backend não deriva de token).
+    // No fluxo do motorista logado o wizard normalmente recebe
+    // `initialPreCheckResponse` e pula este caminho; aqui (fallback + modo
+    // operador) precisamos enviar o cpf explicitamente.
+    const preCheckCpf = onlyDigits(adoptedCpf ?? cpf ?? "");
+    if (preCheckCpf.length !== 11) {
+      setState({
+        kind: "error",
+        message:
+          "CPF do motorista não disponível neste rascunho. Não é possível verificar o cadastro automaticamente.",
+        status: 400,
+      });
+      return;
+    }
+
     setState({ kind: "loading" });
 
     preCheck.mutate(
       {
+        cpf: preCheckCpf,
         horsePlate,
         trailerPlates: safeTrailerPlates,
         accessToken,
@@ -560,7 +606,15 @@ export function DriverRegistrationWizard({
             ...draft.data,
             preCheckResponse: response as unknown as Record<string, unknown>,
           });
-          setState({ kind: "tela0", response });
+          // Resgate pelo operador: o rascunho do motorista normalmente não tem
+          // preCheckResponse persistido, então o pre-check roda aqui. Em vez de
+          // reiniciar em tela0 (perdendo a posição), restaura o passo onde o
+          // motorista parou — as slices (stepA/B/C…) já foram hidratadas pelo
+          // efeito de hidratação, então o operador vê os dados preenchidos.
+          const restored = isOperatorMode
+            ? buildRestoredWizardState(draft.currentStep, response)
+            : null;
+          setState(restored ?? { kind: "tela0", response });
         },
         onError: (error) => {
           const status = error instanceof CandidaturaApiError ? error.status : 0;
@@ -580,7 +634,7 @@ export function DriverRegistrationWizard({
         },
       },
     );
-  }, [accessToken, draft, handoffContext, horsePlate, isOperatorMode, onOpenChange, onPreCheckPassed, preCheck, safeTrailerPlates]);
+  }, [accessToken, adoptedCpf, cpf, draft, handoffContext, horsePlate, isOperatorMode, onOpenChange, onPreCheckPassed, preCheck, safeTrailerPlates]);
 
   // Quando o wizard abre com contexto válido, usa o pre-check já feito pelo interceptor
   // (initialPreCheckResponse) ou dispara um novo — exceto se temos rascunho válido.
