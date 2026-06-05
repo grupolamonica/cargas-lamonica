@@ -78,18 +78,60 @@ export async function submitDraftAsOperator({
   }
 
   // 2) Reusa o pipeline canônico de submissão do motorista.
-  const result = await submitCandidaturaFinal({
-    driverUserId: draft.driver_user_id ?? null,
-    driverCpf,
-    cargaId: draft.carga_id ?? null,
-    idempotencyKey: `op-resgate-${cadastroId}`,
-    dados: effectiveDados,
-    requestIp,
-    correlationId,
-    // Sem driver autenticado declarando o próprio CPF: mesma proteção do fluxo
-    // público — não confia em motorista.cpf == cavalo.owner_doc para pular ANTT.
-    disableOwnerReuseByDriver: !draft.driver_user_id,
-  });
+  const runSubmit = (cargaIdArg) =>
+    submitCandidaturaFinal({
+      driverUserId: draft.driver_user_id ?? null,
+      driverCpf,
+      cargaId: cargaIdArg,
+      idempotencyKey: cargaIdArg
+        ? `op-resgate-${cadastroId}`
+        : `op-resgate-standalone-${cadastroId}`,
+      dados: effectiveDados,
+      requestIp,
+      correlationId,
+      // Sem driver autenticado declarando o próprio CPF: mesma proteção do fluxo
+      // público — não confia em motorista.cpf == cavalo.owner_doc para pular ANTT.
+      disableOwnerReuseByDriver: !draft.driver_user_id,
+    });
+
+  let result;
+  try {
+    result = await runSubmit(draft.carga_id ?? null);
+
+    // Resgate: se a carga já foi alocada a outro motorista (409 CargaAlreadyApproved),
+    // o objetivo do operador continua sendo finalizar o cadastro do motorista —
+    // re-submete em modo standalone (carga_id=NULL). O 'pendente' resultante
+    // aparece na aba Pendentes para aprovação (sem vínculo à carga tomada).
+    if (result?.statusCode === 409 && draft.carga_id) {
+      console.warn("[operator.submit-draft] carga já alocada — submetendo standalone", {
+        correlationId,
+        operatorId,
+        cadastroId,
+        cargaId: draft.carga_id,
+      });
+      result = await runSubmit(null);
+    }
+  } catch (err) {
+    // Surface o erro real (ferramenta interna do operador) + log com stack no
+    // servidor, em vez do 500 genérico "Unexpected error".
+    console.error("[operator.submit-draft] submit-final lançou exceção", {
+      correlationId,
+      operatorId,
+      cadastroId,
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+    return {
+      statusCode: 500,
+      payload: {
+        error: "SubmitFailed",
+        message: `Falha ao submeter o cadastro: ${
+          err instanceof Error && err.message ? err.message : "erro desconhecido"
+        }`,
+        meta: { correlationId },
+      },
+    };
+  }
 
   // 3) Consome o rascunho de origem somente quando o submit foi bem-sucedido.
   //    Guard por status='draft' evita apagar uma row que mudou de estado.
