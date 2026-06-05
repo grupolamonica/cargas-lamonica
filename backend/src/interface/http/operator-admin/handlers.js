@@ -1718,8 +1718,10 @@ export async function resolveOperatorPatchCadastroDadosResponse(request) {
       if (!rows.length) {
         return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
       }
-      if (!["aprovado", "pendente", "em_revisao"].includes(rows[0].status)) {
-        return { statusCode: 409, payload: { error: "Conflict", message: "Apenas cadastros pendentes ou aprovados podem ser editados.", meta: { correlationId } } };
+      // 'draft' incluído para o resgate de rascunho pelo operador (autosave do
+      // wizard persiste o progresso na própria row de rascunho via PATCH).
+      if (!["draft", "aprovado", "pendente", "em_revisao"].includes(rows[0].status)) {
+        return { statusCode: 409, payload: { error: "Conflict", message: "Apenas rascunhos, pendentes ou aprovados podem ser editados.", meta: { correlationId } } };
       }
       await client.query(
         `UPDATE public.pending_driver_registrations SET dados = $1 WHERE id = $2`,
