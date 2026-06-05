@@ -220,6 +220,36 @@ function isPersistedStepKind(value: string): value is WizardStepKind {
 }
 
 /**
+ * Mapeia o passo persistido (`__currentStep`) para o estado do FSM ao restaurar
+ * um rascunho. Retorna null quando não há restauração direta (tela0, step-e —
+ * que exige PendingCarreta em memória — e success). Compartilhado entre o efeito
+ * de hidratação e o resgate pelo operador.
+ */
+function buildRestoredWizardState(
+  step: string,
+  response: PreCheckResponse,
+): WizardState | null {
+  switch (step) {
+    case "step-a":
+      return { kind: "step-a", response };
+    case "step-b":
+      return { kind: "step-b" };
+    case "step-c":
+      return { kind: "step-c" };
+    case "step-c-antt":
+      return { kind: "step-c-antt" };
+    case "step-d":
+      return { kind: "step-d" };
+    case "step-e-antt":
+      return { kind: "step-e-antt" };
+    case "confirmation":
+      return { kind: "confirmation" };
+    default:
+      return null;
+  }
+}
+
+/**
  * Wizard root do cadastro v2.
  *
  * Fluxo:
@@ -576,7 +606,15 @@ export function DriverRegistrationWizard({
             ...draft.data,
             preCheckResponse: response as unknown as Record<string, unknown>,
           });
-          setState({ kind: "tela0", response });
+          // Resgate pelo operador: o rascunho do motorista normalmente não tem
+          // preCheckResponse persistido, então o pre-check roda aqui. Em vez de
+          // reiniciar em tela0 (perdendo a posição), restaura o passo onde o
+          // motorista parou — as slices (stepA/B/C…) já foram hidratadas pelo
+          // efeito de hidratação, então o operador vê os dados preenchidos.
+          const restored = isOperatorMode
+            ? buildRestoredWizardState(draft.currentStep, response)
+            : null;
+          setState(restored ?? { kind: "tela0", response });
         },
         onError: (error) => {
           const status = error instanceof CandidaturaApiError ? error.status : 0;
