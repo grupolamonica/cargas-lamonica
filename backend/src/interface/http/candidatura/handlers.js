@@ -648,7 +648,12 @@ export async function resolveCandidaturaSubmitResponse(request) {
     // wizard pulou o Step B (placa do cavalo ja tem cadastro vigente). Faz
     // merge do veiculo persistido (+ cavalo_owner) ANTES da validacao zod.
     const incomingCavalo = body.dados.cavalo;
-    if (isCavaloPartial(incomingCavalo)) {
+    // Só tenta merge/síntese quando HÁ um cavalo presente (mesmo que parcial,
+    // ex.: { placa }). Cadastro parcial sem cavalo (pendência só do motorista,
+    // veículo já vigente) deixa cavalo ausente — o schema agora aceita. Sem este
+    // guard, o fallback abaixo criava um cavalo SEM placa ({owner_doc}) que
+    // falhava no cavaloSchema.
+    if (incomingCavalo && isCavaloPartial(incomingCavalo)) {
       const placaForLookup = String(incomingCavalo?.placa ?? "").trim();
       let lookupCpf = (body.dados.motorista?.cpf ?? "").toString().replace(/\D/g, "");
       if (driverUserId) {
@@ -694,9 +699,9 @@ export async function resolveCandidaturaSubmitResponse(request) {
       // ainda nao tem owner_doc no cavalo, assume que ele e o proprio dono
       // (consistente com `cavaloOwnerIsDriver` em submit-final). Operator
       // pode revisar no painel. Sem isso o schema strict rejeita.
-      if (!body.dados.cavalo?.owner_doc && lookupCpf) {
+      if (body.dados.cavalo?.placa && !body.dados.cavalo?.owner_doc && lookupCpf) {
         body.dados.cavalo = {
-          ...(body.dados.cavalo || {}),
+          ...body.dados.cavalo,
           owner_doc: lookupCpf,
           owner_doc_type: "cpf",
         };
