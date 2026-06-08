@@ -438,9 +438,15 @@ const dadosSchema = z
     // ausente aqui para nao bloquear esse fluxo legitimo; o handler garante
     // que o objeto final esteja completo.
     motorista: motoristaSchema.optional(),
-    cavalo: cavaloSchema,
+    // Cadastro PARCIAL: quando o pre-check indica que só o motorista é pendência
+    // (cavalo/carreta já vigentes nas bases externas), o wizard pula os steps B/D
+    // e o submit não traz cavalo/carretas. Antes o schema os EXIGIA → submit 422 →
+    // a row ficava presa em 'draft' e nunca chegava em Pendentes. Tornados
+    // opcionais: cadastros COMPLETOS seguem enviando+validando o cavalo (o wizard
+    // só omite quando a pendência não inclui o veículo); o operador revisa.
+    cavalo: cavaloSchema.optional(),
     cavalo_owner: ownerSchema.optional(),
-    carretas: z.array(carretaSchema).max(2, "Maximo de 2 carretas (BITREM)."),
+    carretas: z.array(carretaSchema).max(2, "Maximo de 2 carretas (BITREM).").optional().default([]),
     carreta_owners: z.array(ownerSchema).max(2).optional(),
     protocolo: z.string().trim().optional(), // pode existir em re-submit idempotente.
   })
