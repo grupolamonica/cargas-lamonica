@@ -66,6 +66,7 @@ import { fetchPendingDriverRegistrations } from "../../../application/operator-a
 import { listDraftRegistrations } from "../../../application/operator-admin/use-cases/list-draft-registrations.js";
 import { submitDraftAsOperator } from "../../../application/operator-admin/use-cases/submit-draft-as-operator.js";
 import { candidaturaSubmitSchema } from "../schemas/candidatura-schemas.js";
+import { DRAFT_FILE_BUCKET } from "../../../application/candidatura/use-cases/upload-draft-file.js";
 import { ensureDriverLoadsSheetFresh } from "../public-loads/handlers.js";
 import { fetchDriverFlowMetrics } from "../../../domain/operator-admin/driver-flow-metrics.js";
 import {
@@ -1686,6 +1687,47 @@ export async function resolveOperatorGetCadastroResponse(request) {
         return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
       }
       return { statusCode: 200, payload: { cadastro: rows[0], meta: { correlationId } } };
+    });
+  });
+}
+
+/**
+ * GET /api/operator/cadastros/:id/arquivo?path=<storage_path>
+ * Gera uma signed URL (TTL 1h) para o operador visualizar um documento enviado
+ * pelo motorista (CNH, CRLV, comprovante, etc.) no bucket privado cadastro-drafts.
+ * Segurança: o path precisa estar referenciado no `dados` DESTE cadastro — evita
+ * que o endpoint assine qualquer objeto do bucket.
+ */
+export async function resolveOperatorCadastroFileUrlResponse(request) {
+  return withOperatorSession(request, "cadastro-arquivo-url", async ({ correlationId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso intermediário necessário.");
+    const id = getQueryParam(request, "id");
+    const path = getQueryParam(request, "path");
+    if (!id || !path) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "id e path são obrigatórios.", meta: { correlationId } } };
+    }
+    return withPgClient(async (client) => {
+      const { rows } = await client.query(
+        `SELECT dados FROM public.pending_driver_registrations WHERE id = $1`,
+        [id],
+      );
+      if (!rows.length) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      // Path precisa ser um valor-string presente no dados deste cadastro.
+      const dadosStr = JSON.stringify(rows[0].dados ?? {});
+      if (!dadosStr.includes(JSON.stringify(path))) {
+        return { statusCode: 403, payload: { error: "Forbidden", message: "Arquivo não pertence a este cadastro.", meta: { correlationId } } };
+      }
+      const supabase = createSupabaseAdminClient();
+      const { data, error } = await supabase.storage
+        .from(DRAFT_FILE_BUCKET)
+        .createSignedUrl(path, 3600);
+      const signedUrl = data?.signedUrl ?? data?.signedURL ?? null;
+      if (error || !signedUrl) {
+        return { statusCode: 502, payload: { error: "StorageError", message: "Não foi possível gerar o link do arquivo.", meta: { correlationId } } };
+      }
+      return { statusCode: 200, payload: { signed_url: signedUrl, expires_in: 3600, meta: { correlationId } } };
     });
   });
 }

@@ -64,6 +64,7 @@ import {
   resolveOperatorCadastrosPendentesResponse,
   resolveOperatorListDraftRegistrationsResponse,
   resolveOperatorSubmitDraftResponse,
+  resolveOperatorCadastroFileUrlResponse,
   resolveOperatorAprovarCadastroResponse,
   resolveOperatorRejeitarCadastroResponse,
   resolveOperatorAngelliraPrecheckResponse,
@@ -309,6 +310,7 @@ export function registerRoutes(app) {
   router.post("/api/operator/cadastros/:id/spx/cadastrar", wrap(resolveOperatorSpxCadastrarResponse));
 
   // Gerenciamento de cadastros (editar/excluir)
+  router.get("/api/operator/cadastros/:id/arquivo", wrap(resolveOperatorCadastroFileUrlResponse));
   router.get("/api/operator/cadastros/:id", wrap(resolveOperatorGetCadastroResponse));
   router.patch("/api/operator/cadastros/:id/dados", wrap(resolveOperatorPatchCadastroDadosResponse));
   router.delete("/api/operator/cadastros/:id", wrap(resolveOperatorDeleteCadastroResponse));

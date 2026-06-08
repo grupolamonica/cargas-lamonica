@@ -58,6 +58,11 @@ export function CadastroRascunhoResgateModal({
 
   return (
     <DriverRegistrationWizard
+      // key por draft.id: força remount completo do wizard ao trocar de rascunho.
+      // Sem isso, o estado interno (hasHydratedFromDraftRef + slices stepA/B/C…)
+      // persistia entre drafts — abrir o draft B mantinha os dados do A e o
+      // autosave gravava o A sobre o B (bug "sobrescreve" reportado).
+      key={draft.id}
       open={open}
       onOpenChange={onOpenChange}
       cargaId={draft.carga_id ?? undefined}

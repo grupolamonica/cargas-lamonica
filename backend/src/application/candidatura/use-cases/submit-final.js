@@ -52,15 +52,28 @@ function ensureTelefonePrimarioMirror(motorista) {
  */
 async function applyOwnerReuseAndCascade({ dados, driverCpf, correlationId, disableOwnerReuseByDriver = false }) {
   // A2 fix — no fluxo publico (sem login), o CPF declarado pelo cliente nao e
-  // source-of-truth. Forcamos normalizedDriverCpf="" para que owner-reuse-by-
-  // driver nunca dispare; cavalo/carreta owner sempre roda cascata ANTT (D-12).
-  const normalizedDriverCpf = disableOwnerReuseByDriver ? "" : stripDocDigits(driverCpf);
+  // source-of-truth. `cascadeDriverCpf` fica vazio para que a cascata ANTT
+  // NUNCA seja pulada por "owner == driver" no publico (D-12 / anti-bypass).
+  const cascadeDriverCpf = disableOwnerReuseByDriver ? "" : stripDocDigits(driverCpf);
+  // `factualDriverCpf` é o CPF real — usado apenas para EXIBIR no painel se o
+  // dono do cavalo é o próprio motorista (e p/ pular o bloco bancário do dono).
+  // Decoupling: antes ambos usavam o gated, então o painel mostrava sempre
+  // "Dono = motorista: Não" no fluxo publico/operador mesmo quando ERA o
+  // motorista (bug reportado).
+  const factualDriverCpf = stripDocDigits(driverCpf);
 
   const cavaloOwnerDoc = stripDocDigits(dados.cavalo?.owner_doc);
-  const cavaloOwnerIsDriver = cavaloOwnerDoc === normalizedDriverCpf && normalizedDriverCpf.length > 0;
+  // Para a cascata (segurança): só considera "é o motorista" quando confiamos no CPF.
+  const cavaloOwnerIsDriverForCascade =
+    cavaloOwnerDoc === cascadeDriverCpf && cascadeDriverCpf.length > 0;
+  // Para exibição/banco: o fato real.
+  const cavaloOwnerIsDriverFactual =
+    cavaloOwnerDoc === factualDriverCpf && factualDriverCpf.length > 0;
+
+  const cavaloOwnerIsDriver = cavaloOwnerIsDriverForCascade;
 
   const reuse = {
-    cavalo_owner_is_driver: cavaloOwnerIsDriver,
+    cavalo_owner_is_driver: cavaloOwnerIsDriverFactual,
     carreta_owners_reused: [],
   };
   const anttHits = [];
@@ -138,7 +151,7 @@ async function applyOwnerReuseAndCascade({ dados, driverCpf, correlationId, disa
     const carretaOwnerDoc = stripDocDigits(carreta.owner_doc);
 
     let reuseFlag = "none";
-    if (carretaOwnerDoc === normalizedDriverCpf && normalizedDriverCpf.length > 0) {
+    if (carretaOwnerDoc === cascadeDriverCpf && cascadeDriverCpf.length > 0) {
       reuseFlag = "driver";
     } else if (carretaOwnerDoc === cavaloOwnerDoc && cavaloOwnerDoc.length > 0) {
       reuseFlag = "cavalo_owner";
