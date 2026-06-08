@@ -360,6 +360,45 @@ function isFichaFileField(key: string, value: unknown): boolean {
   return /_url$|storage_path$|storagePath$/i.test(key) && String(value).length > 0;
 }
 
+// Rótulo de seção (prefixo de contexto) para a galeria de documentos.
+const CADASTRO_DOC_SECTION_LABELS: Record<string, string> = {
+  motorista: "Motorista",
+  cavalo: "Cavalo",
+  cavalo_owner: "Dono do cavalo",
+  carretas: "Carreta",
+  carreta_owners: "Dono da carreta",
+  antt_titular: "Titular RNTRC",
+  endereco: "Endereço",
+};
+
+/**
+ * Percorre o JSONB `dados` e coleta TODOS os arquivos enviados (CNH, CRLV,
+ * comprovante, selfie, documentos do proprietário/titular, etc.) com um rótulo
+ * contextual (ex.: "Cavalo — CRLV", "Carreta 1 — CRLV", "Dono do cavalo —
+ * Documento"). Alimenta a galeria "Documentos enviados" no topo da revisão do
+ * pendente, para o operador conferir tudo antes de aprovar sem caçar na ficha.
+ */
+function collectCadastroDocuments(
+  node: unknown,
+  context: string[] = [],
+  out: Array<{ path: string; label: string }> = [],
+): Array<{ path: string; label: string }> {
+  if (!node || typeof node !== "object") return out;
+  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+    if (typeof v === "string" && isFichaFileField(k, v)) {
+      const leaf = humanizeFichaKey(k).replace(/\s*\(arquivo\)\s*$/i, "");
+      out.push({ path: v, label: [...context, leaf].join(" — ") });
+    } else if (Array.isArray(v)) {
+      const base = CADASTRO_DOC_SECTION_LABELS[k] ?? humanizeFichaKey(k);
+      v.forEach((item, i) => collectCadastroDocuments(item, [...context, `${base} ${i + 1}`], out));
+    } else if (v && typeof v === "object") {
+      const base = CADASTRO_DOC_SECTION_LABELS[k] ?? humanizeFichaKey(k);
+      collectCadastroDocuments(v, [...context, base], out);
+    }
+  }
+  return out;
+}
+
 function formatFichaScalar(key: string, value: unknown): string {
   if (typeof value === "boolean") return value ? "Sim" : "Não";
   const s = String(value);
@@ -1077,6 +1116,35 @@ const Motoristas = () => {
                         <X className="h-4 w-4 text-muted-foreground" />
                       </button>
                     </div>
+
+                    {/* Galeria de documentos enviados — destacada no topo para o
+                        operador conferir tudo antes de aprovar (sem caçar na ficha). */}
+                    {(() => {
+                      const docs = collectCadastroDocuments(selectedPendente.dados);
+                      if (docs.length === 0) return null;
+                      return (
+                        <div className="mt-4 rounded-xl border border-border bg-muted/20 p-3">
+                          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            Documentos enviados ({docs.length})
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {docs.map((doc, i) => (
+                              <button
+                                key={`${doc.path}-${i}`}
+                                type="button"
+                                onClick={() =>
+                                  setFilePreview({ cadastroId: selectedPendente.id, path: doc.path, label: doc.label })
+                                }
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/10"
+                              >
+                                <span aria-hidden>👁</span>
+                                {doc.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {selectedPendente.dados && (
                       <div className="mt-4 space-y-3 max-h-[420px] overflow-y-auto pr-1">
