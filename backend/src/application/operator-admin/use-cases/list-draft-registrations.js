@@ -54,31 +54,41 @@ export async function listDraftRegistrations({ page, pageSize, correlationId } =
     const [itemsResult, countResult] = await Promise.all([
       client.query(
         `
-        SELECT
-          id,
-          carga_id,
-          created_at,
-          updated_at,
-          dados->>'__currentStep'           AS current_step,
-          dados->'motorista'->>'cpf'        AS cpf,
-          dados->'stepA'->'a1'->>'nome'     AS nome,
-          dados->'stepB'->>'placa'          AS placa_cavalo,
-          dados->'stepA'->'a1'->>'categoria' AS cnh_categoria,
-          (dados ? 'stepA')                 AS has_step_a,
-          (dados ? 'stepB')                 AS has_step_b,
-          (dados ? 'stepC')                 AS has_step_c,
-          (dados ? 'stepD')                 AS has_step_d,
-          (dados ? 'stepE')                 AS has_step_e,
-          (dados ? '__submitIdempotencyKey') AS has_submit_key
-        FROM public.pending_driver_registrations
-        WHERE status = 'draft'
+        -- Dedupe por CPF: o mesmo motorista (público, sem login) gera 1 draft por
+        -- carga → a lista mostrava a mesma pessoa N vezes. Mantém só o rascunho
+        -- mais recente por CPF (o cadastro do motorista é o mesmo entre cargas).
+        -- Rascunhos sem CPF (não identificáveis) usam o id como chave → cada um
+        -- permanece distinto.
+        WITH deduped AS (
+          SELECT DISTINCT ON (COALESCE(dados->'motorista'->>'cpf', id::text))
+            id,
+            carga_id,
+            created_at,
+            updated_at,
+            dados->>'__currentStep'           AS current_step,
+            dados->'motorista'->>'cpf'        AS cpf,
+            dados->'stepA'->'a1'->>'nome'     AS nome,
+            dados->'stepB'->>'placa'          AS placa_cavalo,
+            dados->'stepA'->'a1'->>'categoria' AS cnh_categoria,
+            (dados ? 'stepA')                 AS has_step_a,
+            (dados ? 'stepB')                 AS has_step_b,
+            (dados ? 'stepC')                 AS has_step_c,
+            (dados ? 'stepD')                 AS has_step_d,
+            (dados ? 'stepE')                 AS has_step_e,
+            (dados ? '__submitIdempotencyKey') AS has_submit_key
+          FROM public.pending_driver_registrations
+          WHERE status = 'draft'
+          ORDER BY COALESCE(dados->'motorista'->>'cpf', id::text), updated_at DESC NULLS LAST
+        )
+        SELECT * FROM deduped
         ORDER BY updated_at DESC NULLS LAST, created_at DESC
         LIMIT $1 OFFSET $2
         `,
         [safePageSize, offset],
       ),
       client.query(
-        `SELECT COUNT(*)::int AS total FROM public.pending_driver_registrations WHERE status = 'draft'`,
+        `SELECT COUNT(DISTINCT COALESCE(dados->'motorista'->>'cpf', id::text))::int AS total
+         FROM public.pending_driver_registrations WHERE status = 'draft'`,
       ),
     ]);
 

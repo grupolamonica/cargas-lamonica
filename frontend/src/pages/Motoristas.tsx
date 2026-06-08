@@ -42,6 +42,7 @@ import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/App
 import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
 import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
 import { CadastroRascunhoResgateModal } from "@/components/operator/CadastroRascunhoResgateModal";
+import { FilePreviewModal } from "@/components/operator/FilePreviewModal";
 import {
   StandaloneCadastroDialog,
   type StandaloneCadastroProceedArgs,
@@ -355,10 +356,14 @@ function isFichaEmpty(value: unknown): boolean {
   );
 }
 
+function isFichaFileField(key: string, value: unknown): boolean {
+  return /_url$|storage_path$|storagePath$/i.test(key) && String(value).length > 0;
+}
+
 function formatFichaScalar(key: string, value: unknown): string {
   if (typeof value === "boolean") return value ? "Sim" : "Não";
   const s = String(value);
-  if (/_url$|storage_path$|storagePath$/i.test(key) && s.length > 0) {
+  if (isFichaFileField(key, value)) {
     return "✓ arquivo enviado";
   }
   return s;
@@ -370,21 +375,34 @@ function FichaNode({
   value,
   depth,
   bare = false,
+  onOpenFile,
 }: {
   nodeKey: string;
   value: unknown;
   depth: number;
   bare?: boolean;
+  onOpenFile?: (path: string, label: string) => void;
 }) {
   if (isFichaEmpty(value)) return null;
 
   // Escalar → linha rótulo/valor.
   if (typeof value !== "object" || value === null) {
+    const isFile = isFichaFileField(nodeKey, value);
     const field = (
       <>
         <dt className="text-muted-foreground truncate">{humanizeFichaKey(nodeKey)}</dt>
         <dd className="font-medium text-foreground break-words">
-          {formatFichaScalar(nodeKey, value)}
+          {isFile && onOpenFile ? (
+            <button
+              type="button"
+              onClick={() => onOpenFile(String(value), humanizeFichaKey(nodeKey))}
+              className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/20"
+            >
+              👁 Ver arquivo
+            </button>
+          ) : (
+            formatFichaScalar(nodeKey, value)
+          )}
         </dd>
       </>
     );
@@ -418,7 +436,7 @@ function FichaNode({
               <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 {singular} {i + 1}
               </p>
-              <FichaNode nodeKey={nodeKey} value={item} depth={depth + 1} bare />
+              <FichaNode nodeKey={nodeKey} value={item} depth={depth + 1} bare onOpenFile={onOpenFile} />
             </div>
           ))}
         </div>
@@ -437,12 +455,12 @@ function FichaNode({
       {scalars.length > 0 ? (
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
           {scalars.map(([k, v]) => (
-            <FichaNode key={k} nodeKey={k} value={v} depth={depth + 1} />
+            <FichaNode key={k} nodeKey={k} value={v} depth={depth + 1} onOpenFile={onOpenFile} />
           ))}
         </dl>
       ) : null}
       {nested.map(([k, v]) => (
-        <FichaNode key={k} nodeKey={k} value={v} depth={depth + 1} />
+        <FichaNode key={k} nodeKey={k} value={v} depth={depth + 1} onOpenFile={onOpenFile} />
       ))}
     </>
   );
@@ -612,6 +630,8 @@ const Motoristas = () => {
   const [editJsonError, setEditJsonError] = useState<string | null>(null);
   // Confirmação de exclusão
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  // Preview de arquivo enviado pelo motorista (CNH/CRLV/comprovante/etc.)
+  const [filePreview, setFilePreview] = useState<{ cadastroId: string; path: string; label: string } | null>(null);
 
   // Modal de PROGRESSO ao vivo do disparo externo (Angellira + SPX) — DC-111 / DC-118.
   // Snapshot dos dados no momento do disparo (selectedPendente pode mudar/limpar).
@@ -1063,7 +1083,15 @@ const Motoristas = () => {
                         {Object.entries(selectedPendente.dados as Record<string, unknown>)
                           .filter(([, v]) => !isFichaEmpty(v))
                           .map(([section, value]) => (
-                            <FichaNode key={section} nodeKey={section} value={value} depth={0} />
+                            <FichaNode
+                              key={section}
+                              nodeKey={section}
+                              value={value}
+                              depth={0}
+                              onOpenFile={(path, label) =>
+                                setFilePreview({ cadastroId: selectedPendente.id, path, label })
+                              }
+                            />
                           ))}
                       </div>
                     )}
@@ -1826,6 +1854,9 @@ const Motoristas = () => {
           queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
         }}
       />
+
+      {/* Preview de arquivo enviado pelo motorista (CNH/CRLV/comprovante/etc.) */}
+      <FilePreviewModal file={filePreview} onClose={() => setFilePreview(null)} />
     </div>
   );
 };

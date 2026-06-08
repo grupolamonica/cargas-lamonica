@@ -1174,6 +1174,17 @@ export async function submitCadastroRascunho(id: string, dados: Record<string, u
   );
 }
 
+/**
+ * Gera uma signed URL (TTL 1h) para visualizar um arquivo enviado pelo motorista
+ * (CNH/CRLV/comprovante/etc.) no bucket privado cadastro-drafts. O backend valida
+ * que o path pertence ao cadastro.
+ */
+export async function fetchCadastroArquivoUrl(cadastroId: string, path: string) {
+  return getOperator<{ signed_url: string; expires_in: number }>(
+    `/api/operator/cadastros/${cadastroId}/arquivo?path=${encodeURIComponent(path)}`,
+  );
+}
+
 // ── Cadastro rápido de motorista pelo operador ────────────────────────────
 
 export interface CadastroRapidoInput {
