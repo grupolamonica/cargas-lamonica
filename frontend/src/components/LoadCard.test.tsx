@@ -150,9 +150,16 @@ describe("LoadCard — avulsa (legacy regression)", () => {
 describe("LoadCard — pacote_meta branch", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    // Congela "hoje" numa data fixa != earliest_carga_date do fixture (2026-06-10)
+    // para o badge renderizar "10/06" e não "hoje" — o teste dependia do dia da
+    // execução e quebrava quando rodava em 10/06. shouldAdvanceTime mantém
+    // promises/waitFor funcionando sob fake timers.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-01-15T12:00:00"));
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 

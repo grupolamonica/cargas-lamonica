@@ -21,6 +21,15 @@ interface Slide {
 
 const SLIDES: Slide[] = [
   {
+    src: "/sponsors/anuncie-aqui_1200x628.jpg",
+    alt: "Anuncie aqui no portal Lamônica — produtos e acessórios, serviços e lubrificantes, pneus, lavagens e peças. Mais visibilidade, mais oportunidades, mais vendas.",
+    href: "https://wa.me/557139950665?text=Ol%C3%A1%2C%20vi%20o%20espa%C3%A7o%20Anuncie%20aqui%20no%20portal%20Lam%C3%B4nica%20e%20quero%20anunciar%20meu%20produto%20ou%20servi%C3%A7o.",
+    brand: "ANUNCIE AQUI",
+    tagline: "Divulgue seu produto ou serviço no portal",
+    cta: "Quero anunciar",
+    selfContained: true,
+  },
+  {
     src: "/sponsors/lamonica-postos-pe.png",
     alt: "Lamônica Postos — nova parceria: 3 novos postos em Pernambuco com valor diferenciado para agregados e parceiros",
     href: "https://wa.me/557139950665?text=Ol%C3%A1%2C%20vi%20a%20parceria%20dos%20postos%20em%20PE%20no%20portal%20e%20quero%20saber%20mais%20sobre%20o%20valor%20diferenciado.",
