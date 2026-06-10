@@ -281,7 +281,10 @@ describe("public-loads handlers — Phase 10 pacote support", () => {
           cliente_id: cliente.id,
           driver_visibility: "PUBLIC",
           viagem_id: null,
-          data: `2026-06-1${i}`,
+          // Datas no futuro distante (espelha o default 2099-12-31 do helper)
+          // para não depender do dia da execução — o read model filtra cargas
+          // com data <= hoje, então fixtures em 2026-06-1x quebravam em 10/06.
+          data: `2099-12-1${i}`,
           origem: `OrigemAvulsa${i} / SP`,
           destino: `DestinoAvulsa${i} / RJ`,
         });
