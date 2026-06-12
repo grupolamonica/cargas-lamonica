@@ -17,6 +17,14 @@ interface Slide {
    * com letterbox lateral quando o aspect ratio nao bate com 16/7.
    */
   selfContained?: boolean;
+  /**
+   * Ajuste da imagem dentro do card 1536x785. "cover" (default) preenche e
+   * pode cortar; "contain" mostra a arte inteira (banners 1.5:1 ganham
+   * letterbox lateral) — use quando o banner traz CTA/contato nas bordas.
+   */
+  fit?: "cover" | "contain";
+  /** Cor de fundo do card (preenche o letterbox de slides "contain"). */
+  bg?: string;
 }
 
 const SLIDES: Slide[] = [
@@ -30,6 +38,17 @@ const SLIDES: Slide[] = [
     selfContained: true,
   },
   {
+    src: "/sponsors/lamonica-bolao_1536x1024.jpg",
+    alt: "Venha bater um bolão com a gente e ser o motorista bola cheia da Lamônica — cadastre-se aqui.",
+    href: "https://wa.me/557139950665?text=Ol%C3%A1%2C%20vi%20a%20campanha%20%22Motorista%20Bola%20Cheia%22%20no%20portal%20e%20quero%20me%20cadastrar%20como%20motorista%20da%20Lam%C3%B4nica.",
+    brand: "LAMONICA BOLAO",
+    tagline: "Seja o motorista bola cheia da Lamônica",
+    cta: "Cadastre-se aqui",
+    selfContained: true,
+    fit: "contain",
+    bg: "#0a1530",
+  },
+  {
     src: "/sponsors/lamonica-postos-pe.png",
     alt: "Lamônica Postos — nova parceria: 3 novos postos em Pernambuco com valor diferenciado para agregados e parceiros",
     href: "https://wa.me/557139950665?text=Ol%C3%A1%2C%20vi%20a%20parceria%20dos%20postos%20em%20PE%20no%20portal%20e%20quero%20saber%20mais%20sobre%20o%20valor%20diferenciado.",
@@ -37,6 +56,17 @@ const SLIDES: Slide[] = [
     tagline: "Nova parceria — 3 postos em Pernambuco",
     cta: "Saiba mais",
     selfContained: true,
+  },
+  {
+    src: "/sponsors/auto-lave_1536x1024.jpg",
+    alt: "Auto Lave — serviços de lavagem e lubrificação em geral: rodotrem, carretas, containers, silders, automóveis e caçambas. Rod. BA 093, Simões Filho — Bahia.",
+    href: "https://wa.me/5571974006128?text=Ol%C3%A1%2C%20vim%20pelo%20portal%20Lamonica%20e%20quero%20um%20or%C3%A7amento%20de%20lavagem.",
+    brand: "AUTO LAVE",
+    tagline: "Lavagem de carretas, rodotrem, contêineres e mais",
+    cta: "Falar no WhatsApp",
+    selfContained: true,
+    fit: "contain",
+    bg: "#0c0c0c",
   },
   {
     src: "/sponsors/parabrisa_X4_2407x1607.jpg",
@@ -119,7 +149,7 @@ export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
                     target="_blank"
                     rel="noreferrer"
                     className="relative block overflow-hidden"
-                    style={{ aspectRatio: "1536 / 785" }}
+                    style={{ aspectRatio: "1536 / 785", backgroundColor: slide.bg }}
                     onClick={() => {
                       void fetch("/api/driver/sponsor-click", {
                         method: "POST",
@@ -134,7 +164,9 @@ export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
                     <img
                       src={slide.src}
                       alt={slide.alt}
-                      className="absolute inset-0 h-full w-full object-cover"
+                      className={`absolute inset-0 h-full w-full ${
+                        slide.fit === "contain" ? "object-contain" : "object-cover"
+                      }`}
                       style={{ objectPosition: slide.objectPosition ?? "center" }}
                     />
 
