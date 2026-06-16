@@ -242,7 +242,9 @@ describe("Leads", () => {
         // Backoff dinâmico: 30s antes do primeiro response, 60s estável.
         refetchInterval: expect.any(Function),
         refetchIntervalInBackground: false,
-        refetchOnWindowFocus: true,
+        // Desligado para cortar egress do pooler: alternar abas não deve
+        // refetchar a query pesada da fila (polling + realtime já cobrem).
+        refetchOnWindowFocus: false,
         refetchOnReconnect: true,
         staleTime: 15_000,
       }),
@@ -262,11 +264,14 @@ describe("Leads", () => {
 
     realtimeCallbacks.get("load_public_leads")?.();
 
+    // A invalidação é DEBOUNCED em 3s (corta egress do pooler: rajada de
+    // eventos do canal `cargas`, inflada pelo sheet sync, colapsa em 1
+    // refetch). Por isso o waitFor precisa de timeout > 3s.
     await waitFor(() => {
       expect(invalidateQueries).toHaveBeenCalledWith({
         queryKey: ["operator", "public-load-leads"],
       });
-    });
+    }, { timeout: 5_000 });
   });
 
   it("mostra banner amarelo de sincronizacao indisponivel quando 503 e ja existem dados", () => {
