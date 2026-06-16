@@ -171,7 +171,11 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     // estável de operador sem perder responsividade no carregamento inicial.
     refetchInterval: (query) => (query.state.data ? 60_000 : 30_000),
     refetchIntervalInBackground: false,
-    refetchOnWindowFocus: true,
+    // refetchOnWindowFocus desligado: o polling (60s) + realtime debounced já
+    // mantêm a fila fresca. Com focus-refetch ligado, alternar abas dispara
+    // refetch da query pesada (238 leads × 6 JOINs) desnecessariamente — somava
+    // ao egress do pooler (incidente 70GB).
+    refetchOnWindowFocus: false,
     refetchOnReconnect: true,
     staleTime: 15_000,
     // Retry transient errors (5xx) with exponential backoff. 4xx errors
@@ -224,22 +228,34 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   }, [sheetData]);
 
   useEffect(() => {
-    const invalidateLeadQueue = () =>
-      queryClient.invalidateQueries({
-        queryKey: LEADS_QUERY_KEY,
-      });
+    // Debounce da invalidação: o canal `cargas` é ruidoso — o sheet sync faz
+    // UPDATE em massa (centenas de linhas por ciclo), e cada linha emite um
+    // evento postgres_changes. Sem debounce, cada evento disparava um refetch
+    // imediato da query pesada (listOperatorPublicLoadLeads: 238 leads × 6
+    // JOINs), gerando centenas de mil chamadas ao pooler (incidente 70GB de
+    // egress). O debounce colapsa uma rajada de N eventos numa única
+    // invalidação ~3s depois do último evento.
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const invalidateLeadQueueDebounced = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        void queryClient.invalidateQueries({ queryKey: LEADS_QUERY_KEY });
+      }, 3_000);
+    };
 
     const realtimeChannel = supabase
       .channel("operator-public-load-leads")
       .on("postgres_changes", { event: "*", schema: "public", table: "load_public_leads" }, () => {
-        void invalidateLeadQueue();
+        invalidateLeadQueueDebounced();
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "cargas" }, () => {
-        void invalidateLeadQueue();
+        invalidateLeadQueueDebounced();
       })
       .subscribe();
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       void supabase.removeChannel(realtimeChannel);
     };
   }, [queryClient]);
