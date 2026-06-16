@@ -166,7 +166,11 @@ describe("public-loads handlers — Phase 10 pacote support", () => {
         driver_visibility: "PREMIUM",
         viagem_id: pacoteId,
         ordem_viagem: 1,
-        data: "2026-06-10",
+        // Datas no futuro distante: o read model filtra cargas com data <= hoje
+        // (handlers.js: `data > $1`). As datas originais (2026-06-10/12/15) eram
+        // futuras quando o teste foi escrito mas viraram passado em 2026-06-16,
+        // fazendo o pacote sumir do listing (entry undefined). 2099 nunca expira.
+        data: "2099-06-10",
         distancia_km: 800,
         duracao_horas: 12,
         perfil: "CARRETA",
@@ -176,7 +180,7 @@ describe("public-loads handlers — Phase 10 pacote support", () => {
         driver_visibility: "PREMIUM",
         viagem_id: pacoteId,
         ordem_viagem: 2,
-        data: "2026-06-12",
+        data: "2099-06-12",
         distancia_km: 500,
         duracao_horas: 8,
         perfil: "CARRETA",
@@ -186,7 +190,7 @@ describe("public-loads handlers — Phase 10 pacote support", () => {
         driver_visibility: "PREMIUM",
         viagem_id: pacoteId,
         ordem_viagem: 3,
-        data: "2026-06-15",
+        data: "2099-06-15",
         distancia_km: 300,
         duracao_horas: 5,
         perfil: "CARRETA",
@@ -211,7 +215,7 @@ describe("public-loads handlers — Phase 10 pacote support", () => {
       const earliestIso = earliest instanceof Date ? earliest.toISOString().slice(0, 10) : String(earliest);
       // Date instance pode estar em TZ local (Jun 9 23h em America/Sao_Paulo ===
       // Jun 10 02h UTC). Aceitar +/- 1 dia para nao ser flaky em CI multi-TZ.
-      expect(["2026-06-09", "2026-06-10", "2026-06-11"]).toContain(earliestIso);
+      expect(["2099-06-09", "2099-06-10", "2099-06-11"]).toContain(earliestIso);
       // iter #2 (2026-05-23): MIN(horario) tambem deve estar presente quando
       // todas cargas tem horario.
       expect(entry.pacote_meta.earliest_carga_horario).toBeTruthy();
