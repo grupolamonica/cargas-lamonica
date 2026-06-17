@@ -205,6 +205,10 @@ export interface OperatorCargoListItem {
   ordem_viagem?: number | null;
   /** Resumo inline do pacote para painel operador — null quando avulsa. */
   pacote_meta?: PacoteMeta | null;
+  /** Carga recorrente (renova-se sozinha + clona ao reservar). */
+  is_recurring?: boolean;
+  /** Intervalo de recorrência em dias (1 = diária). null quando não recorrente. */
+  recurrence_interval_days?: number | null;
 }
 
 export interface OperatorClienteListItem {

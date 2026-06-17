@@ -620,6 +620,8 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
             ${nextSupportsOptionalColumns ? 'cargas.sheet_data_descarga' : "NULL::text AS sheet_data_descarga"},
             cargas.viagem_id,
             cargas.ordem_viagem,
+            ${nextSupportsOptionalColumns ? "COALESCE(cargas.is_recurring, false) AS is_recurring" : "FALSE AS is_recurring"},
+            ${nextSupportsOptionalColumns ? "cargas.recurrence_interval_days" : "NULL::int AS recurrence_interval_days"},
             clientes.nome AS cliente_nome
           FROM public.cargas
           LEFT JOIN public.clientes
@@ -710,6 +712,8 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
           sheet_data_descarga: row.sheet_data_descarga ?? null,
           viagem_id: row.viagem_id ?? null,
           ordem_viagem: row.ordem_viagem ?? null,
+          is_recurring: row.is_recurring ?? false,
+          recurrence_interval_days: row.recurrence_interval_days ?? null,
           clientes: row.cliente_nome
             ? {
                 nome: row.cliente_nome,

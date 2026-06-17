@@ -76,6 +76,8 @@ const schemaSql = `
     perfil text NOT NULL DEFAULT 'CARRETA',
     valor numeric,
     bonus numeric,
+    bonus_exigencias text,
+    driver_visibility text NOT NULL DEFAULT 'PUBLIC',
     status text NOT NULL DEFAULT 'DRAFT',
     is_template boolean NOT NULL DEFAULT false,
     created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
@@ -102,6 +104,9 @@ const schemaSql = `
     booked_at timestamptz,
     viagem_id uuid,
     ordem_viagem integer,
+    is_recurring boolean NOT NULL DEFAULT false,
+    recurrence_interval_days integer,
+    recurrence_parent_id uuid,
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT cargas_status_check CHECK (
       status IN ('DRAFT', 'OPEN', 'RESERVED', 'BOOKED', 'EXPIRED', 'CANCELLED', 'COMPLETED', 'FAILED')
@@ -537,7 +542,9 @@ export async function seedLoad(overrides = {}) {
         reserved_at,
         reserved_until,
         booked_driver_id,
-        booked_at
+        booked_at,
+        is_recurring,
+        recurrence_interval_days
       )
       VALUES (
         $1,
@@ -558,7 +565,9 @@ export async function seedLoad(overrides = {}) {
         $16,
         $17,
         $18,
-        $19
+        $19,
+        $20,
+        $21
       )
     `,
     [
@@ -581,6 +590,8 @@ export async function seedLoad(overrides = {}) {
       overrides.reserved_until ?? null,
       overrides.booked_driver_id ?? null,
       overrides.booked_at ?? null,
+      overrides.is_recurring ?? false,
+      overrides.recurrence_interval_days ?? null,
     ],
   );
 
