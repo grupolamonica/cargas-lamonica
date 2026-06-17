@@ -1220,6 +1220,23 @@ export async function syncGoogleSheetLoads({
               UNNEST($9::text[])  AS sheet_status
           ) AS v
           WHERE c.id = v.id
+            -- Anti no-op: só reescreve quando algo MUDOU (ou ainda precisa
+            -- transitar OPEN/RESERVED→BOOKED). Sem este guard, todo sync
+            -- reescrevia todas as cargas booked com valores idênticos, gerando
+            -- dead tuples (bloat de cargas) e uma tempestade de eventos realtime
+            -- no canal cargas — amplificador do incidente de 70GB de egress do
+            -- pooler. O indicador global de ultimo sync (sheet_synced_at)
+            -- segue fresco via o upsert das cargas disponíveis, não daqui.
+            AND (
+              c.status IN ('OPEN', 'RESERVED')
+              OR c.sheet_motorista         IS DISTINCT FROM v.motorista
+              OR c.sheet_cavalo            IS DISTINCT FROM v.cavalo
+              OR c.sheet_carreta           IS DISTINCT FROM v.carreta
+              OR c.sheet_tipo              IS DISTINCT FROM v.tipo
+              OR c.sheet_data_carregamento IS DISTINCT FROM v.data_carregamento
+              OR c.sheet_data_descarga     IS DISTINCT FROM v.data_descarga
+              OR c.sheet_status            IS DISTINCT FROM v.sheet_status
+            )
         `,
         [
           syncedAt,

@@ -1711,7 +1711,70 @@ function groupLeadsForOperator(rows) {
   return Array.from(groupsMap.values());
 }
 
-export async function listOperatorPublicLoadLeads({ correlationId }) {
+// ── Micro-cache + single-flight do read model da fila (incidente 70GB egress) ──
+// O endpoint da fila do operador é o maior consumidor de egress do pooler:
+// `SELECT leads.* + 6 JOINs` retornando ~238 leads/chamada, disparado em rajada
+// pelo realtime (canal `cargas` é ruidoso por causa do sheet sync em massa).
+//
+// Duas proteções, complementares ao debounce do frontend (Leads.tsx):
+//   1. single-flight: chamadas concorrentes compartilham UMA query ao DB. Sempre
+//      ligado — só coalesce concorrência real, então não afeta testes sequenciais.
+//   2. micro-cache TTL: serve o último resultado por OPERATOR_LEADS_CACHE_TTL_MS.
+//      Default 3000ms em produção (fix ativo no deploy, sem precisar setar env).
+//      Forçado a 0 sob teste (VITEST/NODE_ENV=test) p/ não vazar estado de
+//      módulo entre testes. Staleness de 3s é aceitável numa fila de operador.
+let _operatorLeadsInFlight = null;
+let _operatorLeadsCache = { at: 0, payload: null };
+
+function getOperatorLeadsCacheTtlMs() {
+  // Em teste o cache de módulo vazaria entre casos (mutate→list espera dado
+  // fresco). Desliga sempre sob Vitest.
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0;
+  const raw = Number.parseInt(process.env.OPERATOR_LEADS_CACHE_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // respeita override (incl. 0)
+  return 3_000; // default produção
+}
+
+function nowMs() {
+  return Date.now();
+}
+
+export async function listOperatorPublicLoadLeads({ correlationId } = {}) {
+  const resolvedCorrelationId = correlationId || createCorrelationId();
+  const ttl = getOperatorLeadsCacheTtlMs();
+
+  // 1) micro-cache TTL (só quando habilitado em produção)
+  if (ttl > 0 && _operatorLeadsCache.payload && nowMs() - _operatorLeadsCache.at < ttl) {
+    return {
+      statusCode: 200,
+      payload: { ..._operatorLeadsCache.payload, meta: { correlationId: resolvedCorrelationId, cached: true } },
+    };
+  }
+
+  // 2) single-flight: rajada concorrente compartilha 1 query
+  if (_operatorLeadsInFlight) {
+    const shared = await _operatorLeadsInFlight;
+    return {
+      statusCode: 200,
+      payload: { ...shared, meta: { correlationId: resolvedCorrelationId, cached: true } },
+    };
+  }
+
+  _operatorLeadsInFlight = (async () => {
+    const result = await listOperatorPublicLoadLeadsUncached({ correlationId: resolvedCorrelationId });
+    if (ttl > 0) _operatorLeadsCache = { at: nowMs(), payload: result.payload };
+    return result.payload;
+  })();
+
+  try {
+    const payload = await _operatorLeadsInFlight;
+    return { statusCode: 200, payload };
+  } finally {
+    _operatorLeadsInFlight = null;
+  }
+}
+
+async function listOperatorPublicLoadLeadsUncached({ correlationId }) {
   const resolvedCorrelationId = correlationId || createCorrelationId();
 
   return withPgTransaction(async (client) => {

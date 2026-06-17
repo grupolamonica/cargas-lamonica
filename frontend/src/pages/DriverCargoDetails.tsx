@@ -585,6 +585,11 @@ const DriverCargoDetails = () => {
       // gerados do Supabase ainda não foram regenerados — cast via unknown.
       return resolveCargoDecorations(data as unknown as CargoDetailsRow);
     },
+    // Detalhe de carga muda pouco; sem staleTime (default 0) cada foco de aba
+    // refazia a query + JOINs de cliente/rota. 30s corta refetches redundantes
+    // (egress do pooler) sem prejudicar a navegação do motorista.
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   });
 
   // ─── Pacote (cargas casadas) realtime — plan 10-06 ──────────────────────
