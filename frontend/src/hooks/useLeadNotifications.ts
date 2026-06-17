@@ -89,14 +89,17 @@ export function useLeadNotifications() {
       const currentEntries = query.state.data as DriverLeadNotificationStatusEntry[] | undefined;
       if (!currentEntries?.length) return false;
       const hasQueued = currentEntries.some((e) => e.state.stage === "QUEUED");
-      // N-01: poll mais agressivo (15s) quando há QUEUED — motorista esperando aprovação;
-      // 60s quando só há PRE_REGISTERED (mudança rara).
+      // N-01: poll (30s) quando há QUEUED — motorista esperando aprovação;
+      // 60s quando só há PRE_REGISTERED (mudança rara). O refetchOnWindowFocus
+      // já dá update instantâneo ao reabrir o app, então 30s é backstop
+      // suficiente — 15s multiplicava egress do pooler por nº de motoristas em
+      // fila sem ganho real de UX (incidente de egress).
       // TODO: substituir polling por Supabase realtime channel em `public_load_leads`
-      // para notificação imediata em vez de até 15s de espera.
+      // para notificação imediata em vez de espera por intervalo.
       if (!hasQueued) {
         return currentEntries.some(shouldContinuePollingDriverLeadStatus) ? 60_000 : false;
       }
-      return currentEntries.some(shouldContinuePollingDriverLeadStatus) ? 15_000 : false;
+      return currentEntries.some(shouldContinuePollingDriverLeadStatus) ? 30_000 : false;
     },
   });
 

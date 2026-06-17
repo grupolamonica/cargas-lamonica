@@ -1,6 +1,7 @@
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { parseOperatorDashboardQuery } from "../../../domain/operator-admin/schemas.js";
 import { buildPaginationMeta, parseNullableNumber } from "../../../domain/operator-admin/route-utils.js";
+import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 import {
   isMissingOptionalCargoReadModelColumnsError,
   buildDriverLoadFilters,
@@ -180,7 +181,84 @@ export async function fetchOperatorDashboardReadModel({ query, correlationId }) 
   });
 }
 
+// ── Cache + single-flight do read model de cargas do MOTORISTA ───────────────
+// A lista de cargas do portal é PÚBLICA e idêntica para todos os motoristas
+// (sem filtro por usuário). Centenas de motoristas no polling da view padrão
+// executavam a MESMA query pesada (todas as cargas OPEN + JOINs, paginada em
+// memória) — maior consumidor de egress do pooler. O cache colapsa N polls
+// concorrentes (mesmos filtros) em 1 query por janela de TTL; o single-flight
+// garante que uma rajada concorrente compartilhe a query em andamento.
+// Chave = combinação de filtros (a view padrão sem busca é a mais comum →
+// hit rate altíssimo). TTL default 8s em produção; 0 em teste (VITEST) p/ não
+// vazar estado entre casos. Staleness de 8s é aceitável numa lista de cargas.
+let _driverLoadsInFlight = new Map();
+let _driverLoadsCache = new Map();
+
+function getDriverLoadsCacheTtlMs() {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0;
+  const raw = Number.parseInt(process.env.DRIVER_LOADS_CACHE_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // respeita override (incl. 0)
+  return 8_000; // default produção
+}
+
+function driverLoadsCacheKey(query = {}) {
+  // Normaliza só os campos que mudam o resultado. Ordena p/ estabilidade.
+  const q = query || {};
+  return JSON.stringify({
+    page: String(q.page ?? ""),
+    pageSize: String(q.pageSize ?? ""),
+    search: String(q.search ?? "").trim().toLowerCase(),
+    status: String(q.status ?? "").trim().toLowerCase(),
+    driverVisibility: String(q.driverVisibility ?? "").trim().toLowerCase(),
+    clienteId: String(q.clienteId ?? "").trim(),
+    origem: String(q.origem ?? "").trim().toLowerCase(),
+    destino: String(q.destino ?? "").trim().toLowerCase(),
+  });
+}
+
 export async function fetchDriverLoadsReadModel({ query, correlationId }) {
+  const ttl = getDriverLoadsCacheTtlMs();
+  if (ttl <= 0) {
+    return fetchDriverLoadsReadModelUncached({ query, correlationId });
+  }
+  const key = driverLoadsCacheKey(query);
+  const now = Date.now();
+
+  const cached = _driverLoadsCache.get(key);
+  if (cached && now - cached.at < ttl) {
+    return { statusCode: 200, payload: { ...cached.payload, meta: { ...cached.payload.meta, correlationId, cached: true } } };
+  }
+
+  const inFlight = _driverLoadsInFlight.get(key);
+  if (inFlight) {
+    const shared = await inFlight;
+    return { statusCode: 200, payload: { ...shared, meta: { ...shared.meta, correlationId, cached: true } } };
+  }
+
+  const promise = (async () => {
+    const result = await fetchDriverLoadsReadModelUncached({ query, correlationId });
+    // Só cacheia 200 (erros/fallbacks de schema não devem grudar).
+    if (result?.statusCode === 200 && result.payload) {
+      _driverLoadsCache.set(key, { at: Date.now(), payload: result.payload });
+      // Evita crescimento ilimitado de chaves (filtros variados).
+      if (_driverLoadsCache.size > 200) {
+        const oldest = [..._driverLoadsCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
+        if (oldest) _driverLoadsCache.delete(oldest);
+      }
+    }
+    return result.payload;
+  })();
+  _driverLoadsInFlight.set(key, promise);
+
+  try {
+    const payload = await promise;
+    return { statusCode: 200, payload };
+  } finally {
+    _driverLoadsInFlight.delete(key);
+  }
+}
+
+async function fetchDriverLoadsReadModelUncached({ query, correlationId }) {
   return withPgClient(async (client) => {
     // Phase 10: includePacoteVisibilityFilter ativa a clausula composta
     //  (avulsa PUBLIC) OR (pacote em status visivel) — necessario para nao filtrar
@@ -310,9 +388,8 @@ export async function fetchDriverLoadFacets({ correlationId }) {
     // Iter #8: filtra cargas expiradas (data + horario passados) tambem nos
     // facets — para que filtros e contadores nao mostrem cargas que nem
     // aparecem no listing. Parameterizado pq pg-mem nao suporta CURRENT_DATE.
-    const nowDate = new Date();
-    const todayIso = nowDate.toISOString().slice(0, 10);
-    const nowTimeIso = nowDate.toTimeString().slice(0, 8);
+    // "Agora" no fuso de Sao Paulo (container roda em UTC; data/horario sao BRT).
+    const { dateIso: todayIso, timeIso: nowTimeIso } = getSaoPauloWallClock();
     const notExpiredSql =
       "(data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))";
 
