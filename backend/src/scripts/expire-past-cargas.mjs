@@ -23,6 +23,7 @@
 
 import "../infrastructure/config/load-env.js";
 import { Pool } from "pg";
+import { getSaoPauloWallClock } from "../domain/sao-paulo-time.js";
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
@@ -50,20 +51,26 @@ async function main() {
   // Cargas com (data + horario) ja passado, ainda em OPEN, nao template, nao
   // reservadas no sheet (preservamos visibilidade pra cargas alocadas em
   // pipeline ativo, mesmo que horario tenha estourado — operador resolve).
+  //
+  // "Agora" no fuso de Sao Paulo (parameterizado): CURRENT_DATE/CURRENT_TIME
+  // sao avaliados na sessao do banco (Supabase = UTC), mas data/horario sao
+  // horario local do Brasil. Usar UTC expirava cargas de hoje ~3h cedo (e o dia
+  // todo apos 21h BRT). Mesma definicao de "agora" do filtro de runtime.
+  const { dateIso: todaySp, timeIso: nowTimeSp } = getSaoPauloWallClock();
   const selectSql = `
     SELECT id, data, horario, origem, destino, status, sheet_motorista
     FROM public.cargas
     WHERE status = 'OPEN'
       AND data IS NOT NULL
-      AND (data < CURRENT_DATE
-        OR (data = CURRENT_DATE AND horario IS NOT NULL AND horario < CURRENT_TIME))
+      AND (data < $1
+        OR (data = $2 AND horario IS NOT NULL AND horario < $3))
       AND COALESCE(is_template, false) = false
       AND COALESCE(sheet_motorista, '') = ''
     ORDER BY data, horario
     ${limit ? `LIMIT ${limit}` : ""}
   `;
 
-  const { rows: candidates } = await pool.query(selectSql);
+  const { rows: candidates } = await pool.query(selectSql, [todaySp, todaySp, nowTimeSp]);
   console.log(
     `[expire-past-cargas] found ${candidates.length} expired OPEN cargas.`,
   );

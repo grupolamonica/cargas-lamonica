@@ -15,6 +15,7 @@ import {
 } from "../../../domain/operator-admin/route-utils.js";
 import { baseRouteValues } from "../../../domain/operator-admin/base-route-values.js";
 import { parseDriverLoadsQuery } from "../../../domain/operator-admin/schemas.js";
+import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -794,9 +795,11 @@ export function buildDriverLoadFilters(query, {
   // cadastrando ainda). Quando horario for NULL, comparamos só pela data.
   //
   // Parameterizado pq pg-mem nao suporta CURRENT_DATE/CURRENT_TIME nativos.
-  const nowDate = new Date();
-  const todayIso = nowDate.toISOString().slice(0, 10); // YYYY-MM-DD
-  const nowTimeIso = nowDate.toTimeString().slice(0, 8); // HH:MM:SS (local TZ)
+  //
+  // O "agora" tem que ser o relógio de Sao Paulo: o container roda em UTC e
+  // cargas.data/horario são horário local do Brasil. Misturar fusos (data UTC +
+  // hora local) escondia cargas de hoje até ~3h cedo e o dia todo após 21h BRT.
+  const { dateIso: todayIso, timeIso: nowTimeIso } = getSaoPauloWallClock();
   clauses.push(
     `(cargas.data IS NULL OR cargas.data > $${index} OR (cargas.data = $${index + 1} AND (cargas.horario IS NULL OR cargas.horario >= $${index + 2})))`,
   );
