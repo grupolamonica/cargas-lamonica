@@ -2,8 +2,10 @@
  * Lógica pura de recorrência de cargas — compartilhada entre o job de
  * auto-avanço (application/operator-admin) e o clone-on-reserve
  * (application/load-claims), garantindo UMA definição de "próxima ocorrência
- * visível". Sem dependências externas (camada de domínio).
+ * visível". Camada de domínio.
  */
+
+import { getSaoPauloWallClock } from "./sao-paulo-time.js";
 
 /**
  * Soma `n` dias a uma data ISO (YYYY-MM-DD) em espaço UTC (evita saltos de DST).
@@ -20,8 +22,8 @@ export function addDaysIso(iso, n) {
 
 /**
  * Normaliza um valor de coluna `date` (Date do driver pg ou string) para
- * YYYY-MM-DD. Usa getters UTC — consistente com o filtro de visibilidade do
- * portal (que usa toISOString) e estável no Postgres real e no motor in-memory.
+ * YYYY-MM-DD. `date` é uma data de calendário (sem hora); getters UTC extraem o
+ * dia correto tanto no container UTC quanto no motor de teste in-memory.
  * @param {Date|string} value
  * @returns {string}
  */
@@ -39,7 +41,10 @@ export function toIsoDate(value) {
  * A partir de `dataIso`, retorna a primeira data (em passos de `intervalDays`)
  * que fica VISÍVEL pelo mesmo critério do portal do motorista
  * (buildDriverLoadFilters): `data > hoje` OU `data = hoje E horario >= agora`.
- * Função pura.
+ *
+ * "Hoje/agora" usa o relógio de São Paulo (getSaoPauloWallClock) — idêntico ao
+ * filtro de visibilidade — porque o container roda em UTC mas cargas.data/horario
+ * são BRT. Usar toISOString/toTimeString aqui escondia/atrasava ocorrências.
  *
  * @param {string} dataIso      data de partida (YYYY-MM-DD)
  * @param {string} horario      horário da carga (HH:MM[:SS])
@@ -49,8 +54,7 @@ export function toIsoDate(value) {
  */
 export function computeNextRecurrenceDate(dataIso, horario, intervalDays, now = new Date()) {
   const interval = Number.isInteger(intervalDays) && intervalDays > 0 ? intervalDays : 1;
-  const todayIso = now.toISOString().slice(0, 10);
-  const nowTime = now.toTimeString().slice(0, 8); // HH:MM:SS local — espelha buildDriverLoadFilters
+  const { dateIso: todayIso, timeIso: nowTime } = getSaoPauloWallClock(now);
   const time = String(horario || "00:00:00").slice(0, 8);
 
   const isVisible = (d) => d > todayIso || (d === todayIso && time >= nowTime);

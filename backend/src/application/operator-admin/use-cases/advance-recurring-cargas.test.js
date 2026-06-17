@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 
 import { computeNextRecurrenceDate } from "./advance-recurring-cargas.js";
 
-// Referência fixa: 2026-06-17 (quarta) ao MEIO-DIA local. Meio-dia evita que o
-// offset de fuso empurre a data de `toISOString()` para outro dia, mantendo o
-// teste determinístico tanto no CI (UTC) quanto local (America/Sao_Paulo).
-const NOW = new Date(2026, 5, 17, 12, 0, 0);
+// Instante FIXO em UTC = 2026-06-17 12:00 BRT (UTC-3). computeNextRecurrenceDate
+// usa getSaoPauloWallClock, então cravar o instante em UTC mantém o teste
+// determinístico em qualquer fuso (CI em UTC ou dev em America/Sao_Paulo).
+const NOW = new Date("2026-06-17T15:00:00Z");
 
 describe("computeNextRecurrenceDate", () => {
   it("mantém a data quando a ocorrência de hoje ainda está no futuro", () => {
@@ -46,7 +46,7 @@ describe("computeNextRecurrenceDate", () => {
   });
 
   it("cruza a virada de mês corretamente", () => {
-    const endOfMonth = new Date(2026, 5, 30, 12, 0, 0); // 2026-06-30 meio-dia
+    const endOfMonth = new Date("2026-06-30T15:00:00Z"); // 2026-06-30 12:00 BRT
     expect(computeNextRecurrenceDate("2026-06-30", "04:00:00", 1, endOfMonth)).toBe("2026-07-01");
   });
 });

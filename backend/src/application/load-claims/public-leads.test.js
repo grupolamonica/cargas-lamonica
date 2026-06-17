@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LOAD_STATUS, PUBLIC_LEAD_STATUS } from "../../domain/load-claims/constants.js";
+import { getSaoPauloWallClock } from "../../domain/sao-paulo-time.js";
 
 vi.mock("../../infrastructure/pg/postgres.js", async () => {
   const harness = await import("./test-harness.js");
@@ -785,7 +786,8 @@ describe.sequential("public load leads", () => {
     const past = new Date();
     past.setUTCDate(past.getUTCDate() - 10);
     const pastIso = past.toISOString().slice(0, 10);
-    const todayIso = new Date().toISOString().slice(0, 10);
+    // Limiar = hoje no relógio de São Paulo (mesma base do clone/filtro).
+    const todayIso = getSaoPauloWallClock().dateIso;
 
     const { id: loadId } = await harness.seedLoad({
       data: pastIso,

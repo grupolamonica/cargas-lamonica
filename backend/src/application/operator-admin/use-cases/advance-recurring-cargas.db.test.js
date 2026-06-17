@@ -12,8 +12,9 @@ vi.mock("../../../infrastructure/pg/postgres.js", () => ({ withPgTransaction }))
 
 const { advanceRecurringCargas } = await import("./advance-recurring-cargas.js");
 
-// 2026-06-17 (quarta) ao meio-dia local — estável em UTC e America/Sao_Paulo.
-const NOW = new Date(2026, 5, 17, 12, 0, 0);
+// Instante FIXO em UTC = 2026-06-17 12:00 BRT (UTC-3). advanceRecurringCargas
+// usa getSaoPauloWallClock, então cravamos o instante em UTC p/ determinismo.
+const NOW = new Date("2026-06-17T15:00:00Z");
 
 const isoDateOf = (v) =>
   v instanceof Date

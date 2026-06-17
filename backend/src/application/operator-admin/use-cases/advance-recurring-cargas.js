@@ -1,6 +1,7 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 import { computeNextRecurrenceDate, toIsoDate } from "../../../domain/recurrence.js";
+import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 
 // Re-export para compat com importadores existentes (e testes da função pura).
 export { computeNextRecurrenceDate };
@@ -16,8 +17,10 @@ export { computeNextRecurrenceDate };
  */
 export async function advanceRecurringCargas({ now = new Date() } = {}) {
   return withPgTransaction(async (client) => {
-    const todayIso = now.toISOString().slice(0, 10);
-    const nowTime = now.toTimeString().slice(0, 8);
+    // Relógio de São Paulo (container roda em UTC; cargas.data/horario são BRT) —
+    // idêntico a buildDriverLoadFilters, para varrer exatamente as cargas que o
+    // portal considera vencidas.
+    const { dateIso: todayIso, timeIso: nowTime } = getSaoPauloWallClock(now);
 
     const { rows } = await client.query(
       `
