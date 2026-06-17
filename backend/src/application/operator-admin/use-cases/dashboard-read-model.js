@@ -1,6 +1,7 @@
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { parseOperatorDashboardQuery } from "../../../domain/operator-admin/schemas.js";
 import { buildPaginationMeta, parseNullableNumber } from "../../../domain/operator-admin/route-utils.js";
+import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 import {
   isMissingOptionalCargoReadModelColumnsError,
   buildDriverLoadFilters,
@@ -310,9 +311,8 @@ export async function fetchDriverLoadFacets({ correlationId }) {
     // Iter #8: filtra cargas expiradas (data + horario passados) tambem nos
     // facets — para que filtros e contadores nao mostrem cargas que nem
     // aparecem no listing. Parameterizado pq pg-mem nao suporta CURRENT_DATE.
-    const nowDate = new Date();
-    const todayIso = nowDate.toISOString().slice(0, 10);
-    const nowTimeIso = nowDate.toTimeString().slice(0, 8);
+    // "Agora" no fuso de Sao Paulo (container roda em UTC; data/horario sao BRT).
+    const { dateIso: todayIso, timeIso: nowTimeIso } = getSaoPauloWallClock();
     const notExpiredSql =
       "(data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))";
 

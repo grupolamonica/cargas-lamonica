@@ -25,6 +25,7 @@ import { getPublicPacote } from "../../../application/cargas-casadas/service.js"
 import { pacoteIdParamsSchema } from "../../../domain/cargas-casadas/schemas.js";
 import { recordDriverPortalVisit } from "../../../domain/operator-admin/driver-flow-metrics.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
+import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 
 const PORTAL_VISIT_RATE_LIMIT_MS = 30_000;
 const portalVisitRateLimitByIp = new Map();
@@ -292,9 +293,8 @@ export async function resolveDriverLoadsDigestResponse(request) {
       // sheet_status removido (era over-broad).
       // Iter #8: filtra cargas expiradas (data + horario passados) — pg-mem nao
       // suporta CURRENT_DATE/CURRENT_TIME, entao parameterizamos.
-      const nowDate = new Date();
-      const todayIso = nowDate.toISOString().slice(0, 10);
-      const nowTimeIso = nowDate.toTimeString().slice(0, 8);
+      // "Agora" no fuso de Sao Paulo (container roda em UTC; data/horario sao BRT).
+      const { dateIso: todayIso, timeIso: nowTimeIso } = getSaoPauloWallClock();
       const { rows } = await client.query(
         `
         SELECT
