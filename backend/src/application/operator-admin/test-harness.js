@@ -82,6 +82,10 @@ const schemaSql = `
     sheet_synced_at timestamptz,
     viagem_id uuid,
     ordem_viagem integer,
+    is_recurring boolean NOT NULL DEFAULT false,
+    recurrence_interval_days integer,
+    recurrence_parent_id uuid,
+    version integer NOT NULL DEFAULT 0,
     created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
@@ -393,10 +397,12 @@ export async function seedCargo(overrides = {}) {
         sheet_data_carregamento,
         sheet_data_descarga,
         created_by,
-        created_at
+        created_at,
+        is_recurring,
+        recurrence_interval_days
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
       )
     `,
     [
@@ -420,6 +426,8 @@ export async function seedCargo(overrides = {}) {
       overrides.sheet_data_descarga ?? "2026-04-09 12:00",
       overrides.created_by ?? null,
       overrides.created_at ?? new Date().toISOString(),
+      overrides.is_recurring ?? false,
+      overrides.recurrence_interval_days ?? null,
     ],
   );
 

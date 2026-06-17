@@ -726,6 +726,117 @@ describe.sequential("public load leads", () => {
     expect(load.booked_driver_id).toBeNull();
   });
 
+  const isoDateOf = (value) =>
+    value instanceof Date
+      ? `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, "0")}-${String(value.getUTCDate()).padStart(2, "0")}`
+      : String(value).slice(0, 10);
+
+  it("clona uma carga recorrente ao reservar e desmarca a recorrência da reservada", async () => {
+    // Data futura fixa (2099) — determinística e nunca expira (sem time-bomb).
+    const { id: loadId } = await harness.seedLoad({
+      data: "2099-06-10",
+      horario: "04:00:00",
+      is_recurring: true,
+      recurrence_interval_days: 1,
+    });
+    const operator = await harness.seedOperator();
+
+    const preregistered = await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-recur-prereg",
+    });
+
+    const approved = await service.approvePublicLoadLead({
+      loadId,
+      leadId: preregistered.payload.lead.id,
+      operatorId: operator.id,
+      correlationId: "corr-recur-approve",
+    });
+
+    expect(approved.statusCode).toBe(200);
+
+    // A carga reservada deixou de ser recorrente (virou concreta).
+    const reserved = await harness.getLoad(loadId);
+    expect(reserved.status).toBe(LOAD_STATUS.RESERVED);
+    expect(reserved.is_recurring).toBe(false);
+
+    // Nasceu uma cópia OPEN, recorrente, com a data avançada 1 dia, apontando
+    // para a carga mãe e com fila vazia.
+    const { rows: clones } = await harness.query(
+      `SELECT id, status, data, is_recurring, recurrence_interval_days, recurrence_parent_id
+       FROM public.cargas WHERE recurrence_parent_id = $1`,
+      [loadId],
+    );
+    expect(clones).toHaveLength(1);
+    const clone = clones[0];
+    expect(clone.status).toBe(LOAD_STATUS.OPEN);
+    expect(clone.is_recurring).toBe(true);
+    expect(Number(clone.recurrence_interval_days)).toBe(1);
+    expect(isoDateOf(clone.data)).toBe("2099-06-11"); // 2099-06-10 + 1 dia
+
+    const cloneLeads = await harness.getPublicLeadsByLoad(clone.id);
+    expect(cloneLeads).toHaveLength(0);
+  });
+
+  it("clona já na próxima ocorrência VISÍVEL quando a carga mãe está com data defasada", async () => {
+    // Mãe com data no passado (ex.: job de avanço não rodou). A cópia NÃO pode
+    // nascer no passado — deve pular para a próxima ocorrência visível (>= hoje).
+    const past = new Date();
+    past.setUTCDate(past.getUTCDate() - 10);
+    const pastIso = past.toISOString().slice(0, 10);
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const { id: loadId } = await harness.seedLoad({
+      data: pastIso,
+      horario: "04:00:00",
+      is_recurring: true,
+      recurrence_interval_days: 1,
+    });
+    const operator = await harness.seedOperator();
+
+    const preregistered = await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-recur-stale-prereg",
+    });
+    await service.approvePublicLoadLead({
+      loadId,
+      leadId: preregistered.payload.lead.id,
+      operatorId: operator.id,
+      correlationId: "corr-recur-stale-approve",
+    });
+
+    const { rows: clones } = await harness.query(
+      `SELECT data FROM public.cargas WHERE recurrence_parent_id = $1`,
+      [loadId],
+    );
+    expect(clones).toHaveLength(1);
+    // Visível pelo filtro do portal: data >= hoje (não nasce no passado).
+    expect(isoDateOf(clones[0].data) >= todayIso).toBe(true);
+  });
+
+  it("não clona ao reservar uma carga não-recorrente", async () => {
+    const { id: loadId } = await harness.seedLoad({ is_recurring: false });
+    const operator = await harness.seedOperator();
+
+    const preregistered = await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-norecur-prereg",
+    });
+
+    await service.approvePublicLoadLead({
+      loadId,
+      leadId: preregistered.payload.lead.id,
+      operatorId: operator.id,
+      correlationId: "corr-norecur-approve",
+    });
+
+    const { rows } = await harness.query(`SELECT id FROM public.cargas`);
+    expect(rows).toHaveLength(1); // nenhuma cópia criada
+  });
+
   it("replicates a pacote candidatura em todas as cargas do mesmo viagem_id", async () => {
     // 3 cargas no mesmo pacote — o motorista candidata na carga #1 e o backend
     // precisa criar lead em #2 e #3 tambem (uma candidatura por viagem casada).
