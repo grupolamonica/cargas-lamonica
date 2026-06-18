@@ -18,7 +18,6 @@ import { ApiError, approveOperatorLoadLead, cancelOperatorLoadLead, createDirect
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { VEHICLE_PROFILE_OPTIONS } from "@/lib/vehicleProfiles";
 import { fetchOperatorClientes, fetchSheetMonitor, type SheetMonitorRow } from "@/services/readModels";
-import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 
 interface SheetAllocation {
   driverName: string;
