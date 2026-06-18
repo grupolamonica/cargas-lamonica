@@ -54,6 +54,7 @@ import {
   resolveSheetMonitorEnrichResponse,
   resolveSheetMonitorResponse,
   resolveSheetMonitorRowDetailResponse,
+  resolveUpdateMonitorAllocationResponse,
   resolveToggleOperatorCargoStatusResponse,
   resolveUpdateOperatorCargoResponse,
   resolveUpdateOperatorClienteResponse,
@@ -327,6 +328,7 @@ export function registerRoutes(app) {
   router.get("/api/operator/sheet-monitor", wrap(resolveSheetMonitorResponse));
   router.get("/api/operator/sheet-monitor/row", wrap(resolveSheetMonitorRowDetailResponse));
   router.post("/api/operator/sheet-monitor/enrich", wrap(resolveSheetMonitorEnrichResponse));
+  router.patch("/api/operator/sheet-monitor", wrap(resolveUpdateMonitorAllocationResponse));
 
   // PII Redaction
   router.post("/api/operator/pii-redaction", wrap(resolveRedactPublicLeadPiiResponse));

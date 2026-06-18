@@ -803,7 +803,9 @@ export function buildDriverLoadFilters(query, {
     // legítimas dos motoristas. Para estados terminais (DESCARREGADO, CTE
     // ENVIADO, CANCELADO, etc.), o `cargas.status` já transita para BOOKED
     // /EXPIRED via sync, então o filtro principal `cargas.status='OPEN'` cobre.
-    "COALESCE(cargas.sheet_motorista, '') = ''",
+    // Alocação efetiva = override do operador (alloc_motorista, editado no Monitor)
+    // tem precedência sobre o que veio da planilha (sheet_motorista).
+    "COALESCE(cargas.alloc_motorista, cargas.sheet_motorista, '') = ''",
   ];
   const values = [];
   let index = 1;

@@ -304,7 +304,7 @@ export async function resolveDriverLoadsDigestResponse(request) {
         WHERE status = 'OPEN'
           AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'
           AND COALESCE(is_template, false) = false
-          AND COALESCE(sheet_motorista, '') = ''
+          AND COALESCE(alloc_motorista, sheet_motorista, '') = ''
           AND (data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))
       `,
         [todayIso, todayIso, nowTimeIso],

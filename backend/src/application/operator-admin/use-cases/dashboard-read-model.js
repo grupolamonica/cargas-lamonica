@@ -140,7 +140,7 @@ export async function fetchOperatorDashboardReadModel({ query, correlationId }) 
         COALESCE(SUM(CASE
           WHEN status = 'OPEN'
             AND NOT COALESCE(is_template, false)
-            AND COALESCE(sheet_motorista, '') = ''
+            AND COALESCE(alloc_motorista, sheet_motorista, '') = ''
           THEN 1 ELSE 0 END), 0)::int AS active_count,
         COALESCE(SUM(CASE WHEN status = 'DRAFT' THEN 1 ELSE 0 END), 0)::int AS draft_count,
         COALESCE(SUM(CASE WHEN COALESCE(is_template, false) THEN 1 ELSE 0 END), 0)::int AS template_count
@@ -384,7 +384,7 @@ export async function fetchDriverLoadFacets({ correlationId }) {
     // que o sync demore para refletir status='BOOKED' no DB. Filtro de
     // sheet_status removido (era over-broad — bloqueava statuses de pipeline
     // aberto como 'AGUARDANDO CARREGAMENTO').
-    const sheetUnallocatedSql = "COALESCE(sheet_motorista, '') = ''";
+    const sheetUnallocatedSql = "COALESCE(alloc_motorista, sheet_motorista, '') = ''";
     // Iter #8: filtra cargas expiradas (data + horario passados) tambem nos
     // facets — para que filtros e contadores nao mostrem cargas que nem
     // aparecem no listing. Parameterizado pq pg-mem nao suporta CURRENT_DATE.

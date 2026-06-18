@@ -19,6 +19,16 @@ export const sheetMonitorEnrichBodySchema = z.object({
   forceSessionStart: z.string().optional().nullable(),
 }).passthrough();
 
+/** Body for PATCH /api/operator/sheet-monitor — alocação editada no Monitor (Fase 0).
+ *  Cada campo: string = define override; null/"" = limpa o override (volta ao valor da planilha). */
+export const sheetMonitorAllocationBodySchema = z.object({
+  lh: z.string().trim().min(1).max(120),
+  motorista: z.string().trim().max(180).nullable().optional(),
+  cavalo: z.string().trim().max(40).nullable().optional(),
+  carreta: z.string().trim().max(40).nullable().optional(),
+  status: z.string().trim().max(60).nullable().optional(),
+}).strict();
+
 /** Query params for PII redaction POST */
 export const piiRedactionQuerySchema = z.object({
   retentionDays: z.coerce.number().int().min(1).max(365).optional(),

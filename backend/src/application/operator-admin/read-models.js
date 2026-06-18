@@ -527,7 +527,7 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
           // \u2014 bloqueava pipeline statuses como 'AGUARDANDO CARREGAMENTO' que
           // significam carga aberta na planilha).
           clauses.push("cargas.status IN ('DRAFT', 'OPEN')");
-          clauses.push("COALESCE(cargas.sheet_motorista, '') = ''");
+          clauses.push("COALESCE(cargas.alloc_motorista, cargas.sheet_motorista, '') = ''");
         } else {
           values.push(status);
           clauses.push(`cargas.status = $${index}`);

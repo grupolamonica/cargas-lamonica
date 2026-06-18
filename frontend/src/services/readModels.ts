@@ -625,6 +625,19 @@ export interface SheetMonitorEnrichedRow {
   enriched_at: string | null;
 }
 
+/**
+ * Alocação editada pelo operador no Monitor (cargas.alloc_*), por LH. Sobrepõe os
+ * valores que vieram da planilha — efetivo = alloc_* ?? valor da planilha (Fase 0).
+ */
+export interface SheetMonitorAllocation {
+  sheet_lh: string;
+  alloc_motorista: string | null;
+  alloc_cavalo: string | null;
+  alloc_carreta: string | null;
+  alloc_status: string | null;
+  alloc_updated_at: string | null;
+}
+
 export async function fetchSheetMonitor({ refresh = false }: { refresh?: boolean } = {}) {
   const accessToken = await getOperatorAccessToken();
   const url = refresh ? "/api/operator/sheet-monitor?refresh=true" : "/api/operator/sheet-monitor";
@@ -633,6 +646,7 @@ export async function fetchSheetMonitor({ refresh = false }: { refresh?: boolean
     items: SheetMonitorRow[];
     summary: SheetMonitorSummary;
     enrichedByLh: Record<string, SheetMonitorEnrichedRow>;
+    allocByLh?: Record<string, SheetMonitorAllocation>;
     meta: {
       correlationId: string;
       sheetConfigured: boolean;
@@ -642,6 +656,32 @@ export async function fetchSheetMonitor({ refresh = false }: { refresh?: boolean
       snapshotSaveError?: string;
     };
   }>(url, { accessToken });
+}
+
+/**
+ * Salva a alocação editada no Monitor (motorista/cavalo/carreta/status operacional)
+ * para um LH. Cada campo: string define o override; null/"" limpa (volta à planilha).
+ */
+export async function updateMonitorAllocation(input: {
+  lh: string;
+  motorista?: string | null;
+  cavalo?: string | null;
+  carreta?: string | null;
+  status?: string | null;
+}) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{
+    ok: boolean;
+    lh: string;
+    allocation: {
+      motorista: string | null;
+      cavalo: string | null;
+      carreta: string | null;
+      status: string | null;
+      source: string;
+    };
+    meta: { correlationId: string };
+  }>("/api/operator/sheet-monitor", { accessToken, method: "PATCH", body: input });
 }
 
 export async function enrichSheetMonitor({ force = false, forceSessionStart }: { force?: boolean; forceSessionStart?: string } = {}): Promise<{

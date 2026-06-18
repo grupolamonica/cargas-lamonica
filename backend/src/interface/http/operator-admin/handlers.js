@@ -34,7 +34,7 @@ import {
 } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
-import { dashboardQuerySchema } from "../schemas/operator-schemas.js";
+import { dashboardQuerySchema, sheetMonitorAllocationBodySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
@@ -65,6 +65,7 @@ import { fetchOperatorAuditLogsReadModel } from "../../../application/operator-a
 import { fetchPendingDriverRegistrations } from "../../../application/operator-admin/use-cases/pending-driver-registrations-read-model.js";
 import { listDraftRegistrations } from "../../../application/operator-admin/use-cases/list-draft-registrations.js";
 import { submitDraftAsOperator } from "../../../application/operator-admin/use-cases/submit-draft-as-operator.js";
+import { updateMonitorAllocation } from "../../../application/operator-admin/use-cases/update-monitor-allocation.js";
 import { candidaturaSubmitSchema } from "../schemas/candidatura-schemas.js";
 import { DRAFT_FILE_BUCKET } from "../../../application/candidatura/use-cases/upload-draft-file.js";
 import { ensureDriverLoadsSheetFresh } from "../public-loads/handlers.js";
@@ -664,6 +665,29 @@ export async function resolveSheetMonitorResponse(request) {
     const refresh = getQueryParam(request, "refresh") === "true";
     const emptySummary = { total: 0, available: 0, assigned: 0, withStatus: 0, statuses: {}, tipos: {} };
 
+    // Overlay da ALOCAÇÃO editada no Monitor (cargas.alloc_*), por LH — a decisão
+    // do operador que sobrepõe o que veio da planilha (Fase 0). O frontend aplica
+    // efetivo = alloc_* ?? valor da planilha. Não-fatal se a coluna ainda não existe.
+    let allocByLh = {};
+    try {
+      const { data: allocRows } = await supabaseClient
+        .from("cargas")
+        .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_updated_at")
+        .not("sheet_lh", "is", null)
+        .not("alloc_updated_at", "is", null)
+        .limit(50000);
+      if (allocRows) {
+        for (const r of allocRows) {
+          if (r.sheet_lh) allocByLh[r.sheet_lh] = r;
+        }
+      }
+    } catch (allocErr) {
+      logStructuredEvent("warn", "sheet-monitor.alloc-read-failed", {
+        correlationId,
+        message: allocErr instanceof Error ? allocErr.message : String(allocErr),
+      });
+    }
+
     // ----------------------------------------------------------------
     // REFRESH path: operator explicitly asked for a fresh sync.
     // Fetch CSV → parse all rows → save to DB → return parsed rows IMMEDIATELY
@@ -707,6 +731,7 @@ export async function resolveSheetMonitorResponse(request) {
             payload: {
               items: rows,
               summary,
+              allocByLh,
               meta: {
                 correlationId,
                 sheetConfigured: true,
@@ -779,6 +804,7 @@ export async function resolveSheetMonitorResponse(request) {
           items: snapshot.rows_json ?? [],
           summary: snapshot.summary_json ?? emptySummary,
           enrichedByLh,
+          allocByLh,
           meta: {
             correlationId,
             sheetConfigured: true,
@@ -804,6 +830,21 @@ export async function resolveSheetMonitorResponse(request) {
       },
     };
   });
+}
+
+export async function resolveUpdateMonitorAllocationResponse(request) {
+  return withOperatorSession(
+    request,
+    "update-monitor-allocation",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { lh, ...allocation } = sheetMonitorAllocationBodySchema.parse(await parseJsonBody(request));
+      return updateMonitorAllocation({ lh, operatorId, payload: allocation, requestIp, correlationId });
+    },
+  );
 }
 
 export async function resolveSheetMonitorRowDetailResponse(request) {
