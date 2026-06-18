@@ -21,6 +21,8 @@ import {
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { toast } from "sonner";
+
 import DashboardHeader from "@/components/DashboardHeader";
 import {
   Dialog,
@@ -28,10 +30,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   enrichSheetMonitor,
   fetchSheetMonitor,
+  updateMonitorAllocation,
+  type SheetMonitorAllocation,
   type SheetMonitorEnrichedRow,
   type SheetMonitorRow as SheetMonitorRowType,
   type SheetMonitorSummary,
@@ -42,6 +47,7 @@ const SHEET_MONITOR_QUERY_KEY = ["admin", "sheet-monitor"] as const;
 const PAGE_SIZE = 50;
 const EMPTY_ROWS: SheetMonitorRowType[] = [];
 const EMPTY_ENRICHED: Record<string, SheetMonitorEnrichedRow> = {};
+const EMPTY_ALLOC: Record<string, SheetMonitorAllocation> = {};
 
 const SHEET_MONITOR_QUERY_OPTIONS = {
   staleTime: 30_000,
@@ -402,14 +408,42 @@ function SourceBadge({ source }: { source: string | null | undefined }) {
 function RowDetailModal({
   row,
   enriched,
+  alloc,
   open,
   onClose,
 }: {
   row: SheetMonitorRowType | null;
   enriched: SheetMonitorEnrichedRow | undefined;
+  alloc: SheetMonitorAllocation | undefined;
   open: boolean;
   onClose: () => void;
 }) {
+  const queryClient = useQueryClient();
+  const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "" });
+
+  // Pré-preenche com a alocação EFETIVA: override do operador (alloc_*) ?? planilha.
+  useEffect(() => {
+    if (!row) return;
+    setAllocForm({
+      motorista: alloc?.alloc_motorista ?? row.motoristas ?? "",
+      cavalo: alloc?.alloc_cavalo ?? row.cavalo ?? "",
+      carreta: alloc?.alloc_carreta ?? row.carreta ?? "",
+      status: alloc?.alloc_status ?? row.status ?? "",
+    });
+  }, [row, alloc, open]);
+
+  const saveAllocation = useMutation({
+    mutationFn: updateMonitorAllocation,
+    onSuccess: () => {
+      toast.success("Alocação salva no sistema.");
+      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      onClose();
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Não foi possível salvar a alocação.");
+    },
+  });
+
   if (!row) return null;
 
   return (
@@ -432,6 +466,74 @@ function RowDetailModal({
 
           {/* Scrollable body */}
           <div className="min-h-0 flex-1 overflow-y-auto">
+
+            {/* ── Alocação (editável no sistema) ── */}
+            <ModalSection title="Alocação · editar no sistema">
+              <div className="space-y-2">
+                <div>
+                  <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Motorista</label>
+                  <Input
+                    value={allocForm.motorista}
+                    onChange={(e) => setAllocForm((f) => ({ ...f, motorista: e.target.value }))}
+                    placeholder="Nome do motorista alocado"
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Cavalo</label>
+                    <Input
+                      value={allocForm.cavalo}
+                      onChange={(e) => setAllocForm((f) => ({ ...f, cavalo: e.target.value }))}
+                      placeholder="Placa cavalo"
+                      className="h-8 text-xs font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Carreta</label>
+                    <Input
+                      value={allocForm.carreta}
+                      onChange={(e) => setAllocForm((f) => ({ ...f, carreta: e.target.value }))}
+                      placeholder="Placa carreta"
+                      className="h-8 text-xs font-mono"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Status operacional</label>
+                  <Input
+                    value={allocForm.status}
+                    onChange={(e) => setAllocForm((f) => ({ ...f, status: e.target.value }))}
+                    placeholder="Ex: DESCARREGADO, CTE ENVIADO, AGUARDANDO DESCARGA"
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <span className="text-[0.58rem] leading-tight text-muted-foreground/60">
+                    {alloc?.alloc_updated_at
+                      ? "Editado no sistema — sobrepõe a planilha."
+                      : "Campo vazio usa o valor da planilha. Salvar grava no sistema."}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      saveAllocation.mutate({
+                        lh: row.lh,
+                        motorista: allocForm.motorista,
+                        cavalo: allocForm.cavalo,
+                        carreta: allocForm.carreta,
+                        status: allocForm.status,
+                      })
+                    }
+                    disabled={saveAllocation.isPending}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {saveAllocation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                    Salvar
+                  </button>
+                </div>
+              </div>
+            </ModalSection>
 
             {/* ── Viagem ── */}
             <ModalSection title="Viagem">
@@ -584,8 +686,31 @@ export default function SheetMonitor() {
     ...SHEET_MONITOR_QUERY_OPTIONS,
   });
 
-  const items = monitorData?.items ?? EMPTY_ROWS;
+  const rawItems = monitorData?.items ?? EMPTY_ROWS;
   const enrichedByLh = monitorData?.enrichedByLh ?? EMPTY_ENRICHED;
+  const allocByLh = monitorData?.allocByLh ?? EMPTY_ALLOC;
+
+  // Alocação efetiva: o override do operador (alloc_*) sobrepõe o valor da
+  // planilha. Reflete na tabela/contadores o que foi editado no Monitor.
+  const items = useMemo(() => {
+    if (Object.keys(allocByLh).length === 0) return rawItems;
+    return rawItems.map((row) => {
+      const a = allocByLh[row.lh];
+      if (!a) return row;
+      const motoristas = a.alloc_motorista ?? row.motoristas;
+      const status = a.alloc_status ?? row.status;
+      return {
+        ...row,
+        motoristas,
+        cavalo: a.alloc_cavalo ?? row.cavalo,
+        carreta: a.alloc_carreta ?? row.carreta,
+        status,
+        hasDriver: Boolean(motoristas),
+        isAvailable: !motoristas && !status,
+      };
+    });
+  }, [rawItems, allocByLh]);
+
   const sheetConfigured = monitorData?.meta?.sheetConfigured ?? true;
   const noSnapshot = monitorData?.meta?.noSnapshot ?? false;
   const cachedAt = monitorData?.meta?.cachedAt;
@@ -961,6 +1086,7 @@ export default function SheetMonitor() {
       <RowDetailModal
         row={selectedRow}
         enriched={selectedRow ? enrichedByLh[selectedRow.lh] : undefined}
+        alloc={selectedRow ? allocByLh[selectedRow.lh] : undefined}
         open={selectedRow !== null}
         onClose={() => setSelectedRow(null)}
       />
