@@ -29,6 +29,18 @@ export const sheetMonitorAllocationBodySchema = z.object({
   status: z.string().trim().max(60).nullable().optional(),
 }).strict();
 
+/** Body for POST /api/operator/sheet-monitor/reassign — reordenar a fila de
+ *  motoristas/veículos (F3). Cada move grava a alocação relocada numa carga;
+ *  "" = vazio explícito (sobrepõe a planilha → carga sem motorista). */
+export const sheetMonitorReassignBodySchema = z.object({
+  moves: z.array(z.object({
+    lh: z.string().trim().min(1).max(120),
+    motorista: z.string().trim().max(180).optional().default(""),
+    cavalo: z.string().trim().max(40).optional().default(""),
+    carreta: z.string().trim().max(40).optional().default(""),
+  })).min(1).max(500),
+}).strict();
+
 /** Query params for PII redaction POST */
 export const piiRedactionQuerySchema = z.object({
   retentionDays: z.coerce.number().int().min(1).max(365).optional(),
