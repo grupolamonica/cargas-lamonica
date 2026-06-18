@@ -11,6 +11,7 @@ import {
   Filter,
   GripVertical,
   Loader2,
+  Lock,
   MapPin,
   Pencil,
   RefreshCw,
@@ -35,6 +36,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { allocEditPolicy } from "@/lib/monitorEditPolicy";
 import { computeShiftMoves, computeSwapMoves } from "@/lib/monitorReorder";
 import {
   enrichSheetMonitor,
@@ -305,6 +307,19 @@ function MonitorDatalists({
   );
 }
 
+// Regra de edição por status (Disponível/Reservado/"aguardando chegar no
+// cliente" editam; demais travam — já em atribuição no ASPX) em
+// @/lib/monitorEditPolicy (allocEditPolicy), para ser testável.
+
+function AspxAssigningWarning({ className }: { className?: string }) {
+  return (
+    <p className={cn("flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[0.62rem] font-medium leading-tight text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300", className)}>
+      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+      <span>Já estão atribuindo no ASPX — confirme antes de alterar.</span>
+    </p>
+  );
+}
+
 // Conteúdo da célula Motorista/Placa — visualização (com alça de arrastar) +
 // edição inline. A alça arrasta a ALOCAÇÃO (motorista+placa) para reatribuir
 // entre cargas; o lápis abre a edição inline.
@@ -322,30 +337,44 @@ type AllocCellProps = {
 };
 
 function AllocCell({ row, enriched, editing, saving, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onDragStartHandle, onDragEndHandle }: AllocCellProps) {
+  const { editable, aspxWarning } = allocEditPolicy(row);
   if (editing) {
     return (
-      <InlineAllocEditor
-        initial={{ motorista: row.motoristas ?? "", cavalo: row.cavalo ?? "", carreta: row.carreta ?? "" }}
-        saving={saving}
-        onSave={(v) => onSaveInline({ lh: row.lh, ...v, status: allocStatus ?? "" })}
-        onCancel={onCancelEdit}
-      />
+      <div className="space-y-1.5">
+        {aspxWarning && <AspxAssigningWarning />}
+        <InlineAllocEditor
+          initial={{ motorista: row.motoristas ?? "", cavalo: row.cavalo ?? "", carreta: row.carreta ?? "" }}
+          saving={saving}
+          onSave={(v) => onSaveInline({ lh: row.lh, ...v, status: allocStatus ?? "" })}
+          onCancel={onCancelEdit}
+        />
+      </div>
     );
   }
   return (
     <div className="group/alloc flex items-start gap-1">
-      <button
-        type="button"
-        aria-label="Arrastar alocação (trocar / mover na fila)"
-        title="Arraste para o corpo de outra carga (trocar) ou para a borda (mover na fila)"
-        draggable
-        onClick={(e) => e.stopPropagation()}
-        onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", row.lh); onDragStartHandle(row.lh); }}
-        onDragEnd={onDragEndHandle}
-        className="mt-0.5 shrink-0 cursor-grab rounded p-0.5 text-muted-foreground/40 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover/alloc:opacity-100 active:cursor-grabbing"
-      >
-        <GripVertical className="h-3.5 w-3.5" />
-      </button>
+      {editable ? (
+        <button
+          type="button"
+          aria-label="Arrastar alocação (trocar / mover na fila)"
+          title="Arraste para o corpo de outra carga (trocar) ou para a borda (mover na fila)"
+          draggable
+          onClick={(e) => e.stopPropagation()}
+          onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", row.lh); onDragStartHandle(row.lh); }}
+          onDragEnd={onDragEndHandle}
+          className="mt-0.5 shrink-0 cursor-grab rounded p-0.5 text-muted-foreground/40 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover/alloc:opacity-100 active:cursor-grabbing"
+        >
+          <GripVertical className="h-3.5 w-3.5" />
+        </button>
+      ) : (
+        <span
+          aria-label="Alocação travada"
+          title="Travado: já em atribuição no ASPX (este status não permite alterar motorista/veículo)"
+          className="mt-0.5 shrink-0 p-0.5 text-muted-foreground/30"
+        >
+          <Lock className="h-3.5 w-3.5" />
+        </span>
+      )}
       <div className="min-w-0 flex-1">
         {row.motoristas ? (
           <div className="flex items-center gap-1.5">
@@ -363,16 +392,23 @@ function AllocCell({ row, enriched, editing, saving, allocStatus, onStartEdit, o
             </span>
           </div>
         )}
+        {aspxWarning && (
+          <span className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-medium text-amber-600 dark:text-amber-400" title="Já estão atribuindo no ASPX">
+            <AlertTriangle className="h-2.5 w-2.5" /> em atribuição no ASPX
+          </span>
+        )}
       </div>
-      <button
-        type="button"
-        title="Editar alocação na linha"
-        aria-label="Editar alocação"
-        onClick={(e) => { e.stopPropagation(); onStartEdit(row.lh); }}
-        className="shrink-0 rounded p-1 text-muted-foreground/40 opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100 group-hover/alloc:opacity-100"
-      >
-        <Pencil className="h-3 w-3" />
-      </button>
+      {editable && (
+        <button
+          type="button"
+          title="Editar alocação na linha"
+          aria-label="Editar alocação"
+          onClick={(e) => { e.stopPropagation(); onStartEdit(row.lh); }}
+          className="shrink-0 rounded p-1 text-muted-foreground/40 opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100 group-hover/alloc:opacity-100"
+        >
+          <Pencil className="h-3 w-3" />
+        </button>
+      )}
     </div>
   );
 }
@@ -549,6 +585,14 @@ function SheetMonitorTable({
 
   const handleRowDragOver = useCallback((e: React.DragEvent, lh: string) => {
     if (!dragLhRef.current) return;
+    // Não dá para soltar numa linha travada (status já em atribuição no ASPX).
+    const targetRow = rowsRef.current.find((r) => r.lh === lh);
+    if (targetRow && !allocEditPolicy(targetRow).editable) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "none";
+      setDropTarget(null);
+      return;
+    }
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     if (lh === dragLhRef.current) { setDropTarget(null); return; }
@@ -573,7 +617,18 @@ function SheetMonitorTable({
       intent === "swap" ? computeSwapMoves(items, srcIdx, dstIdx)
         : intent === "before" ? computeShiftMoves(items, srcIdx, dstIdx)
           : computeShiftMoves(items, srcIdx, dstIdx + 1);
-    if (moves.length > 0) onReassign(moves);
+    if (moves.length === 0) return;
+    // Bloqueia se qualquer linha afetada (alvo ou intermediárias do "descer
+    // fila") estiver travada — não pode mexer em carga já atribuída no ASPX.
+    const hitsLocked = moves.some((m) => {
+      const r = list.find((x) => x.lh === m.lh);
+      return r && !allocEditPolicy(r).editable;
+    });
+    if (hitsLocked) {
+      toast.error("Não dá para reordenar: há carga travada (já em atribuição no ASPX).");
+      return;
+    }
+    onReassign(moves);
   }, [onReassign]);
 
   if (loading) {
@@ -766,6 +821,10 @@ function RowDetailModal({
 
   if (!row) return null;
 
+  // Trava motorista/veículo conforme o status (mesma regra da tabela). O status
+  // operacional continua editável (o bloqueio é só de motorista/veículo).
+  const { editable: allocEditable, aspxWarning } = allocEditPolicy(row);
+
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="max-w-2xl p-0 overflow-hidden">
@@ -790,13 +849,21 @@ function RowDetailModal({
             {/* ── Alocação (editável no sistema) ── */}
             <ModalSection title="Alocação · editar no sistema">
               <div className="space-y-2">
+                {aspxWarning && <AspxAssigningWarning />}
+                {!allocEditable && (
+                  <p className="flex items-start gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-[0.62rem] font-medium leading-tight text-muted-foreground">
+                    <Lock className="mt-0.5 h-3 w-3 shrink-0" />
+                    <span>Motorista e veículo travados neste status (já em atribuição no ASPX). Só o status operacional pode ser alterado.</span>
+                  </p>
+                )}
                 <div>
                   <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Motorista</label>
                   <Input
                     value={allocForm.motorista}
                     onChange={(e) => setAllocForm((f) => ({ ...f, motorista: e.target.value }))}
                     placeholder="Nome do motorista alocado"
-                    className="h-8 text-xs"
+                    disabled={!allocEditable}
+                    className="h-8 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -806,7 +873,8 @@ function RowDetailModal({
                       value={allocForm.cavalo}
                       onChange={(e) => setAllocForm((f) => ({ ...f, cavalo: e.target.value }))}
                       placeholder="Placa cavalo"
-                      className="h-8 text-xs font-mono"
+                      disabled={!allocEditable}
+                      className="h-8 text-xs font-mono disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </div>
                   <div>
@@ -815,7 +883,8 @@ function RowDetailModal({
                       value={allocForm.carreta}
                       onChange={(e) => setAllocForm((f) => ({ ...f, carreta: e.target.value }))}
                       placeholder="Placa carreta"
-                      className="h-8 text-xs font-mono"
+                      disabled={!allocEditable}
+                      className="h-8 text-xs font-mono disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </div>
                 </div>
@@ -847,9 +916,12 @@ function RowDetailModal({
                     onClick={() =>
                       saveAllocation.mutate({
                         lh: row.lh,
-                        motorista: allocForm.motorista,
-                        cavalo: allocForm.cavalo,
-                        carreta: allocForm.carreta,
+                        // Linha travada: preserva o motorista/veículo atual (alloc
+                        // override; null = continua refletindo a planilha) e grava
+                        // só o status.
+                        motorista: allocEditable ? allocForm.motorista : (alloc?.alloc_motorista ?? ""),
+                        cavalo: allocEditable ? allocForm.cavalo : (alloc?.alloc_cavalo ?? ""),
+                        carreta: allocEditable ? allocForm.carreta : (alloc?.alloc_carreta ?? ""),
                         status: allocForm.status,
                       })
                     }
@@ -999,6 +1071,7 @@ export default function SheetMonitor() {
   const [tipoFilter, setTipoFilter] = useState("todos");
   const [assignmentFilter, setAssignmentFilter] = useState("todos");
   const [routeFilter, setRouteFilter] = useState("todos");
+  const [editFilter, setEditFilter] = useState<"todos" | "editaveis" | "bloqueadas">("todos");
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
   const [page, setPage] = useState(0);
@@ -1196,6 +1269,9 @@ export default function SheetMonitor() {
     else if (assignmentFilter === "sem_motorista") result = result.filter((r) => !r.motoristas);
     else if (assignmentFilter === "disponiveis") result = result.filter((r) => !r.motoristas && !r.status);
 
+    if (editFilter === "editaveis") result = result.filter((r) => allocEditPolicy(r).editable);
+    else if (editFilter === "bloqueadas") result = result.filter((r) => !allocEditPolicy(r).editable);
+
     if (dateFromFilter || dateToFilter) {
       const fromTs = dateFromFilter ? new Date(dateFromFilter).getTime() : null;
       const toTs = dateToFilter ? new Date(dateToFilter).getTime() : null;
@@ -1212,13 +1288,13 @@ export default function SheetMonitor() {
     }
 
     return result;
-  }, [items, deferredSearch, statusFilter, tipoFilter, routeFilter, assignmentFilter, dateFromFilter, dateToFilter]);
+  }, [items, deferredSearch, statusFilter, tipoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter]);
 
   const hasActiveFilters =
     deferredSearch.trim().length > 0 || statusFilter !== "todos" || tipoFilter !== "todos" ||
-    routeFilter !== "todos" || assignmentFilter !== "todos" || dateFromFilter.length > 0 || dateToFilter.length > 0;
+    routeFilter !== "todos" || assignmentFilter !== "todos" || editFilter !== "todos" || dateFromFilter.length > 0 || dateToFilter.length > 0;
 
-  useEffect(() => { setPage(0); }, [deferredSearch, statusFilter, tipoFilter, routeFilter, assignmentFilter, dateFromFilter, dateToFilter]);
+  useEffect(() => { setPage(0); }, [deferredSearch, statusFilter, tipoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages - 1);
@@ -1435,6 +1511,14 @@ export default function SheetMonitor() {
                 <option value="disponiveis">Disponiveis p/ importacao</option>
               </select>
 
+              <select value={editFilter} onChange={(e) => setEditFilter(e.target.value as "todos" | "editaveis" | "bloqueadas")}
+                title="Filtrar por edição" aria-label="Filtrar por edição de motorista/veículo"
+                className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40">
+                <option value="todos">Edição: todas</option>
+                <option value="editaveis">Editáveis (motorista/veículo)</option>
+                <option value="bloqueadas">Bloqueadas (em atribuição no ASPX)</option>
+              </select>
+
               <input type="datetime-local" value={dateFromFilter} onChange={(e) => setDateFromFilter(e.target.value)}
                 className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
                 title="Carregamento a partir de" aria-label="Carregamento a partir de" />
@@ -1444,7 +1528,7 @@ export default function SheetMonitor() {
 
               {hasActiveFilters && (
                 <button type="button"
-                  onClick={() => { setSearch(""); setStatusFilter("todos"); setTipoFilter("todos"); setRouteFilter("todos"); setAssignmentFilter("todos"); setDateFromFilter(""); setDateToFilter(""); }}
+                  onClick={() => { setSearch(""); setStatusFilter("todos"); setTipoFilter("todos"); setRouteFilter("todos"); setAssignmentFilter("todos"); setEditFilter("todos"); setDateFromFilter(""); setDateToFilter(""); }}
                   className="inline-flex items-center gap-1 rounded-xl border border-border/80 bg-white px-3 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-muted/40">
                   <X className="h-3.5 w-3.5" />Limpar
                 </button>
