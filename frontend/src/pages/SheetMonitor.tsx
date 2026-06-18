@@ -1,7 +1,8 @@
-import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   BadgeCheck,
+  Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -10,6 +11,7 @@ import {
   Filter,
   Loader2,
   MapPin,
+  Pencil,
   RefreshCw,
   Search,
   ShieldX,
@@ -34,6 +36,8 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   enrichSheetMonitor,
+  fetchOperatorDrivers,
+  fetchOperatorVehicles,
   fetchSheetMonitor,
   updateMonitorAllocation,
   type SheetMonitorAllocation,
@@ -199,6 +203,162 @@ function AngelliraDot({ found }: { found: boolean | null | undefined }) {
     : <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-400" title="Angellira: não aprovado" />;
 }
 
+// ─── Inline allocation editor (combobox por linha) ─────────────────────────────
+
+// Os ids dos <datalist> ficam montados uma única vez na tabela; cada editor de
+// linha referencia via `list=`. Datalist = combobox nativo: autocomplete dos
+// cadastrados + texto livre, sem problemas de posicionamento dentro da tabela
+// com scroll (que um Popover teria).
+const DRIVER_DATALIST_ID = "monitor-driver-options";
+const CAVALO_DATALIST_ID = "monitor-cavalo-options";
+const CARRETA_DATALIST_ID = "monitor-carreta-options";
+
+const INLINE_INPUT_CLASS =
+  "h-7 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring";
+
+function InlineAllocEditor({
+  initial,
+  saving,
+  onSave,
+  onCancel,
+}: {
+  initial: { motorista: string; cavalo: string; carreta: string };
+  saving: boolean;
+  onSave: (value: { motorista: string; cavalo: string; carreta: string }) => void;
+  onCancel: () => void;
+}) {
+  const [form, setForm] = useState(initial);
+  return (
+    // stopPropagation: evita que cliques no editor disparem o onClick da linha
+    // (que abriria o modal / alternaria a seleção).
+    <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
+      <input
+        list={DRIVER_DATALIST_ID}
+        value={form.motorista}
+        onChange={(e) => setForm((f) => ({ ...f, motorista: e.target.value }))}
+        placeholder="Motorista"
+        autoFocus
+        className={INLINE_INPUT_CLASS}
+        onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}
+      />
+      <div className="grid grid-cols-2 gap-1">
+        <input
+          list={CAVALO_DATALIST_ID}
+          value={form.cavalo}
+          onChange={(e) => setForm((f) => ({ ...f, cavalo: e.target.value.toUpperCase() }))}
+          placeholder="Cavalo"
+          className={cn(INLINE_INPUT_CLASS, "font-mono uppercase")}
+          onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}
+        />
+        <input
+          list={CARRETA_DATALIST_ID}
+          value={form.carreta}
+          onChange={(e) => setForm((f) => ({ ...f, carreta: e.target.value.toUpperCase() }))}
+          placeholder="Carreta"
+          className={cn(INLINE_INPUT_CLASS, "font-mono uppercase")}
+          onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}
+        />
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onSave(form)}
+          disabled={saving}
+          className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[0.68rem] font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+          Salvar
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[0.68rem] font-medium text-muted-foreground hover:text-foreground disabled:opacity-60"
+        >
+          Cancelar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Os <datalist> são montados uma única vez na página (ids fixos) e referenciados
+// por todos os editores inline — na tabela plana E na visão por rota.
+function MonitorDatalists({
+  driverOptions,
+  cavaloOptions,
+  carretaOptions,
+}: {
+  driverOptions: string[];
+  cavaloOptions: string[];
+  carretaOptions: string[];
+}) {
+  return (
+    <>
+      <datalist id={DRIVER_DATALIST_ID}>{driverOptions.map((o) => <option key={o} value={o} />)}</datalist>
+      <datalist id={CAVALO_DATALIST_ID}>{cavaloOptions.map((o) => <option key={o} value={o} />)}</datalist>
+      <datalist id={CARRETA_DATALIST_ID}>{carretaOptions.map((o) => <option key={o} value={o} />)}</datalist>
+    </>
+  );
+}
+
+// Conteúdo da célula Motorista/Placa — visualização + edição inline. Extraído
+// para ser reutilizado tanto na tabela plana quanto na visão por rota (F2).
+type AllocCellProps = {
+  row: SheetMonitorRowType;
+  enriched: SheetMonitorEnrichedRow | undefined;
+  editing: boolean;
+  saving: boolean;
+  allocStatus: string | null;
+  onStartEdit: (lh: string) => void;
+  onCancelEdit: () => void;
+  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+};
+
+function AllocCell({ row, enriched, editing, saving, allocStatus, onStartEdit, onCancelEdit, onSaveInline }: AllocCellProps) {
+  if (editing) {
+    return (
+      <InlineAllocEditor
+        initial={{ motorista: row.motoristas ?? "", cavalo: row.cavalo ?? "", carreta: row.carreta ?? "" }}
+        saving={saving}
+        onSave={(v) => onSaveInline({ lh: row.lh, ...v, status: allocStatus ?? "" })}
+        onCancel={onCancelEdit}
+      />
+    );
+  }
+  return (
+    <div className="group/alloc flex items-start justify-between gap-1">
+      <div className="min-w-0 flex-1">
+        {row.motoristas ? (
+          <div className="flex items-center gap-1.5">
+            <AngelliraDot found={enriched?.angellira_driver_found} />
+            <span className="truncate text-xs font-medium text-foreground">{row.motoristas}</span>
+          </div>
+        ) : (
+          <span className="text-xs text-muted-foreground/50">Sem motorista</span>
+        )}
+        {row.cavalo && (
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <AngelliraDot found={enriched?.cavalo_angellira_found} />
+            <span className="truncate text-[0.62rem] text-muted-foreground">
+              {row.cavalo}{row.carreta ? ` · ${row.carreta}` : ""}
+            </span>
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        title="Editar alocação na linha"
+        aria-label="Editar alocação"
+        onClick={(e) => { e.stopPropagation(); onStartEdit(row.lh); }}
+        className="shrink-0 rounded p-1 text-muted-foreground/40 opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100 group-hover/alloc:opacity-100"
+      >
+        <Pencil className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
 // ─── Table row ────────────────────────────────────────────────────────────────
 
 const ROW_VIRTUALIZATION_STYLE = { contentVisibility: "auto" as const, containIntrinsicSize: "0 48px" as const };
@@ -207,12 +367,26 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   row,
   enriched,
   selected,
+  editing,
+  saving,
+  allocStatus,
   onSelect,
+  onStartEdit,
+  onCancelEdit,
+  onSaveInline,
 }: {
   row: SheetMonitorRowType;
   enriched: SheetMonitorEnrichedRow | undefined;
   selected: boolean;
+  editing: boolean;
+  saving: boolean;
+  // alloc_status atual do override — reenviado no save inline para NÃO apagar o
+  // status operacional ao editar só motorista/placa.
+  allocStatus: string | null;
   onSelect: (row: SheetMonitorRowType) => void;
+  onStartEdit: (lh: string) => void;
+  onCancelEdit: () => void;
+  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
 }) {
   return (
     <tr
@@ -261,24 +435,18 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
         )}
       </td>
 
-      {/* Motorista + Placa + enriched dots */}
-      <td className="px-3 py-2">
-        {row.motoristas ? (
-          <div className="flex items-center gap-1.5">
-            <AngelliraDot found={enriched?.angellira_driver_found} />
-            <span className="truncate text-xs font-medium text-foreground">{row.motoristas}</span>
-          </div>
-        ) : (
-          <span className="text-xs text-muted-foreground/50">Sem motorista</span>
-        )}
-        {row.cavalo && (
-          <div className="flex items-center gap-1.5 mt-0.5">
-            <AngelliraDot found={enriched?.cavalo_angellira_found} />
-            <span className="truncate text-[0.62rem] text-muted-foreground">
-              {row.cavalo}{row.carreta ? ` · ${row.carreta}` : ""}
-            </span>
-          </div>
-        )}
+      {/* Motorista + Placa — editável inline (combobox) */}
+      <td className="px-3 py-2 align-top">
+        <AllocCell
+          row={row}
+          enriched={enriched}
+          editing={editing}
+          saving={saving}
+          allocStatus={allocStatus}
+          onStartEdit={onStartEdit}
+          onCancelEdit={onCancelEdit}
+          onSaveInline={onSaveInline}
+        />
       </td>
     </tr>
   );
@@ -289,15 +457,27 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
 function SheetMonitorTable({
   rows,
   enrichedByLh,
+  allocByLh,
   selectedLh,
+  editingLh,
+  savingLh,
   loading,
   onSelect,
+  onStartEdit,
+  onCancelEdit,
+  onSaveInline,
 }: {
   rows: SheetMonitorRowType[];
   enrichedByLh: Record<string, SheetMonitorEnrichedRow>;
+  allocByLh: Record<string, SheetMonitorAllocation>;
   selectedLh: string | null;
+  editingLh: string | null;
+  savingLh: string | null;
   loading: boolean;
   onSelect: (row: SheetMonitorRowType) => void;
+  onStartEdit: (lh: string) => void;
+  onCancelEdit: () => void;
+  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
 }) {
   if (loading) {
     return (
@@ -319,13 +499,13 @@ function SheetMonitorTable({
   return (
     <div className="relative">
       <div className="overflow-x-auto overscroll-x-contain pb-1">
-        <table className="w-full min-w-[680px] table-fixed text-sm">
+        <table className="w-full min-w-[720px] table-fixed text-sm">
           <colgroup>
             <col className="w-[130px]" />
             <col className="w-[100px]" />
             <col />
             <col className="w-[140px]" />
-            <col className="w-[190px]" />
+            <col className="w-[230px]" />
           </colgroup>
           <thead>
             <tr className="border-b border-border/60 bg-primary/[0.028]">
@@ -343,13 +523,141 @@ function SheetMonitorTable({
                 row={row}
                 enriched={enrichedByLh[row.lh]}
                 selected={row.lh === selectedLh}
+                editing={row.lh === editingLh}
+                saving={row.lh === savingLh}
+                allocStatus={allocByLh[row.lh]?.alloc_status ?? null}
                 onSelect={onSelect}
+                onStartEdit={onStartEdit}
+                onCancelEdit={onCancelEdit}
+                onSaveInline={onSaveInline}
               />
             ))}
           </tbody>
         </table>
       </div>
       <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to l from-background/80 to-transparent" />
+    </div>
+  );
+}
+
+// ─── Visão por rota (F2) ───────────────────────────────────────────────────────
+
+// Chave de rota = "ORIGEM → DESTINO". Linhas sem rota caem em "—".
+function routeKeyOf(row: SheetMonitorRowType) {
+  const o = (row.origem || "").trim();
+  const d = (row.destino || "").trim();
+  if (!o && !d) return "—";
+  return `${o || "—"} → ${d || "—"}`;
+}
+
+function RouteGroupedView({
+  rows,
+  enrichedByLh,
+  allocByLh,
+  editingLh,
+  savingLh,
+  onSelect,
+  onStartEdit,
+  onCancelEdit,
+  onSaveInline,
+}: {
+  rows: SheetMonitorRowType[];
+  enrichedByLh: Record<string, SheetMonitorEnrichedRow>;
+  allocByLh: Record<string, SheetMonitorAllocation>;
+  editingLh: string | null;
+  savingLh: string | null;
+  onSelect: (row: SheetMonitorRowType) => void;
+  onStartEdit: (lh: string) => void;
+  onCancelEdit: () => void;
+  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+}) {
+  const groups = useMemo(() => {
+    const map = new Map<string, SheetMonitorRowType[]>();
+    for (const r of rows) {
+      const k = routeKeyOf(r);
+      const arr = map.get(k);
+      if (arr) arr.push(r);
+      else map.set(k, [r]);
+    }
+    return Array.from(map.entries())
+      .map(([route, rs]) => {
+        const available = rs.filter((r) => !r.motoristas).length;
+        // Disponíveis (sem motorista) primeiro — a fila aguardando alocação.
+        const sorted = [...rs].sort((a, b) => Number(Boolean(a.motoristas)) - Number(Boolean(b.motoristas)));
+        return { route, rows: sorted, total: rs.length, available, assigned: rs.length - available };
+      })
+      // Rotas com mais cargas disponíveis no topo (maior fila primeiro).
+      .sort((a, b) => b.available - a.available || a.route.localeCompare(b.route, "pt-BR"));
+  }, [rows]);
+
+  if (rows.length === 0) {
+    return (
+      <div className="admin-panel flex flex-col items-center gap-3 py-16 text-muted-foreground">
+        <MapPin className="h-10 w-10 opacity-30" />
+        <p className="text-sm font-medium">Nenhuma carga para os filtros atuais.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {groups.map((g) => (
+        <section key={g.route} className="admin-panel overflow-hidden">
+          <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 bg-primary/[0.03] px-4 py-2.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <MapPin className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+              <span className="truncate text-xs font-semibold text-foreground">{g.route}</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[0.62rem] font-semibold text-blue-700 dark:bg-blue-500/15 dark:text-blue-200">
+                {g.available} disponíveis
+              </span>
+              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[0.62rem] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-200">
+                {g.assigned} alocadas
+              </span>
+            </div>
+          </header>
+          <ul className="divide-y divide-border/40">
+            {g.rows.map((row) => (
+              <li
+                key={row.lh}
+                onClick={() => onSelect(row)}
+                className={cn(
+                  "flex cursor-pointer items-start gap-3 px-4 py-2.5 transition-colors",
+                  row.motoristas ? "hover:bg-emerald-50/50 dark:hover:bg-emerald-500/10" : "hover:bg-primary/[0.04]",
+                )}
+              >
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge status={!row.status && row.motoristas ? "Reservado" : row.status} />
+                    <span className="font-mono text-[0.68rem] font-semibold text-foreground/70">{row.lh}</span>
+                    {row.tipo && <span className="text-[0.6rem] text-muted-foreground/60">{row.tipo}</span>}
+                  </div>
+                  {(row.carregamentoLabel || row.descargaLabel) && (
+                    <span className="text-[0.62rem] text-muted-foreground">
+                      {row.carregamentoLabel ? `Carga ${row.carregamentoLabel}` : ""}
+                      {row.carregamentoLabel && row.descargaLabel ? " · " : ""}
+                      {row.descargaLabel ? `Descarga ${row.descargaLabel}` : ""}
+                    </span>
+                  )}
+                </div>
+                <div className="w-[230px] shrink-0">
+                  <AllocCell
+                    row={row}
+                    enriched={enrichedByLh[row.lh]}
+                    editing={row.lh === editingLh}
+                    saving={row.lh === savingLh}
+                    allocStatus={allocByLh[row.lh]?.alloc_status ?? null}
+                    onStartEdit={onStartEdit}
+                    onCancelEdit={onCancelEdit}
+                    onSaveInline={onSaveInline}
+                  />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
     </div>
   );
 }
@@ -693,10 +1001,13 @@ export default function SheetMonitor() {
   const [statusFilter, setStatusFilter] = useState("todos");
   const [tipoFilter, setTipoFilter] = useState("todos");
   const [assignmentFilter, setAssignmentFilter] = useState("todos");
+  const [routeFilter, setRouteFilter] = useState("todos");
+  const [viewMode, setViewMode] = useState<"tabela" | "rota">("tabela");
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
   const [page, setPage] = useState(0);
   const [selectedRow, setSelectedRow] = useState<SheetMonitorRowType | null>(null);
+  const [editingLh, setEditingLh] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
 
   // Enrich loop state
@@ -740,6 +1051,75 @@ export default function SheetMonitor() {
   const snapshotSaveFailed = monitorData?.meta?.snapshotSaved === false;
   const snapshotSaveError = monitorData?.meta?.snapshotSaveError;
 
+  // ── Sugestões do combobox inline (autocomplete dos cadastrados) ───────────────
+  // Busca uma página dos motoristas/veículos cadastrados uma vez (cacheada),
+  // só quando há snapshot. Alimenta os <datalist> da edição inline; o operador
+  // ainda pode digitar um valor novo (texto livre).
+  const { data: suggestionsData } = useQuery({
+    queryKey: ["admin", "monitor-alloc-suggestions"],
+    queryFn: async () => {
+      const [drivers, vehicles] = await Promise.all([
+        fetchOperatorDrivers({ pageSize: "300" }),
+        fetchOperatorVehicles({ pageSize: "300" }),
+      ]);
+      return { drivers: drivers.items, vehicles: vehicles.items };
+    },
+    enabled: !noSnapshot,
+    staleTime: 5 * 60_000,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  });
+
+  // Opções = valores já presentes nas linhas (planilha/alocação) + cadastrados.
+  const { driverOptions, cavaloOptions, carretaOptions } = useMemo(() => {
+    const drivers = new Set<string>();
+    const cavalos = new Set<string>();
+    const carretas = new Set<string>();
+    for (const r of items) {
+      if (r.motoristas) drivers.add(r.motoristas);
+      if (r.cavalo) cavalos.add(r.cavalo);
+      if (r.carreta) carretas.add(r.carreta);
+    }
+    for (const d of suggestionsData?.drivers ?? []) {
+      if (d.displayName) drivers.add(d.displayName);
+    }
+    for (const v of suggestionsData?.vehicles ?? []) {
+      if (!v.plate) continue;
+      if (v.plateRole === "HORSE") cavalos.add(v.plate);
+      else carretas.add(v.plate);
+    }
+    const sort = (s: Set<string>) => Array.from(s).sort((a, b) => a.localeCompare(b, "pt-BR"));
+    return { driverOptions: sort(drivers), cavaloOptions: sort(cavalos), carretaOptions: sort(carretas) };
+  }, [items, suggestionsData]);
+
+  // ── Edição inline da alocação ─────────────────────────────────────────────────
+  const {
+    mutate: mutateInlineAlloc,
+    isPending: inlineAllocPending,
+    variables: inlineAllocVars,
+  } = useMutation({
+    mutationFn: updateMonitorAllocation,
+    onSuccess: () => {
+      toast.success("Alocação salva no sistema.");
+      setEditingLh(null);
+      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Não foi possível salvar a alocação.");
+    },
+  });
+  const savingLh = inlineAllocPending ? (inlineAllocVars?.lh ?? null) : null;
+
+  const handleStartEdit = useCallback((lh: string) => setEditingLh(lh), []);
+  const handleCancelEdit = useCallback(() => setEditingLh(null), []);
+  const handleSaveInline = useCallback(
+    (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => {
+      mutateInlineAlloc(payload);
+    },
+    [mutateInlineAlloc],
+  );
+
   const pendingEnrich = items.length > 0
     ? items.length - Object.keys(enrichedByLh).length
     : 0;
@@ -774,6 +1154,12 @@ export default function SheetMonitor() {
     return Array.from(s).sort();
   }, [items]);
 
+  const routeOptions = useMemo(() => {
+    const s = new Set<string>();
+    items.forEach((item) => s.add(routeKeyOf(item)));
+    return Array.from(s).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [items]);
+
   const filteredRows = useMemo(() => {
     let result = items;
 
@@ -790,6 +1176,9 @@ export default function SheetMonitor() {
 
     if (tipoFilter !== "todos")
       result = result.filter((r) => r.tipo === tipoFilter);
+
+    if (routeFilter !== "todos")
+      result = result.filter((r) => routeKeyOf(r) === routeFilter);
 
     if (assignmentFilter === "com_motorista") result = result.filter((r) => Boolean(r.motoristas));
     else if (assignmentFilter === "sem_motorista") result = result.filter((r) => !r.motoristas);
@@ -811,13 +1200,13 @@ export default function SheetMonitor() {
     }
 
     return result;
-  }, [items, deferredSearch, statusFilter, tipoFilter, assignmentFilter, dateFromFilter, dateToFilter]);
+  }, [items, deferredSearch, statusFilter, tipoFilter, routeFilter, assignmentFilter, dateFromFilter, dateToFilter]);
 
   const hasActiveFilters =
     deferredSearch.trim().length > 0 || statusFilter !== "todos" || tipoFilter !== "todos" ||
-    assignmentFilter !== "todos" || dateFromFilter.length > 0 || dateToFilter.length > 0;
+    routeFilter !== "todos" || assignmentFilter !== "todos" || dateFromFilter.length > 0 || dateToFilter.length > 0;
 
-  useEffect(() => { setPage(0); }, [deferredSearch, statusFilter, tipoFilter, assignmentFilter, dateFromFilter, dateToFilter]);
+  useEffect(() => { setPage(0); }, [deferredSearch, statusFilter, tipoFilter, routeFilter, assignmentFilter, dateFromFilter, dateToFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages - 1);
@@ -884,9 +1273,9 @@ export default function SheetMonitor() {
   const loading = isLoading && items.length === 0;
   const isRefreshing = (isFetching && !loading) || refreshMutation.isPending;
 
-  const handleSelectRow = (row: SheetMonitorRowType) => {
+  const handleSelectRow = useCallback((row: SheetMonitorRowType) => {
     setSelectedRow((prev) => (prev?.lh === row.lh ? null : row));
-  };
+  }, []);
 
   return (
     <div>
@@ -1019,6 +1408,13 @@ export default function SheetMonitor() {
                 {tipoOptions.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
 
+              <select value={routeFilter} onChange={(e) => setRouteFilter(e.target.value)}
+                title="Filtrar por rota" aria-label="Filtrar por rota"
+                className="max-w-[220px] rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10">
+                <option value="todos">Todas as rotas</option>
+                {routeOptions.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+
               <select value={assignmentFilter} onChange={(e) => setAssignmentFilter(e.target.value)}
                 className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40">
                 <option value="todos">Todos</option>
@@ -1036,7 +1432,7 @@ export default function SheetMonitor() {
 
               {hasActiveFilters && (
                 <button type="button"
-                  onClick={() => { setSearch(""); setStatusFilter("todos"); setTipoFilter("todos"); setAssignmentFilter("todos"); setDateFromFilter(""); setDateToFilter(""); }}
+                  onClick={() => { setSearch(""); setStatusFilter("todos"); setTipoFilter("todos"); setRouteFilter("todos"); setAssignmentFilter("todos"); setDateFromFilter(""); setDateToFilter(""); }}
                   className="inline-flex items-center gap-1 rounded-xl border border-border/80 bg-white px-3 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-muted/40">
                   <X className="h-3.5 w-3.5" />Limpar
                 </button>
@@ -1068,40 +1464,83 @@ export default function SheetMonitor() {
           </section>
         )}
 
-        {/* ── Table ── */}
+        {/* ── View toggle + datalists + conteúdo ── */}
         {!noSnapshot && (
-          <section className="admin-panel overflow-hidden">
-            <SheetMonitorTable
-              rows={paginatedRows}
-              enrichedByLh={enrichedByLh}
-              selectedLh={selectedRow?.lh ?? null}
-              loading={loading}
-              onSelect={handleSelectRow}
-            />
-            {!loading && filteredRows.length > PAGE_SIZE && (
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 px-4 py-3 text-xs text-muted-foreground">
-                <span>
-                  Mostrando <span className="font-semibold text-foreground">{pageStart}</span>–
-                  <span className="font-semibold text-foreground">{pageEnd}</span> de{" "}
-                  <span className="font-semibold text-foreground">{filteredRows.length}</span>
-                </span>
-                <div className="flex items-center gap-2">
-                  <button type="button" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={safePage === 0}
-                    className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-white px-2.5 py-1.5 font-medium text-foreground hover:bg-muted/50 disabled:opacity-40">
-                    <ChevronLeft className="h-3.5 w-3.5" />Anterior
-                  </button>
-                  <span className="tabular-nums">
-                    Página <span className="font-semibold text-foreground">{safePage + 1}</span> de{" "}
-                    <span className="font-semibold text-foreground">{totalPages}</span>
-                  </span>
-                  <button type="button" onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={safePage >= totalPages - 1}
-                    className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-white px-2.5 py-1.5 font-medium text-foreground hover:bg-muted/50 disabled:opacity-40">
-                    Próxima<ChevronRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+          <>
+            <MonitorDatalists driverOptions={driverOptions} cavaloOptions={cavaloOptions} carretaOptions={carretaOptions} />
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="inline-flex rounded-xl border border-border/70 bg-muted/30 p-0.5">
+                <button type="button" onClick={() => setViewMode("tabela")}
+                  className={cn("rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors", viewMode === "tabela" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                  Tabela
+                </button>
+                <button type="button" onClick={() => setViewMode("rota")}
+                  className={cn("rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors", viewMode === "rota" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                  Por rota
+                </button>
               </div>
+              {viewMode === "rota" && (
+                <span className="text-xs text-muted-foreground">
+                  <span className="font-semibold text-foreground">{filteredRows.length}</span> cargas em{" "}
+                  <span className="font-semibold text-foreground">{new Set(filteredRows.map(routeKeyOf)).size}</span> rotas
+                </span>
+              )}
+            </div>
+
+            {viewMode === "tabela" ? (
+              <section className="admin-panel overflow-hidden">
+                <SheetMonitorTable
+                  rows={paginatedRows}
+                  enrichedByLh={enrichedByLh}
+                  allocByLh={allocByLh}
+                  selectedLh={selectedRow?.lh ?? null}
+                  editingLh={editingLh}
+                  savingLh={savingLh}
+                  loading={loading}
+                  onSelect={handleSelectRow}
+                  onStartEdit={handleStartEdit}
+                  onCancelEdit={handleCancelEdit}
+                  onSaveInline={handleSaveInline}
+                />
+                {!loading && filteredRows.length > PAGE_SIZE && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 px-4 py-3 text-xs text-muted-foreground">
+                    <span>
+                      Mostrando <span className="font-semibold text-foreground">{pageStart}</span>–
+                      <span className="font-semibold text-foreground">{pageEnd}</span> de{" "}
+                      <span className="font-semibold text-foreground">{filteredRows.length}</span>
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button type="button" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={safePage === 0}
+                        className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-white px-2.5 py-1.5 font-medium text-foreground hover:bg-muted/50 disabled:opacity-40">
+                        <ChevronLeft className="h-3.5 w-3.5" />Anterior
+                      </button>
+                      <span className="tabular-nums">
+                        Página <span className="font-semibold text-foreground">{safePage + 1}</span> de{" "}
+                        <span className="font-semibold text-foreground">{totalPages}</span>
+                      </span>
+                      <button type="button" onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={safePage >= totalPages - 1}
+                        className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-white px-2.5 py-1.5 font-medium text-foreground hover:bg-muted/50 disabled:opacity-40">
+                        Próxima<ChevronRight className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </section>
+            ) : (
+              <RouteGroupedView
+                rows={filteredRows}
+                enrichedByLh={enrichedByLh}
+                allocByLh={allocByLh}
+                editingLh={editingLh}
+                savingLh={savingLh}
+                onSelect={handleSelectRow}
+                onStartEdit={handleStartEdit}
+                onCancelEdit={handleCancelEdit}
+                onSaveInline={handleSaveInline}
+              />
             )}
-          </section>
+          </>
         )}
       </main>
 
