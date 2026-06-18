@@ -9,6 +9,7 @@ import {
   Database,
   FileSpreadsheet,
   Filter,
+  GripVertical,
   Loader2,
   MapPin,
   Pencil,
@@ -34,11 +35,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { computeReassignMoves } from "@/lib/monitorReorder";
 import {
   enrichSheetMonitor,
   fetchOperatorDrivers,
   fetchOperatorVehicles,
   fetchSheetMonitor,
+  reassignMonitorAllocations,
   updateMonitorAllocation,
   type SheetMonitorAllocation,
   type SheetMonitorEnrichedRow,
@@ -550,27 +553,44 @@ function routeKeyOf(row: SheetMonitorRowType) {
   return `${o || "—"} → ${d || "—"}`;
 }
 
+type ReorderMode = "off" | "swap" | "shift";
+
+// Ordena por agenda (carregamento) — fila estável, independente de quem está
+// alocado. Assim, ao arrastar/reordenar motoristas, as LINHAS ficam paradas e só
+// as alocações (motorista/placa) se movem entre elas.
+function agendaSortKey(row: SheetMonitorRowType) {
+  return `${row.data ?? ""}T${row.horario ?? ""}|${row.lh}`;
+}
+
 function RouteGroupedView({
   rows,
   enrichedByLh,
   allocByLh,
   editingLh,
   savingLh,
+  reassigning,
   onSelect,
   onStartEdit,
   onCancelEdit,
   onSaveInline,
+  onReassign,
 }: {
   rows: SheetMonitorRowType[];
   enrichedByLh: Record<string, SheetMonitorEnrichedRow>;
   allocByLh: Record<string, SheetMonitorAllocation>;
   editingLh: string | null;
   savingLh: string | null;
+  reassigning: boolean;
   onSelect: (row: SheetMonitorRowType) => void;
   onStartEdit: (lh: string) => void;
   onCancelEdit: () => void;
   onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+  onReassign: (moves: Array<{ lh: string; motorista: string; cavalo: string; carreta: string }>) => void;
 }) {
+  const [reorderMode, setReorderMode] = useState<ReorderMode>("off");
+  const [dragLh, setDragLh] = useState<string | null>(null);
+  const [overLh, setOverLh] = useState<string | null>(null);
+
   const groups = useMemo(() => {
     const map = new Map<string, SheetMonitorRowType[]>();
     for (const r of rows) {
@@ -582,13 +602,30 @@ function RouteGroupedView({
     return Array.from(map.entries())
       .map(([route, rs]) => {
         const available = rs.filter((r) => !r.motoristas).length;
-        // Disponíveis (sem motorista) primeiro — a fila aguardando alocação.
-        const sorted = [...rs].sort((a, b) => Number(Boolean(a.motoristas)) - Number(Boolean(b.motoristas)));
+        // Ordem da fila = agenda (estável p/ arrastar), não "disponível primeiro".
+        const sorted = [...rs].sort((a, b) => agendaSortKey(a).localeCompare(agendaSortKey(b), "pt-BR"));
         return { route, rows: sorted, total: rs.length, available, assigned: rs.length - available };
       })
-      // Rotas com mais cargas disponíveis no topo (maior fila primeiro).
       .sort((a, b) => b.available - a.available || a.route.localeCompare(b.route, "pt-BR"));
   }, [rows]);
+
+  const dragging = reorderMode !== "off";
+
+  function handleDrop(groupRows: SheetMonitorRowType[], dstLh: string) {
+    const src = dragLh;
+    setDragLh(null);
+    setOverLh(null);
+    if (!dragging || !src || src === dstLh) return;
+    const srcIdx = groupRows.findIndex((r) => r.lh === src);
+    const dstIdx = groupRows.findIndex((r) => r.lh === dstLh);
+    if (srcIdx < 0 || dstIdx < 0) return; // arraste entre rotas diferentes → ignora
+    const items = groupRows.map((r) => ({
+      lh: r.lh,
+      alloc: { motorista: r.motoristas || "", cavalo: r.cavalo || "", carreta: r.carreta || "" },
+    }));
+    const moves = computeReassignMoves(items, srcIdx, dstIdx, reorderMode);
+    if (moves.length > 0) onReassign(moves);
+  }
 
   if (rows.length === 0) {
     return (
@@ -601,6 +638,36 @@ function RouteGroupedView({
 
   return (
     <div className="space-y-4">
+      {/* Barra de reordenação da fila (F3) */}
+      <div className="admin-panel flex flex-wrap items-center gap-3 p-3">
+        <span className="text-xs font-semibold text-muted-foreground">Reordenar a fila:</span>
+        <div className="inline-flex rounded-lg border border-border/70 bg-muted/30 p-0.5">
+          {([
+            ["off", "Desligado"],
+            ["shift", "Descer fila"],
+            ["swap", "Trocar posições"],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => { setReorderMode(value); setDragLh(null); setOverLh(null); }}
+              className={cn(
+                "rounded-md px-2.5 py-1 text-[0.7rem] font-semibold transition-colors",
+                reorderMode === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {dragging && (
+          <span className="inline-flex items-center gap-1.5 text-[0.7rem] text-muted-foreground">
+            {reassigning && <Loader2 className="h-3 w-3 animate-spin" />}
+            Arraste pelo <GripVertical className="h-3 w-3" /> para {reorderMode === "swap" ? "trocar a alocação entre duas cargas" : "mover a alocação na fila"}.
+          </span>
+        )}
+      </div>
+
       {groups.map((g) => (
         <section key={g.route} className="admin-panel overflow-hidden">
           <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 bg-primary/[0.03] px-4 py-2.5">
@@ -622,11 +689,30 @@ function RouteGroupedView({
               <li
                 key={row.lh}
                 onClick={() => onSelect(row)}
+                onDragOver={dragging ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (overLh !== row.lh) setOverLh(row.lh); } : undefined}
+                onDragLeave={dragging ? () => { if (overLh === row.lh) setOverLh(null); } : undefined}
+                onDrop={dragging ? (e) => { e.preventDefault(); handleDrop(g.rows, row.lh); } : undefined}
                 className={cn(
-                  "flex cursor-pointer items-start gap-3 px-4 py-2.5 transition-colors",
+                  "flex cursor-pointer items-start gap-2 px-4 py-2.5 transition-colors",
                   row.motoristas ? "hover:bg-emerald-50/50 dark:hover:bg-emerald-500/10" : "hover:bg-primary/[0.04]",
+                  dragging && dragLh === row.lh && "opacity-40",
+                  dragging && overLh === row.lh && dragLh !== row.lh && "ring-2 ring-inset ring-primary/50",
                 )}
               >
+                {dragging && (
+                  <button
+                    type="button"
+                    aria-label="Arrastar para reordenar"
+                    title="Arraste para reordenar a fila"
+                    draggable
+                    onClick={(e) => e.stopPropagation()}
+                    onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", row.lh); setDragLh(row.lh); }}
+                    onDragEnd={() => { setDragLh(null); setOverLh(null); }}
+                    className="mt-0.5 shrink-0 cursor-grab rounded p-0.5 text-muted-foreground/50 hover:bg-muted hover:text-foreground active:cursor-grabbing"
+                  >
+                    <GripVertical className="h-4 w-4" />
+                  </button>
+                )}
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <StatusBadge status={!row.status && row.motoristas ? "Reservado" : row.status} />
@@ -1120,6 +1206,22 @@ export default function SheetMonitor() {
     [mutateInlineAlloc],
   );
 
+  // ── Reordenar a fila de motoristas/veículos (F3) ──────────────────────────────
+  const { mutate: mutateReassign, isPending: reassigning } = useMutation({
+    mutationFn: reassignMonitorAllocations,
+    onSuccess: (data) => {
+      toast.success(`Fila atualizada — ${data.count} carga${data.count === 1 ? "" : "s"} realocada${data.count === 1 ? "" : "s"}.`);
+      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Não foi possível reordenar a fila.");
+    },
+  });
+  const handleReassign = useCallback(
+    (moves: Array<{ lh: string; motorista: string; cavalo: string; carreta: string }>) => mutateReassign(moves),
+    [mutateReassign],
+  );
+
   const pendingEnrich = items.length > 0
     ? items.length - Object.keys(enrichedByLh).length
     : 0;
@@ -1534,10 +1636,12 @@ export default function SheetMonitor() {
                 allocByLh={allocByLh}
                 editingLh={editingLh}
                 savingLh={savingLh}
+                reassigning={reassigning}
                 onSelect={handleSelectRow}
                 onStartEdit={handleStartEdit}
                 onCancelEdit={handleCancelEdit}
                 onSaveInline={handleSaveInline}
+                onReassign={handleReassign}
               />
             )}
           </>
