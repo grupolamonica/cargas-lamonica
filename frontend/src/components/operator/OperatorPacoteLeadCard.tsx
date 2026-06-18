@@ -2,6 +2,7 @@ import { Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Layers, Loader2,
 
 import ClientLogo from "@/components/ClientLogo";
 import { cn } from "@/lib/utils";
+import { resolveVinculoStyle } from "@/lib/vinculo";
 import { buildDisplayDateTime, formatFullDateTime, formatShortDateTime } from "@/lib/dateDisplay";
 import type { OperatorLeadGroup, OperatorLeadPacoteMeta, PublicLeadValidationSummary } from "@/services/loadClaims";
 
@@ -37,6 +38,17 @@ function aggregateCandidaturaStatus(items: PacoteLeadItem[]) {
 function pickDriverName(items: PacoteLeadItem[]) {
   for (const it of items) {
     if (it.lead.driverName?.trim()) return it.lead.driverName.trim();
+  }
+  return null;
+}
+
+/**
+ * Vínculo do motorista no pacote: o mesmo CPF replica em todas as paradas, então
+ * o vínculo é consistente — pega o primeiro lead que tiver.
+ */
+function pickVinculo(items: PacoteLeadItem[]) {
+  for (const it of items) {
+    if (it.lead.vinculo?.trim()) return it.lead.vinculo.trim();
   }
   return null;
 }
@@ -384,6 +396,7 @@ const OperatorPacoteLeadCard = ({
                   const validation = firstLead?.validation ?? null;
                   const whatsappUrl = firstLead?.whatsappUrl ?? "";
                   const driverName = pickDriverName(cand.items);
+                  const vinculoStyle = resolveVinculoStyle(pickVinculo(cand.items));
                   const aggregateStatus = aggregateCandidaturaStatus(cand.items);
                   const cpfMask = maskCpfSuffix(cand.cpf);
                   const phoneFormatted = formatPhoneDisplay(cand.phone);
@@ -415,7 +428,20 @@ const OperatorPacoteLeadCard = ({
                             <Phone className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                           )}
                           <div className="min-w-0 leading-tight">
-                            <div className="truncate">{driverName ?? phoneFormatted}</div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="truncate">{driverName ?? phoneFormatted}</span>
+                              {vinculoStyle ? (
+                                <span
+                                  className={cn(
+                                    "shrink-0 rounded-full px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-wide",
+                                    vinculoStyle.className,
+                                  )}
+                                  title={`Vínculo: ${vinculoStyle.label}`}
+                                >
+                                  {vinculoStyle.label}
+                                </span>
+                              ) : null}
+                            </div>
                             <div className="mt-0.5 truncate text-[0.65rem] font-normal text-muted-foreground">
                               {subLabel}
                             </div>
