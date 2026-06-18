@@ -49,6 +49,21 @@ const EMPTY_ROWS: SheetMonitorRowType[] = [];
 const EMPTY_ENRICHED: Record<string, SheetMonitorEnrichedRow> = {};
 const EMPTY_ALLOC: Record<string, SheetMonitorAllocation> = {};
 
+// Status operacional canônico da planilha (mesma terminologia, sem os valores
+// com encoding corrompido que aparecem nos dados crus). Ordem = pipeline da viagem.
+const OPERATIONAL_STATUS_OPTIONS = [
+  "AGUARDANDO CARREGAMENTO",
+  "CARREGADO",
+  "AGUARDANDO CHEGAR NO CLIENTE",
+  "AGUARDANDO DESCARGA",
+  "DESCARREGANDO",
+  "DESCARREGADO",
+  "CTE EM EMISSÃO",
+  "CTE ENVIADO",
+  "NO SHOW",
+  "CANCELADO",
+] as const;
+
 const SHEET_MONITOR_QUERY_OPTIONS = {
   staleTime: 30_000,
   gcTime: 60_000,
@@ -501,12 +516,20 @@ function RowDetailModal({
                 </div>
                 <div>
                   <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Status operacional</label>
-                  <Input
+                  <select
                     value={allocForm.status}
                     onChange={(e) => setAllocForm((f) => ({ ...f, status: e.target.value }))}
-                    placeholder="Ex: DESCARREGADO, CTE ENVIADO, AGUARDANDO DESCARGA"
-                    className="h-8 text-xs"
-                  />
+                    className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+                  >
+                    <option value="">— sem status (usa a planilha) —</option>
+                    {/* Preserva um valor já salvo que não esteja na lista canônica (ex.: legado). */}
+                    {allocForm.status && !OPERATIONAL_STATUS_OPTIONS.includes(allocForm.status as (typeof OPERATIONAL_STATUS_OPTIONS)[number]) && (
+                      <option value={allocForm.status}>{allocForm.status}</option>
+                    )}
+                    {OPERATIONAL_STATUS_OPTIONS.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
                 </div>
                 <div className="flex items-center justify-between gap-2 pt-1">
                   <span className="text-[0.58rem] leading-tight text-muted-foreground/60">
