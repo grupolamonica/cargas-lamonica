@@ -190,7 +190,7 @@ export function createSheetLoadId(sheetLh) {
   return formatUuidFromHex(hash);
 }
 
-function parseCsv(text) {
+export function parseCsv(text) {
   const sourceText = text.replace(/^\uFEFF/, "");
   const rows = [];
   let row = [];

@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import "../../infrastructure/config/load-env.js";
 
 import { syncGoogleSheetLoads } from "../../application/google-sheets/google-sheet-loads.js";
+import { syncDriverVinculos } from "../../application/google-sheets/driver-vinculos.js";
 import { createSupabaseAdminClient } from "../../infrastructure/supabase/admin-client.js";
 
 function getErrorPayload(error) {
@@ -58,11 +59,21 @@ export async function resolveSheetSyncResponse(request) {
       supabaseClient,
     });
 
+    // Sync da aba "Vinculo" — não-fatal: não derruba o sync de cargas.
+    let vinculos = null;
+    try {
+      vinculos = await syncDriverVinculos({ supabaseClient });
+    } catch (vinculoError) {
+      console.error("[sheet-sync-api] erro no sync de vinculos:", vinculoError?.message);
+      vinculos = { error: vinculoError?.message ?? "unknown" };
+    }
+
     return {
       statusCode: 200,
       payload: {
         ok: true,
         ...result,
+        vinculos,
       },
     };
   } catch (error) {

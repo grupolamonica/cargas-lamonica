@@ -254,7 +254,16 @@ async function bootstrap() {
       try {
         const { syncGoogleSheetLoads } = await import("./application/google-sheets/google-sheet-loads.js");
         const { createSupabaseAdminClient } = await import("./infrastructure/supabase/admin-client.js");
-        await syncGoogleSheetLoads({ supabaseClient: createSupabaseAdminClient() });
+        const adminClient = createSupabaseAdminClient();
+        await syncGoogleSheetLoads({ supabaseClient: adminClient });
+        // Sync da aba "Vinculo" (motorista -> vínculo) em paralelo lógico ao de
+        // cargas. Não-fatal: uma falha aqui não deve abortar o ciclo de cargas.
+        try {
+          const { syncDriverVinculos } = await import("./application/google-sheets/driver-vinculos.js");
+          await syncDriverVinculos({ supabaseClient: adminClient });
+        } catch (vinculoErr) {
+          console.error("[sheet-sync-periodic] erro no sync de vinculos:", vinculoErr?.message);
+        }
         const durationMs = Date.now() - startedAt;
         console.info(`[sheet-sync-periodic] sync concluído em ${durationMs}ms`);
         if (durationMs > 30_000) {
