@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { computeReassignMoves } from "@/lib/monitorReorder";
+import { computeShiftMoves, computeSwapMoves } from "@/lib/monitorReorder";
 import {
   enrichSheetMonitor,
   fetchOperatorDrivers,
@@ -305,8 +305,9 @@ function MonitorDatalists({
   );
 }
 
-// Conteúdo da célula Motorista/Placa — visualização + edição inline. Extraído
-// para ser reutilizado tanto na tabela plana quanto na visão por rota (F2).
+// Conteúdo da célula Motorista/Placa — visualização (com alça de arrastar) +
+// edição inline. A alça arrasta a ALOCAÇÃO (motorista+placa) para reatribuir
+// entre cargas; o lápis abre a edição inline.
 type AllocCellProps = {
   row: SheetMonitorRowType;
   enriched: SheetMonitorEnrichedRow | undefined;
@@ -316,9 +317,11 @@ type AllocCellProps = {
   onStartEdit: (lh: string) => void;
   onCancelEdit: () => void;
   onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+  onDragStartHandle: (lh: string) => void;
+  onDragEndHandle: () => void;
 };
 
-function AllocCell({ row, enriched, editing, saving, allocStatus, onStartEdit, onCancelEdit, onSaveInline }: AllocCellProps) {
+function AllocCell({ row, enriched, editing, saving, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onDragStartHandle, onDragEndHandle }: AllocCellProps) {
   if (editing) {
     return (
       <InlineAllocEditor
@@ -330,7 +333,19 @@ function AllocCell({ row, enriched, editing, saving, allocStatus, onStartEdit, o
     );
   }
   return (
-    <div className="group/alloc flex items-start justify-between gap-1">
+    <div className="group/alloc flex items-start gap-1">
+      <button
+        type="button"
+        aria-label="Arrastar alocação (trocar / mover na fila)"
+        title="Arraste para o corpo de outra carga (trocar) ou para a borda (mover na fila)"
+        draggable
+        onClick={(e) => e.stopPropagation()}
+        onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", row.lh); onDragStartHandle(row.lh); }}
+        onDragEnd={onDragEndHandle}
+        className="mt-0.5 shrink-0 cursor-grab rounded p-0.5 text-muted-foreground/40 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover/alloc:opacity-100 active:cursor-grabbing"
+      >
+        <GripVertical className="h-3.5 w-3.5" />
+      </button>
       <div className="min-w-0 flex-1">
         {row.motoristas ? (
           <div className="flex items-center gap-1.5">
@@ -366,6 +381,8 @@ function AllocCell({ row, enriched, editing, saving, allocStatus, onStartEdit, o
 
 const ROW_VIRTUALIZATION_STYLE = { contentVisibility: "auto" as const, containIntrinsicSize: "0 48px" as const };
 
+type RowDropIntent = "swap" | "before" | "after" | null;
+
 const SheetMonitorRow = memo(function SheetMonitorRow({
   row,
   enriched,
@@ -373,10 +390,16 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   editing,
   saving,
   allocStatus,
+  isDragSource,
+  dropIntent,
   onSelect,
   onStartEdit,
   onCancelEdit,
   onSaveInline,
+  onDragStartHandle,
+  onDragEndHandle,
+  onRowDragOver,
+  onRowDrop,
 }: {
   row: SheetMonitorRowType;
   enriched: SheetMonitorEnrichedRow | undefined;
@@ -386,22 +409,37 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   // alloc_status atual do override — reenviado no save inline para NÃO apagar o
   // status operacional ao editar só motorista/placa.
   allocStatus: string | null;
+  isDragSource: boolean;
+  dropIntent: RowDropIntent;
   onSelect: (row: SheetMonitorRowType) => void;
   onStartEdit: (lh: string) => void;
   onCancelEdit: () => void;
   onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+  onDragStartHandle: (lh: string) => void;
+  onDragEndHandle: () => void;
+  onRowDragOver: (e: React.DragEvent, lh: string) => void;
+  onRowDrop: (e: React.DragEvent, lh: string) => void;
 }) {
   return (
     <tr
       style={ROW_VIRTUALIZATION_STYLE}
       onClick={() => onSelect(row)}
+      onDragOver={(e) => onRowDragOver(e, row.lh)}
+      onDrop={(e) => onRowDrop(e, row.lh)}
       className={cn(
         "cursor-pointer transition-colors duration-100",
-        selected
-          ? "bg-primary/10 dark:bg-primary/20"
-          : row.hasDriver
-            ? "hover:bg-emerald-50/60 dark:hover:bg-emerald-500/10"
-            : "hover:bg-primary/[0.04]",
+        // Soltar no CORPO = trocar → linha toda azul.
+        dropIntent === "swap"
+          ? "bg-blue-500/20"
+          : selected
+            ? "bg-primary/10 dark:bg-primary/20"
+            : row.hasDriver
+              ? "hover:bg-emerald-50/60 dark:hover:bg-emerald-500/10"
+              : "hover:bg-primary/[0.04]",
+        // Soltar na BORDA = descer/subir a fila → só a borda azul.
+        dropIntent === "before" && "[&>td]:border-t-2 [&>td]:border-blue-500",
+        dropIntent === "after" && "[&>td]:border-b-2 [&>td]:border-blue-500",
+        isDragSource && "opacity-40",
       )}
     >
       {/* Status */}
@@ -449,6 +487,8 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
           onStartEdit={onStartEdit}
           onCancelEdit={onCancelEdit}
           onSaveInline={onSaveInline}
+          onDragStartHandle={onDragStartHandle}
+          onDragEndHandle={onDragEndHandle}
         />
       </td>
     </tr>
@@ -465,10 +505,12 @@ function SheetMonitorTable({
   editingLh,
   savingLh,
   loading,
+  reassigning,
   onSelect,
   onStartEdit,
   onCancelEdit,
   onSaveInline,
+  onReassign,
 }: {
   rows: SheetMonitorRowType[];
   enrichedByLh: Record<string, SheetMonitorEnrichedRow>;
@@ -477,11 +519,63 @@ function SheetMonitorTable({
   editingLh: string | null;
   savingLh: string | null;
   loading: boolean;
+  reassigning: boolean;
   onSelect: (row: SheetMonitorRowType) => void;
   onStartEdit: (lh: string) => void;
   onCancelEdit: () => void;
   onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+  onReassign: (moves: Array<{ lh: string; motorista: string; cavalo: string; carreta: string }>) => void;
 }) {
+  // Arrastar a fila de motoristas/veículos entre cargas (as viagens são fixas).
+  // Modo auto-identificável pelo ponto de soltura: corpo da linha = trocar
+  // (linha azul); borda da linha = descer/subir a fila (borda azul).
+  const [dragLh, setDragLh] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ lh: string; intent: "swap" | "before" | "after" } | null>(null);
+  const dragLhRef = useRef<string | null>(null);
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+
+  const handleDragStartHandle = useCallback((lh: string) => { dragLhRef.current = lh; setDragLh(lh); }, []);
+  const handleDragEndHandle = useCallback(() => { dragLhRef.current = null; setDragLh(null); setDropTarget(null); }, []);
+
+  const intentFromEvent = (e: React.DragEvent): "swap" | "before" | "after" => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const h = rect.height || 1;
+    if (y < h * 0.25) return "before";
+    if (y > h * 0.75) return "after";
+    return "swap";
+  };
+
+  const handleRowDragOver = useCallback((e: React.DragEvent, lh: string) => {
+    if (!dragLhRef.current) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (lh === dragLhRef.current) { setDropTarget(null); return; }
+    const intent = intentFromEvent(e);
+    setDropTarget((prev) => (prev && prev.lh === lh && prev.intent === intent ? prev : { lh, intent }));
+  }, []);
+
+  const handleRowDrop = useCallback((e: React.DragEvent, lh: string) => {
+    e.preventDefault();
+    const src = dragLhRef.current;
+    dragLhRef.current = null;
+    setDragLh(null);
+    setDropTarget(null);
+    if (!src) return;
+    const list = rowsRef.current;
+    const srcIdx = list.findIndex((r) => r.lh === src);
+    const dstIdx = list.findIndex((r) => r.lh === lh);
+    if (srcIdx < 0 || dstIdx < 0) return;
+    const items = list.map((r) => ({ lh: r.lh, alloc: { motorista: r.motoristas || "", cavalo: r.cavalo || "", carreta: r.carreta || "" } }));
+    const intent = intentFromEvent(e);
+    const moves =
+      intent === "swap" ? computeSwapMoves(items, srcIdx, dstIdx)
+        : intent === "before" ? computeShiftMoves(items, srcIdx, dstIdx)
+          : computeShiftMoves(items, srcIdx, dstIdx + 1);
+    if (moves.length > 0) onReassign(moves);
+  }, [onReassign]);
+
   if (loading) {
     return (
       <div className="space-y-2 p-4">
@@ -501,6 +595,11 @@ function SheetMonitorTable({
 
   return (
     <div className="relative">
+      {reassigning && (
+        <div className="absolute right-3 top-2 z-10 inline-flex items-center gap-1.5 rounded-full bg-blue-600 px-2.5 py-1 text-[0.62rem] font-semibold text-white shadow">
+          <Loader2 className="h-3 w-3 animate-spin" /> Reordenando…
+        </div>
+      )}
       <div className="overflow-x-auto overscroll-x-contain pb-1">
         <table className="w-full min-w-[720px] table-fixed text-sm">
           <colgroup>
@@ -529,10 +628,16 @@ function SheetMonitorTable({
                 editing={row.lh === editingLh}
                 saving={row.lh === savingLh}
                 allocStatus={allocByLh[row.lh]?.alloc_status ?? null}
+                isDragSource={row.lh === dragLh}
+                dropIntent={dropTarget?.lh === row.lh ? dropTarget.intent : null}
                 onSelect={onSelect}
                 onStartEdit={onStartEdit}
                 onCancelEdit={onCancelEdit}
                 onSaveInline={onSaveInline}
+                onDragStartHandle={handleDragStartHandle}
+                onDragEndHandle={handleDragEndHandle}
+                onRowDragOver={handleRowDragOver}
+                onRowDrop={handleRowDrop}
               />
             ))}
           </tbody>
@@ -543,9 +648,9 @@ function SheetMonitorTable({
   );
 }
 
-// ─── Visão por rota (F2) ───────────────────────────────────────────────────────
+// ─── Filtro por rota ────────────────────────────────────────────────────────────
 
-// Chave de rota = "ORIGEM → DESTINO". Linhas sem rota caem em "—".
+// Chave de rota = "ORIGEM → DESTINO" (usada no filtro de rota). Sem rota → "—".
 function routeKeyOf(row: SheetMonitorRowType) {
   const o = (row.origem || "").trim();
   const d = (row.destino || "").trim();
@@ -553,200 +658,6 @@ function routeKeyOf(row: SheetMonitorRowType) {
   return `${o || "—"} → ${d || "—"}`;
 }
 
-type ReorderMode = "off" | "swap" | "shift";
-
-// Ordena por agenda (carregamento) — fila estável, independente de quem está
-// alocado. Assim, ao arrastar/reordenar motoristas, as LINHAS ficam paradas e só
-// as alocações (motorista/placa) se movem entre elas.
-function agendaSortKey(row: SheetMonitorRowType) {
-  return `${row.data ?? ""}T${row.horario ?? ""}|${row.lh}`;
-}
-
-function RouteGroupedView({
-  rows,
-  enrichedByLh,
-  allocByLh,
-  editingLh,
-  savingLh,
-  reassigning,
-  onSelect,
-  onStartEdit,
-  onCancelEdit,
-  onSaveInline,
-  onReassign,
-}: {
-  rows: SheetMonitorRowType[];
-  enrichedByLh: Record<string, SheetMonitorEnrichedRow>;
-  allocByLh: Record<string, SheetMonitorAllocation>;
-  editingLh: string | null;
-  savingLh: string | null;
-  reassigning: boolean;
-  onSelect: (row: SheetMonitorRowType) => void;
-  onStartEdit: (lh: string) => void;
-  onCancelEdit: () => void;
-  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
-  onReassign: (moves: Array<{ lh: string; motorista: string; cavalo: string; carreta: string }>) => void;
-}) {
-  const [reorderMode, setReorderMode] = useState<ReorderMode>("off");
-  const [dragLh, setDragLh] = useState<string | null>(null);
-  const [overLh, setOverLh] = useState<string | null>(null);
-
-  const groups = useMemo(() => {
-    const map = new Map<string, SheetMonitorRowType[]>();
-    for (const r of rows) {
-      const k = routeKeyOf(r);
-      const arr = map.get(k);
-      if (arr) arr.push(r);
-      else map.set(k, [r]);
-    }
-    return Array.from(map.entries())
-      .map(([route, rs]) => {
-        const available = rs.filter((r) => !r.motoristas).length;
-        // Ordem da fila = agenda (estável p/ arrastar), não "disponível primeiro".
-        const sorted = [...rs].sort((a, b) => agendaSortKey(a).localeCompare(agendaSortKey(b), "pt-BR"));
-        return { route, rows: sorted, total: rs.length, available, assigned: rs.length - available };
-      })
-      .sort((a, b) => b.available - a.available || a.route.localeCompare(b.route, "pt-BR"));
-  }, [rows]);
-
-  const dragging = reorderMode !== "off";
-
-  function handleDrop(groupRows: SheetMonitorRowType[], dstLh: string) {
-    const src = dragLh;
-    setDragLh(null);
-    setOverLh(null);
-    if (!dragging || !src || src === dstLh) return;
-    const srcIdx = groupRows.findIndex((r) => r.lh === src);
-    const dstIdx = groupRows.findIndex((r) => r.lh === dstLh);
-    if (srcIdx < 0 || dstIdx < 0) return; // arraste entre rotas diferentes → ignora
-    const items = groupRows.map((r) => ({
-      lh: r.lh,
-      alloc: { motorista: r.motoristas || "", cavalo: r.cavalo || "", carreta: r.carreta || "" },
-    }));
-    const moves = computeReassignMoves(items, srcIdx, dstIdx, reorderMode);
-    if (moves.length > 0) onReassign(moves);
-  }
-
-  if (rows.length === 0) {
-    return (
-      <div className="admin-panel flex flex-col items-center gap-3 py-16 text-muted-foreground">
-        <MapPin className="h-10 w-10 opacity-30" />
-        <p className="text-sm font-medium">Nenhuma carga para os filtros atuais.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      {/* Barra de reordenação da fila (F3) */}
-      <div className="admin-panel flex flex-wrap items-center gap-3 p-3">
-        <span className="text-xs font-semibold text-muted-foreground">Reordenar a fila:</span>
-        <div className="inline-flex rounded-lg border border-border/70 bg-muted/30 p-0.5">
-          {([
-            ["off", "Desligado"],
-            ["shift", "Descer fila"],
-            ["swap", "Trocar posições"],
-          ] as const).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => { setReorderMode(value); setDragLh(null); setOverLh(null); }}
-              className={cn(
-                "rounded-md px-2.5 py-1 text-[0.7rem] font-semibold transition-colors",
-                reorderMode === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {dragging && (
-          <span className="inline-flex items-center gap-1.5 text-[0.7rem] text-muted-foreground">
-            {reassigning && <Loader2 className="h-3 w-3 animate-spin" />}
-            Arraste pelo <GripVertical className="h-3 w-3" /> para {reorderMode === "swap" ? "trocar a alocação entre duas cargas" : "mover a alocação na fila"}.
-          </span>
-        )}
-      </div>
-
-      {groups.map((g) => (
-        <section key={g.route} className="admin-panel overflow-hidden">
-          <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 bg-primary/[0.03] px-4 py-2.5">
-            <div className="flex min-w-0 items-center gap-2">
-              <MapPin className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
-              <span className="truncate text-xs font-semibold text-foreground">{g.route}</span>
-            </div>
-            <div className="flex shrink-0 items-center gap-1.5">
-              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[0.62rem] font-semibold text-blue-700 dark:bg-blue-500/15 dark:text-blue-200">
-                {g.available} disponíveis
-              </span>
-              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[0.62rem] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-200">
-                {g.assigned} alocadas
-              </span>
-            </div>
-          </header>
-          <ul className="divide-y divide-border/40">
-            {g.rows.map((row) => (
-              <li
-                key={row.lh}
-                onClick={() => onSelect(row)}
-                onDragOver={dragging ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (overLh !== row.lh) setOverLh(row.lh); } : undefined}
-                onDragLeave={dragging ? () => { if (overLh === row.lh) setOverLh(null); } : undefined}
-                onDrop={dragging ? (e) => { e.preventDefault(); handleDrop(g.rows, row.lh); } : undefined}
-                className={cn(
-                  "flex cursor-pointer items-start gap-2 px-4 py-2.5 transition-colors",
-                  row.motoristas ? "hover:bg-emerald-50/50 dark:hover:bg-emerald-500/10" : "hover:bg-primary/[0.04]",
-                  dragging && dragLh === row.lh && "opacity-40",
-                  dragging && overLh === row.lh && dragLh !== row.lh && "ring-2 ring-inset ring-primary/50",
-                )}
-              >
-                {dragging && (
-                  <button
-                    type="button"
-                    aria-label="Arrastar para reordenar"
-                    title="Arraste para reordenar a fila"
-                    draggable
-                    onClick={(e) => e.stopPropagation()}
-                    onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", row.lh); setDragLh(row.lh); }}
-                    onDragEnd={() => { setDragLh(null); setOverLh(null); }}
-                    className="mt-0.5 shrink-0 cursor-grab rounded p-0.5 text-muted-foreground/50 hover:bg-muted hover:text-foreground active:cursor-grabbing"
-                  >
-                    <GripVertical className="h-4 w-4" />
-                  </button>
-                )}
-                <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <StatusBadge status={!row.status && row.motoristas ? "Reservado" : row.status} />
-                    <span className="font-mono text-[0.68rem] font-semibold text-foreground/70">{row.lh}</span>
-                    {row.tipo && <span className="text-[0.6rem] text-muted-foreground/60">{row.tipo}</span>}
-                  </div>
-                  {(row.carregamentoLabel || row.descargaLabel) && (
-                    <span className="text-[0.62rem] text-muted-foreground">
-                      {row.carregamentoLabel ? `Carga ${row.carregamentoLabel}` : ""}
-                      {row.carregamentoLabel && row.descargaLabel ? " · " : ""}
-                      {row.descargaLabel ? `Descarga ${row.descargaLabel}` : ""}
-                    </span>
-                  )}
-                </div>
-                <div className="w-[230px] shrink-0">
-                  <AllocCell
-                    row={row}
-                    enriched={enrichedByLh[row.lh]}
-                    editing={row.lh === editingLh}
-                    saving={row.lh === savingLh}
-                    allocStatus={allocByLh[row.lh]?.alloc_status ?? null}
-                    onStartEdit={onStartEdit}
-                    onCancelEdit={onCancelEdit}
-                    onSaveInline={onSaveInline}
-                  />
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ))}
-    </div>
-  );
-}
 
 // ─── Modal helpers ────────────────────────────────────────────────────────────
 
@@ -1088,7 +999,6 @@ export default function SheetMonitor() {
   const [tipoFilter, setTipoFilter] = useState("todos");
   const [assignmentFilter, setAssignmentFilter] = useState("todos");
   const [routeFilter, setRouteFilter] = useState("todos");
-  const [viewMode, setViewMode] = useState<"tabela" | "rota">("tabela");
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
   const [page, setPage] = useState(0);
@@ -1566,76 +1476,20 @@ export default function SheetMonitor() {
           </section>
         )}
 
-        {/* ── View toggle + datalists + conteúdo ── */}
+        {/* ── Tabela + datalists ── */}
         {!noSnapshot && (
           <>
             <MonitorDatalists driverOptions={driverOptions} cavaloOptions={cavaloOptions} carretaOptions={carretaOptions} />
 
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="inline-flex rounded-xl border border-border/70 bg-muted/30 p-0.5">
-                <button type="button" onClick={() => setViewMode("tabela")}
-                  className={cn("rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors", viewMode === "tabela" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
-                  Tabela
-                </button>
-                <button type="button" onClick={() => setViewMode("rota")}
-                  className={cn("rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors", viewMode === "rota" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
-                  Por rota
-                </button>
-              </div>
-              {viewMode === "rota" && (
-                <span className="text-xs text-muted-foreground">
-                  <span className="font-semibold text-foreground">{filteredRows.length}</span> cargas em{" "}
-                  <span className="font-semibold text-foreground">{new Set(filteredRows.map(routeKeyOf)).size}</span> rotas
-                </span>
-              )}
-            </div>
-
-            {viewMode === "tabela" ? (
-              <section className="admin-panel overflow-hidden">
-                <SheetMonitorTable
-                  rows={paginatedRows}
-                  enrichedByLh={enrichedByLh}
-                  allocByLh={allocByLh}
-                  selectedLh={selectedRow?.lh ?? null}
-                  editingLh={editingLh}
-                  savingLh={savingLh}
-                  loading={loading}
-                  onSelect={handleSelectRow}
-                  onStartEdit={handleStartEdit}
-                  onCancelEdit={handleCancelEdit}
-                  onSaveInline={handleSaveInline}
-                />
-                {!loading && filteredRows.length > PAGE_SIZE && (
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 px-4 py-3 text-xs text-muted-foreground">
-                    <span>
-                      Mostrando <span className="font-semibold text-foreground">{pageStart}</span>–
-                      <span className="font-semibold text-foreground">{pageEnd}</span> de{" "}
-                      <span className="font-semibold text-foreground">{filteredRows.length}</span>
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <button type="button" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={safePage === 0}
-                        className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-white px-2.5 py-1.5 font-medium text-foreground hover:bg-muted/50 disabled:opacity-40">
-                        <ChevronLeft className="h-3.5 w-3.5" />Anterior
-                      </button>
-                      <span className="tabular-nums">
-                        Página <span className="font-semibold text-foreground">{safePage + 1}</span> de{" "}
-                        <span className="font-semibold text-foreground">{totalPages}</span>
-                      </span>
-                      <button type="button" onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={safePage >= totalPages - 1}
-                        className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-white px-2.5 py-1.5 font-medium text-foreground hover:bg-muted/50 disabled:opacity-40">
-                        Próxima<ChevronRight className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </section>
-            ) : (
-              <RouteGroupedView
-                rows={filteredRows}
+            <section className="admin-panel overflow-hidden">
+              <SheetMonitorTable
+                rows={paginatedRows}
                 enrichedByLh={enrichedByLh}
                 allocByLh={allocByLh}
+                selectedLh={selectedRow?.lh ?? null}
                 editingLh={editingLh}
                 savingLh={savingLh}
+                loading={loading}
                 reassigning={reassigning}
                 onSelect={handleSelectRow}
                 onStartEdit={handleStartEdit}
@@ -1643,7 +1497,30 @@ export default function SheetMonitor() {
                 onSaveInline={handleSaveInline}
                 onReassign={handleReassign}
               />
-            )}
+              {!loading && filteredRows.length > PAGE_SIZE && (
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 px-4 py-3 text-xs text-muted-foreground">
+                  <span>
+                    Mostrando <span className="font-semibold text-foreground">{pageStart}</span>–
+                    <span className="font-semibold text-foreground">{pageEnd}</span> de{" "}
+                    <span className="font-semibold text-foreground">{filteredRows.length}</span>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={safePage === 0}
+                      className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-white px-2.5 py-1.5 font-medium text-foreground hover:bg-muted/50 disabled:opacity-40">
+                      <ChevronLeft className="h-3.5 w-3.5" />Anterior
+                    </button>
+                    <span className="tabular-nums">
+                      Página <span className="font-semibold text-foreground">{safePage + 1}</span> de{" "}
+                      <span className="font-semibold text-foreground">{totalPages}</span>
+                    </span>
+                    <button type="button" onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={safePage >= totalPages - 1}
+                      className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-white px-2.5 py-1.5 font-medium text-foreground hover:bg-muted/50 disabled:opacity-40">
+                      Próxima<ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
           </>
         )}
       </main>
