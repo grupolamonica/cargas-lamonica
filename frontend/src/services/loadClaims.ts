@@ -109,6 +109,12 @@ export interface PublicLoadLead {
    * `null` quando nenhuma fonte tem o nome → frontend cai no telefone.
    */
   driverName?: string | null;
+  /**
+   * Vínculo do motorista (AGREGADO DEDICADO / PME / FROTA / PX) vindo da aba
+   * "Vinculo" da planilha Lamonica Shopee, casado por nome. Exibido como badge
+   * ao lado do nome na fila. `null`/ausente quando o nome não consta na aba.
+   */
+  vinculo?: string | null;
   queuePosition: number | null;
 }
 

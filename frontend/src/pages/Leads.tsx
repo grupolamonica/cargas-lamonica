@@ -9,6 +9,7 @@ import DashboardHeader from "@/components/DashboardHeader";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
 import OperatorPacoteLeadCard, { type DriverCandidatura, type PacoteLeadItem } from "@/components/operator/OperatorPacoteLeadCard";
 import { cn } from "@/lib/utils";
+import { resolveVinculoStyle } from "@/lib/vinculo";
 import { confirmAction } from "@/lib/confirm";
 import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 import { buildDisplayDateTime, formatFullDateTime, formatShortDateTime } from "@/lib/dateDisplay";
@@ -1257,6 +1258,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                           {group.leads.map((lead, index) => {
                             const isApprovedLead = lead.status === "APPROVED";
                             const canApprove = group.load.status === "OPEN" && lead.status === "QUEUED";
+                            const vinculoStyle = resolveVinculoStyle(lead.vinculo);
 
                             return (
                               <tr
@@ -1291,8 +1293,21 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                                       <Phone className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                                     )}
                                     <div className="min-w-0 leading-tight">
-                                      <div className="truncate">
-                                        {lead.driverName?.trim() || formatPhoneDisplay(lead.phone)}
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="truncate">
+                                          {lead.driverName?.trim() || formatPhoneDisplay(lead.phone)}
+                                        </span>
+                                        {vinculoStyle ? (
+                                          <span
+                                            className={cn(
+                                              "shrink-0 rounded-full px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-wide",
+                                              vinculoStyle.className,
+                                            )}
+                                            title={`Vínculo: ${vinculoStyle.label}`}
+                                          >
+                                            {vinculoStyle.label}
+                                          </span>
+                                        ) : null}
                                       </div>
                                       <div className="mt-0.5 truncate text-[0.65rem] font-normal text-muted-foreground">
                                         {buildDriverSubLabel(lead)}
