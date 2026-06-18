@@ -541,6 +541,7 @@ describe("Leads", () => {
                 validation: null,
                 whatsappUrl: "https://wa.me/5571999998888",
                 driverName: "Carlos Eduardo Pereira",
+                vinculo: "AGREGADO DEDICADO",
               },
             ],
           },
@@ -557,6 +558,8 @@ describe("Leads", () => {
     expect(screen.getByRole("columnheader", { name: "Motorista" })).toBeInTheDocument();
     // Nome aparece como label principal.
     expect(screen.getByText("Carlos Eduardo Pereira")).toBeInTheDocument();
+    // Badge de vínculo aparece ao lado do nome (sem precisar abrir o modal).
+    expect(screen.getByText("Agregado dedicado")).toBeInTheDocument();
     // CPF mascarado + phone formatado aparecem como sublabel.
     expect(screen.getByText(/CPF \*01.*\(71\) 99999-8888/)).toBeInTheDocument();
   });
@@ -613,6 +616,8 @@ describe("Leads", () => {
     expect(screen.getByText("(41) 97777-6666")).toBeInTheDocument();
     // Sublabel sinaliza "sem cadastro".
     expect(screen.getByText(/CPF \*00.*sem cadastro/)).toBeInTheDocument();
+    // Sem vinculo na planilha => badge "Terceiro" ao lado do nome/telefone.
+    expect(screen.getByText("Terceiro")).toBeInTheDocument();
   });
 
   it("abre as disputas minimizadas por padrao e permite expandir depois", () => {
