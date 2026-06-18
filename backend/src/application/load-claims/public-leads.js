@@ -23,6 +23,7 @@ import { createCorrelationId } from "./helpers.js";
 import { logLoadClaimEvent } from "./logging.js";
 import { LOAD_STATUS, PUBLIC_LEAD_EVENT_TYPE, PUBLIC_LEAD_STATUS } from "../../domain/load-claims/constants.js";
 import { lookupAspxDriverByCpf } from "../../infrastructure/aspx/aspx-directory.js";
+import { loadDriverVinculoMap, normalizeDriverNameKey } from "../google-sheets/driver-vinculos.js";
 const DEFAULT_PUBLIC_LEAD_PRE_REGISTRATION_MAX_ATTEMPTS = 6;
 const DEFAULT_PUBLIC_LEAD_PRE_REGISTRATION_WINDOW_SECONDS = 600;
 const DEFAULT_PUBLIC_LEAD_WHATSAPP_QUEUE_MAX_ATTEMPTS = 8;
@@ -1641,7 +1642,7 @@ function resolveLeadDriverName(row) {
   return null;
 }
 
-function groupLeadsForOperator(rows) {
+function groupLeadsForOperator(rows, vinculoMap = new Map()) {
   const groupsMap = new Map();
 
   rows.forEach((row) => {
@@ -1676,6 +1677,13 @@ function groupLeadsForOperator(rows) {
 
     const queuePosition = row.status === PUBLIC_LEAD_STATUS.QUEUED ? existingGroup.queueCount + 1 : null;
 
+    // Vínculo (AGREGADO DEDICADO / PME / FROTA / PX) vindo da aba "Vinculo" da
+    // planilha, casado por nome normalizado. Exibido ao lado do nome na fila.
+    const resolvedDriverName = resolveLeadDriverName(row);
+    const vinculo = resolvedDriverName
+      ? vinculoMap.get(normalizeDriverNameKey(resolvedDriverName)) ?? null
+      : null;
+
     existingGroup.leads.push({
       id: row.id,
       status: row.status,
@@ -1694,7 +1702,8 @@ function groupLeadsForOperator(rows) {
         status: row.validation_status,
         checkedAt: row.validation_checked_at,
       }),
-      driverName: resolveLeadDriverName(row),
+      driverName: resolvedDriverName,
+      vinculo,
       queuePosition,
       whatsappUrl: buildPhoneWhatsAppUrl(row.phone),
     });
@@ -2036,10 +2045,23 @@ async function listOperatorPublicLoadLeadsUncached({ correlationId }) {
         leads: [],
       }));
 
+    // Mapa de vínculos (aba "Vinculo" da planilha) para enriquecer os leads com
+    // o badge ao lado do nome. Isolado em savepoint: se a tabela ainda não foi
+    // migrada (42P01), degrada para Map vazio sem poluir a transação nem
+    // derrubar a fila.
+    let vinculoMap = new Map();
+    try {
+      vinculoMap = await runWithTransactionSavepoint(client, () => loadDriverVinculoMap(client));
+    } catch (error) {
+      if (error?.code !== "42P01") {
+        throw error;
+      }
+    }
+
     return {
       statusCode: 200,
       payload: {
-        groups: [...groupLeadsForOperator(rows), ...emptyGroups],
+        groups: [...groupLeadsForOperator(rows, vinculoMap), ...emptyGroups],
         meta: {
           correlationId: resolvedCorrelationId,
         },

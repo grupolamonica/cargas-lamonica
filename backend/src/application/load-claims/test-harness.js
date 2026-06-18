@@ -314,6 +314,17 @@ const schemaSql = `
   );
 
   CREATE UNIQUE INDEX ux_vehicles_plate ON public.vehicles (plate);
+
+  -- Vínculo do motorista (aba "Vinculo" da planilha) exibido ao lado do nome na
+  -- fila do operador. Casado por nome normalizado no read model.
+  CREATE TABLE public.driver_vinculos (
+    nome_normalizado text PRIMARY KEY,
+    nome_original    text NOT NULL,
+    vinculo          text NOT NULL,
+    synced_at        timestamptz NOT NULL DEFAULT now(),
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now()
+  );
 `;
 
 function createDatabase() {
@@ -619,6 +630,15 @@ export async function seedAspxDriver({ cpf, displayName }) {
      VALUES ($1, $2)
      ON CONFLICT (cpf) DO UPDATE SET display_name = EXCLUDED.display_name`,
     [cpf, displayName],
+  );
+}
+
+export async function seedDriverVinculo({ nomeOriginal, nomeNormalizado, vinculo }) {
+  await query(
+    `INSERT INTO public.driver_vinculos (nome_normalizado, nome_original, vinculo)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (nome_normalizado) DO UPDATE SET vinculo = EXCLUDED.vinculo`,
+    [nomeNormalizado, nomeOriginal, vinculo],
   );
 }
 

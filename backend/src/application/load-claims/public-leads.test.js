@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LOAD_STATUS, PUBLIC_LEAD_STATUS } from "../../domain/load-claims/constants.js";
+import { normalizeDriverNameKey } from "../google-sheets/driver-vinculos.js";
 
 vi.mock("../../infrastructure/pg/postgres.js", async () => {
   const harness = await import("./test-harness.js");
@@ -627,6 +628,54 @@ describe.sequential("public load leads", () => {
     expect(leadsByPhone.get("71922222222")?.driverName).toBe("Maria Santos ASPx");
     expect(leadsByPhone.get("71933333333")?.driverName).toBe("Pedro Souza Cadastro");
     expect(leadsByPhone.get("71944444444")?.driverName).toBeNull();
+  });
+
+  it("anexa o vinculo do motorista (aba Vinculo) casando por nome normalizado", async () => {
+    const { id: loadId } = await harness.seedLoad();
+
+    // Lead 1: nome via ASPx, COM vinculo cadastrado (casa por nome normalizado).
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload({
+        cpf: "111.111.111-11",
+        phone: "(71) 91111-1111",
+        horsePlate: "AAA1B11",
+        trailerPlate: "BBB2C22",
+      }),
+      correlationId: "corr-vinc-1",
+    });
+    await harness.seedAspxDriver({ cpf: "11111111111", displayName: "JOSÉ COSME GONÇALVES DIAS" });
+    // Vinculo gravado com a MESMA normalização do sync (acento/caixa removidos).
+    await harness.seedDriverVinculo({
+      nomeOriginal: "JOSÉ COSME GONÇALVES DIAS",
+      nomeNormalizado: normalizeDriverNameKey("jose cosme goncalves dias"),
+      vinculo: "AGREGADO DEDICADO",
+    });
+
+    // Lead 2: nome via ASPx, SEM vinculo cadastrado → vinculo null.
+    await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload({
+        cpf: "222.222.222-22",
+        phone: "(71) 92222-2222",
+        horsePlate: "AAA2B22",
+        trailerPlate: "BBB3C33",
+      }),
+      correlationId: "corr-vinc-2",
+    });
+    await harness.seedAspxDriver({ cpf: "22222222222", displayName: "Motorista Sem Vinculo" });
+
+    const listing = await service.listOperatorPublicLoadLeads({
+      correlationId: "corr-vinc-list",
+    });
+
+    expect(listing.statusCode).toBe(200);
+    const leadsByPhone = new Map(listing.payload.groups[0].leads.map((l) => [l.phone, l]));
+
+    // Casamento acento-insensível: "JOSÉ ... GONÇALVES" -> "AGREGADO DEDICADO".
+    expect(leadsByPhone.get("71911111111")?.vinculo).toBe("AGREGADO DEDICADO");
+    // Sem vinculo cadastrado → null (UI não mostra badge).
+    expect(leadsByPhone.get("71922222222")?.vinculo).toBeNull();
   });
 
   it("expoe 503 SCHEMA_DRIFT quando a coluna cargas.sheet_status nao existe", async () => {
