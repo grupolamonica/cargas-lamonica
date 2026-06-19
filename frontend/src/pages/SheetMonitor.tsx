@@ -519,8 +519,8 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
               ? "hover:bg-emerald-50/60 dark:hover:bg-emerald-500/10"
               : "hover:bg-primary/[0.04]",
         // Soltar na BORDA = descer/subir a fila → só a borda azul.
-        dropIntent === "before" && "[&>td]:border-t-2 [&>td]:border-blue-500",
-        dropIntent === "after" && "[&>td]:border-b-2 [&>td]:border-blue-500",
+        dropIntent === "before" && "[&>td]:border-t-[3px] [&>td]:border-blue-600",
+        dropIntent === "after" && "[&>td]:border-b-[3px] [&>td]:border-blue-600",
         isDragSource && "opacity-40",
       )}
     >
@@ -620,13 +620,16 @@ function SheetMonitorTable({
   const handleDragStartHandle = useCallback((lh: string) => { dragLhRef.current = lh; setDragLh(lh); }, []);
   const handleDragEndHandle = useCallback(() => { dragLhRef.current = null; setDragLh(null); setDropTarget(null); }, []);
 
+  // Zona de soltura: terços maiores nas bordas (mover na fila = descer/subir) e
+  // um miolo menor para trocar. Antes o miolo ocupava 50% e quase todo drop caía
+  // em "trocar"; agora a maior parte da linha é "mover na fila".
   const intentFromEvent = (e: React.DragEvent): "swap" | "before" | "after" => {
     const rect = e.currentTarget.getBoundingClientRect();
     const y = e.clientY - rect.top;
     const h = rect.height || 1;
-    if (y < h * 0.25) return "before";
-    if (y > h * 0.75) return "after";
-    return "swap";
+    if (y < h * 0.4) return "before";   // metade de cima → insere ACIMA (move na fila)
+    if (y > h * 0.6) return "after";    // metade de baixo → insere ABAIXO (move na fila)
+    return "swap";                      // miolo (20%) → troca
   };
 
   const handleRowDragOver = useCallback((e: React.DragEvent, lh: string) => {
