@@ -2,6 +2,7 @@ import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
 import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
+import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 
 /**
  * Reatribui (move) a alocação motorista+cavalo+carreta entre cargas do Monitor,
@@ -50,7 +51,7 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
     };
   });
 
-  return withPgTransaction(async (client) => {
+  const result = await withPgTransaction(async (client) => {
     const updated = [];
     for (const m of normalized) {
       const { rows } = await client.query(
@@ -98,4 +99,12 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
       payload: { ok: true, updated, count: updated.length, meta: { correlationId } },
     };
   });
+
+  // Write-back best-effort pra planilha (espelho) — FORA da transação, nunca
+  // lança. Os moves já são os valores EFETIVOS relocados ("" = célula vazia).
+  await writeAllocationsToSheet(
+    normalized.map(({ lh, motorista, cavalo, carreta }) => ({ lh, motorista, cavalo, carreta })),
+  );
+
+  return result;
 }

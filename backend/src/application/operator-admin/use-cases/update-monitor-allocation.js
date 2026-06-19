@@ -2,6 +2,7 @@ import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { NotFoundError } from "../../../domain/load-claims/errors.js";
 import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
+import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 
 /**
  * Grava a ALOCAÇÃO editada no Monitor (motorista/cavalo/carreta/status operacional)
@@ -28,15 +29,17 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
   const carreta = norm(payload.carreta);
   const status = norm(payload.status);
 
-  return withPgTransaction(async (client) => {
+  const result = await withPgTransaction(async (client) => {
     const { rows } = await client.query(
-      `SELECT id, sheet_lh FROM public.cargas WHERE id = $1 FOR UPDATE`,
+      `SELECT id, sheet_lh, sheet_motorista, sheet_cavalo, sheet_carreta FROM public.cargas WHERE id = $1 FOR UPDATE`,
       [cargoId],
     );
 
     if (rows.length === 0) {
       throw new NotFoundError("Carga da planilha não encontrada para este LH.");
     }
+
+    const sheetRow = rows[0];
 
     await client.query(
       `
@@ -82,6 +85,18 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
         allocation: { motorista, cavalo, carreta, status, source: "operator" },
         meta: { correlationId },
       },
+      // Valor EFETIVO (o que o Monitor mostra) = override do operador ?? planilha.
+      // Usado no write-back pra refletir na planilha; "" limpa a célula.
+      effective: {
+        motorista: motorista ?? sheetRow.sheet_motorista ?? "",
+        cavalo: cavalo ?? sheetRow.sheet_cavalo ?? "",
+        carreta: carreta ?? sheetRow.sheet_carreta ?? "",
+      },
     };
   });
+
+  // Write-back best-effort pra planilha (espelho) — FORA da transação, nunca lança.
+  await writeAllocationsToSheet([{ lh, ...result.effective }]);
+
+  return { statusCode: result.statusCode, payload: result.payload };
 }
