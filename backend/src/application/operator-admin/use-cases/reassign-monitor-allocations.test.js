@@ -139,4 +139,28 @@ describe("reassignMonitorAllocations", () => {
       reassignMonitorAllocations({ moves: [], operatorId: operator.id, correlationId: "corr-reassign-vazio" }),
     ).rejects.toThrow();
   });
+
+  it("rejeita mover uma carga FIXA (alloc_pinned) sem alterar nada", async () => {
+    const idFixa = await seedSheetCargo("LH-FIXA", { motorista: "FIXO" });
+    const idLivre = await seedSheetCargo("LH-LIVRE", { motorista: "LIVRE" });
+    await query(`UPDATE public.cargas SET alloc_pinned = true WHERE id = $1`, [idFixa]);
+    const operator = await seedUser({ email: "op-reassign-pin@teste.local" });
+
+    await expect(
+      reassignMonitorAllocations({
+        moves: [
+          { lh: "LH-FIXA", motorista: "LIVRE" },
+          { lh: "LH-LIVRE", motorista: "FIXO" },
+        ],
+        operatorId: operator.id,
+        correlationId: "corr-reassign-pin",
+      }),
+    ).rejects.toThrow(/fixada/i);
+
+    // Transação inteira revertida — nenhuma das duas mudou.
+    const fixa = await getAlloc(idFixa);
+    const livre = await getAlloc(idLivre);
+    expect(fixa.alloc_motorista).toBeNull();
+    expect(livre.alloc_motorista).toBeNull();
+  });
 });

@@ -14,6 +14,8 @@ import {
   Lock,
   MapPin,
   Pencil,
+  Pin,
+  PinOff,
   RefreshCw,
   Search,
   ShieldX,
@@ -45,6 +47,7 @@ import {
   fetchOperatorVehicles,
   fetchSheetMonitor,
   reassignMonitorAllocations,
+  setMonitorAllocationPin,
   updateMonitorAllocation,
   type SheetMonitorAllocation,
   type SheetMonitorEnrichedRow,
@@ -377,16 +380,21 @@ type AllocCellProps = {
   enriched: SheetMonitorEnrichedRow | undefined;
   editing: boolean;
   saving: boolean;
+  pinning: boolean;
   allocStatus: string | null;
   onStartEdit: (lh: string) => void;
   onCancelEdit: () => void;
   onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+  onTogglePin: (lh: string, pinned: boolean) => void;
   onDragStartHandle: (lh: string) => void;
   onDragEndHandle: () => void;
 };
 
-function AllocCell({ row, enriched, editing, saving, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onDragStartHandle, onDragEndHandle }: AllocCellProps) {
+function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle }: AllocCellProps) {
   const { editable, aspxWarning } = allocEditPolicy(row);
+  const pinned = !!row.pinned;
+  // Fixo trava motorista/veículo (intocável). Status-lock (ASPX) também trava.
+  const canEditAlloc = editable && !pinned;
   if (editing) {
     return (
       <InlineAllocEditor
@@ -399,7 +407,7 @@ function AllocCell({ row, enriched, editing, saving, allocStatus, onStartEdit, o
   }
   return (
     <div className="group/alloc flex items-start gap-1">
-      {editable ? (
+      {canEditAlloc ? (
         <button
           type="button"
           aria-label="Arrastar alocação (trocar / mover na fila)"
@@ -412,6 +420,14 @@ function AllocCell({ row, enriched, editing, saving, allocStatus, onStartEdit, o
         >
           <GripVertical className="h-3.5 w-3.5" />
         </button>
+      ) : pinned ? (
+        <span
+          aria-label="Alocação fixada"
+          title="Fixado: motorista e veículo travados nesta carga (não muda por arrasto, edição ou cascata)"
+          className="mt-0.5 shrink-0 p-0.5 text-amber-500"
+        >
+          <Pin className="h-3.5 w-3.5 fill-current" />
+        </span>
       ) : (
         <span
           aria-label="Alocação travada"
@@ -438,23 +454,47 @@ function AllocCell({ row, enriched, editing, saving, allocStatus, onStartEdit, o
             </span>
           </div>
         )}
-        {aspxWarning && (
+        {pinned && (
+          <span className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-semibold text-amber-600 dark:text-amber-400" title="Fixado nesta carga">
+            <Pin className="h-2.5 w-2.5 fill-current" /> fixado
+          </span>
+        )}
+        {aspxWarning && !pinned && (
           <span className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-medium text-amber-600 dark:text-amber-400" title="Já estão atribuindo no ASPX">
             <AlertTriangle className="h-2.5 w-2.5" /> em atribuição no ASPX
           </span>
         )}
       </div>
-      {editable && (
-        <button
-          type="button"
-          title="Editar alocação na linha"
-          aria-label="Editar alocação"
-          onClick={(e) => { e.stopPropagation(); onStartEdit(row.lh); }}
-          className="shrink-0 rounded p-1 text-muted-foreground/40 opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100 group-hover/alloc:opacity-100"
-        >
-          <Pencil className="h-3 w-3" />
-        </button>
-      )}
+      <div className="flex shrink-0 items-center gap-0.5">
+        {(row.motoristas || pinned) && (
+          <button
+            type="button"
+            title={pinned ? "Desafixar (liberar para mover na fila)" : "Fixar motorista/veículo nesta carga"}
+            aria-label={pinned ? "Desafixar alocação" : "Fixar alocação"}
+            disabled={pinning}
+            onClick={(e) => { e.stopPropagation(); onTogglePin(row.lh, !pinned); }}
+            className={cn(
+              "rounded p-1 transition-opacity hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50",
+              pinned
+                ? "text-amber-500 hover:text-amber-600"
+                : "text-muted-foreground/40 opacity-0 hover:text-foreground focus:opacity-100 group-hover/alloc:opacity-100",
+            )}
+          >
+            {pinning ? <Loader2 className="h-3 w-3 animate-spin" /> : pinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+          </button>
+        )}
+        {canEditAlloc && (
+          <button
+            type="button"
+            title="Editar alocação na linha"
+            aria-label="Editar alocação"
+            onClick={(e) => { e.stopPropagation(); onStartEdit(row.lh); }}
+            className="rounded p-1 text-muted-foreground/40 opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100 group-hover/alloc:opacity-100"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -471,6 +511,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   selected,
   editing,
   saving,
+  pinning,
   allocStatus,
   isDragSource,
   dropIntent,
@@ -478,6 +519,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   onStartEdit,
   onCancelEdit,
   onSaveInline,
+  onTogglePin,
   onDragStartHandle,
   onDragEndHandle,
   onRowDragOver,
@@ -488,6 +530,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   selected: boolean;
   editing: boolean;
   saving: boolean;
+  pinning: boolean;
   // alloc_status atual do override — reenviado no save inline para NÃO apagar o
   // status operacional ao editar só motorista/placa.
   allocStatus: string | null;
@@ -497,6 +540,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   onStartEdit: (lh: string) => void;
   onCancelEdit: () => void;
   onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+  onTogglePin: (lh: string, pinned: boolean) => void;
   onDragStartHandle: (lh: string) => void;
   onDragEndHandle: () => void;
   onRowDragOver: (e: React.DragEvent, lh: string) => void;
@@ -565,10 +609,12 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
           enriched={enriched}
           editing={editing}
           saving={saving}
+          pinning={pinning}
           allocStatus={allocStatus}
           onStartEdit={onStartEdit}
           onCancelEdit={onCancelEdit}
           onSaveInline={onSaveInline}
+          onTogglePin={onTogglePin}
           onDragStartHandle={onDragStartHandle}
           onDragEndHandle={onDragEndHandle}
         />
@@ -586,12 +632,14 @@ function SheetMonitorTable({
   selectedLh,
   editingLh,
   savingLh,
+  pinningLh,
   loading,
   reassigning,
   onSelect,
   onStartEdit,
   onCancelEdit,
   onSaveInline,
+  onTogglePin,
   onReassign,
 }: {
   rows: SheetMonitorRowType[];
@@ -600,12 +648,14 @@ function SheetMonitorTable({
   selectedLh: string | null;
   editingLh: string | null;
   savingLh: string | null;
+  pinningLh: string | null;
   loading: boolean;
   reassigning: boolean;
   onSelect: (row: SheetMonitorRowType) => void;
   onStartEdit: (lh: string) => void;
   onCancelEdit: () => void;
   onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+  onTogglePin: (lh: string, pinned: boolean) => void;
   onReassign: (moves: Array<{ lh: string; motorista: string; cavalo: string; carreta: string }>) => void;
 }) {
   // Arrastar a fila de motoristas/veículos entre cargas (as viagens são fixas).
@@ -634,9 +684,10 @@ function SheetMonitorTable({
 
   const handleRowDragOver = useCallback((e: React.DragEvent, lh: string) => {
     if (!dragLhRef.current) return;
-    // Não dá para soltar numa linha travada (status já em atribuição no ASPX).
+    // Não dá para soltar numa linha travada (status já em atribuição no ASPX)
+    // nem numa linha FIXA (motorista/veículo intocável).
     const targetRow = rowsRef.current.find((r) => r.lh === lh);
-    if (targetRow && !allocEditPolicy(targetRow).editable) {
+    if (targetRow && (!allocEditPolicy(targetRow).editable || targetRow.pinned)) {
       e.preventDefault();
       e.dataTransfer.dropEffect = "none";
       setDropTarget(null);
@@ -668,12 +719,13 @@ function SheetMonitorTable({
           : computeShiftMoves(items, srcIdx, dstIdx + 1);
     if (moves.length === 0) return;
     // Bloqueia se qualquer linha afetada (alvo ou intermediárias do "descer
-    // fila") estiver travada — não pode mexer em carga já atribuída no ASPX.
-    const hitsLocked = moves.some((m) => {
-      const r = list.find((x) => x.lh === m.lh);
-      return r && !allocEditPolicy(r).editable;
-    });
-    if (hitsLocked) {
+    // fila") estiver FIXA ou travada por status (já em atribuição no ASPX).
+    const affected = moves.map((m) => list.find((x) => x.lh === m.lh)).filter(Boolean) as SheetMonitorRowType[];
+    if (affected.some((r) => r.pinned)) {
+      toast.error("Não dá para reordenar: há carga fixada na fila. Desafixe antes de mover.");
+      return;
+    }
+    if (affected.some((r) => !allocEditPolicy(r).editable)) {
       toast.error("Não dá para reordenar: há carga travada (já em atribuição no ASPX).");
       return;
     }
@@ -731,6 +783,7 @@ function SheetMonitorTable({
                 selected={row.lh === selectedLh}
                 editing={row.lh === editingLh}
                 saving={row.lh === savingLh}
+                pinning={row.lh === pinningLh}
                 allocStatus={allocByLh[row.lh]?.alloc_status ?? null}
                 isDragSource={row.lh === dragLh}
                 dropIntent={dropTarget?.lh === row.lh ? dropTarget.intent : null}
@@ -738,6 +791,7 @@ function SheetMonitorTable({
                 onStartEdit={onStartEdit}
                 onCancelEdit={onCancelEdit}
                 onSaveInline={onSaveInline}
+                onTogglePin={onTogglePin}
                 onDragStartHandle={handleDragStartHandle}
                 onDragEndHandle={handleDragEndHandle}
                 onRowDragOver={handleRowDragOver}
@@ -869,11 +923,24 @@ function RowDetailModal({
     },
   });
 
+  const pinMutation = useMutation({
+    mutationFn: setMonitorAllocationPin,
+    onSuccess: (data) => {
+      toast.success(data.pinned ? "Carga fixada — motorista/veículo travados." : "Carga desafixada.");
+      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Não foi possível fixar a carga.");
+    },
+  });
+
   if (!row) return null;
 
-  // Trava motorista/veículo conforme o status (mesma regra da tabela). O status
-  // operacional continua editável (o bloqueio é só de motorista/veículo).
-  const { editable: allocEditable, aspxWarning } = allocEditPolicy(row);
+  // Trava motorista/veículo conforme o status (mesma regra da tabela) E pelo
+  // "fixo". O status operacional continua editável (o bloqueio é só de m/v).
+  const { editable, aspxWarning } = allocEditPolicy(row);
+  const pinned = Boolean(alloc?.alloc_pinned ?? row.pinned);
+  const allocEditable = editable && !pinned;
 
   const doSave = () => {
     saveAllocation.mutate({
@@ -923,10 +990,36 @@ function RowDetailModal({
             {/* ── Alocação (editável no sistema) ── */}
             <ModalSection title="Alocação · editar no sistema">
               <div className="space-y-2">
+                {/* Fixar/desafixar — trava o motorista/veículo nesta carga. */}
+                <div className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/30 px-2 py-1.5">
+                  <span className="text-[0.62rem] font-medium leading-tight text-muted-foreground">
+                    {pinned
+                      ? "Fixada — motorista/veículo travados (não muda por arrasto, edição ou cascata)."
+                      : "Fixe para travar o motorista/veículo nesta carga."}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => pinMutation.mutate({ lh: row.lh, pinned: !pinned })}
+                    disabled={pinMutation.isPending}
+                    className={cn(
+                      "inline-flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1 text-[0.7rem] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+                      pinned
+                        ? "border-amber-400 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-300"
+                        : "border-border/80 text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {pinMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : pinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+                    {pinned ? "Desafixar" : "Fixar"}
+                  </button>
+                </div>
                 {!allocEditable && (
                   <p className="flex items-start gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-[0.62rem] font-medium leading-tight text-muted-foreground">
                     <Lock className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span>Motorista e veículo travados neste status (já em atribuição no ASPX). Só o status operacional pode ser alterado.</span>
+                    <span>
+                      {pinned
+                        ? "Carga fixada: motorista e veículo travados. Desafixe para editar. Só o status operacional pode ser alterado."
+                        : "Motorista e veículo travados neste status (já em atribuição no ASPX). Só o status operacional pode ser alterado."}
+                    </span>
                   </p>
                 )}
                 <div>
@@ -1179,6 +1272,7 @@ export default function SheetMonitor() {
         cavalo: a.alloc_cavalo ?? row.cavalo,
         carreta: a.alloc_carreta ?? row.carreta,
         status,
+        pinned: a.alloc_pinned ?? false,
         hasDriver: Boolean(motoristas),
         isAvailable: !motoristas && !status,
       };
@@ -1297,6 +1391,27 @@ export default function SheetMonitor() {
     [mutateReassign],
   );
 
+  // ── Fixar / desafixar a alocação (fixo) ───────────────────────────────────────
+  const {
+    mutate: mutatePin,
+    isPending: pinPending,
+    variables: pinVars,
+  } = useMutation({
+    mutationFn: setMonitorAllocationPin,
+    onSuccess: (data) => {
+      toast.success(data.pinned ? "Carga fixada — motorista/veículo travados." : "Carga desafixada.");
+      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Não foi possível fixar a carga.");
+    },
+  });
+  const pinningLh = pinPending ? (pinVars?.lh ?? null) : null;
+  const handleTogglePin = useCallback(
+    (lh: string, pinned: boolean) => mutatePin({ lh, pinned }),
+    [mutatePin],
+  );
+
   const pendingEnrich = items.length > 0
     ? items.length - Object.keys(enrichedByLh).length
     : 0;
@@ -1361,8 +1476,8 @@ export default function SheetMonitor() {
     else if (assignmentFilter === "sem_motorista") result = result.filter((r) => !r.motoristas);
     else if (assignmentFilter === "disponiveis") result = result.filter((r) => !r.motoristas && !r.status);
 
-    if (editFilter === "editaveis") result = result.filter((r) => allocEditPolicy(r).editable);
-    else if (editFilter === "bloqueadas") result = result.filter((r) => !allocEditPolicy(r).editable);
+    if (editFilter === "editaveis") result = result.filter((r) => allocEditPolicy(r).editable && !r.pinned);
+    else if (editFilter === "bloqueadas") result = result.filter((r) => !allocEditPolicy(r).editable || r.pinned);
 
     if (dateFromFilter || dateToFilter) {
       const fromTs = dateFromFilter ? new Date(dateFromFilter).getTime() : null;
@@ -1665,12 +1780,14 @@ export default function SheetMonitor() {
                 selectedLh={selectedRow?.lh ?? null}
                 editingLh={editingLh}
                 savingLh={savingLh}
+                pinningLh={pinningLh}
                 loading={loading}
                 reassigning={reassigning}
                 onSelect={handleSelectRow}
                 onStartEdit={handleStartEdit}
                 onCancelEdit={handleCancelEdit}
                 onSaveInline={handleSaveInline}
+                onTogglePin={handleTogglePin}
                 onReassign={handleReassign}
               />
               {!loading && filteredRows.length > PAGE_SIZE && (

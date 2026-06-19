@@ -583,6 +583,9 @@ export interface SheetMonitorRow {
   checklistCarreta: string;
   isAvailable: boolean;
   hasDriver: boolean;
+  // Efetivo (vem do override alloc_pinned, mesclado no front). Carga fixa = o
+  // motorista/veículo é intocável (arrasto, edição e cascata).
+  pinned?: boolean;
 }
 
 export interface SheetMonitorSummary {
@@ -635,6 +638,7 @@ export interface SheetMonitorAllocation {
   alloc_cavalo: string | null;
   alloc_carreta: string | null;
   alloc_status: string | null;
+  alloc_pinned: boolean | null;
   alloc_updated_at: string | null;
 }
 
@@ -699,6 +703,20 @@ export async function reassignMonitorAllocations(
     count: number;
     meta: { correlationId: string };
   }>("/api/operator/sheet-monitor/reassign", { accessToken, method: "POST", body: { moves } });
+}
+
+/**
+ * Fixa ("fixo") ou desafixa a alocação de uma carga. Carga fixa = motorista/veículo
+ * intocável (não move por arrasto, edição inline/modal, nem cascata de cancelamento).
+ */
+export async function setMonitorAllocationPin(input: { lh: string; pinned: boolean }) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{
+    ok: boolean;
+    lh: string;
+    pinned: boolean;
+    meta: { correlationId: string };
+  }>("/api/operator/sheet-monitor/pin", { accessToken, method: "POST", body: input });
 }
 
 export async function enrichSheetMonitor({ force = false, forceSessionStart }: { force?: boolean; forceSessionStart?: string } = {}): Promise<{

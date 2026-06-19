@@ -95,6 +95,29 @@ describe("updateMonitorAllocation", () => {
     expect(row.sheet_motorista).toBe("MOTORISTA DA PLANILHA");
   });
 
+  it("carga FIXA: preserva motorista/veículo e deixa passar só o status", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-pin@teste.local" });
+    // Aloca e fixa: alloc_motorista/cavalo definidos + alloc_pinned=true.
+    await query(
+      `UPDATE public.cargas SET alloc_motorista = 'FIXO JOSE', alloc_cavalo = 'PIN1A11', alloc_pinned = true WHERE id = $1`,
+      [id],
+    );
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      // tenta trocar o motorista/veículo (deve ser IGNORADO) e mudar o status (deve passar)
+      payload: { motorista: "OUTRO MOTORISTA", cavalo: "XXX9X99", carreta: "YYY8Y88", status: "DESCARREGADO" },
+      correlationId: "corr-monitor-pin",
+    });
+
+    const row = await getAlloc(id);
+    expect(row.alloc_motorista).toBe("FIXO JOSE");   // preservado
+    expect(row.alloc_cavalo).toBe("PIN1A11");        // preservado
+    expect(row.alloc_status).toBe("DESCARREGADO");   // status passou
+  });
+
   it("lança NotFoundError quando o LH não tem carga correspondente", async () => {
     const operator = await seedUser({ email: "op-monitor-404@teste.local" });
     await expect(

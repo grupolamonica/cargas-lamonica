@@ -31,7 +31,9 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
 
   const result = await withPgTransaction(async (client) => {
     const { rows } = await client.query(
-      `SELECT id, sheet_lh, sheet_motorista, sheet_cavalo, sheet_carreta FROM public.cargas WHERE id = $1 FOR UPDATE`,
+      `SELECT id, sheet_lh, sheet_motorista, sheet_cavalo, sheet_carreta,
+              alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta
+       FROM public.cargas WHERE id = $1 FOR UPDATE`,
       [cargoId],
     );
 
@@ -40,6 +42,13 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     }
 
     const sheetRow = rows[0];
+
+    // Carga FIXA: motorista/veículo são intocáveis — preserva o que já está
+    // alocado (ignora os valores recebidos) e deixa passar só o status operacional.
+    const pinned = sheetRow.alloc_pinned === true;
+    const finalMotorista = pinned ? (sheetRow.alloc_motorista ?? null) : motorista;
+    const finalCavalo = pinned ? (sheetRow.alloc_cavalo ?? null) : cavalo;
+    const finalCarreta = pinned ? (sheetRow.alloc_carreta ?? null) : carreta;
 
     await client.query(
       `
@@ -54,7 +63,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
             updated_at = now()
         WHERE id = $1
       `,
-      [cargoId, motorista, cavalo, carreta, status, operatorId],
+      [cargoId, finalMotorista, finalCavalo, finalCarreta, status, operatorId],
     );
 
     await insertSecurityAuditEvent(client, {
@@ -69,11 +78,12 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       correlationId,
       metadata: {
         lh,
-        motorista,
-        cavalo,
-        carreta,
+        motorista: finalMotorista,
+        cavalo: finalCavalo,
+        carreta: finalCarreta,
         status,
-        cleared: motorista === null && cavalo === null && carreta === null && status === null,
+        pinned,
+        cleared: finalMotorista === null && finalCavalo === null && finalCarreta === null && status === null,
       },
     });
 
@@ -82,15 +92,15 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       payload: {
         ok: true,
         lh,
-        allocation: { motorista, cavalo, carreta, status, source: "operator" },
+        allocation: { motorista: finalMotorista, cavalo: finalCavalo, carreta: finalCarreta, status, source: "operator" },
         meta: { correlationId },
       },
       // Valor EFETIVO (o que o Monitor mostra) = override do operador ?? planilha.
       // Usado no write-back pra refletir na planilha; "" limpa a célula.
       effective: {
-        motorista: motorista ?? sheetRow.sheet_motorista ?? "",
-        cavalo: cavalo ?? sheetRow.sheet_cavalo ?? "",
-        carreta: carreta ?? sheetRow.sheet_carreta ?? "",
+        motorista: finalMotorista ?? sheetRow.sheet_motorista ?? "",
+        cavalo: finalCavalo ?? sheetRow.sheet_cavalo ?? "",
+        carreta: finalCarreta ?? sheetRow.sheet_carreta ?? "",
       },
     };
   });

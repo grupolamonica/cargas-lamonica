@@ -41,6 +41,13 @@ export const sheetMonitorReassignBodySchema = z.object({
   })).min(1).max(500),
 }).strict();
 
+/** Body for POST /api/operator/sheet-monitor/pin — fixar/desafixar a alocação de
+ *  uma carga (motorista/veículo intocável por arrasto, edição e cascata). */
+export const sheetMonitorPinBodySchema = z.object({
+  lh: z.string().trim().min(1).max(120),
+  pinned: z.boolean(),
+}).strict();
+
 /** Query params for PII redaction POST */
 export const piiRedactionQuerySchema = z.object({
   retentionDays: z.coerce.number().int().min(1).max(365).optional(),

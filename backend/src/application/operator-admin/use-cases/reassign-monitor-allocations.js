@@ -55,11 +55,16 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
     const updated = [];
     for (const m of normalized) {
       const { rows } = await client.query(
-        `SELECT id FROM public.cargas WHERE id = $1 FOR UPDATE`,
+        `SELECT id, alloc_pinned FROM public.cargas WHERE id = $1 FOR UPDATE`,
         [m.cargoId],
       );
       if (rows.length === 0) {
         throw new NotFoundError(`Carga da planilha não encontrada para o LH ${m.lh}.`);
+      }
+      // Carga FIXA é intocável — não pode ser movida pela fila (nem origem nem
+      // destino de uma troca/descida). O operador precisa desafixar antes.
+      if (rows[0].alloc_pinned) {
+        throw new ValidationError(`A carga ${m.lh} está fixada e não pode ser movida. Desafixe antes de reordenar.`);
       }
       await client.query(
         `

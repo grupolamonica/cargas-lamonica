@@ -34,7 +34,7 @@ import {
 } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
-import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorReassignBodySchema } from "../schemas/operator-schemas.js";
+import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
@@ -67,6 +67,7 @@ import { listDraftRegistrations } from "../../../application/operator-admin/use-
 import { submitDraftAsOperator } from "../../../application/operator-admin/use-cases/submit-draft-as-operator.js";
 import { updateMonitorAllocation } from "../../../application/operator-admin/use-cases/update-monitor-allocation.js";
 import { reassignMonitorAllocations } from "../../../application/operator-admin/use-cases/reassign-monitor-allocations.js";
+import { setMonitorAllocationPin } from "../../../application/operator-admin/use-cases/set-monitor-allocation-pin.js";
 import { candidaturaSubmitSchema } from "../schemas/candidatura-schemas.js";
 import { DRAFT_FILE_BUCKET } from "../../../application/candidatura/use-cases/upload-draft-file.js";
 import { ensureDriverLoadsSheetFresh } from "../public-loads/handlers.js";
@@ -673,7 +674,7 @@ export async function resolveSheetMonitorResponse(request) {
     try {
       const { data: allocRows } = await supabaseClient
         .from("cargas")
-        .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_updated_at")
+        .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_pinned, alloc_updated_at")
         .not("sheet_lh", "is", null)
         .not("alloc_updated_at", "is", null)
         .limit(50000);
@@ -859,6 +860,21 @@ export async function resolveReassignMonitorAllocationsResponse(request) {
     async ({ correlationId, requestIp, operatorId }) => {
       const { moves } = sheetMonitorReassignBodySchema.parse(await parseJsonBody(request));
       return reassignMonitorAllocations({ moves, operatorId, requestIp, correlationId });
+    },
+  );
+}
+
+export async function resolveSetMonitorAllocationPinResponse(request) {
+  return withOperatorSession(
+    request,
+    "set-monitor-allocation-pin",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { lh, pinned } = sheetMonitorPinBodySchema.parse(await parseJsonBody(request));
+      return setMonitorAllocationPin({ lh, pinned, operatorId, requestIp, correlationId });
     },
   );
 }
