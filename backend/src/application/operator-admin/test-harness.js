@@ -101,6 +101,22 @@ const schemaSql = `
     updated_at timestamptz NOT NULL DEFAULT now()
   );
 
+  CREATE TABLE public.monitor_reservas (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    motorista text NOT NULL DEFAULT '',
+    cavalo text NOT NULL DEFAULT '',
+    carreta text NOT NULL DEFAULT '',
+    origem text NOT NULL DEFAULT '',
+    destino text NOT NULL DEFAULT '',
+    route_key text NOT NULL DEFAULT '',
+    origin_lh text,
+    status text NOT NULL DEFAULT 'RESERVA',
+    active boolean NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    created_by uuid,
+    updated_at timestamptz NOT NULL DEFAULT now()
+  );
+
   CREATE TABLE public.driver_profiles (
     user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     full_name text NOT NULL,

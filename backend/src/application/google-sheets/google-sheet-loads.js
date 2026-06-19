@@ -1310,11 +1310,29 @@ export async function syncGoogleSheetLoads({
     );
   }
 
+  // Cancelamento vindo da planilha: linhas que ficaram CANCELADO no sync e ainda
+  // têm motorista → cascata da rota (Interpretação A), idempotente. Non-fatal: o
+  // sync já concluiu. Import dinâmico evita ciclo (cancel-load-cascade → este módulo).
+  let cancelCascadeSwept = 0;
+  try {
+    const { sweepCancelledCascades } = await import("../operator-admin/sweep-cancelled-cascades.js");
+    const swept = await sweepCancelledCascades({});
+    cancelCascadeSwept = swept.cascaded;
+    if (swept.cascaded > 0) {
+      console.info(`[google-sheet-loads] ${swept.cascaded} cancelamento(s) da planilha cascateado(s) na fila`, { ...swept });
+    }
+  } catch (sweepError) {
+    console.error("[google-sheet-loads] sweep de cancelamento falhou após sync", {
+      message: sweepError instanceof Error ? sweepError.message : String(sweepError),
+    });
+  }
+
   return {
     availableLoadsCount: sheetLoadPayloads.length,
     unlinkedLoadsCount: staleInSheet.length + staleTrulyGone.length,
     revertedToOpenCount,
     skippedInvalidLoadsCount: invalidRows.length,
+    cancelCascadeSwept,
     sheetUrl,
   };
 }

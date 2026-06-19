@@ -118,6 +118,34 @@ describe("updateMonitorAllocation", () => {
     expect(row.alloc_status).toBe("DESCARREGADO");   // status passou
   });
 
+  it("setar status CANCELADO dispara a cascata da rota (gera reserva)", async () => {
+    const idA = createSheetLoadId("CASC-A");
+    const idB = createSheetLoadId("CASC-B");
+    await seedCargo({ id: idA, sheet_lh: "CASC-A", status: "OPEN", origem: "Salvador / BA", destino: "Feira / BA", horario: "08:00:00" });
+    await seedCargo({ id: idB, sheet_lh: "CASC-B", status: "OPEN", origem: "Salvador / BA", destino: "Feira / BA", horario: "10:00:00" });
+    await query(`UPDATE public.cargas SET sheet_motorista = 'MOT A' WHERE id = $1`, [idA]);
+    await query(`UPDATE public.cargas SET sheet_motorista = 'MOT B' WHERE id = $1`, [idB]);
+    const operator = await seedUser({ email: "op-monitor-cascade@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: "CASC-A",
+      operatorId: operator.id,
+      payload: { status: "CANCELADO" },
+      correlationId: "corr-monitor-cancel",
+    });
+
+    // CASC-A: status CANCELADO + motorista esvaziado pela cascata.
+    const a = await query(`SELECT alloc_motorista, alloc_status FROM public.cargas WHERE id = $1`, [idA]);
+    expect(a.rows[0].alloc_status).toBe("CANCELADO");
+    expect(a.rows[0].alloc_motorista).toBe("");
+    // CASC-B recebeu MOT A; MOT B (deslocado) virou reserva.
+    const b = await query(`SELECT alloc_motorista FROM public.cargas WHERE id = $1`, [idB]);
+    expect(b.rows[0].alloc_motorista).toBe("MOT A");
+    const r = await query(`SELECT motorista FROM public.monitor_reservas WHERE active = true`);
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0].motorista).toBe("MOT B");
+  });
+
   it("lança NotFoundError quando o LH não tem carga correspondente", async () => {
     const operator = await seedUser({ email: "op-monitor-404@teste.local" });
     await expect(

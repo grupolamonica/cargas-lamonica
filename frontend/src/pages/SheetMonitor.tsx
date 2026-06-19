@@ -102,6 +102,7 @@ function resolveSheetStatusStyle(status: string) {
     "Entregue":    { dot: "bg-teal-500",    bg: "bg-teal-50 text-teal-800 dark:bg-teal-500/15 dark:text-teal-200",             label: "Entregue" },
     "Cancelado":   { dot: "bg-red-400",     bg: "bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-200",                 label: "Cancelado" },
     "Concluido":   { dot: "bg-green-600",   bg: "bg-green-50 text-green-800 dark:bg-green-500/15 dark:text-green-200",         label: "Concluido" },
+    "RESERVA":     { dot: "bg-amber-500",   bg: "bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-100",        label: "Reserva" },
   };
 
   if (exact[trimmed]) return exact[trimmed];
@@ -391,6 +392,29 @@ type AllocCellProps = {
 };
 
 function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle }: AllocCellProps) {
+  // Linha de RESERVA (standby na rota) — só exibe o motorista/veículo; não arrasta,
+  // não edita, não fixa (não é uma carga da planilha).
+  if (row.reserva) {
+    return (
+      <div className="flex items-start gap-1.5 border-l-2 border-amber-400 pl-2">
+        <div className="min-w-0 flex-1">
+          {row.motoristas ? (
+            <span className="truncate text-xs font-medium text-foreground">{row.motoristas}</span>
+          ) : (
+            <span className="text-xs text-muted-foreground/50">—</span>
+          )}
+          {row.cavalo && (
+            <div className="truncate text-[0.62rem] text-muted-foreground">
+              {row.cavalo}{row.carreta ? ` · ${row.carreta}` : ""}
+            </div>
+          )}
+          <span className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-semibold text-amber-600 dark:text-amber-400">
+            em reserva nesta rota
+          </span>
+        </div>
+      </div>
+    );
+  }
   const { editable, aspxWarning } = allocEditPolicy(row);
   const pinned = !!row.pinned;
   // Fixo trava motorista/veículo (intocável). Status-lock (ASPX) também trava.
@@ -549,19 +573,22 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   return (
     <tr
       style={ROW_VIRTUALIZATION_STYLE}
-      onClick={() => onSelect(row)}
+      onClick={() => { if (!row.reserva) onSelect(row); }}
       onDragOver={(e) => onRowDragOver(e, row.lh)}
       onDrop={(e) => onRowDrop(e, row.lh)}
       className={cn(
-        "cursor-pointer transition-colors duration-100",
+        "transition-colors duration-100",
+        row.reserva ? "cursor-default" : "cursor-pointer",
         // Soltar no CORPO = trocar → linha toda azul.
         dropIntent === "swap"
           ? "bg-blue-500/20"
           : selected
             ? "bg-primary/10 dark:bg-primary/20"
-            : row.hasDriver
-              ? "hover:bg-emerald-50/60 dark:hover:bg-emerald-500/10"
-              : "hover:bg-primary/[0.04]",
+            : row.reserva
+              ? "bg-amber-50/70 dark:bg-amber-500/10"
+              : row.hasDriver
+                ? "hover:bg-emerald-50/60 dark:hover:bg-emerald-500/10"
+                : "hover:bg-primary/[0.04]",
         // Soltar na BORDA = descer/subir a fila → só a borda azul.
         dropIntent === "before" && "[&>td]:border-t-[3px] [&>td]:border-blue-600",
         dropIntent === "after" && "[&>td]:border-b-[3px] [&>td]:border-blue-600",
@@ -573,8 +600,14 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
 
       {/* LH + Tipo */}
       <td className="px-3 py-2">
-        <span className="block font-mono text-xs font-semibold text-foreground/80">{row.lh}</span>
-        {row.tipo && <span className="block text-[0.62rem] text-muted-foreground">{row.tipo}</span>}
+        {row.reserva ? (
+          <span className="block text-[0.62rem] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">standby</span>
+        ) : (
+          <>
+            <span className="block font-mono text-xs font-semibold text-foreground/80">{row.lh}</span>
+            {row.tipo && <span className="block text-[0.62rem] text-muted-foreground">{row.tipo}</span>}
+          </>
+        )}
       </td>
 
       {/* Rota */}
@@ -687,7 +720,7 @@ function SheetMonitorTable({
     // Não dá para soltar numa linha travada (status já em atribuição no ASPX)
     // nem numa linha FIXA (motorista/veículo intocável).
     const targetRow = rowsRef.current.find((r) => r.lh === lh);
-    if (targetRow && (!allocEditPolicy(targetRow).editable || targetRow.pinned)) {
+    if (targetRow && (targetRow.reserva || !allocEditPolicy(targetRow).editable || targetRow.pinned)) {
       e.preventDefault();
       e.dataTransfer.dropEffect = "none";
       setDropTarget(null);
@@ -729,6 +762,10 @@ function SheetMonitorTable({
     // Bloqueia se qualquer linha afetada (alvo ou intermediárias do "descer
     // fila") estiver FIXA ou travada por status (já em atribuição no ASPX).
     const affected = moves.map((m) => list.find((x) => x.lh === m.lh)).filter(Boolean) as SheetMonitorRowType[];
+    if (affected.some((r) => r.reserva)) {
+      toast.error("Linha de reserva não entra na reordenação da fila.");
+      return;
+    }
     // Só reordena dentro da MESMA rota. Um arrasto que cruzaria rotas (troca entre
     // rotas, ou descer a fila atravessando linhas de outra rota) é bloqueado —
     // rota diferente muda manualmente, sem arrastar.
@@ -1429,7 +1466,7 @@ export default function SheetMonitor() {
   );
 
   const pendingEnrich = items.length > 0
-    ? items.length - Object.keys(enrichedByLh).length
+    ? items.filter((r) => !r.reserva).length - Object.keys(enrichedByLh).length
     : 0;
 
   const summary = useMemo(() => {
@@ -1440,6 +1477,7 @@ export default function SheetMonitor() {
     const tipos: Record<string, number> = {};
     let available = 0, assigned = 0, withStatus = 0;
     for (const row of items) {
+      if (row.reserva) continue; // reserva é linha sintética — não conta nos KPIs
       if (!row.motoristas && !row.status) available += 1;
       if (row.motoristas) assigned += 1;
       if (row.status) withStatus += 1;

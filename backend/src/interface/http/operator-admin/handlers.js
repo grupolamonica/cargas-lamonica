@@ -690,6 +690,45 @@ export async function resolveSheetMonitorResponse(request) {
       });
     }
 
+    // Motoristas em RESERVA (standby por rota) — linhas que NÃO vêm da planilha
+    // (geradas pela cascata de cancelamento). Injetadas como linhas RESERVA no
+    // Monitor. Não-fatal se a tabela ainda não existe.
+    let reservaRows = [];
+    try {
+      const { data: reservas } = await supabaseClient
+        .from("monitor_reservas")
+        .select("id, motorista, cavalo, carreta, origem, destino, created_at")
+        .eq("active", true)
+        .limit(5000);
+      if (reservas) {
+        reservaRows = reservas.map((r) => ({
+          lh: `reserva:${r.id}`,
+          tipo: "RESERVA",
+          status: "RESERVA",
+          motoristas: r.motorista || "",
+          origem: r.origem || "",
+          destino: r.destino || "",
+          data: null,
+          horario: null,
+          carregamentoLabel: null,
+          descargaLabel: null,
+          valor: undefined,
+          cavalo: r.cavalo || "",
+          carreta: r.carreta || "",
+          checklistCavalo: "",
+          checklistCarreta: "",
+          isAvailable: false,
+          hasDriver: Boolean(r.motorista),
+          reserva: true,
+        }));
+      }
+    } catch (reservaErr) {
+      logStructuredEvent("warn", "sheet-monitor.reservas-read-failed", {
+        correlationId,
+        message: reservaErr instanceof Error ? reservaErr.message : String(reservaErr),
+      });
+    }
+
     // ----------------------------------------------------------------
     // REFRESH path: operator explicitly asked for a fresh sync.
     // Fetch CSV → parse all rows → save to DB → return parsed rows IMMEDIATELY
@@ -731,7 +770,7 @@ export async function resolveSheetMonitorResponse(request) {
           return {
             statusCode: 200,
             payload: {
-              items: rows,
+              items: reservaRows.length ? [...rows, ...reservaRows] : rows,
               summary,
               allocByLh,
               meta: {
@@ -800,10 +839,11 @@ export async function resolveSheetMonitorResponse(request) {
         });
       }
 
+      const baseRows = snapshot.rows_json ?? [];
       return {
         statusCode: 200,
         payload: {
-          items: snapshot.rows_json ?? [],
+          items: reservaRows.length ? [...baseRows, ...reservaRows] : baseRows,
           summary: snapshot.summary_json ?? emptySummary,
           enrichedByLh,
           allocByLh,

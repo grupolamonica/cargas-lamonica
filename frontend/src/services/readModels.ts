@@ -586,6 +586,9 @@ export interface SheetMonitorRow {
   // Efetivo (vem do override alloc_pinned, mesclado no front). Carga fixa = o
   // motorista/veículo é intocável (arrasto, edição e cascata).
   pinned?: boolean;
+  // Linha sintética de RESERVA (motorista em standby na rota; não vem da
+  // planilha, não tem LH real). Só exibida — não arrasta/edita.
+  reserva?: boolean;
 }
 
 export interface SheetMonitorSummary {

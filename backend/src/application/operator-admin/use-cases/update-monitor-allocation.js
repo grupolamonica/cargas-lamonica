@@ -3,6 +3,7 @@ import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit
 import { NotFoundError } from "../../../domain/load-claims/errors.js";
 import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
+import { cancelLoadCascade } from "./cancel-load-cascade.js";
 
 /**
  * Grava a ALOCAÇÃO editada no Monitor (motorista/cavalo/carreta/status operacional)
@@ -105,11 +106,29 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     };
   });
 
+  // Cancelou no Monitor (status → CANCELADO) → dispara a cascata da rota: o
+  // motorista desce a fila (Interpretação A) e o último sem carga vira reserva.
+  const willCascade = Boolean(status) && /cancel/i.test(status);
+
   // Write-back best-effort pra planilha (espelho) — FORA da transação e SEM
-  // await: o Apps Script pode levar segundos; não travamos a resposta do
-  // operador por isso. O banco já está salvo (fonte da verdade); a planilha
-  // espelha em background. Nunca lança (catch defensivo).
-  void writeAllocationsToSheet([{ lh, ...result.effective }]).catch(() => {});
+  // await. Quando vai cascatear, o write-back fica por conta da cascata (que
+  // sabe os valores relocados) — evita gravar o valor antigo e depois corrigir.
+  if (!willCascade) {
+    void writeAllocationsToSheet([{ lh, ...result.effective }]).catch(() => {});
+  }
+
+  if (willCascade) {
+    // Best-effort: a edição de status já está commitada; se a cascata falhar, o
+    // sweep do próximo sync recupera (cancelLoadCascade é idempotente).
+    try {
+      await cancelLoadCascade({ lh, operatorId, requestIp, correlationId });
+    } catch (cascadeErr) {
+      console.warn(
+        `[update-monitor-allocation] cascata de cancelamento falhou para ${lh}:`,
+        cascadeErr instanceof Error ? cascadeErr.message : cascadeErr,
+      );
+    }
+  }
 
   return { statusCode: result.statusCode, payload: result.payload };
 }
