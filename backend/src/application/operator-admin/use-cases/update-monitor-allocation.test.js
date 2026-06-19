@@ -146,6 +146,25 @@ describe("updateMonitorAllocation", () => {
     expect(r.rows[0].motorista).toBe("MOT B");
   });
 
+  it("alocar um motorista que está em reserva baixa a reserva (não fica em dois lugares)", async () => {
+    await seedSheetCargo();
+    await query(
+      `INSERT INTO public.monitor_reservas (motorista, route_key, origin_lh) VALUES ($1, $2, $3)`,
+      ["RESERVADO X", "ROTA-QQ", "OLD-CANCEL"],
+    );
+    const operator = await seedUser({ email: "op-monitor-evict@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { motorista: "RESERVADO X", cavalo: "AAA1A11", carreta: "" },
+      correlationId: "corr-monitor-evict",
+    });
+
+    const r = await query(`SELECT active FROM public.monitor_reservas WHERE motorista = 'RESERVADO X'`);
+    expect(r.rows[0].active).toBe(false);
+  });
+
   it("lança NotFoundError quando o LH não tem carga correspondente", async () => {
     const operator = await seedUser({ email: "op-monitor-404@teste.local" });
     await expect(

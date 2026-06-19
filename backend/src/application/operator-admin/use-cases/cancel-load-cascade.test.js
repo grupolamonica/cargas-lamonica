@@ -85,6 +85,24 @@ describe("cancelLoadCascade", () => {
     expect(await reservas()).toHaveLength(0);
   });
 
+  it("re-cascata da mesma carga não duplica reserva (supersede a anterior)", async () => {
+    await seedRouteCargo("G1", { motorista: "JOAO", horario: "08:00:00" });
+    await seedRouteCargo("G2", { motorista: "MARIA", horario: "12:00:00", status: "CANCELADO" });
+    await seedRouteCargo("G3", { motorista: "PEDRO", horario: "16:00:00" });
+    // Reserva ativa "fantasma" pré-existente da MESMA carga cancelada.
+    await query(
+      `INSERT INTO public.monitor_reservas (motorista, route_key, origin_lh) VALUES ($1, $2, $3)`,
+      ["ANTIGO", "Salvador / BA→Feira / BA", "G2"],
+    );
+    const op = await seedUser({ email: "op-cascade-supersede@teste.local" });
+
+    await cancelLoadCascade({ lh: "G2", operatorId: op.id });
+
+    const active = await reservas();
+    expect(active).toHaveLength(1);            // a antiga foi baixada
+    expect(active[0].motorista).toBe("PEDRO"); // só a nova fica ativa
+  });
+
   it("carga fixa cancelada não cascateia (fixo intocável)", async () => {
     const f1 = await seedRouteCargo("F1", { motorista: "JOAO", horario: "08:00:00" });
     const f2 = await seedRouteCargo("F2", { motorista: "MARIA", horario: "12:00:00", status: "CANCELADO", pinned: true });

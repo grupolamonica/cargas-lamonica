@@ -88,6 +88,19 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       },
     });
 
+    // Motorista alocado numa carga NORMAL deixa de estar "em reserva": baixa as
+    // reservas ativas desse motorista (senão aparece na carga E no standby). Não
+    // baixa em cancelamento — aí quem move é a cascata.
+    const effMotorista = (finalMotorista ?? sheetRow.sheet_motorista ?? "").toString().trim();
+    const cancelling = Boolean(status) && /cancel/i.test(status);
+    if (effMotorista && !cancelling) {
+      await client.query(
+        `UPDATE public.monitor_reservas SET active = false, updated_at = now()
+         WHERE active = true AND motorista = $1`,
+        [effMotorista],
+      );
+    }
+
     return {
       statusCode: 200,
       payload: {

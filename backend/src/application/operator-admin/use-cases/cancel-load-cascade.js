@@ -94,6 +94,14 @@ export async function cancelLoadCascade({ lh, operatorId, requestIp, correlation
     let reservaCreated = false;
     if (reserva) {
       const routeKey = `${(origem ?? "").trim()}→${(destino ?? "").trim()}`;
+      // Supersede qualquer reserva ativa anterior da MESMA carga cancelada — se a
+      // cascata reprocessar (ex.: a carga recuperou motorista e foi cancelada de
+      // novo), mantém no máximo 1 reserva ativa por origin_lh (sem duplicar).
+      await client.query(
+        `UPDATE public.monitor_reservas SET active = false, updated_at = now()
+         WHERE active = true AND origin_lh = $1`,
+        [lh],
+      );
       await client.query(
         `INSERT INTO public.monitor_reservas
            (motorista, cavalo, carreta, origem, destino, route_key, origin_lh, created_by)
