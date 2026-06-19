@@ -95,8 +95,11 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     };
   });
 
-  // Write-back best-effort pra planilha (espelho) — FORA da transação, nunca lança.
-  await writeAllocationsToSheet([{ lh, ...result.effective }]);
+  // Write-back best-effort pra planilha (espelho) — FORA da transação e SEM
+  // await: o Apps Script pode levar segundos; não travamos a resposta do
+  // operador por isso. O banco já está salvo (fonte da verdade); a planilha
+  // espelha em background. Nunca lança (catch defensivo).
+  void writeAllocationsToSheet([{ lh, ...result.effective }]).catch(() => {});
 
   return { statusCode: result.statusCode, payload: result.payload };
 }

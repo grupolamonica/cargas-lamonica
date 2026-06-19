@@ -17,6 +17,19 @@ em tempo real.
 - Wired em `update-monitor-allocation.js` (inline/modal) e
   `reassign-monitor-allocations.js` (arrastar), **após** o commit no banco.
 
+## Latência / não-bloqueante (importante)
+
+O Apps Script é **lento** (~1–20s por chamada, variável; cold start + execução
+no Google). Por isso o write-back é **fire-and-forget**: o backend grava no banco,
+**responde na hora** e dispara o POST pra planilha **em background** (sem `await`).
+O operador nunca espera o Google — a edição é instantânea e a planilha espelha
+alguns segundos depois.
+
+O Apps Script abaixo usa **busca indexada** (`TextFinder` escopado na coluna A)
+em vez de ler a coluna inteira (`getValues` de milhares de linhas) — isso derruba
+a execução de ~20s pra ~1–2s. **Se você ainda tem a versão antiga (com `getValues`/
+`indexOf`), recole a versão abaixo e reimplante** (Nova versão).
+
 ## Env (backend)
 
 ```
@@ -44,14 +57,15 @@ function doPost(e) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheets().filter(s => s.getSheetId() === DATA_GID)[0];
     if (!sheet) return out_({ ok:false, error:"aba (gid) nao encontrada" });
-    const last = sheet.getLastRow();
-    const lhCol = sheet.getRange(1, 1, last, 1).getValues().map(r => String(r[0]).trim());
+    const lhRange = sheet.getRange(1, 1, sheet.getLastRow(), 1); // coluna A (LH)
     let updated = 0;
     (body.updates || []).forEach(u => {
       const lh = String(u.lh || "").trim();
-      const i = lhCol.indexOf(lh);            // acha a linha pelo LH (coluna A)
-      if (!lh || i < 0) return;
-      sheet.getRange(i + 1, 5, 1, 3).setValues([[u.motorista || "", u.cavalo || "", u.carreta || ""]]); // E,F,G
+      if (!lh) return;
+      // Busca indexada server-side (NÃO lê a coluna inteira) — ~10x mais rápido.
+      const cell = lhRange.createTextFinder(lh).matchEntireCell(true).findNext();
+      if (!cell) return;
+      sheet.getRange(cell.getRow(), 5, 1, 3).setValues([[u.motorista || "", u.cavalo || "", u.carreta || ""]]); // E,F,G
       updated++;
     });
     return out_({ ok:true, updated });

@@ -100,11 +100,12 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
     };
   });
 
-  // Write-back best-effort pra planilha (espelho) — FORA da transação, nunca
-  // lança. Os moves já são os valores EFETIVOS relocados ("" = célula vazia).
-  await writeAllocationsToSheet(
+  // Write-back best-effort pra planilha (espelho) — FORA da transação e SEM
+  // await (o Apps Script pode levar segundos; não travamos a resposta). Os
+  // moves já são os valores EFETIVOS relocados ("" = célula vazia). Nunca lança.
+  void writeAllocationsToSheet(
     normalized.map(({ lh, motorista, cavalo, carreta }) => ({ lh, motorista, cavalo, carreta })),
-  );
+  ).catch(() => {});
 
   return result;
 }
