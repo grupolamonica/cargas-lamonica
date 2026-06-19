@@ -658,6 +658,34 @@ export async function resolveOperatorDriverFlowMetricsResponse(request) {
   });
 }
 
+async function readSheetMonitorEnrichedByLh(supabaseClient, correlationId) {
+  const enrichedByLh = {};
+  try {
+    // PostgREST caps responses at 1000 rows server-side (.limit is clamped), so
+    // a single select would silently drop every enriched row past the first 1000
+    // — leaving thousands of rows showing "Consulta Angellira/ASPX pendente" in
+    // the Monitor even with good data. Paginate by range to fetch the full set.
+    const PAGE_SIZE = 1000;
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data: enrichedRows, error } = await supabaseClient
+        .from("sheet_monitor_enriched")
+        .select("*")
+        .order("lh", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) throw error;
+      if (!enrichedRows || enrichedRows.length === 0) break;
+      for (const r of enrichedRows) enrichedByLh[r.lh] = r;
+      if (enrichedRows.length < PAGE_SIZE) break;
+    }
+  } catch (enrichErr) {
+    logStructuredEvent("warn", "sheet-monitor.enrich-read-failed", {
+      correlationId,
+      message: enrichErr instanceof Error ? enrichErr.message : String(enrichErr),
+    });
+  }
+  return enrichedByLh;
+}
+
 export async function resolveSheetMonitorResponse(request) {
   return withOperatorSession(request, "sheet-monitor", async ({ correlationId }) => {
     const supabaseClient = createSupabaseAdminClient();
@@ -701,12 +729,17 @@ export async function resolveSheetMonitorResponse(request) {
             });
           }
 
-          // Return the freshly-parsed rows immediately — no extra DB read needed.
+          // Return the freshly-parsed rows immediately. Still attach the enriched
+          // map from the DB — otherwise setQueryData() on the client would replace
+          // the cached payload with one that has no enrichedByLh, blanking every
+          // row to "Consulta Angellira/ASPX pendente" until the next read.
+          const enrichedByLh = await readSheetMonitorEnrichedByLh(supabaseClient, correlationId);
           return {
             statusCode: 200,
             payload: {
               items: rows,
               summary,
+              enrichedByLh,
               meta: {
                 correlationId,
                 sheetConfigured: true,
@@ -756,22 +789,8 @@ export async function resolveSheetMonitorResponse(request) {
     }
 
     if (snapshot) {
-      // Read enriched data in parallel — non-fatal if missing
-      let enrichedByLh = {};
-      try {
-        const { data: enrichedRows } = await supabaseClient
-          .from("sheet_monitor_enriched")
-          .select("*")
-          .limit(50000);
-        if (enrichedRows) {
-          for (const r of enrichedRows) enrichedByLh[r.lh] = r;
-        }
-      } catch (enrichErr) {
-        logStructuredEvent("warn", "sheet-monitor.enrich-read-failed", {
-          correlationId,
-          message: enrichErr instanceof Error ? enrichErr.message : String(enrichErr),
-        });
-      }
+      // Read enriched data — non-fatal if missing
+      const enrichedByLh = await readSheetMonitorEnrichedByLh(supabaseClient, correlationId);
 
       return {
         statusCode: 200,
