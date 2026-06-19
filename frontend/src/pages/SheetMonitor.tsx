@@ -31,6 +31,7 @@ import DashboardHeader from "@/components/DashboardHeader";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -311,12 +312,60 @@ function MonitorDatalists({
 // cliente" editam; demais travam — já em atribuição no ASPX) em
 // @/lib/monitorEditPolicy (allocEditPolicy), para ser testável.
 
-function AspxAssigningWarning({ className }: { className?: string }) {
+// Texto do pop-up de confirmação para cargas "aguardando chegar no cliente"
+// (motorista/veículo já no ASPX). Pergunta antes de efetivar a troca.
+function aspxConfirmDescription(count: number) {
+  return count > 1
+    ? `${count} cargas estão "aguardando chegar no cliente" — o motorista e o veículo já estão no ASPX. Tem certeza de que quer fazer a troca?`
+    : `Esta carga está "aguardando chegar no cliente" — o motorista e o veículo já estão no ASPX. Tem certeza de que quer fazer a troca?`;
+}
+
+// Pop-up de confirmação genérico (sim/cancelar) sobre o Dialog existente.
+function ConfirmDialog({
+  open,
+  title,
+  description,
+  confirmLabel = "Sim, trocar",
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  title: string;
+  description: React.ReactNode;
+  confirmLabel?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
   return (
-    <p className={cn("flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[0.62rem] font-medium leading-tight text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300", className)}>
-      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-      <span>Já estão atribuindo no ASPX — confirme antes de alterar.</span>
-    </p>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onCancel(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+            {title}
+          </DialogTitle>
+          <DialogDescription className="pt-1 text-sm leading-relaxed text-muted-foreground">
+            {description}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="mt-1 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg border border-border/80 px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-amber-700"
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -340,15 +389,12 @@ function AllocCell({ row, enriched, editing, saving, allocStatus, onStartEdit, o
   const { editable, aspxWarning } = allocEditPolicy(row);
   if (editing) {
     return (
-      <div className="space-y-1.5">
-        {aspxWarning && <AspxAssigningWarning />}
-        <InlineAllocEditor
-          initial={{ motorista: row.motoristas ?? "", cavalo: row.cavalo ?? "", carreta: row.carreta ?? "" }}
-          saving={saving}
-          onSave={(v) => onSaveInline({ lh: row.lh, ...v, status: allocStatus ?? "" })}
-          onCancel={onCancelEdit}
-        />
-      </div>
+      <InlineAllocEditor
+        initial={{ motorista: row.motoristas ?? "", cavalo: row.cavalo ?? "", carreta: row.carreta ?? "" }}
+        saving={saving}
+        onSave={(v) => onSaveInline({ lh: row.lh, ...v, status: allocStatus ?? "" })}
+        onCancel={onCancelEdit}
+      />
     );
   }
   return (
@@ -795,6 +841,7 @@ function RowDetailModal({
 }) {
   const queryClient = useQueryClient();
   const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "" });
+  const [confirmAspx, setConfirmAspx] = useState(false);
 
   // Pré-preenche com a alocação EFETIVA: override do operador (alloc_*) ?? planilha.
   useEffect(() => {
@@ -825,7 +872,31 @@ function RowDetailModal({
   // operacional continua editável (o bloqueio é só de motorista/veículo).
   const { editable: allocEditable, aspxWarning } = allocEditPolicy(row);
 
+  const doSave = () => {
+    saveAllocation.mutate({
+      lh: row.lh,
+      // Linha travada: preserva o motorista/veículo atual (alloc override; null
+      // = continua refletindo a planilha) e grava só o status.
+      motorista: allocEditable ? allocForm.motorista : (alloc?.alloc_motorista ?? ""),
+      cavalo: allocEditable ? allocForm.cavalo : (alloc?.alloc_cavalo ?? ""),
+      carreta: allocEditable ? allocForm.carreta : (alloc?.alloc_carreta ?? ""),
+      status: allocForm.status,
+    });
+  };
+
+  // "Aguardando chegar no cliente": só pergunta se o motorista/veículo realmente
+  // mudou (mudança só de status não dispara o pop-up).
+  const mvChanged =
+    allocForm.motorista !== (alloc?.alloc_motorista ?? row.motoristas ?? "") ||
+    allocForm.cavalo !== (alloc?.alloc_cavalo ?? row.cavalo ?? "") ||
+    allocForm.carreta !== (alloc?.alloc_carreta ?? row.carreta ?? "");
+  const requestSave = () => {
+    if (allocEditable && aspxWarning && mvChanged) setConfirmAspx(true);
+    else doSave();
+  };
+
   return (
+    <>
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="max-w-2xl p-0 overflow-hidden">
         <div className="flex flex-col" style={{ maxHeight: "88vh" }}>
@@ -849,7 +920,6 @@ function RowDetailModal({
             {/* ── Alocação (editável no sistema) ── */}
             <ModalSection title="Alocação · editar no sistema">
               <div className="space-y-2">
-                {aspxWarning && <AspxAssigningWarning />}
                 {!allocEditable && (
                   <p className="flex items-start gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-[0.62rem] font-medium leading-tight text-muted-foreground">
                     <Lock className="mt-0.5 h-3 w-3 shrink-0" />
@@ -913,18 +983,7 @@ function RowDetailModal({
                   </span>
                   <button
                     type="button"
-                    onClick={() =>
-                      saveAllocation.mutate({
-                        lh: row.lh,
-                        // Linha travada: preserva o motorista/veículo atual (alloc
-                        // override; null = continua refletindo a planilha) e grava
-                        // só o status.
-                        motorista: allocEditable ? allocForm.motorista : (alloc?.alloc_motorista ?? ""),
-                        cavalo: allocEditable ? allocForm.cavalo : (alloc?.alloc_cavalo ?? ""),
-                        carreta: allocEditable ? allocForm.carreta : (alloc?.alloc_carreta ?? ""),
-                        status: allocForm.status,
-                      })
-                    }
+                    onClick={requestSave}
                     disabled={saveAllocation.isPending}
                     className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
                   >
@@ -1059,6 +1118,15 @@ function RowDetailModal({
         </div>
       </DialogContent>
     </Dialog>
+
+    <ConfirmDialog
+      open={confirmAspx}
+      title="Confirmar troca de motorista/veículo"
+      description={aspxConfirmDescription(1)}
+      onConfirm={() => { setConfirmAspx(false); doSave(); }}
+      onCancel={() => setConfirmAspx(false)}
+    />
+    </>
   );
 }
 
@@ -1113,6 +1181,13 @@ export default function SheetMonitor() {
       };
     });
   }, [rawItems, allocByLh]);
+
+  // Ref dos itens (status efetivo) p/ os handlers de save/reassign checarem a
+  // política de edição sem virar dependência (mantém os callbacks estáveis).
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  // Ação pendente aguardando confirmação no pop-up de ASPX (edição inline / arrastar).
+  const [aspxConfirm, setAspxConfirm] = useState<{ count: number; run: () => void } | null>(null);
 
   const sheetConfigured = monitorData?.meta?.sheetConfigured ?? true;
   const noSnapshot = monitorData?.meta?.noSnapshot ?? false;
@@ -1184,7 +1259,11 @@ export default function SheetMonitor() {
   const handleCancelEdit = useCallback(() => setEditingLh(null), []);
   const handleSaveInline = useCallback(
     (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => {
-      mutateInlineAlloc(payload);
+      const target = itemsRef.current.find((r) => r.lh === payload.lh);
+      const run = () => mutateInlineAlloc(payload);
+      // "Aguardando chegar no cliente" → confirma a troca (motorista/veículo no ASPX).
+      if (target && allocEditPolicy(target).aspxWarning) setAspxConfirm({ count: 1, run });
+      else run();
     },
     [mutateInlineAlloc],
   );
@@ -1201,7 +1280,17 @@ export default function SheetMonitor() {
     },
   });
   const handleReassign = useCallback(
-    (moves: Array<{ lh: string; motorista: string; cavalo: string; carreta: string }>) => mutateReassign(moves),
+    (moves: Array<{ lh: string; motorista: string; cavalo: string; carreta: string }>) => {
+      const run = () => mutateReassign(moves);
+      const aspxCount = moves.filter((m) => {
+        const r = itemsRef.current.find((x) => x.lh === m.lh);
+        return r && allocEditPolicy(r).aspxWarning;
+      }).length;
+      // Se a troca/reordenação toca alguma carga "aguardando chegar no cliente",
+      // confirma antes (motorista/veículo no ASPX).
+      if (aspxCount > 0) setAspxConfirm({ count: aspxCount, run });
+      else run();
+    },
     [mutateReassign],
   );
 
@@ -1616,6 +1705,15 @@ export default function SheetMonitor() {
         alloc={selectedRow ? allocByLh[selectedRow.lh] : undefined}
         open={selectedRow !== null}
         onClose={() => setSelectedRow(null)}
+      />
+
+      {/* ── Confirmação ASPX (edição inline / arrastar) ── */}
+      <ConfirmDialog
+        open={aspxConfirm !== null}
+        title="Confirmar troca de motorista/veículo"
+        description={aspxConfirm ? aspxConfirmDescription(aspxConfirm.count) : ""}
+        onConfirm={() => { aspxConfirm?.run(); setAspxConfirm(null); }}
+        onCancel={() => setAspxConfirm(null)}
       />
     </div>
   );
