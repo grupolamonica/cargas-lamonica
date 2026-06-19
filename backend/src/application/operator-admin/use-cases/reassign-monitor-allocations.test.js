@@ -163,4 +163,51 @@ describe("reassignMonitorAllocations", () => {
     expect(fixa.alloc_motorista).toBeNull();
     expect(livre.alloc_motorista).toBeNull();
   });
+
+  it("rejeita reordenar entre ROTAS diferentes (só mesma rota)", async () => {
+    const idA = createSheetLoadId("LH-ROTA-A");
+    const idB = createSheetLoadId("LH-ROTA-B");
+    await seedCargo({ id: idA, sheet_lh: "LH-ROTA-A", status: "OPEN", origem: "Salvador / BA", destino: "Feira / BA" });
+    await seedCargo({ id: idB, sheet_lh: "LH-ROTA-B", status: "OPEN", origem: "Recife / PE", destino: "Olinda / PE" });
+    await query(`UPDATE public.cargas SET sheet_motorista = 'A' WHERE id = $1`, [idA]);
+    await query(`UPDATE public.cargas SET sheet_motorista = 'B' WHERE id = $1`, [idB]);
+    const operator = await seedUser({ email: "op-reassign-rota@teste.local" });
+
+    await expect(
+      reassignMonitorAllocations({
+        moves: [
+          { lh: "LH-ROTA-A", motorista: "B" },
+          { lh: "LH-ROTA-B", motorista: "A" },
+        ],
+        operatorId: operator.id,
+        correlationId: "corr-reassign-rota",
+      }),
+    ).rejects.toThrow(/mesma rota/i);
+
+    // Nada gravado (validação antes de qualquer escrita).
+    const a = await getAlloc(idA);
+    const b = await getAlloc(idB);
+    expect(a.alloc_motorista).toBeNull();
+    expect(b.alloc_motorista).toBeNull();
+  });
+
+  it("permite reordenar dentro da MESMA rota", async () => {
+    const idA = createSheetLoadId("LH-MESMA-A");
+    const idB = createSheetLoadId("LH-MESMA-B");
+    await seedCargo({ id: idA, sheet_lh: "LH-MESMA-A", status: "OPEN", origem: "Salvador / BA", destino: "Feira / BA" });
+    await seedCargo({ id: idB, sheet_lh: "LH-MESMA-B", status: "OPEN", origem: "Salvador / BA", destino: "Feira / BA" });
+    const operator = await seedUser({ email: "op-reassign-mesma@teste.local" });
+
+    const res = await reassignMonitorAllocations({
+      moves: [
+        { lh: "LH-MESMA-A", motorista: "B" },
+        { lh: "LH-MESMA-B", motorista: "A" },
+      ],
+      operatorId: operator.id,
+      correlationId: "corr-reassign-mesma",
+    });
+    expect(res.payload.count).toBe(2);
+    expect((await getAlloc(idA)).alloc_motorista).toBe("B");
+    expect((await getAlloc(idB)).alloc_motorista).toBe("A");
+  });
 });

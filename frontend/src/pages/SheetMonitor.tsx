@@ -693,6 +693,14 @@ function SheetMonitorTable({
       setDropTarget(null);
       return;
     }
+    // Só arrasta dentro da MESMA rota — soltar numa linha de outra rota é negado.
+    const sourceRow = rowsRef.current.find((r) => r.lh === dragLhRef.current);
+    if (targetRow && sourceRow && routeKeyOf(targetRow) !== routeKeyOf(sourceRow)) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "none";
+      setDropTarget(null);
+      return;
+    }
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     if (lh === dragLhRef.current) { setDropTarget(null); return; }
@@ -721,6 +729,14 @@ function SheetMonitorTable({
     // Bloqueia se qualquer linha afetada (alvo ou intermediárias do "descer
     // fila") estiver FIXA ou travada por status (já em atribuição no ASPX).
     const affected = moves.map((m) => list.find((x) => x.lh === m.lh)).filter(Boolean) as SheetMonitorRowType[];
+    // Só reordena dentro da MESMA rota. Um arrasto que cruzaria rotas (troca entre
+    // rotas, ou descer a fila atravessando linhas de outra rota) é bloqueado —
+    // rota diferente muda manualmente, sem arrastar.
+    const srcRow = list[srcIdx];
+    if (srcRow && affected.some((r) => routeKeyOf(r) !== routeKeyOf(srcRow))) {
+      toast.error("Só dá pra arrastar dentro da mesma rota (origem → destino). Para mudar entre rotas, edite manualmente.");
+      return;
+    }
     if (affected.some((r) => r.pinned)) {
       toast.error("Não dá para reordenar: há carga fixada na fila. Desafixe antes de mover.");
       return;

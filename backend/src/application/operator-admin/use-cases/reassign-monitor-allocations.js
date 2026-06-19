@@ -51,11 +51,16 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
     };
   });
 
+  // Chave de rota = origem→destino normalizado (mesma ideia do routeKeyOf do front).
+  const routeKeyFromRow = (r) => `${(r.origem ?? "").trim()}→${(r.destino ?? "").trim()}`;
+
   const result = await withPgTransaction(async (client) => {
-    const updated = [];
+    // 1) Trava e valida TODAS as cargas afetadas ANTES de escrever (sem escrita
+    //    parcial em caso de falha de validação): existência, fixo e rota.
+    const routeKeys = new Set();
     for (const m of normalized) {
       const { rows } = await client.query(
-        `SELECT id, alloc_pinned FROM public.cargas WHERE id = $1 FOR UPDATE`,
+        `SELECT id, alloc_pinned, origem, destino FROM public.cargas WHERE id = $1 FOR UPDATE`,
         [m.cargoId],
       );
       if (rows.length === 0) {
@@ -66,6 +71,21 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
       if (rows[0].alloc_pinned) {
         throw new ValidationError(`A carga ${m.lh} está fixada e não pode ser movida. Desafixe antes de reordenar.`);
       }
+      routeKeys.add(routeKeyFromRow(rows[0]));
+    }
+
+    // Só reordena DENTRO da mesma rota (origem → destino). Um arrasto que cruza
+    // rotas (troca entre rotas, ou descer a fila atravessando linhas de outra
+    // rota) é recusado — rota diferente muda manualmente, sem arrastar.
+    if (routeKeys.size > 1) {
+      throw new ValidationError(
+        "Só é possível reordenar dentro da mesma rota (origem → destino). Para mover entre rotas, edite manualmente.",
+      );
+    }
+
+    // 2) Aplica os updates — validação já passou.
+    const updated = [];
+    for (const m of normalized) {
       await client.query(
         `
           UPDATE public.cargas
