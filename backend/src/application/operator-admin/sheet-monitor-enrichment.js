@@ -1,7 +1,6 @@
 import { logStructuredEvent } from "../../infrastructure/security-log.js";
 import { getPostgresPool } from "../../infrastructure/pg/postgres.js";
 
-const STALE_HOURS = 6;
 const BATCH_SIZE = 60;
 const CONCURRENCY = 8;
 const CALL_TIMEOUT_MS = 8_000;
@@ -26,6 +25,26 @@ async function runConcurrent(tasks, concurrency) {
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, worker));
+}
+
+// PostgREST enforces a hard server-side max-rows cap (1000 on this project) that
+// silently clamps .limit()/.range(). Any read of a full table that can exceed
+// 1000 rows MUST paginate — otherwise it returns a truncated set. This bit us in
+// two ways: (1) incomplete ASPX matching (drivers past row 1000 never matched);
+// (2) a starvation loop in the enrich job — the done-set only ever saw the first
+// 1000 enriched rows, so freshly-written rows were never recognized as done and
+// the same head-of-snapshot rows got reprocessed forever (remaining never moved).
+// `makeQuery` must build a FRESH query each call (Supabase builders are single-use).
+async function fetchAllRows(makeQuery, { pageSize = 1000 } = {}) {
+  const all = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await makeQuery().range(from, from + pageSize - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < pageSize) break;
+  }
+  return all;
 }
 
 // Best-effort fuzzy match: driver name (from sheet) → aspx record
@@ -68,39 +87,65 @@ export async function enrichSheetMonitorRows(supabaseClient, correlationId, { fo
   const allRows = [...new Map(rawRows.filter((r) => r.lh).map((r) => [r.lh, r])).values()];
   if (allRows.length === 0) return { enriched: 0, remaining: 0 };
 
-  // 2. Find stale / unenriched rows
+  // 2. Decide which rows still need a consult
   let rowsToProcess = allRows;
   if (force && forceSessionStart) {
     // force=true with session tracking: skip rows already enriched since this session started
     // prevents infinite loop where the same first BATCH_SIZE rows are reprocessed endlessly
-    const { data: alreadyDone } = await supabaseClient
-      .from("sheet_monitor_enriched")
-      .select("lh")
-      .gte("enriched_at", forceSessionStart)
-      .limit(50000);
-    const doneSet = new Set((alreadyDone || []).map((r) => r.lh));
+    const alreadyDone = await fetchAllRows(() =>
+      supabaseClient
+        .from("sheet_monitor_enriched")
+        .select("lh")
+        .gte("enriched_at", forceSessionStart)
+        .order("lh", { ascending: true }),
+    ).catch(() => []);
+    const doneSet = new Set(alreadyDone.map((r) => r.lh));
     rowsToProcess = allRows.filter((r) => !doneSet.has(r.lh));
   } else if (!force) {
-    const staleTs = new Date(Date.now() - STALE_HOURS * 3_600_000).toISOString();
-    const { data: fresh } = await supabaseClient
-      .from("sheet_monitor_enriched")
-      .select("lh")
-      .gte("enriched_at", staleTs)
-      .limit(50000); // avoid Supabase default 1000-row cap on large datasets
-    const freshSet = new Set((fresh || []).map((r) => r.lh));
-    rowsToProcess = allRows.filter((r) => !freshSet.has(r.lh));
+    // Default (Monitor button + bulk script): consult ONLY rows that still lack a
+    // consult. A row counts as "done" once it has an enriched record whose
+    // driver/cavalo/carreta consult is not in the transient-failure state
+    // UNAVAILABLE. Rows with a good (or genuinely not-found) consult are NEVER
+    // re-queried — this is what stops an Angellira timeout from overwriting good
+    // data with UNAVAILABLE ("consultado voltava a pendente"). Rows that are
+    // missing OR previously failed (UNAVAILABLE) are (re)processed. Use force=true
+    // / --force-reset to re-consult everything from scratch.
+    // Paginated — the table exceeds PostgREST's 1000-row cap; a truncated read
+    // here would make the done-set incomplete and starve the loop (see fetchAllRows).
+    const enrichedRows = await fetchAllRows(() =>
+      supabaseClient
+        .from("sheet_monitor_enriched")
+        .select("lh, angellira_driver_status, cavalo_angellira_status, carreta_angellira_status")
+        .order("lh", { ascending: true }),
+    ).catch(() => []);
+    const doneSet = new Set(
+      enrichedRows
+        .filter(
+          (r) =>
+            r.angellira_driver_status !== "UNAVAILABLE" &&
+            r.cavalo_angellira_status !== "UNAVAILABLE" &&
+            r.carreta_angellira_status !== "UNAVAILABLE",
+        )
+        .map((r) => r.lh),
+    );
+    rowsToProcess = allRows.filter((r) => !doneSet.has(r.lh));
   }
 
   const batch = rowsToProcess.slice(0, BATCH_SIZE);
   const remaining = rowsToProcess.length - batch.length;
   if (batch.length === 0) return { enriched: 0, remaining: 0 };
 
-  // 3. Bulk load ASPX drivers (full table, match in JS — table is small)
-  const { data: aspxRows } = await supabaseClient
-    .from("aspx_drivers")
-    .select("cpf, display_name")
-    .order("last_seen_at", { ascending: false });
-  const aspxList = aspxRows || [];
+  // 3. Bulk load ASPX drivers (full table, match in JS). Paginated — the table
+  // exceeds the 1000-row cap; a truncated read silently drops drivers from the
+  // match pool. Secondary order by cpf keeps pagination deterministic while
+  // preserving most-recent-first preference for matchAspxDriver.
+  const aspxList = await fetchAllRows(() =>
+    supabaseClient
+      .from("aspx_drivers")
+      .select("cpf, display_name")
+      .order("last_seen_at", { ascending: false })
+      .order("cpf", { ascending: false }),
+  ).catch(() => []);
 
   // 4. Bulk load known plates from vehicles table
   const uniquePlates = [
