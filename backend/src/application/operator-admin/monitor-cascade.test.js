@@ -91,6 +91,21 @@ describe("computeCancelCascade (Interpretação A)", () => {
     expect(r.reserva).toBeNull();
   });
 
+  it("pula carga TRAVADA (status operacional) — só remaneja Disponível/Reservado", () => {
+    const loads = [
+      load("C1", "Joao"),
+      load("C2", "Maria", { cancelled: true }),
+      load("C3", "Pedro", { locked: true }), // ex.: CARREGADO — intocável
+      load("C4", "Ana"),
+    ];
+    const { moves, reserva } = computeCancelCascade(loads, "C2");
+    const byLh = Object.fromEntries(moves.map((m) => [m.lh, m]));
+    expect(byLh.C2.motorista).toBe("");
+    expect(byLh.C3).toBeUndefined();         // travada → intocada
+    expect(byLh.C4.motorista).toBe("Maria");  // Maria pulou a travada e foi pra C4
+    expect(reserva?.motorista).toBe("Ana");
+  });
+
   it("carga cancelada FIXA não cascateia (fixo é intocável)", () => {
     const loads = [
       load("C1", "Joao"),

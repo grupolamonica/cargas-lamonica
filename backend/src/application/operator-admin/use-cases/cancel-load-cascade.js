@@ -52,14 +52,20 @@ export async function cancelLoadCascade({ lh, operatorId, requestIp, correlation
       [origem, destino],
     );
 
-    const loads = routeRows.map((r) => ({
-      lh: r.sheet_lh,
-      motorista: r.motorista,
-      cavalo: r.cavalo,
-      carreta: r.carreta,
-      pinned: r.alloc_pinned === true,
-      cancelled: /cancel/i.test(r.status || ""),
-    }));
+    const loads = routeRows.map((r) => {
+      const st = (r.status || "").trim();
+      return {
+        lh: r.sheet_lh,
+        motorista: r.motorista,
+        cavalo: r.cavalo,
+        carreta: r.carreta,
+        pinned: r.alloc_pinned === true,
+        cancelled: /cancel/i.test(st),
+        // Status operacional (CARREGADO/DESCARGA/AGUARDANDO…) trava o remanejamento
+        // — só Disponível/Reservado (status vazio) entram na cascata.
+        locked: st !== "" && !/cancel/i.test(st),
+      };
+    });
 
     const source = loads.find((l) => l.lh === lh);
     const noop = {

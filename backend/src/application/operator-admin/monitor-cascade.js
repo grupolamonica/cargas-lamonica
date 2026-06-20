@@ -10,8 +10,10 @@
 // - A carga cancelada fica MORTA (sem motorista) — seu motorista vira o "carry".
 // - Cargas FIXAS (pinned) são intocáveis: a cascata pula (o motorista fica) e o
 //   carry continua para a próxima carga livre.
-// - Outras cargas CANCELADAS também são puladas (não se aloca motorista em carga
-//   morta; o motorista delas é tratado pela cascata própria de cada uma).
+// - Cargas TRAVADAS (locked) — com status operacional (CARREGADO, DESCARGA, etc.)
+//   ou canceladas — também são puladas: não se mexe em motorista que já está no
+//   ASPX/em operação (mesma regra da trava de edição). Só Disponível/Reservado
+//   (status vazio) entram no remanejamento.
 // - O ripple PARA na primeira carga VAZIA (sem motorista) que receber o carry —
 //   o motorista achou lugar e ninguém sobra (sem reserva).
 // - Sobrou carry no fim → vira RESERVA.
@@ -20,7 +22,7 @@
 // não há o que mover → { moves: [], reserva: null }.
 
 /** @typedef {{ motorista?: string|null, cavalo?: string|null, carreta?: string|null }} Alloc */
-/** @typedef {Alloc & { lh: string, pinned?: boolean, cancelled?: boolean }} CascadeLoad */
+/** @typedef {Alloc & { lh: string, pinned?: boolean, cancelled?: boolean, locked?: boolean }} CascadeLoad */
 
 const EMPTY = { motorista: "", cavalo: "", carreta: "" };
 
@@ -53,8 +55,9 @@ export function computeCancelCascade(loads, cancelledLh) {
 
   let reserva = null;
   for (let i = idx + 1; i < loads.length; i++) {
-    // Carga fixa ou cancelada não recebe motorista — pula, o carry segue adiante.
-    if (loads[i].pinned || loads[i].cancelled) continue;
+    // Carga fixa, travada (status operacional) ou cancelada não recebe motorista
+    // — pula, o carry segue adiante até a próxima carga livre (Disponível/Reservado).
+    if (loads[i].pinned || loads[i].cancelled || loads[i].locked) continue;
     const prev = next[i];
     next[i] = { ...carry };
     if (!hasDriver(prev)) { carry = null; break; } // achou carga vazia → ripple absorvido
