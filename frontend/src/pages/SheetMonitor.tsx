@@ -1537,6 +1537,7 @@ export default function SheetMonitor() {
       const fromTs = dateFromFilter ? new Date(dateFromFilter).getTime() : null;
       const toTs = dateToFilter ? new Date(dateToFilter).getTime() : null;
       result = result.filter((row) => {
+        if (row.reserva) return true; // standby (sem data) — sempre visível na fila da rota
         if (!row.data) return false;
         const horario = row.horario || "00:00:00";
         const iso = `${row.data}T${horario.length === 5 ? `${horario}:00` : horario}`;
