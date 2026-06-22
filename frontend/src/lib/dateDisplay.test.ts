@@ -29,4 +29,14 @@ describe("dateDisplay", () => {
     expect(formatDateOnly("2026-04-08T14:35:00")).toBe("08/04/2026");
     expect(formatDateOnly("invalido", "Base importada")).toBe("Base importada");
   });
+
+  it("não joga datas de calendário para o dia anterior (UTC vs BRT)", () => {
+    // A coluna `cargas.data` (date) é serializada pelo backend em container UTC
+    // como meia-noite Z. Parsear como instante e formatar em BRT (UTC-3) mostrava
+    // o dia anterior — era o que fazia a carga recorrente "parecer" não avançar.
+    expect(formatDateOnly("2026-06-22T00:00:00.000Z")).toBe("22/06/2026");
+    expect(formatDateOnly("2026-01-01T00:00:00.000Z")).toBe("01/01/2026");
+    // Forma date-only crua segue correta.
+    expect(formatDateOnly("2026-06-22")).toBe("22/06/2026");
+  });
 });
