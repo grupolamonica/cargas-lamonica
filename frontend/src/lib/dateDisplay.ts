@@ -72,6 +72,21 @@ export function formatFullDateTime(value: DateDisplayInput, fallback = "Aguardan
 }
 
 export function formatDateOnly(value: DateDisplayInput, fallback = "A confirmar") {
+  // Datas de calendário (coluna `date` do Postgres, ex. `cargas.data`) chegam
+  // serializadas como "YYYY-MM-DDT00:00:00.000Z" porque o container do backend
+  // roda em UTC. Interpretá-las como instante (parseISO) e formatar no fuso do
+  // navegador (BRT, UTC-3) empurra a exibição para o DIA ANTERIOR (ex.: a data
+  // 2026-06-22 aparece como 21/06). Para um rótulo "somente data" o que importa
+  // é a data de calendário escrita no valor — reformatamos o prefixo YYYY-MM-DD
+  // diretamente, sem passar por instante/fuso.
+  if (typeof value === "string") {
+    const calendarDate = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (calendarDate) {
+      const [, year, month, day] = calendarDate;
+      return `${day}/${month}/${year}`;
+    }
+  }
+
   const parsedDate = parseDisplayDate(value);
   return parsedDate ? format(parsedDate, "dd/MM/yyyy") : fallback;
 }
