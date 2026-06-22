@@ -118,7 +118,8 @@ describe("updateMonitorAllocation", () => {
     expect(row.alloc_status).toBe("DESCARREGADO");   // status passou
   });
 
-  it("setar status CANCELADO dispara a cascata da rota (gera reserva)", async () => {
+  it("setar status CANCELADO dispara a cascata da rota (motorista desce + gera reserva)", async () => {
+    // Fila DESC: CASC-B(10h, topo) · CASC-A(08h, base). Cancela a do TOPO → desce.
     const idA = createSheetLoadId("CASC-A");
     const idB = createSheetLoadId("CASC-B");
     await seedCargo({ id: idA, sheet_lh: "CASC-A", status: "OPEN", origem: "Salvador / BA", destino: "Feira / BA", horario: "08:00:00" });
@@ -128,22 +129,22 @@ describe("updateMonitorAllocation", () => {
     const operator = await seedUser({ email: "op-monitor-cascade@teste.local" });
 
     await updateMonitorAllocation({
-      lh: "CASC-A",
+      lh: "CASC-B",
       operatorId: operator.id,
       payload: { status: "CANCELADO" },
       correlationId: "corr-monitor-cancel",
     });
 
-    // CASC-A: status CANCELADO + motorista esvaziado pela cascata.
-    const a = await query(`SELECT alloc_motorista, alloc_status FROM public.cargas WHERE id = $1`, [idA]);
-    expect(a.rows[0].alloc_status).toBe("CANCELADO");
-    expect(a.rows[0].alloc_motorista).toBe("");
-    // CASC-B recebeu MOT A; MOT B (deslocado) virou reserva.
-    const b = await query(`SELECT alloc_motorista FROM public.cargas WHERE id = $1`, [idB]);
-    expect(b.rows[0].alloc_motorista).toBe("MOT A");
+    // CASC-B (topo, cancelada): status CANCELADO + motorista esvaziado pela cascata.
+    const b = await query(`SELECT alloc_motorista, alloc_status FROM public.cargas WHERE id = $1`, [idB]);
+    expect(b.rows[0].alloc_status).toBe("CANCELADO");
+    expect(b.rows[0].alloc_motorista).toBe("");
+    // CASC-A (abaixo) recebeu MOT B (desceu); MOT A (que estava nela) sobrou → reserva.
+    const a = await query(`SELECT alloc_motorista FROM public.cargas WHERE id = $1`, [idA]);
+    expect(a.rows[0].alloc_motorista).toBe("MOT B");
     const r = await query(`SELECT motorista FROM public.monitor_reservas WHERE active = true`);
     expect(r.rows).toHaveLength(1);
-    expect(r.rows[0].motorista).toBe("MOT B");
+    expect(r.rows[0].motorista).toBe("MOT A");
   });
 
   it("alocar um motorista que está em reserva baixa a reserva (não fica em dois lugares)", async () => {

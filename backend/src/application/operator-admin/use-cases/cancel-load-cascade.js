@@ -36,9 +36,12 @@ export async function cancelLoadCascade({ lh, operatorId, requestIp, correlation
     }
     const { origem, destino } = head[0];
 
-    // Trava a ROTA inteira em ordem cronológica (a "fila"). Ordem determinística
-    // (data, horario, sheet_lh) → cascatas concorrentes na mesma rota não dão
-    // deadlock. NULLs de data/horário caem por último (default do Postgres em ASC).
+    // Trava a ROTA inteira na MESMA ordem da fila exibida no Monitor — data+horário
+    // DECRESCENTE (mais recente no topo; NULLs por último), igual ao sort do
+    // snapshot (parseAllGoogleSheetRows). É o que faz "descer na fila" bater com o
+    // que o operador vê: o motorista da carga cancelada assume a carga logo ABAIXO
+    // (a seguinte na fila), e não a de cima. Ordem determinística também evita
+    // deadlock entre cascatas concorrentes na mesma rota.
     const { rows: routeRows } = await client.query(
       `SELECT sheet_lh, alloc_pinned,
               COALESCE(alloc_motorista, sheet_motorista, '') AS motorista,
@@ -47,7 +50,7 @@ export async function cancelLoadCascade({ lh, operatorId, requestIp, correlation
               COALESCE(alloc_status,    sheet_status,    '') AS status
        FROM public.cargas
        WHERE origem = $1 AND destino = $2 AND sheet_lh IS NOT NULL
-       ORDER BY data, horario, sheet_lh
+       ORDER BY (data IS NULL), data DESC, horario DESC, sheet_lh
        FOR UPDATE`,
       [origem, destino],
     );

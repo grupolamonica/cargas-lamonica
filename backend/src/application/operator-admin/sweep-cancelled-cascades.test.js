@@ -34,14 +34,15 @@ describe("sweepCancelledCascades", () => {
   });
 
   it("cascateia cargas canceladas vindas da planilha (com motorista) e é idempotente", async () => {
-    await seedRouteCargo("S1", { motorista: "JOAO", horario: "08:00:00" });
+    // Fila DESC: S3(16h) topo · S2(12h) cancelada · S1(08h) base. Maria desce p/ S1.
+    const s1 = await seedRouteCargo("S1", { motorista: "JOAO", horario: "08:00:00" });
     await seedRouteCargo("S2", { motorista: "MARIA", horario: "12:00:00", status: "CANCELADO" });
-    const s3 = await seedRouteCargo("S3", { motorista: "PEDRO", horario: "16:00:00" });
+    await seedRouteCargo("S3", { motorista: "PEDRO", horario: "16:00:00" });
 
     const first = await sweepCancelledCascades({});
     expect(first.found).toBe(1);
     expect(first.cascaded).toBe(1);
-    expect((await query(`SELECT alloc_motorista FROM public.cargas WHERE id = $1`, [s3])).rows[0].alloc_motorista).toBe("MARIA");
+    expect((await query(`SELECT alloc_motorista FROM public.cargas WHERE id = $1`, [s1])).rows[0].alloc_motorista).toBe("MARIA");
     expect(await reservas()).toHaveLength(1);
 
     // Rodar de novo não acha mais nada (S2 já sem motorista) nem duplica reserva.
