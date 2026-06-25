@@ -221,6 +221,50 @@ function AngelliraDot({ found }: { found: boolean | null | undefined }) {
     : <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-400" title="Angellira: não aprovado" />;
 }
 
+// Angellira "vigente": encontrado E (sem validade OU validade no futuro). null = não consultado.
+function angelliraVigenteState(e: SheetMonitorEnrichedRow | undefined): boolean | null {
+  if (!e || e.angellira_driver_found === null || e.angellira_driver_found === undefined) return null;
+  if (e.angellira_driver_found === false) return false;
+  if (e.angellira_driver_valid_until) {
+    const d = new Date(e.angellira_driver_valid_until);
+    if (!Number.isNaN(d.getTime()) && d.getTime() < Date.now()) return false; // vencido
+  }
+  return true;
+}
+// Cadastro no ASPX: tem CPF/nome no diretório do ASPX. null = não enriquecido.
+function aspxCadastroState(e: SheetMonitorEnrichedRow | undefined): boolean | null {
+  if (!e) return null;
+  return Boolean(e.aspx_cpf || e.aspx_display_name);
+}
+
+function CheckPill({ state, label, title }: { state: boolean | null; label: string; title: string }) {
+  if (state === null)
+    return (
+      <span title={`${title} — não consultado`} className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[0.56rem] font-semibold text-muted-foreground/60">
+        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/30" aria-hidden />{label}
+      </span>
+    );
+  return state ? (
+    <span title={`${title}: ok`} className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[0.56rem] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+      <CheckCircle2 className="h-2.5 w-2.5" />{label}
+    </span>
+  ) : (
+    <span title={`${title}: não`} className="inline-flex items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[0.56rem] font-semibold text-red-700 dark:bg-red-500/15 dark:text-red-300">
+      <XCircle className="h-2.5 w-2.5" />{label}
+    </span>
+  );
+}
+
+// Checks bonitos do motorista: Angellira vigente + cadastro no ASPX.
+function DriverChecks({ enriched }: { enriched: SheetMonitorEnrichedRow | undefined }) {
+  return (
+    <div className="mt-0.5 flex flex-wrap items-center gap-1">
+      <CheckPill state={angelliraVigenteState(enriched)} label="Angellira" title="Angellira vigente" />
+      <CheckPill state={aspxCadastroState(enriched)} label="ASPX" title="Cadastro no ASPX" />
+    </div>
+  );
+}
+
 // ─── Inline allocation editor (combobox por linha) ─────────────────────────────
 
 // Os ids dos <datalist> ficam montados uma única vez na tabela; cada editor de
@@ -413,6 +457,7 @@ function aspxStateMeta(state: AspxAllocationItem["state"]) {
 function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<Awaited<ReturnType<typeof assignAspxAllocations>> | null>(null);
+  const [confirmReal, setConfirmReal] = useState(false);
 
   const previewQuery = useQuery<AspxAllocationPreview>({
     queryKey: ["admin", "aspx-preview"],
@@ -439,6 +484,7 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
     if (!open) {
       setSelected(new Set());
       setResult(null);
+      setConfirmReal(false);
     }
   }, [open]);
 
@@ -473,9 +519,15 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
     return m;
   }, [result]);
 
-  const confirmLabel = data?.writeEnabled && !data?.simulated
+  const realMode = Boolean(data?.writeEnabled && !data?.simulated);
+  const confirmLabel = realMode
     ? `Aplicar ${selected.size} no ASPX`
     : `Simular ${selected.size} (dry-run)`;
+  const submit = () => {
+    if (selected.size === 0) return;
+    if (realMode) setConfirmReal(true); // envio REAL → confirma antes
+    else assignMutation.mutate({ lhs: Array.from(selected) });
+  };
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -647,15 +699,28 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
               className="rounded-lg border border-border/80 px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground">
               Fechar
             </button>
-            <button type="button" onClick={() => assignMutation.mutate({ lhs: Array.from(selected) })}
+            <button type="button" onClick={submit}
               disabled={selected.size === 0 || assignMutation.isPending || previewQuery.isLoading}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50">
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition-colors disabled:opacity-50",
+                realMode ? "bg-red-600 hover:bg-red-700" : "bg-primary text-primary-foreground hover:bg-primary/90",
+              )}>
               {assignMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
               {confirmLabel}
             </button>
           </div>
         </div>
       </DialogContent>
+
+      {/* Confirmação de ENVIO REAL ao ASPX (escreve na produção da Shopee) */}
+      <ConfirmDialog
+        open={confirmReal}
+        title="Enviar de verdade ao ASPX?"
+        confirmLabel={`Sim, aplicar ${selected.size}`}
+        description={`Isto vai ALTERAR o ASPX (produção Shopee) de ${selected.size} carga(s) — atribuir/trocar motorista de verdade. Confirme apenas se tiver certeza.`}
+        onConfirm={() => { setConfirmReal(false); assignMutation.mutate({ lhs: Array.from(selected) }); }}
+        onCancel={() => setConfirmReal(false)}
+      />
     </Dialog>
   );
 }
@@ -990,9 +1055,9 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
       )}
       <div className="min-w-0 flex-1">
         {row.motoristas ? (
-          <div className="flex items-center gap-1.5">
-            <AngelliraDot found={enriched?.angellira_driver_found} />
-            <span className="truncate text-xs font-medium text-foreground">{row.motoristas}</span>
+          <div>
+            <span className="block truncate text-xs font-medium text-foreground">{row.motoristas}</span>
+            <DriverChecks enriched={enriched} />
           </div>
         ) : (
           <span className="text-xs text-muted-foreground/50">Sem motorista</span>
