@@ -37,6 +37,7 @@ import AdminPagination from "@/components/AdminPagination";
 import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 import { AspxSyncCard } from "@/components/AspxSyncCard";
 import DashboardHeader from "@/components/DashboardHeader";
+import { ExternalValidationPill } from "@/components/ExternalValidationPill";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
 import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
@@ -1652,14 +1653,18 @@ const Motoristas = () => {
                         </>
                       ) : driver.externalValidation ? (
                         <>
-                          <span className="inline-flex items-center gap-2 rounded-full border border-primary/15 bg-primary/8 px-3 py-1.5 text-xs font-semibold text-primary">
-                            <BadgeCheck className="h-3.5 w-3.5" />
-                            Angellira: {driver.externalValidation.hasAngelira ? "✓ Verificado" : "Não encontrado"}
-                          </span>
-                          <span className="inline-flex items-center gap-2 rounded-full border border-primary/15 bg-primary/8 px-3 py-1.5 text-xs font-semibold text-primary">
-                            <BadgeCheck className="h-3.5 w-3.5" />
-                            ASPX: {driver.externalValidation.hasAspx ? "✓ Cadastrado" : "Não cadastrado"}
-                          </span>
+                          <ExternalValidationPill
+                            label="Angellira"
+                            found={driver.externalValidation.hasAngelira}
+                            okText="✓ Verificado"
+                            noText="Não encontrado"
+                          />
+                          <ExternalValidationPill
+                            label="ASPX"
+                            found={driver.externalValidation.hasAspx}
+                            okText="✓ Cadastrado"
+                            noText="Não cadastrado"
+                          />
                         </>
                       ) : null}
                     </div>
