@@ -52,7 +52,7 @@ export function invalidateSpxPrecheckCache(cadastroId) {
  * @param {string} [args.correlationId]
  * @returns {Promise<{
  *   ok: boolean,
- *   status: 'NOT_FOUND'|'IS_MATCHED_NOSSA'|'IS_MATCHED_OUTRA'|'REQUEST_PENDENTE'|'BLOQUEADO'|'UNAVAILABLE',
+ *   status: 'NOT_FOUND'|'IS_MATCHED_NOSSA'|'IS_MATCHED_OUTRA'|'REQUEST_PENDENTE'|'INATIVO'|'BLOQUEADO'|'UNAVAILABLE',
  *   driverInfo?: object,
  *   existingDriverId?: number,
  *   existingRequestId?: number,
@@ -88,12 +88,17 @@ async function _performSpxPrecheckInner({ cadastro, correlationId = null }) {
     || motorista.telefone,
   );
   // license_number ajuda o bot a passar pelo validate/basic do SPX
-  // (sem ele, retcode 271605013 "CNH vazia" — perdemos cross-agency).
-  // Wizard salva CNH em dados.motorista.cnh.numero ou dados.cnh.numero.
+  // (sem ele, retcode 271605013 "CNH vazia" e o bot manda placeholder, que pode
+  // COLIDIR com outro motorista e dar 271605059/271605005 FALSO — daí perdemos a
+  // deteccao real de cross-agency). dados.motorista.cnh pode vir como STRING (o
+  // numero direto) OU objeto {registro|numero}; o payload-mapper usa cnh.registro.
+  // Tem que bater com o mapper, senao o precheck e o disparo divergem.
+  const cnhRaw = motorista.cnh ?? cadastro?.dados?.cnh;
   const licenseNumber = digitsOnly(
-    motorista.cnh?.numero
-    || cadastro?.dados?.cnh?.numero
-    || motorista.cnh_numero,
+    (typeof cnhRaw === "string" ? cnhRaw : (cnhRaw?.registro || cnhRaw?.numero))
+    || motorista.cnh_registro
+    || motorista.cnh_numero
+    || "",
   );
 
   if (!cpf || cpf.length !== 11) {
@@ -109,6 +114,21 @@ async function _performSpxPrecheckInner({ cadastro, correlationId = null }) {
     const r = await botLookupMotorista({
       cpf, driverName, contactNumber, licenseNumber, correlationId,
     });
+
+    // Inconclusivo: o bot usou placeholder de CNH/telefone (faltavam no cadastro)
+    // e colidiu com outro motorista — não dá pra afirmar nada. Default seguro =
+    // NOT_FOUND (libera cadastro novo; se existir, o submit pega o retcode real),
+    // mas sinaliza pro operador completar os dados.
+    if (r.inconclusivo) {
+      return {
+        ok: true,
+        status: "NOT_FOUND",
+        retcode: r.retcode,
+        message: r.motivo
+          || "Status no SPX indeterminado — complete a CNH/telefone do cadastro e refaça a verificação.",
+        _inconclusivo: true,
+      };
+    }
 
     if (!r.encontrado) {
       return { ok: true, status: "NOT_FOUND" };
@@ -135,12 +155,15 @@ async function _performSpxPrecheckInner({ cadastro, correlationId = null }) {
       };
     }
 
-    // Motorista inativo na agência — precisa ativar via /spx/motorista/ativar
+    // Motorista inativo na agência — precisa ativar via /spx/motorista/ativar.
+    // Devolve driver_id pra o pipeline conseguir reativar (sem ele, não dá).
     if (r.inativo) {
       return {
         ok: true,
         status: "INATIVO",
         retcode: r.retcode,
+        existingDriverId: r.existing_driver_id ?? r.driver_info?.driver_id ?? null,
+        driverInfo: r.driver_info ?? null,
         message: "Motorista cadastrado mas inativo. Use 'Ativar' antes de cadastrar de novo.",
       };
     }

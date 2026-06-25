@@ -14,6 +14,7 @@
 
 import {
   SpxBotError,
+  ativarDriver as botAtivarDriver,
   cadastrarMotorista as botCadastrarMotorista,
   importarMatched as botImportarMatched,
 } from "../../../../infrastructure/cadastro-bots/spx-bot-client.js";
@@ -29,7 +30,11 @@ import {
 } from "../angellira/jobs-repository.js";
 
 import { performSpxPrecheck } from "./precheck.js";
+import { checkCnhCategoryGate } from "./cnh-category-gate.js";
 import { mapSpxMotoristaPayload } from "./payload-mapper.js";
+import { generateDossie } from "../unificada/generate-dossie.js";
+import { stageSpxAnexos } from "./spx-anexos-stager.js";
+import { consultRiskExpiry, defaultExpiryIso } from "./risk-expiry.js";
 
 const STEP = "spx_motorista";
 
@@ -57,8 +62,52 @@ export async function runSpxPipeline({
   if (!cadastroId) throw new Error("cadastro.id ausente — pipeline SPX abortado");
 
   logStructuredEvent("info", "spx.pipeline.start", {
-    cadastroId, driverUserId, correlationId,
+    cadastroId, driverUserId, correlationId, dryRun: overrides?.dry_run === true,
   });
+
+  // ── DRY-RUN (preview): NÃO persiste job nem cria driver. Estaga os docs +
+  // monta o payload + (NOT_FOUND) chama o bot com dry_run=true (sobe docs, NÃO
+  // submete). Permite conferir tudo antes do disparo real sem poluir a
+  // idempotência (um dry-run não pode marcar o job OK e bloquear o real). ──────
+  if (overrides?.dry_run === true) {
+    const precheck = await performSpxPrecheck({ cadastro, correlationId });
+    const writePath = precheck.status === "NOT_FOUND" || precheck.status === "IS_MATCHED_OUTRA";
+    if (!writePath) {
+      return {
+        ok: true, dry_run: true, precheck_status: precheck.status,
+        results: [{ step: STEP, status: "DRY_RUN", response: { etapa: precheck.status, precheck } }],
+      };
+    }
+    // Gate de categoria da CNH (cavalo/carreta exige E) — mostra o bloqueio no preview.
+    const catBlockDry = checkCnhCategoryGate(cadastro?.dados);
+    if (catBlockDry) {
+      return {
+        ok: true, dry_run: true, precheck_status: precheck.status,
+        results: [{ step: STEP, status: "BLOCKED", error: catBlockDry }],
+      };
+    }
+    const { anexosMap, radExpireDate } = await prepareSpxDocs({ client, cadastro, operatorId, correlationId });
+    const payload = mapSpxMotoristaPayload(cadastro.dados, {
+      ...overrides, ...anexosMap, rad_expire_date: radExpireDate, dry_run: true,
+    });
+    let preview = null;
+    if (precheck.status === "NOT_FOUND") {
+      try {
+        preview = await botCadastrarMotorista({ payload, correlationId });
+      } catch (err) {
+        preview = { ok: false, error: err instanceof SpxBotError ? err.toJSON() : { message: err?.message || String(err) } };
+      }
+    }
+    logStructuredEvent("info", "spx.pipeline.dry_run", {
+      cadastroId, precheckStatus: precheck.status, anexos: Object.keys(anexosMap),
+    });
+    return {
+      ok: true, dry_run: true, precheck_status: precheck.status,
+      anexos_estagados: Object.keys(anexosMap),
+      payload_preview: payload,
+      results: [{ step: STEP, status: "DRY_RUN", response: preview }],
+    };
+  }
 
   // Idempotência: se já tem job OK pra spx_motorista, pula
   const existing = await findExistingOkJob({ client, cadastroId, step: STEP, target: "spx" });
@@ -91,6 +140,20 @@ export async function runSpxPipeline({
       cadastroId, status: precheck.status,
     });
 
+    // Gate de categoria da CNH (paridade c/ produção): cavalo/carreta exige CNH
+    // com E. Barra ANTES do disparo, com mensagem clara, só nos caminhos que
+    // criariam uma request nova (não bloqueia já-cadastrado/pendente/inativo).
+    if (precheck.status === "NOT_FOUND" || precheck.status === "IS_MATCHED_OUTRA") {
+      const catBlock = checkCnhCategoryGate(cadastro?.dados);
+      if (catBlock) {
+        logStructuredEvent("warn", "spx.pipeline.cnh_category_block", {
+          cadastroId, categoria: catBlock.categoria,
+        });
+        await markJobError({ client, jobId, error: catBlock });
+        return { ok: false, results: [{ step: STEP, status: "BLOCKED", error: catBlock }] };
+      }
+    }
+
     if (precheck.status === "IS_MATCHED_NOSSA") {
       // Já cadastrado na nossa agência — sucesso sem ação
       stepResult = {
@@ -98,8 +161,11 @@ export async function runSpxPipeline({
         response: { etapa: "ja_cadastrado_nossa_agencia", precheck },
       };
     } else if (precheck.status === "IS_MATCHED_OUTRA") {
-      // Existe em outra agência → importar_matched (cria request nossa)
-      const payload = mapSpxMotoristaPayload(cadastro.dados, overrides);
+      // Existe em outra agência → importar_matched (cria request nossa).
+      // Gera dossiê + vigência + estaga docs (preenche só Risk Doc/CRLV vazios;
+      // o bot NÃO toca campos locked).
+      const { anexosMap, radExpireDate } = await prepareSpxDocs({ client, cadastro, operatorId, correlationId });
+      const payload = mapSpxMotoristaPayload(cadastro.dados, { ...overrides, ...anexosMap, rad_expire_date: radExpireDate });
       const r = await botImportarMatched({
         cpf: payload.cpf,
         driverInfo: precheck.driverInfo || { driver_id: precheck.existingDriverId },
@@ -116,7 +182,14 @@ export async function runSpxPipeline({
         // resolvível (ex: motorista de outra agência sem cidade mapeada),
         // usa a cidade do endereço do nosso cadastro.
         cityNameFallback: payload.city_name || null,
+        // Risk Doc + CRLV + vigência (preenche campos vazios da request importada).
+        crlvPath: anexosMap.crlv_path || null,
+        riskDocPath: anexosMap.risk_doc_path || null,
+        radExpireDate,
         dryRun: false,
+        // Salva o rascunho ANTES do validate/detail — sem isso a Shopee rejeita com
+        // 271626003 mesmo com tudo batendo 1:1 com o OCR (regra confirmada na produção).
+        doDraftSave: true,
         idempotencyKey: `${cadastroId}:spx_motorista`,
         correlationId,
       });
@@ -129,6 +202,22 @@ export async function runSpxPipeline({
       stepResult = {
         externalId: precheck.existingRequestId ? String(precheck.existingRequestId) : null,
         response: { etapa: "request_pendente", precheck },
+      };
+    } else if (precheck.status === "INATIVO") {
+      // Driver_profile existe mas está inativo na agência (retcode 271605004).
+      // NÃO recadastrar do zero — reativar via /spx/motorista/ativar (activation/update).
+      const driverId = precheck.existingDriverId || precheck.driverInfo?.driver_id || null;
+      if (!driverId) {
+        throw new SpxBotError({
+          code: "SPX_INATIVO_SEM_DRIVER_ID",
+          message: "Motorista inativo no SPX, mas o driver_id não foi recuperado para reativar.",
+          acao: "Reative manualmente no portal SPX (Agency > Driver Profile) ou rode o diagnóstico.",
+        });
+      }
+      await botAtivarDriver({ driverId, correlationId });
+      stepResult = {
+        externalId: String(driverId),
+        response: { etapa: "reativado", precheck },
       };
     } else if (precheck.status === "BLOQUEADO") {
       throw new SpxBotError({
@@ -143,8 +232,12 @@ export async function runSpxPipeline({
         acao: "Verifique o container spx-bot e os cookies no Supabase.",
       });
     } else {
-      // NOT_FOUND → cadastro novo
-      const payload = mapSpxMotoristaPayload(cadastro.dados, overrides);
+      // NOT_FOUND → cadastro novo. Gera dossiê + vigência + estaga TODOS os docs
+      // (CNH/selfie/CRLV/risk_doc) ANTES de montar o payload.
+      const { anexosMap, radExpireDate } = await prepareSpxDocs({ client, cadastro, operatorId, correlationId });
+      const payload = mapSpxMotoristaPayload(cadastro.dados, {
+        ...overrides, ...anexosMap, rad_expire_date: radExpireDate,
+      });
       const r = await botCadastrarMotorista({
         payload,
         idempotencyKey: `${cadastroId}:spx_motorista`,
@@ -208,6 +301,58 @@ export async function runSpxPipeline({
       results: [{ step: STEP, status: "ERROR", error: errorPayload }],
     };
   }
+}
+
+/**
+ * Prepara dossiê + vigência + anexos pro disparo SPX (ramos que ESCREVEM:
+ * NOT_FOUND e IS_MATCHED_OUTRA). Cada passo é best-effort — uma falha de doc não
+ * derruba o disparo — MAS a vigência sempre volta válida (defaultExpiryIso).
+ *
+ * @returns {Promise<{anexosMap:object, radExpireDate:string, riskDocPath:string|null}>}
+ */
+async function prepareSpxDocs({ client, cadastro, operatorId = null, correlationId = null }) {
+  const cadastroId = cadastro?.id;
+  const cpf = String(cadastro?.dados?.motorista?.cpf || "").replace(/\D/g, "");
+
+  // A) Dossiê (Risk Doc) — Fase 1; reusa se < 24h.
+  let riskDocPath = null;
+  try {
+    const dossie = await generateDossie({ client, cadastro, operatorId, correlationId, force: false });
+    if (dossie?.ok) {
+      riskDocPath = dossie.storagePath || null;
+      logStructuredEvent("info", "spx.pipeline.dossie_generated", { cadastroId, reused: !!dossie.reused });
+    } else {
+      logStructuredEvent("warn", "spx.pipeline.dossie_failed", { cadastroId, code: dossie?.error?.code || null });
+    }
+  } catch (err) {
+    logStructuredEvent("warn", "spx.pipeline.dossie_exception", { cadastroId, message: err?.message || String(err) });
+  }
+
+  // B) Vigência (rad_expire_date) — NUNCA null (default hoje+90d).
+  let radExpireDate = defaultExpiryIso();
+  try {
+    const exp = await consultRiskExpiry({ cpf, correlationId });
+    if (exp?.ok && exp.found && exp.rad_expire_date) radExpireDate = exp.rad_expire_date;
+  } catch (err) {
+    logStructuredEvent("warn", "spx.pipeline.expiry_exception", { cadastroId, message: err?.message || String(err) });
+  }
+
+  // C) Estaga anexos (CNH/selfie/CRLV) + o dossiê no sandbox do bot.
+  let anexosMap = {};
+  try {
+    const staged = await stageSpxAnexos({
+      dados: cadastro?.dados, cadastroId, riskDocBucketPath: riskDocPath, correlationId,
+    });
+    if (staged) anexosMap = staged;
+  } catch (err) {
+    logStructuredEvent("warn", "spx.pipeline.anexos_exception", { cadastroId, message: err?.message || String(err) });
+    anexosMap = {};
+  }
+
+  logStructuredEvent("info", "spx.pipeline.docs_ready", {
+    cadastroId, anexos: Object.keys(anexosMap), temRiskDoc: !!riskDocPath, radExpireDate,
+  });
+  return { anexosMap, radExpireDate, riskDocPath };
 }
 
 async function updateDriverProfileFromResult({ client, driverUserId, externalId, requestId }) {

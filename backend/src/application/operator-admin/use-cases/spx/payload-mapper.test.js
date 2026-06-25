@@ -64,3 +64,69 @@ describe("mapSpxMotoristaPayload — license_type espelha K.CNHType do bot SPX",
     expect(p.license_type).toBe(28);
   });
 });
+
+describe("mapSpxMotoristaPayload — defaults alinhados à produção", () => {
+  it("function_type_list default = [1] (DELIVERY — o que os motoristas reais da LAMONICA usam; [3] dá 'Station not exist')", () => {
+    expect(mapSpxMotoristaPayload(DADOS).function_type_list).toEqual([1]);
+  });
+  it("linehaul_station_name default = SoC_BA_Simoes Filho", () => {
+    expect(mapSpxMotoristaPayload(DADOS).linehaul_station_name).toBe("SoC_BA_Simoes Filho");
+  });
+  it("contract_type default = 364; do_draft_save default = true", () => {
+    const p = mapSpxMotoristaPayload(DADOS);
+    expect(p.contract_type).toBe(364);
+    expect(p.do_draft_save).toBe(true);
+  });
+  it("rad_expire_date nunca é null (cai no default hoje+90d)", () => {
+    expect(mapSpxMotoristaPayload(DADOS).rad_expire_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe("mapSpxMotoristaPayload — veículo: marca, owner, multi-placa", () => {
+  it("vehicle_manufacturer = só a MARCA em uppercase (sem modelo) p/ bater o OCR", () => {
+    // marca_modelo "SCANIA / G 420 A6X2" → "SCANIA"
+    expect(mapSpxMotoristaPayload(DADOS).vehicle_manufacturer).toBe("SCANIA");
+  });
+  it("vehicle_owner_name prefere proprietário do CRLV; senão owner; senão motorista", () => {
+    expect(mapSpxMotoristaPayload({ ...DADOS, cavalo: { ...DADOS.cavalo, proprietario: "TRANSP REAL LTDA" } }).vehicle_owner_name).toBe("TRANSP REAL LTDA");
+    expect(mapSpxMotoristaPayload(DADOS).vehicle_owner_name).toBe("JOAO DIMAS FERREIRA"); // cavalo_owner.razao_social
+  });
+  it("só cavalo → TRUCK (49, o que os motoristas reais usam; não TRUCK - EXPRESSA/65), placa única, quantity 1", () => {
+    const p = mapSpxMotoristaPayload(DADOS);
+    expect(p.vehicle_type_name).toBe("TRUCK");
+    expect(p.license_plate).toBe("NLN8428");
+    expect(p.plate_number_quantity).toBe(1);
+  });
+  it("cavalo + carreta → CARRETA, placas 'CAV,CAR', quantity 2", () => {
+    const p = mapSpxMotoristaPayload({ ...DADOS, carretas: [{ placa: "ABC1D23" }] });
+    expect(p.vehicle_type_name).toBe("CARRETA");
+    expect(p.license_plate).toBe("NLN8428,ABC1D23");
+    expect(p.plate_number_quantity).toBe(2);
+  });
+});
+
+describe("mapSpxMotoristaPayload — toIsoDate robusto + cnh_remarks whitelist", () => {
+  it("aceita separador '.' e ano de 2 dígitos; rejeita data inválida → ''", () => {
+    expect(mapSpxMotoristaPayload({ ...DADOS, motorista: { ...DADOS.motorista, data_nascimento: "10.08.97" } }).birth_day).toBe("1997-08-10");
+    expect(mapSpxMotoristaPayload({ ...DADOS, motorista: { ...DADOS.motorista, data_nascimento: "31/02/2020" } }).birth_day).toBe("");
+  });
+  it("cnh_remarks: só tokens da whitelist (EAR ok, lixo descartado)", () => {
+    const p = mapSpxMotoristaPayload({ ...DADOS, motorista: { ...DADOS.motorista, cnh_observacoes: "EAR, BLABLA / CETPP" } });
+    expect(p.cnh_remarks).toEqual(["EAR", "CETPP"]);
+  });
+});
+
+describe("mapSpxMotoristaPayload — overrides do pipeline (anexos + vigência)", () => {
+  it("injeta *_path, risk_doc_path e rad_expire_date via overrides", () => {
+    const p = mapSpxMotoristaPayload(DADOS, {
+      cnh_frente_path: "/s/cnh_f", cnh_verso_path: "/s/cnh_v", selfie_path: "/s/self",
+      crlv_path: "/s/crlv", risk_doc_path: "/s/risk", rad_expire_date: "2026-09-01",
+    });
+    expect(p.cnh_frente_path).toBe("/s/cnh_f");
+    expect(p.cnh_verso_path).toBe("/s/cnh_v");
+    expect(p.selfie_path).toBe("/s/self");
+    expect(p.crlv_path).toBe("/s/crlv");
+    expect(p.risk_doc_path).toBe("/s/risk");
+    expect(p.rad_expire_date).toBe("2026-09-01");
+  });
+});

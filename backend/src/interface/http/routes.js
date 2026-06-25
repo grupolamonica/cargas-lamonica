@@ -65,6 +65,8 @@ import {
   resolveOperatorListDraftRegistrationsResponse,
   resolveOperatorSubmitDraftResponse,
   resolveOperatorCadastroFileUrlResponse,
+  resolveOperatorCadastroDocsMigradosResponse,
+  resolveOperatorCadastroDocMigradoResponse,
   resolveOperatorAprovarCadastroResponse,
   resolveOperatorRejeitarCadastroResponse,
   resolveOperatorAngelliraPrecheckResponse,
@@ -74,6 +76,7 @@ import {
   resolveOperatorListExternalJobsResponse,
   resolveOperatorSpxPrecheckResponse,
   resolveOperatorSpxCadastrarResponse,
+  resolveOperatorUnificadaGerarPdfResponse,
   resolveOperatorGetCadastroResponse,
   resolveOperatorPatchCadastroDadosResponse,
   resolveOperatorDeleteCadastroResponse,
@@ -313,8 +316,13 @@ export function registerRoutes(app) {
   router.post("/api/operator/cadastros/:id/spx/precheck", wrap(resolveOperatorSpxPrecheckResponse));
   router.post("/api/operator/cadastros/:id/spx/cadastrar", wrap(resolveOperatorSpxCadastrarResponse));
 
+  // Unificada — dossiê de gerenciamento de risco (Fase 1 SPX)
+  router.post("/api/operator/cadastros/:id/unificada/gerar-pdf", wrap(resolveOperatorUnificadaGerarPdfResponse));
+
   // Gerenciamento de cadastros (editar/excluir)
   router.get("/api/operator/cadastros/:id/arquivo", wrap(resolveOperatorCadastroFileUrlResponse));
+  router.get("/api/operator/cadastros/:id/docs-migrados", wrap(resolveOperatorCadastroDocsMigradosResponse));
+  router.get("/api/operator/cadastros/:id/doc-migrado", wrap(resolveOperatorCadastroDocMigradoResponse));
   router.get("/api/operator/cadastros/:id", wrap(resolveOperatorGetCadastroResponse));
   router.patch("/api/operator/cadastros/:id/dados", wrap(resolveOperatorPatchCadastroDadosResponse));
   router.delete("/api/operator/cadastros/:id", wrap(resolveOperatorDeleteCadastroResponse));

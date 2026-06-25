@@ -105,15 +105,25 @@ def _raise_with_body(resp, contexto: str) -> None:
     resp.raise_for_status()
 
 
-def create(client: AngellraAPIClient, payload: dict[str, Any]) -> dict:
-    """POST /profile/owners (JSON). Retorna `{id, queryId, ...}`."""
+def create(client: AngellraAPIClient, payload: dict[str, Any], *, timeout: float = 120.0) -> dict:
+    """POST /profile/owners (JSON). Retorna `{id, queryId, ...}`.
+
+    timeout (2026-06-25): POST /owners cria o owner E dispara a consulta na
+    MESMA chamada. Para PJ (empresa), a consulta do AngelLira faz um lookup
+    Receita/CNPJ sincrono que leva 30-90s (mesma janela que o Node ja conhece:
+    vide angellira-bot-client.js "relatorio leva 30-90s" -> timeout Node = 180s).
+    O antigo `default_timeout * 2` (=30s) cortava ANTES da consulta PJ terminar
+    e derrubava o ramo do cavalo inteiro com "Read timed out (30.0)" (caso
+    FERNANDO/TEIXEIRA LOPES TRANSPORTES LTDA, 2026-06-25). 120s cabe no pior
+    caso com folga sob os 180s do Node->bot. PF responde em <2s, entao o teto
+    maior nao a afeta (so esperamos o que a API demorar)."""
     sess = client._ensure_session()
-    log_info(f"[owners.create] POST /owners fields={sorted(payload.keys())}")
+    log_info(f"[owners.create] POST /owners fields={sorted(payload.keys())} timeout={timeout}s")
     resp = sess.post(
         _profile_url(client, "/owners"),
         json=payload,
         headers={"Content-Type": "application/json"},
-        timeout=client.default_timeout * 2,
+        timeout=timeout,
     )
     _raise_with_body(resp, "owners.create")
     return resp.json()

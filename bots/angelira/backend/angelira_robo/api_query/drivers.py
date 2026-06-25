@@ -195,6 +195,103 @@ def patch_grouped(
     return patch(client, driver_id, body)
 
 
+def patch_endereco_multipart(
+    client: AngellraAPIClient,
+    driver_id: int,
+    current: dict,
+    *,
+    address: str,
+    city_id: int,
+    state_id: int,
+    cep: str,
+    neighborhood_name: str,
+    number: Any = None,
+    type_id: int,
+    owner: bool = False,
+    prime: int = 0,
+    custom_template_id: int = 1568,
+) -> dict:
+    """PATCH /drivers/{id} via MULTIPART/form-data — UNICA forma que persiste endereco.
+
+    DESCOBERTA 2026-06-15 (capturando o portal profile.angellira.com.br no Chrome):
+    a API NAO grava endereco via JSON (PATCH/POST application/json -> 422
+    "Cid_Codigo undefined" ou descarte silencioso). MAS grava via multipart com
+    campos FLAT (`address, cityId, stateId, cep, neighborhoodName, number`). O
+    backend AUTO-CRIA neighborhood.id e place.id a partir de neighborhoodName +
+    address + cep — NAO precisa enviar placeId/neighborhoodId. Validado em
+    producao nos drivers 471164 (SIMAO) e 15322931 (GIOVANE): HTTP 200 e o GET
+    pos-PATCH retorna city.id+neighborhood.id+place.id preenchidos.
+
+    IMPORTANTE: o PATCH multipart ZERA os campos que nao forem reenviados (datas,
+    phones, etc.). Por isso `current` (o GET /drivers/{id} mais recente) e usado
+    pra preservar identidade/CNH/datas/phones — replicando o form inteiro que o
+    portal envia. `type_id` e OBRIGATORIO e deve ser o tipo real do motorista
+    (driverRelationshipType.typeId), nunca um default, pra nao trocar o vinculo.
+    """
+    import json as _json
+
+    def _flat_id(v):
+        return v.get("id") if isinstance(v, dict) else v
+
+    def _iso10(v):
+        return str(v)[:10] if v else ""
+
+    def _digits(s):
+        return "".join(c for c in str(s or "") if c.isdigit())
+
+    if not type_id:
+        raise ValueError(
+            "patch_endereco_multipart: type_id ausente — abortando para nao "
+            "corromper o tipo (driverRelationshipType) do motorista"
+        )
+
+    fields = {
+        # ── Identidade / CNH (preserva do estado atual) ──
+        "name":          str(current.get("name") or ""),
+        "rg":            str(current.get("rg") or ""),
+        "rgState":       str(_flat_id(current.get("rgState")) or ""),
+        "rgOrgan":       str(current.get("rgOrgan") or ""),
+        "birth":         _iso10(current.get("birth")),
+        "father":        str(current.get("father") or ""),
+        "mother":        str(current.get("mother") or ""),
+        "naturalness":   str(current.get("naturalness") or ""),
+        "cnh":           str(current.get("cnh") or ""),
+        "cnhValidity":   _iso10(current.get("cnhValidity")),
+        "cnhCategory":   str(current.get("cnhCategory") or ""),
+        "cnhState":      str(_flat_id(current.get("cnhState")) or ""),
+        "cnhSecurity":   str(current.get("cnhSecurity") or ""),
+        "firstCNHIssue": _iso10(current.get("firstCNHIssue")),
+        # ── ENDERECO (flat — o que persiste; backend resolve neighborhood/place) ──
+        "number":           str(number if number not in (None, "") else (current.get("number") or "0")),
+        "address":          str(address or ""),
+        "cityId":           str(city_id),
+        "cep":              _digits(cep),
+        "stateId":          str(state_id),
+        "neighborhoodName": str(neighborhood_name or ""),
+        # ── Meta (valores observados no portal) ──
+        "type":             str(type_id),
+        "owner":            "true" if owner else "false",
+        "prime":            str(prime),
+        "customTemplateId": str(custom_template_id),
+        "phones":           _json.dumps(current.get("phones") or []),
+    }
+
+    sess = client._ensure_session()
+    # Truque requests: files={k:(None,v)} forca multipart/form-data SEM arquivos.
+    multipart = {k: (None, v) for k, v in fields.items()}
+    log_info(
+        f"[drivers.patch_endereco_multipart] PATCH /drivers/{driver_id} (multipart) "
+        f"cityId={city_id} stateId={state_id} bairro={neighborhood_name!r} type={type_id}"
+    )
+    resp = sess.patch(
+        _profile_url(client, f"/drivers/{driver_id}"),
+        files=multipart,
+        timeout=client.default_timeout * 2,
+    )
+    _raise_with_body(resp, f"drivers.patch_endereco_multipart[{driver_id}]")
+    return resp.json() if resp.text else {"id": driver_id}
+
+
 def upload_attachments(
     client: AngellraAPIClient,
     driver_id: int,

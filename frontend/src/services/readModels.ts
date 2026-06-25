@@ -1189,6 +1189,33 @@ export async function fetchCadastroArquivoUrl(cadastroId: string, path: string) 
   );
 }
 
+export interface MigratedDocItem {
+  tipo: string;
+  label: string;
+  filename: string;
+  content_type: string;
+}
+
+/**
+ * Lista os documentos de um cadastro MIGRADO (bot WhatsApp) que existem no share
+ * local. Para cadastro não-migrado volta { docs: [], migrado: false }.
+ */
+export async function fetchMigratedDocsManifest(cadastroId: string) {
+  return getOperator<{ docs: MigratedDocItem[]; migrado: boolean }>(
+    `/api/operator/cadastros/${cadastroId}/docs-migrados`,
+  );
+}
+
+/**
+ * Busca UM documento de cadastro migrado como data-URI base64 (lido do share, sem
+ * passar pelo Supabase). Renderizado inline no FilePreviewModal.
+ */
+export async function fetchCadastroDocMigrado(cadastroId: string, tipo: string) {
+  return getOperator<{ data_uri: string; content_type: string; filename: string; tipo: string }>(
+    `/api/operator/cadastros/${cadastroId}/doc-migrado?tipo=${encodeURIComponent(tipo)}`,
+  );
+}
+
 // ── Cadastro rápido de motorista pelo operador ────────────────────────────
 
 export interface CadastroRapidoInput {

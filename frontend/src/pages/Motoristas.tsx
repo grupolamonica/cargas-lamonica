@@ -79,6 +79,7 @@ import { getOperatorAccessToken } from "@/services/apiClient";
 import {
   aprovarCadastro,
   fetchCadastrosPendentes,
+  fetchMigratedDocsManifest,
   fetchOperatorDrivers,
   rejeitarCadastro,
   type OperatorDriverApplicationItem,
@@ -670,7 +671,8 @@ const Motoristas = () => {
   // Confirmação de exclusão
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   // Preview de arquivo enviado pelo motorista (CNH/CRLV/comprovante/etc.)
-  const [filePreview, setFilePreview] = useState<{ cadastroId: string; path: string; label: string } | null>(null);
+  // path → doc no bucket (wizard/migrado-migrado); tipo → doc do share (migrado, base64).
+  const [filePreview, setFilePreview] = useState<{ cadastroId: string; path?: string; tipo?: string; label: string } | null>(null);
 
   // Modal de PROGRESSO ao vivo do disparo externo (Angellira + SPX) — DC-111 / DC-118.
   // Snapshot dos dados no momento do disparo (selectedPendente pode mudar/limpar).
@@ -681,6 +683,18 @@ const Motoristas = () => {
     hasCavalo: boolean;
     hasCarreta: boolean;
   } | null>(null);
+
+  // Documentos de cadastro MIGRADO (docs só no share local). Para wizard/migrado-no-bucket
+  // volta vazio (os *_url já alimentam a galeria padrão via collectCadastroDocuments).
+  const migradoMotoristaId =
+    (selectedPendente?.dados as { _origem?: { motorista_id?: unknown } } | undefined)?._origem?.motorista_id ?? null;
+  const { data: migratedDocsData } = useQuery({
+    queryKey: ["operator", "docs-migrados", selectedPendente?.id],
+    queryFn: () => fetchMigratedDocsManifest(selectedPendente!.id),
+    enabled: !!selectedPendente?.id && !!migradoMotoristaId,
+    staleTime: 5 * 60 * 1000,
+  });
+  const migratedDocs = migratedDocsData?.docs ?? [];
 
   const { data: pendentesData, isLoading: pendentesLoading, isFetching: pendentesFetching, error: pendentesError } = useQuery({
     queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, pendentesPage],
@@ -1145,6 +1159,31 @@ const Motoristas = () => {
                         </div>
                       );
                     })()}
+
+                    {/* Documentos de cadastro MIGRADO (lidos do share da produção e
+                        servidos como base64 — não passam pelo Supabase). */}
+                    {migratedDocs.length > 0 && (
+                      <div className="mt-4 rounded-xl border border-amber-300/50 bg-amber-50/50 p-3 dark:border-amber-400/20 dark:bg-amber-900/10">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          Documentos (cadastro migrado) ({migratedDocs.length})
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {migratedDocs.map((doc) => (
+                            <button
+                              key={doc.tipo}
+                              type="button"
+                              onClick={() =>
+                                setFilePreview({ cadastroId: selectedPendente.id, tipo: doc.tipo, label: doc.label })
+                              }
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/50 bg-amber-100/50 px-2.5 py-1.5 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                            >
+                              <span aria-hidden>👁</span>
+                              {doc.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {selectedPendente.dados && (
                       <div className="mt-4 space-y-3 max-h-[420px] overflow-y-auto pr-1">
