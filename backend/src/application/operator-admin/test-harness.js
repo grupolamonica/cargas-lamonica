@@ -95,6 +95,7 @@ const schemaSql = `
     is_recurring boolean NOT NULL DEFAULT false,
     recurrence_interval_days integer,
     recurrence_parent_id uuid,
+    lh_manual text,
     version integer NOT NULL DEFAULT 0,
     created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at timestamptz NOT NULL DEFAULT now(),

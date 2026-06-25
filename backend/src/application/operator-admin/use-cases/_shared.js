@@ -615,7 +615,10 @@ export function assertCargoOwnership(cargo, operatorId, options = {}) {
   }
 }
 
-export async function writeCargo(client, { cargoId, operatorId, payload, requestIp, correlationId }) {
+export async function writeCargo(
+  client,
+  { cargoId, operatorId, payload, requestIp, correlationId, skipRouteMetrics = false },
+) {
   const existingCargo = cargoId ? await findCargoById(client, cargoId, { lock: true }) : null;
 
   if (cargoId && !existingCargo) {
@@ -626,10 +629,18 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
     throw new ForbiddenError("Somente cargas em rascunho ou abertas podem ter o status alterado manualmente.");
   }
 
-  const resolvedMetrics = await resolveRouteMetricsIfNeeded(payload.origem, payload.destino, {
-    distancia_km: payload.distancia_km,
-    duracao_horas: payload.duracao_horas,
-  });
+  // Em importações em lote evitamos chamadas externas (Geoapify) por linha
+  // dentro da transação: usamos só as métricas informadas (ou null).
+  const resolvedMetrics = skipRouteMetrics
+    ? {
+        distancia_km: typeof payload.distancia_km === "number" ? payload.distancia_km : null,
+        duracao_horas: typeof payload.duracao_horas === "number" ? payload.duracao_horas : null,
+        degraded: false,
+      }
+    : await resolveRouteMetricsIfNeeded(payload.origem, payload.destino, {
+        distancia_km: payload.distancia_km,
+        duracao_horas: payload.duracao_horas,
+      });
 
   const shouldLockSheetClient = Boolean(existingCargo?.sheet_lh);
   const sheetClientId = shouldLockSheetClient ? await findSheetClientId(client) : null;
@@ -652,6 +663,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
     : null;
   const warnings = [];
   let schemaFallbackUsed = false;
+  let createdId = cargoId; // no INSERT vira o id recém-gerado (RETURNING id)
 
   if (cargoId) {
     try {
@@ -704,7 +716,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
     }
   } else {
     try {
-      await client.query(
+      const ins = await client.query(
         `
           INSERT INTO public.cargas (
             data, horario, origem, destino, distancia_km, duracao_horas,
@@ -714,6 +726,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
             is_recurring, recurrence_interval_days
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+          RETURNING id
         `,
         [
           payload.data, payload.horario, payload.origem, payload.destino,
@@ -724,6 +737,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
           resolvedIsRecurring, resolvedRecurrenceInterval,
         ],
       );
+      createdId = ins.rows[0]?.id ?? null;
     } catch (error) {
       if (
         !isMissingRouteColumnError(error) &&
@@ -734,13 +748,14 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
       ) {
         throw error;
       }
-      await client.query(
+      const insFallback = await client.query(
         `
           INSERT INTO public.cargas (
             data, horario, origem, destino, perfil, valor, bonus,
             cliente_id, status, is_template, created_by
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          RETURNING id
         `,
         [
           payload.data, payload.horario, payload.origem, payload.destino,
@@ -748,6 +763,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
           nextStatus, payload.is_template, operatorId,
         ],
       );
+      createdId = insFallback.rows[0]?.id ?? null;
       schemaFallbackUsed = true;
       warnings.push("Optional cargo fields are not available in the current database schema.");
     }
@@ -762,7 +778,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
     actorUserId: operatorId,
     actorRole: "operator",
     resourceType: "cargo",
-    resourceId: cargoId || null,
+    resourceId: createdId || null,
     action: cargoId ? "update" : "create",
     outcome: "success",
     requestIp,
@@ -780,7 +796,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
     },
   });
 
-  return { warnings };
+  return { warnings, cargoId: createdId };
 }
 
 export function buildDriverLoadFilters(query, {

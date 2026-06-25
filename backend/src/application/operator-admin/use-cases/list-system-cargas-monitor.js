@@ -1,0 +1,111 @@
+// Cargas criadas no SISTEMA (sheet_lh IS NULL) projetadas no MESMO shape de linha
+// do Monitor, para entrarem na visão unificada (planilha ∪ sistema). O sync da
+// planilha ignora cargas sem sheet_lh, então elas são duráveis aqui.
+//
+// Campos efetivos: motorista/cavalo/carreta/status operacional vêm de alloc_*
+// (mesmas colunas usadas como override das linhas da planilha — para o sistema
+// elas são simplesmente "o valor"). origem/destino/data/horario são as colunas
+// canônicas da carga. lh = lh_manual (editável no grid).
+
+const SELECT_COLS =
+  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_pinned, status, lh_manual";
+
+/** DATE do Postgres pode chegar como '2026-06-25' ou ISO '2026-06-25T00:00:00.000Z'.
+ *  Fatiar os 10 primeiros chars dá a data de parede correta (igual ao fix do
+ *  off-by-one — usa a data UTC, não reinterpreta em BRT). */
+function toDateStr(v) {
+  if (!v) return null;
+  const s = String(v);
+  return s.length >= 10 ? s.slice(0, 10) : null;
+}
+function toTimeStr(v) {
+  if (!v) return null;
+  return String(v).slice(0, 5); // HH:MM
+}
+
+/** Label de agenda "DD/MM/YYYY HH:MM" a partir de data (YYYY-MM-DD) + hora (HH:MM). */
+function agendaLabel(dateStr, timeStr) {
+  if (!dateStr) return null;
+  const [y, m, d] = dateStr.split("-");
+  return `${d}/${m}/${y}${timeStr ? ` ${timeStr.slice(0, 5)}` : ""}`;
+}
+
+/** Descarga (texto livre em sheet_data_descarga). Aceita 'YYYY-MM-DD[ T]HH:MM'
+ *  (como o sistema grava) ou label BR 'DD/MM/YYYY HH:MM' (legado da planilha).
+ *  Retorna { label (p/ exibir), at (datetime-local p/ o input do modal) }. */
+function parseDescarga(v) {
+  if (!v) return { label: null, at: null };
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (m) return { label: `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`, at: `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}` };
+  m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})[ ](\d{2}):(\d{2})/);
+  if (m) return { label: s.slice(0, 16), at: `${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}` };
+  return { label: s, at: null };
+}
+
+/** Projeta uma carga do sistema no shape de linha do Monitor. Puro/testável. */
+export function mapSystemCargoToMonitorRow(c) {
+  const motoristas = (c.alloc_motorista || "").trim();
+  const status = (c.alloc_status || "").trim();
+  const cavalo = (c.alloc_cavalo || "").trim();
+  const carreta = (c.alloc_carreta || "").trim();
+  const dataStr = toDateStr(c.data);
+  const horaStr = toTimeStr(c.horario);
+  const descarga = parseDescarga(c.sheet_data_descarga);
+  return {
+    lh: (c.lh_manual || "").trim(),
+    tipo: "SISTEMA",
+    status,
+    motoristas,
+    origem: c.origem || "",
+    destino: c.destino || "",
+    data: dataStr,
+    horario: horaStr,
+    carregamentoLabel: agendaLabel(dataStr, horaStr),
+    descargaLabel: descarga.label,
+    valor: undefined,
+    cavalo,
+    carreta,
+    checklistCavalo: "",
+    checklistCarreta: "",
+    isAvailable: motoristas === "" && status === "",
+    hasDriver: motoristas !== "",
+    // ── unificação ──
+    rowKey: `cargo:${c.id}`,
+    source: "sistema",
+    cargoId: c.id,
+    pinned: c.alloc_pinned === true,
+    lifecycleStatus: c.status || null,
+    // datetime-local p/ os inputs do modal de edição (carregamento = data+hora canônicos)
+    cargaAt: dataStr ? `${dataStr}T${horaStr || "00:00"}` : null,
+    descargaAt: descarga.at,
+  };
+}
+
+/**
+ * Lê TODAS as cargas do sistema (sheet_lh nulo, não-template, não-expiradas)
+ * paginando com .range para furar o cap de 1000 linhas do PostgREST. Retorna o
+ * shape de linha do Monitor. Best-effort: lança o erro para o caller decidir
+ * (o read do Monitor trata como não-fatal).
+ *
+ * @param {object} supabaseClient
+ * @param {{ pageSize?: number, maxRows?: number }} [opts]
+ */
+export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 1000, maxRows = 10000 } = {}) {
+  const out = [];
+  for (let from = 0; from < maxRows; from += pageSize) {
+    const { data, error } = await supabaseClient
+      .from("cargas")
+      .select(SELECT_COLS)
+      .is("sheet_lh", null)
+      .eq("is_template", false)
+      .neq("status", "EXPIRED")
+      .order("data", { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    const batch = data || [];
+    for (const c of batch) out.push(mapSystemCargoToMonitorRow(c));
+    if (batch.length < pageSize) break;
+  }
+  return out;
+}
