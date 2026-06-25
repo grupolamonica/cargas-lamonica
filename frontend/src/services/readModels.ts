@@ -589,6 +589,19 @@ export interface SheetMonitorRow {
   // Linha sintética de RESERVA (motorista em standby na rota; não vem da
   // planilha, não tem LH real). Só exibida — não arrasta/edita.
   reserva?: boolean;
+  // ── Visão unificada (planilha ∪ sistema) ──
+  // Identidade estável da linha: 'sheet:<lh>' | 'cargo:<uuid>' | 'reserva:<id>'.
+  rowKey?: string;
+  // Origem da linha: 'planilha' (Shopee, base na planilha), 'sistema' (carga
+  // criada no sistema, editável em tudo), 'reserva' (standby).
+  source?: "planilha" | "sistema" | "reserva";
+  // id da carga no banco (só para source='sistema') — usado na edição/criação.
+  cargoId?: string;
+  // status de ciclo de vida da carga do sistema (DRAFT/OPEN/...) — informativo.
+  lifecycleStatus?: string | null;
+  // datetime-local ('YYYY-MM-DDTHH:MM') p/ os inputs do modal (só source='sistema').
+  cargaAt?: string | null; // carregamento (= data + horário)
+  descargaAt?: string | null; // descarga
 }
 
 export interface SheetMonitorSummary {
@@ -720,6 +733,177 @@ export async function setMonitorAllocationPin(input: { lh: string; pinned: boole
     pinned: boolean;
     meta: { correlationId: string };
   }>("/api/operator/sheet-monitor/pin", { accessToken, method: "POST", body: input });
+}
+
+/** Campos editáveis de uma carga do SISTEMA no grid do Monitor. Parcial: só os
+ *  campos enviados são alterados. "" limpa motorista/veículo/status/lh. */
+export interface MonitorCargoUpdate {
+  cargoId: string;
+  motorista?: string | null;
+  cavalo?: string | null;
+  carreta?: string | null;
+  status?: string | null;
+  origem?: string;
+  destino?: string;
+  data?: string; // YYYY-MM-DD (carregamento)
+  horario?: string; // HH:MM (carregamento)
+  descarga?: string; // datetime-local 'YYYY-MM-DDTHH:MM' ou '' p/ limpar
+  lh?: string | null;
+}
+
+/**
+ * Edita uma carga do SISTEMA (sheet_lh nulo) direto no grid do Monitor — como uma
+ * planilha. Diferente das linhas da planilha, aqui Rota/Agenda/LH também são
+ * editáveis (a carga do sistema é a fonte da verdade; não há sync sobrescrevendo).
+ */
+export async function updateMonitorCargo(input: MonitorCargoUpdate) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{
+    ok: boolean;
+    cargoId: string;
+    rowKey: string;
+    cargo: {
+      lh: string; motorista: string; cavalo: string; carreta: string;
+      status: string; origem: string; destino: string;
+      data: string | null; horario: string | null;
+    };
+    meta: { correlationId: string };
+  }>("/api/operator/sheet-monitor/cargo", { accessToken, method: "PATCH", body: input });
+}
+
+/** Cria uma carga do SISTEMA a partir do grid do Monitor ("Nova carga").
+ *  Reusa o endpoint canônico de criação (sheet_lh fica nulo → vira linha do
+ *  sistema na próxima leitura do Monitor). Criada como OPEN p/ aparecer já. */
+export async function createMonitorCargo(input: {
+  origem: string;
+  destino: string;
+  data: string; // YYYY-MM-DD (carregamento)
+  horario: string; // HH:MM (carregamento)
+  descarga?: string; // 'YYYY-MM-DD HH:MM' (texto) — opcional
+  perfil?: string;
+}) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ id?: string; cargo?: { id: string }; meta?: { correlationId: string } }>(
+    "/api/operator/cargas",
+    {
+      accessToken,
+      method: "POST",
+      body: {
+        origem: input.origem,
+        destino: input.destino,
+        data: input.data,
+        horario: input.horario,
+        ...(input.descarga ? { sheet_data_descarga: input.descarga } : {}),
+        perfil: input.perfil || "CARRETA",
+        status: "OPEN",
+        is_template: false,
+        driver_visibility: "PUBLIC",
+      },
+    },
+  );
+}
+
+/** Estado de uma carga na pré-visualização de atribuição no ASPX.
+ *  Preview: assign · pending · assigned · in_progress · done · cancelled · not_ready · unknown.
+ *  Resultado do envio: dry_run · simulated · skipped · error. */
+export type AspxAllocationState =
+  | "assign"
+  | "pending"
+  | "assigned"
+  | "in_progress"
+  | "done"
+  | "cancelled"
+  | "not_ready"
+  | "unknown"
+  | "simulated"
+  | "dry_run"
+  | "skipped"
+  | "error";
+
+export interface AspxAllocationItem {
+  lh: string;
+  origem: string | null;
+  destino: string | null;
+  motorista: string;
+  cavalo: string;
+  carreta: string;
+  pinned: boolean;
+  simulated: boolean;
+  tripId: number | null;
+  driverId: number | null;
+  state: AspxAllocationState;
+  /** Nome do status real da viagem no ASPX (ex.: "Assigned", "Departed"). */
+  realStatus: string | null;
+  /** Motorista atualmente atribuído no ASPX (quando já atribuída). */
+  assignedDriver: string;
+  /** ASPX tem um motorista DIFERENTE do sistema (conflito). */
+  divergent: boolean;
+  /** Agenda da carga (DD/MM/YYYY HH:MM). */
+  carregamentoLabel: string | null;
+  descargaLabel: string | null;
+  reason: string | null;
+}
+
+export type AspxAllocationWarning = "assignable_empty" | "index_unavailable" | "index_truncated" | "index_partial";
+
+export interface AspxAllocationPreview {
+  ok: boolean;
+  configured: boolean;
+  simulated: boolean;
+  writeEnabled: boolean;
+  summary: {
+    willAssign: number;
+    pending: number;
+    divergent: number;
+    hidden: number;
+    totalCandidates: number;
+    alreadyAssigned: number;
+    cancelled: number;
+    notReady: number;
+    unknown: number;
+  };
+  warnings: AspxAllocationWarning[];
+  items: AspxAllocationItem[];
+  meta: { correlationId: string; simulationReason?: string | null };
+}
+
+/**
+ * Pré-visualização (dry-run) da atribuição no ASPX: lista as cargas alocadas no
+ * sistema e diz, para cada uma, se vai atribuir / já está atribuída / está
+ * pendente. Nada é enviado ao ASPX — só leitura. Cai em modo simulação se o
+ * sidecar SPX estiver fora do ar.
+ */
+export async function previewAspxAllocation(): Promise<AspxAllocationPreview> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<AspxAllocationPreview>("/api/operator/sheet-monitor/aspx-preview", {
+    accessToken,
+    method: "POST",
+    body: {},
+  });
+}
+
+export interface AspxAssignResult {
+  ok: boolean;
+  writeEnabled: boolean;
+  dryRun: boolean;
+  simulated: boolean;
+  summary: { assigned: number; dryRun: number; simulated: number; pending: number; skipped: number; error: number };
+  results: Array<{ lh: string; state: AspxAllocationState; reason?: string; tripId?: number; driverId?: number }>;
+  meta: { correlationId: string };
+}
+
+/**
+ * Confirma a atribuição no ASPX das cargas (LHs) selecionadas. O envio real só
+ * ocorre com o kill switch ligado no backend (SPX_ALLOC_WRITE_ENABLED); caso
+ * contrário roda em dry_run. `dryRun: true` força simulação independentemente.
+ */
+export async function assignAspxAllocations(input: { lhs: string[]; dryRun?: boolean }): Promise<AspxAssignResult> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<AspxAssignResult>("/api/operator/sheet-monitor/aspx-assign", {
+    accessToken,
+    method: "POST",
+    body: input,
+  });
 }
 
 export async function enrichSheetMonitor({ force = false, forceSessionStart }: { force?: boolean; forceSessionStart?: string } = {}): Promise<{

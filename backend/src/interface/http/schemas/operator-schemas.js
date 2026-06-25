@@ -48,6 +48,33 @@ export const sheetMonitorPinBodySchema = z.object({
   pinned: z.boolean(),
 }).strict();
 
+/** Body for PATCH /api/operator/sheet-monitor/cargo — edita uma carga do SISTEMA
+ *  (sheet_lh nulo) direto no grid do Monitor. Parcial: só os campos enviados são
+ *  alterados. Rota/Agenda são NOT NULL (min length quando enviados); motorista/
+ *  veículo/status são alloc_* ("" limpa). LH livre vai em lh_manual. */
+export const sheetMonitorCargoUpdateBodySchema = z.object({
+  cargoId: z.string().uuid(),
+  motorista: z.string().trim().max(180).nullable().optional(),
+  cavalo: z.string().trim().max(40).nullable().optional(),
+  carreta: z.string().trim().max(40).nullable().optional(),
+  status: z.string().trim().max(60).nullable().optional(),
+  origem: z.string().trim().min(2).max(180).optional(),
+  destino: z.string().trim().min(2).max(180).optional(),
+  data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  horario: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
+  // Descarga (data+hora juntas) — datetime-local 'YYYY-MM-DDTHH:MM' ou '' p/ limpar.
+  descarga: z.string().trim().max(40).optional(),
+  lh: z.string().trim().max(120).nullable().optional(),
+}).strict();
+
+/** Body for POST /api/operator/sheet-monitor/aspx-assign — confirma a atribuição
+ *  no ASPX das cargas (LHs) selecionadas. dryRun força simulação mesmo com o
+ *  kill switch ligado. */
+export const sheetMonitorAspxAssignBodySchema = z.object({
+  lhs: z.array(z.string().trim().min(1).max(120)).min(1).max(300),
+  dryRun: z.boolean().optional().default(false),
+}).strict();
+
 /** Query params for PII redaction POST */
 export const piiRedactionQuerySchema = z.object({
   retentionDays: z.coerce.number().int().min(1).max(365).optional(),

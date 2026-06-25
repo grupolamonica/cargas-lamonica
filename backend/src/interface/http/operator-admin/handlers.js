@@ -16,6 +16,7 @@ import {
 } from "../http-utils.js";
 import {
   cargoCreateMutationSchema,
+  cargoImportMutationSchema,
   cargoUpdateMutationSchema,
   clienteMutationSchema,
   driverProfileUpdateMutationSchema,
@@ -34,10 +35,11 @@ import {
 } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
-import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema } from "../schemas/operator-schemas.js";
+import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
+  importOperatorCargas,
   createOperatorCliente,
   createOperatorRoute,
   deleteOperatorCargo,
@@ -68,6 +70,11 @@ import { submitDraftAsOperator } from "../../../application/operator-admin/use-c
 import { updateMonitorAllocation } from "../../../application/operator-admin/use-cases/update-monitor-allocation.js";
 import { reassignMonitorAllocations } from "../../../application/operator-admin/use-cases/reassign-monitor-allocations.js";
 import { setMonitorAllocationPin } from "../../../application/operator-admin/use-cases/set-monitor-allocation-pin.js";
+import { listSystemCargasForMonitor } from "../../../application/operator-admin/use-cases/list-system-cargas-monitor.js";
+import { updateMonitorCargo } from "../../../application/operator-admin/use-cases/update-monitor-cargo.js";
+import { buildSheetSummary } from "../../../application/google-sheets/google-sheet-loads.js";
+import { previewAspxAllocation } from "../../../application/operator-admin/use-cases/preview-aspx-allocation.js";
+import { assignAspxAllocations } from "../../../application/operator-admin/use-cases/assign-aspx-allocations.js";
 import { candidaturaSubmitSchema } from "../schemas/candidatura-schemas.js";
 import { DRAFT_FILE_BUCKET } from "../../../application/candidatura/use-cases/upload-draft-file.js";
 import { ensureDriverLoadsSheetFresh } from "../public-loads/handlers.js";
@@ -231,6 +238,28 @@ export async function resolveCreateOperatorCargoResponse(request) {
       requestIp,
       correlationId,
     });
+    },
+  );
+}
+
+export async function resolveImportOperatorCargasResponse(request) {
+  return withOperatorSession(
+    request,
+    "import-cargas",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem importar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { csv, dryRun } = cargoImportMutationSchema.parse(await parseJsonBody(request));
+
+      return importOperatorCargas({
+        operatorId,
+        csv,
+        dryRun,
+        requestIp,
+        correlationId,
+      });
     },
   );
 }
@@ -661,6 +690,33 @@ export async function resolveOperatorDriverFlowMetricsResponse(request) {
   });
 }
 
+// Ordena linhas do Monitor por data+horário DESC (mesma regra do sync —
+// parseAllGoogleSheetRows). Linhas sem data vão para o fim.
+function compareMonitorRows(a, b) {
+  const hasA = Boolean(a.data);
+  const hasB = Boolean(b.data);
+  if (!hasA && !hasB) return 0;
+  if (!hasA) return 1;
+  if (!hasB) return -1;
+  if (a.data !== b.data) return a.data < b.data ? 1 : -1;
+  const ha = a.horario || "";
+  const hb = b.horario || "";
+  if (ha === hb) return 0;
+  return ha < hb ? 1 : -1;
+}
+
+// Monta a visão UNIFICADA do Monitor: linhas da planilha ∪ cargas do sistema
+// (intercaladas por data), com reservas no fim. Cada linha ganha rowKey/source.
+// Summary recalculado sobre as linhas operacionais quando há cargas do sistema.
+function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary }) {
+  const sheetRows = baseRows.map((r) => (r.rowKey ? r : { ...r, rowKey: `sheet:${r.lh}`, source: "planilha" }));
+  const operational = [...sheetRows, ...systemRows].sort(compareMonitorRows);
+  const reservas = reservaRows.map((r) => (r.rowKey ? r : { ...r, rowKey: `reserva:${r.lh}`, source: "reserva" }));
+  const items = reservas.length ? [...operational, ...reservas] : operational;
+  const summary = systemRows.length ? buildSheetSummary(operational) : baseSummary;
+  return { items, summary };
+}
+
 export async function resolveSheetMonitorResponse(request) {
   return withOperatorSession(request, "sheet-monitor", async ({ correlationId }) => {
     const supabaseClient = createSupabaseAdminClient();
@@ -729,6 +785,19 @@ export async function resolveSheetMonitorResponse(request) {
       });
     }
 
+    // Cargas criadas no SISTEMA (sheet_lh nulo) — entram na visão unificada do
+    // Monitor (planilha ∪ sistema). Não-fatal: se falhar, o Monitor ainda serve
+    // as linhas da planilha.
+    let systemRows = [];
+    try {
+      systemRows = await listSystemCargasForMonitor(supabaseClient);
+    } catch (systemErr) {
+      logStructuredEvent("warn", "sheet-monitor.system-cargas-read-failed", {
+        correlationId,
+        message: systemErr instanceof Error ? systemErr.message : String(systemErr),
+      });
+    }
+
     // ----------------------------------------------------------------
     // REFRESH path: operator explicitly asked for a fresh sync.
     // Fetch CSV → parse all rows → save to DB → return parsed rows IMMEDIATELY
@@ -767,11 +836,12 @@ export async function resolveSheetMonitorResponse(request) {
           }
 
           // Return the freshly-parsed rows immediately — no extra DB read needed.
+          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary });
           return {
             statusCode: 200,
             payload: {
-              items: reservaRows.length ? [...rows, ...reservaRows] : rows,
-              summary,
+              items: unified.items,
+              summary: unified.summary,
               allocByLh,
               meta: {
                 correlationId,
@@ -840,11 +910,17 @@ export async function resolveSheetMonitorResponse(request) {
       }
 
       const baseRows = snapshot.rows_json ?? [];
+      const unified = buildUnifiedMonitor({
+        baseRows,
+        systemRows,
+        reservaRows,
+        baseSummary: snapshot.summary_json ?? emptySummary,
+      });
       return {
         statusCode: 200,
         payload: {
-          items: reservaRows.length ? [...baseRows, ...reservaRows] : baseRows,
-          summary: snapshot.summary_json ?? emptySummary,
+          items: unified.items,
+          summary: unified.summary,
           enrichedByLh,
           allocByLh,
           meta: {
@@ -856,18 +932,22 @@ export async function resolveSheetMonitorResponse(request) {
       };
     }
 
-    // No snapshot yet (first use or migration pending).
-    // Return empty state — not an error. Frontend shows "Clique em Atualizar planilha".
+    // No snapshot yet (first use or migration pending). Mesmo sem planilha, as
+    // cargas do sistema (+ reservas) devem aparecer no Monitor.
     const { getSheetExportUrl: getUrl } = await import("../../../application/google-sheets/google-sheet-loads.js");
+    const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary });
     return {
       statusCode: 200,
       payload: {
-        items: [],
-        summary: emptySummary,
+        items: unified.items,
+        summary: systemRows.length ? unified.summary : emptySummary,
+        allocByLh,
         meta: {
           correlationId,
           sheetConfigured: Boolean(getUrl()),
-          noSnapshot: true,
+          // noSnapshot só quando NÃO há NADA a mostrar (nem planilha nem sistema) —
+          // senão o frontend esconderia as cargas do sistema atrás do empty state.
+          noSnapshot: systemRows.length === 0,
         },
       },
     };
@@ -904,6 +984,21 @@ export async function resolveReassignMonitorAllocationsResponse(request) {
   );
 }
 
+export async function resolveUpdateMonitorCargoResponse(request) {
+  return withOperatorSession(
+    request,
+    "update-monitor-cargo",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { cargoId, ...fields } = sheetMonitorCargoUpdateBodySchema.parse(await parseJsonBody(request));
+      return updateMonitorCargo({ cargoId, operatorId, payload: fields, requestIp, correlationId });
+    },
+  );
+}
+
 export async function resolveSetMonitorAllocationPinResponse(request) {
   return withOperatorSession(
     request,
@@ -915,6 +1010,35 @@ export async function resolveSetMonitorAllocationPinResponse(request) {
     async ({ correlationId, requestIp, operatorId }) => {
       const { lh, pinned } = sheetMonitorPinBodySchema.parse(await parseJsonBody(request));
       return setMonitorAllocationPin({ lh, pinned, operatorId, requestIp, correlationId });
+    },
+  );
+}
+
+export async function resolvePreviewAspxAllocationResponse(request) {
+  return withOperatorSession(
+    request,
+    "preview-aspx-allocation",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem atribuir no ASPX.",
+    },
+    async ({ correlationId }) => {
+      return previewAspxAllocation({ correlationId });
+    },
+  );
+}
+
+export async function resolveAssignAspxAllocationsResponse(request) {
+  return withOperatorSession(
+    request,
+    "assign-aspx-allocations",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem atribuir no ASPX.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { lhs, dryRun } = sheetMonitorAspxAssignBodySchema.parse(await parseJsonBody(request));
+      return assignAspxAllocations({ lhs, dryRun, operatorId, requestIp, correlationId });
     },
   );
 }

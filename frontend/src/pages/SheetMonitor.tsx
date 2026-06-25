@@ -2,6 +2,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import {
   AlertTriangle,
   BadgeCheck,
+  Ban,
   Check,
   CheckCircle2,
   ChevronLeft,
@@ -18,6 +19,7 @@ import {
   PinOff,
   RefreshCw,
   Search,
+  Send,
   ShieldX,
   Sparkles,
   Truck,
@@ -42,13 +44,19 @@ import { cn } from "@/lib/utils";
 import { allocEditPolicy } from "@/lib/monitorEditPolicy";
 import { computeShiftMoves, computeSwapMoves } from "@/lib/monitorReorder";
 import {
+  assignAspxAllocations,
+  createMonitorCargo,
   enrichSheetMonitor,
   fetchOperatorDrivers,
   fetchOperatorVehicles,
   fetchSheetMonitor,
+  previewAspxAllocation,
   reassignMonitorAllocations,
   setMonitorAllocationPin,
   updateMonitorAllocation,
+  updateMonitorCargo,
+  type AspxAllocationItem,
+  type AspxAllocationPreview,
   type SheetMonitorAllocation,
   type SheetMonitorEnrichedRow,
   type SheetMonitorRow as SheetMonitorRowType,
@@ -373,6 +381,500 @@ function ConfirmDialog({
   );
 }
 
+// ─── Atribuir no ASPX ───────────────────────────────────────────────────────
+// Pré-visualização (dry-run) + confirmação da atribuição no ASPX. Mostra ao
+// operador, por carga, se vai atribuir / já está / está pendente, e quem será
+// atribuído. Nada vai pro ASPX até o operador confirmar (e só de verdade se o
+// kill switch estiver ligado no backend; senão roda em simulação/dry-run).
+
+function aspxStateMeta(state: AspxAllocationItem["state"]) {
+  switch (state) {
+    case "assign":
+      return { label: "Vai atribuir", cls: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300", Icon: CheckCircle2 };
+    case "pending":
+      return { label: "Pendente", cls: "bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300", Icon: AlertTriangle };
+    case "assigned":
+      return { label: "Já atribuída", cls: "bg-slate-100 text-slate-600 dark:bg-slate-500/15 dark:text-slate-300", Icon: Check };
+    case "in_progress":
+      return { label: "Em operação", cls: "bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300", Icon: Truck };
+    case "done":
+      return { label: "Concluída", cls: "bg-slate-100 text-slate-600 dark:bg-slate-500/15 dark:text-slate-300", Icon: Check };
+    case "cancelled":
+      return { label: "Cancelada", cls: "bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300", Icon: XCircle };
+    case "not_ready":
+      return { label: "Não liberada", cls: "bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300", Icon: AlertTriangle };
+    case "unknown":
+      return { label: "Não confirmada", cls: "bg-slate-100 text-slate-500 dark:bg-slate-500/15 dark:text-slate-400", Icon: Ban };
+    default:
+      return { label: state, cls: "bg-slate-100 text-slate-600 dark:bg-slate-500/15 dark:text-slate-300", Icon: Ban };
+  }
+}
+
+function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [result, setResult] = useState<Awaited<ReturnType<typeof assignAspxAllocations>> | null>(null);
+
+  const previewQuery = useQuery<AspxAllocationPreview>({
+    queryKey: ["admin", "aspx-preview"],
+    queryFn: previewAspxAllocation,
+    enabled: open,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  });
+
+  const data = previewQuery.data;
+
+  // Ao carregar a pré-visualização, pré-seleciona tudo que "vai atribuir".
+  useEffect(() => {
+    if (data) {
+      setSelected(new Set(data.items.filter((i) => i.state === "assign").map((i) => i.lh)));
+      setResult(null);
+    }
+  }, [data]);
+
+  // Reseta ao fechar.
+  useEffect(() => {
+    if (!open) {
+      setSelected(new Set());
+      setResult(null);
+    }
+  }, [open]);
+
+  const assignMutation = useMutation({
+    mutationFn: assignAspxAllocations,
+    onSuccess: (r) => {
+      setResult(r);
+      if (r.simulated) toast.info("Simulação: nada enviado ao ASPX (sidecar SPX fora do ar).");
+      else if (r.dryRun) toast.info(`Dry-run: ${r.summary.dryRun} carga(s) montada(s), nada enviado ao ASPX.`);
+      else toast.success(`${r.summary.assigned} carga(s) atribuída(s) no ASPX.`);
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Falha ao atribuir no ASPX."),
+  });
+
+  const items = useMemo(() => data?.items ?? [], [data]);
+  const assignable = useMemo(() => items.filter((i) => i.state === "assign"), [items]);
+  const allSelected = assignable.length > 0 && assignable.every((i) => selected.has(i.lh));
+
+  const toggle = (lh: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(lh)) next.delete(lh);
+      else next.add(lh);
+      return next;
+    });
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(assignable.map((i) => i.lh)));
+
+  const resultByLh = useMemo(() => {
+    const m = new Map<string, string>();
+    (result?.results ?? []).forEach((r) => m.set(r.lh, r.state));
+    return m;
+  }, [result]);
+
+  const confirmLabel = data?.writeEnabled && !data?.simulated
+    ? `Atribuir ${selected.size} no ASPX`
+    : `Simular ${selected.size} (dry-run)`;
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="flex max-h-[88vh] max-w-3xl flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="border-b border-border/60 px-5 py-4">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <Send className="h-4 w-4 shrink-0 text-primary" />
+            Atribuir no ASPX
+          </DialogTitle>
+          <DialogDescription className="pt-1 text-sm leading-relaxed text-muted-foreground">
+            Cargas alocadas no sistema. Confira quem vai ser atribuído no ASPX antes de confirmar — nada é enviado até você confirmar.
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* Banner de modo (simulação / envio desligado) */}
+        {data && (data.simulated || !data.writeEnabled) && (
+          <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-5 py-2.5 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              {data.simulated
+                ? "Modo simulação — o sidecar SPX está fora do ar. Os estados abaixo são inferidos do status; nada será enviado ao ASPX."
+                : "Envio ao ASPX desligado (kill switch). A confirmação roda em dry-run — monta o pedido sem enviar."}
+            </span>
+          </div>
+        )}
+
+        {/* Aviso de dados incompletos (station/cap/aba) */}
+        {data && !data.simulated && data.warnings.length > 0 && (
+          <div className="flex items-start gap-2 border-b border-red-200 bg-red-50 px-5 py-2.5 text-xs text-red-800 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              {data.warnings.includes("assignable_empty") && "A lista de viagens atribuíveis veio VAZIA — provável estação errada ou sessão SPX. Os estados podem não refletir o ASPX. "}
+              {data.warnings.includes("index_unavailable") && "Não foi possível ler o status real das viagens (índice fora do ar) — os já atribuídos aparecem como 'não confirmada'. "}
+              {data.warnings.includes("index_truncated") && "O índice de viagens foi truncado (muitas viagens) — alguns LHs podem aparecer como 'não confirmada'. "}
+              {data.warnings.includes("index_partial") && "Parte das abas de viagem não respondeu — alguns LHs podem aparecer como 'não confirmada'. "}
+            </span>
+          </div>
+        )}
+
+        {/* Resumo — foco no que muda / diverge */}
+        {data && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-5 py-3 text-xs">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+              <CheckCircle2 className="h-3.5 w-3.5" />{data.summary.willAssign} vão ser atribuídas
+            </span>
+            {data.summary.pending > 0 && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 font-semibold text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
+                <AlertTriangle className="h-3.5 w-3.5" />{data.summary.pending} pendentes
+              </span>
+            )}
+            {data.summary.divergent > 0 && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2.5 py-1 font-semibold text-red-700 dark:bg-red-500/15 dark:text-red-300">
+                <AlertTriangle className="h-3.5 w-3.5" />{data.summary.divergent} divergentes do ASPX
+              </span>
+            )}
+            {data.summary.hidden > 0 && (
+              <span className="ml-auto text-[0.68rem] text-muted-foreground/70">
+                {data.summary.hidden} já em dia (ocultas) · {data.summary.totalCandidates} no total
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Lista */}
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+          {previewQuery.isLoading && (
+            <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Carregando pré-visualização…
+            </div>
+          )}
+          {previewQuery.isError && (
+            <div className="flex items-center justify-center gap-2 py-12 text-sm text-red-600">
+              <AlertTriangle className="h-4 w-4" /> Erro ao carregar a pré-visualização.
+            </div>
+          )}
+          {data && items.length === 0 && (
+            <div className="flex flex-col items-center justify-center gap-1 py-12 text-center text-sm text-muted-foreground">
+              <CheckCircle2 className="h-5 w-5 text-emerald-500/70" />
+              Tudo em dia — nenhuma carga a atribuir ou divergente do ASPX.
+              {data.summary.totalCandidates > 0 && (
+                <span className="text-[0.7rem] text-muted-foreground/60">{data.summary.totalCandidates} cargas conferidas</span>
+              )}
+            </div>
+          )}
+
+          {data && items.length > 0 && (
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr className="text-left text-[0.68rem] uppercase tracking-wide text-muted-foreground">
+                  <th className="w-8 px-2 py-2">
+                    <input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={assignable.length === 0}
+                      title="Selecionar todas as atribuíveis" aria-label="Selecionar todas as atribuíveis" />
+                  </th>
+                  <th className="px-2 py-2">LH</th>
+                  <th className="px-2 py-2">Rota</th>
+                  <th className="px-2 py-2">Agenda</th>
+                  <th className="px-2 py-2">Motorista</th>
+                  <th className="px-2 py-2">Veículo</th>
+                  <th className="px-2 py-2">Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((it) => {
+                  const meta = aspxStateMeta(it.state);
+                  const selectable = it.state === "assign";
+                  const sentState = resultByLh.get(it.lh);
+                  return (
+                    <tr key={it.lh} className={cn("border-t border-border/40", !selectable && "opacity-60", it.divergent && "bg-red-50/50 dark:bg-red-500/10")}>
+                      <td className="px-2 py-2 align-top">
+                        <input type="checkbox" disabled={!selectable}
+                          checked={selected.has(it.lh)} onChange={() => toggle(it.lh)}
+                          aria-label={`Selecionar ${it.lh}`} />
+                      </td>
+                      <td className="px-2 py-2 align-top font-mono font-semibold text-foreground">{it.lh}</td>
+                      <td className="px-2 py-2 align-top text-muted-foreground">
+                        {(it.origem || "—")} → {(it.destino || "—")}
+                      </td>
+                      <td className="px-2 py-2 align-top text-muted-foreground">
+                        {it.carregamentoLabel ? (
+                          <span className="block"><span className="text-[0.6rem] uppercase text-muted-foreground/50">carga </span>{it.carregamentoLabel}</span>
+                        ) : null}
+                        {it.descargaLabel ? (
+                          <span className="block"><span className="text-[0.6rem] uppercase text-muted-foreground/50">desc </span>{it.descargaLabel}</span>
+                        ) : null}
+                        {!it.carregamentoLabel && !it.descargaLabel && "—"}
+                      </td>
+                      <td className="px-2 py-2 align-top">
+                        <span className="font-medium text-foreground">{it.motorista || "—"}</span>
+                        {it.pinned && <Pin className="ml-1 inline h-3 w-3 text-primary" aria-label="Fixado" />}
+                        {it.assignedDriver && it.assignedDriver.trim().toUpperCase() !== (it.motorista || "").trim().toUpperCase() && (
+                          <span className="block text-[0.66rem] font-semibold text-red-700 dark:text-red-300">no ASPX: {it.assignedDriver}</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 align-top text-muted-foreground">
+                        {[it.cavalo, it.carreta].filter(Boolean).join(" / ") || "—"}
+                      </td>
+                      <td className="px-2 py-2 align-top">
+                        {it.divergent ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 font-semibold text-red-700 dark:bg-red-500/15 dark:text-red-300">
+                            <AlertTriangle className="h-3 w-3" />Divergente
+                          </span>
+                        ) : (
+                          <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold", meta.cls)}>
+                            <meta.Icon className="h-3 w-3" />{meta.label}
+                          </span>
+                        )}
+                        {sentState && (
+                          <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 font-semibold text-primary">
+                            {sentState === "assigned" ? "enviado" : sentState === "dry_run" ? "dry-run" : sentState === "simulated" ? "simulado" : sentState}
+                          </span>
+                        )}
+                        {it.reason && <span className="ml-1 block text-[0.66rem] text-muted-foreground/70">{it.reason}</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Rodapé */}
+        <div className="flex items-center justify-between gap-2 border-t border-border/60 px-5 py-3">
+          <span className="text-xs text-muted-foreground">
+            <span className="font-semibold text-foreground">{selected.size}</span> selecionada(s)
+          </span>
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose}
+              className="rounded-lg border border-border/80 px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground">
+              Fechar
+            </button>
+            <button type="button" onClick={() => assignMutation.mutate({ lhs: Array.from(selected) })}
+              disabled={selected.size === 0 || assignMutation.isPending || previewQuery.isLoading}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50">
+              {assignMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+              {confirmLabel}
+            </button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Carga do SISTEMA: editar / criar (grid unificado) ──────────────────────
+// Cargas do sistema (sheet_lh nulo) são editadas como uma planilha: Status, LH,
+// Rota, Agenda, Motorista/Placa — todos editáveis (a carga é a fonte da verdade).
+
+type CargoForm = { lh: string; status: string; origem: string; destino: string; carregamento: string; descarga: string; motorista: string; cavalo: string; carreta: string };
+
+function MonitorCargoFields({ form, setForm, statusOptions }: {
+  form: CargoForm;
+  setForm: React.Dispatch<React.SetStateAction<CargoForm>>;
+  statusOptions: readonly string[];
+}) {
+  const set = (k: keyof CargoForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm((f) => ({ ...f, [k]: e.target.value }));
+  const field = "w-full rounded-lg border border-border/80 bg-white/92 px-3 py-2 text-sm outline-none focus:border-primary/30 focus:ring-2 focus:ring-primary/10 dark:bg-muted/40";
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <label className="col-span-1 text-xs font-medium text-muted-foreground">LH (livre)
+        <input className={field} value={form.lh} onChange={set("lh")} placeholder="opcional" maxLength={120} />
+      </label>
+      <label className="col-span-1 text-xs font-medium text-muted-foreground">Status
+        <select className={field} value={form.status} onChange={set("status")}>
+          <option value="">(disponível)</option>
+          {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </label>
+      <label className="col-span-1 text-xs font-medium text-muted-foreground">Origem
+        <input className={field} value={form.origem} onChange={set("origem")} maxLength={180} />
+      </label>
+      <label className="col-span-1 text-xs font-medium text-muted-foreground">Destino
+        <input className={field} value={form.destino} onChange={set("destino")} maxLength={180} />
+      </label>
+      <label className="col-span-1 text-xs font-medium text-muted-foreground">Carregamento (data + hora)
+        <input type="datetime-local" className={field} value={form.carregamento} onChange={set("carregamento")} />
+      </label>
+      <label className="col-span-1 text-xs font-medium text-muted-foreground">Descarga (data + hora)
+        <input type="datetime-local" className={field} value={form.descarga} onChange={set("descarga")} />
+      </label>
+      <label className="col-span-2 text-xs font-medium text-muted-foreground">Motorista
+        <input className={field} value={form.motorista} onChange={set("motorista")} maxLength={180} />
+      </label>
+      <label className="col-span-1 text-xs font-medium text-muted-foreground">Cavalo
+        <input className={field} value={form.cavalo} onChange={set("cavalo")} maxLength={40} />
+      </label>
+      <label className="col-span-1 text-xs font-medium text-muted-foreground">Carreta
+        <input className={field} value={form.carreta} onChange={set("carreta")} maxLength={40} />
+      </label>
+    </div>
+  );
+}
+
+const EMPTY_CARGO_FORM: CargoForm = { lh: "", status: "", origem: "", destino: "", carregamento: "", descarga: "", motorista: "", cavalo: "", carreta: "" };
+
+// datetime-local 'YYYY-MM-DDTHH:MM' → { data:'YYYY-MM-DD', horario:'HH:MM' }
+function splitCarregamento(dt: string): { data: string; horario: string } {
+  const [d, t] = (dt || "").split("T");
+  return { data: d || "", horario: (t || "").slice(0, 5) };
+}
+
+function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
+  row: SheetMonitorRowType | null;
+  open: boolean;
+  onClose: () => void;
+  statusOptions: readonly string[];
+}) {
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState(EMPTY_CARGO_FORM);
+
+  useEffect(() => {
+    if (open && row) {
+      setForm({
+        lh: row.lh ?? "",
+        status: row.status ?? "",
+        origem: row.origem ?? "",
+        destino: row.destino ?? "",
+        carregamento: row.cargaAt ?? (row.data ? `${row.data}T${(row.horario ?? "00:00").slice(0, 5)}` : ""),
+        descarga: row.descargaAt ?? "",
+        motorista: row.motoristas ?? "",
+        cavalo: row.cavalo ?? "",
+        carreta: row.carreta ?? "",
+      });
+    }
+  }, [open, row]);
+
+  const mutation = useMutation({
+    mutationFn: updateMonitorCargo,
+    onSuccess: () => {
+      toast.success("Carga atualizada.");
+      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      onClose();
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Não foi possível salvar a carga."),
+  });
+
+  const save = () => {
+    if (!row?.cargoId) return;
+    const { data, horario } = splitCarregamento(form.carregamento);
+    if (form.origem.trim().length < 2 || form.destino.trim().length < 2 || !data || !horario) {
+      toast.error("Rota e carregamento (origem, destino, data + hora) são obrigatórios.");
+      return;
+    }
+    mutation.mutate({
+      cargoId: row.cargoId,
+      lh: form.lh.trim(),
+      status: form.status.trim(),
+      origem: form.origem.trim(),
+      destino: form.destino.trim(),
+      data,
+      horario,
+      descarga: form.descarga, // datetime-local ou '' (limpa)
+      motorista: form.motorista.trim(),
+      cavalo: form.cavalo.trim(),
+      carreta: form.carreta.trim(),
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <Pencil className="h-4 w-4 shrink-0 text-sky-500" />
+            Editar carga do sistema
+          </DialogTitle>
+          <DialogDescription className="pt-1 text-sm text-muted-foreground">
+            Carga criada no sistema (fora da planilha). Edite como uma planilha — tudo é editável.
+          </DialogDescription>
+        </DialogHeader>
+        <MonitorCargoFields form={form} setForm={setForm} statusOptions={statusOptions} />
+        <div className="mt-2 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-lg border border-border/80 px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground">Cancelar</button>
+          <button type="button" onClick={save} disabled={mutation.isPending}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+            {mutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            Salvar
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function NewCargoModal({ open, onClose, statusOptions }: { open: boolean; onClose: () => void; statusOptions: readonly string[] }) {
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState(EMPTY_CARGO_FORM);
+
+  useEffect(() => { if (open) setForm(EMPTY_CARGO_FORM); }, [open]);
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      // Cria a carga (rota + carregamento + descarga) e, se o operador já preencheu
+      // motorista/placa/status/LH, aplica via updateMonitorCargo na sequência.
+      const { data, horario } = splitCarregamento(form.carregamento);
+      const created = await createMonitorCargo({
+        origem: form.origem.trim(),
+        destino: form.destino.trim(),
+        data,
+        horario,
+        descarga: form.descarga ? form.descarga.replace("T", " ") : undefined,
+      });
+      const cargoId = created?.cargo?.id || created?.id;
+      const extra = form.motorista || form.cavalo || form.carreta || form.status || form.lh;
+      if (cargoId && extra) {
+        await updateMonitorCargo({
+          cargoId,
+          lh: form.lh.trim(),
+          status: form.status.trim(),
+          motorista: form.motorista.trim(),
+          cavalo: form.cavalo.trim(),
+          carreta: form.carreta.trim(),
+        });
+      }
+      return created;
+    },
+    onSuccess: () => {
+      toast.success("Carga criada no sistema.");
+      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      onClose();
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Não foi possível criar a carga."),
+  });
+
+  const create = () => {
+    const { data, horario } = splitCarregamento(form.carregamento);
+    if (form.origem.trim().length < 2 || form.destino.trim().length < 2 || !data || !horario) {
+      toast.error("Origem, destino e carregamento (data + hora) são obrigatórios.");
+      return;
+    }
+    mutation.mutate();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <FileSpreadsheet className="h-4 w-4 shrink-0 text-primary" />
+            Nova carga (sistema)
+          </DialogTitle>
+          <DialogDescription className="pt-1 text-sm text-muted-foreground">
+            Cria uma carga no sistema (fora da planilha Shopee), visível e editável no Monitor.
+          </DialogDescription>
+        </DialogHeader>
+        <MonitorCargoFields form={form} setForm={setForm} statusOptions={statusOptions} />
+        <div className="mt-2 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-lg border border-border/80 px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground">Cancelar</button>
+          <button type="button" onClick={create} disabled={mutation.isPending}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+            {mutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            Criar carga
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // Conteúdo da célula Motorista/Placa — visualização (com alça de arrastar) +
 // edição inline. A alça arrasta a ALOCAÇÃO (motorista+placa) para reatribuir
 // entre cargas; o lápis abre a edição inline.
@@ -410,6 +912,30 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
           )}
           <span className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-semibold text-amber-600 dark:text-amber-400">
             em reserva nesta rota
+          </span>
+        </div>
+      </div>
+    );
+  }
+  // Carga do SISTEMA — motorista/veículo exibidos read-only aqui; a edição (de
+  // tudo: status/LH/rota/agenda/motorista/placa) é feita pelo modal ao clicar na
+  // linha. Evita o keying por LH do editor inline (cargas do sistema têm LH livre).
+  if (row.source === "sistema") {
+    return (
+      <div className="flex items-start gap-1.5 border-l-2 border-sky-400 pl-2">
+        <div className="min-w-0 flex-1">
+          {row.motoristas ? (
+            <span className="truncate text-xs font-medium text-foreground">{row.motoristas}</span>
+          ) : (
+            <span className="text-xs text-muted-foreground/50">—</span>
+          )}
+          {row.cavalo && (
+            <div className="truncate text-[0.62rem] text-muted-foreground">
+              {row.cavalo}{row.carreta ? ` · ${row.carreta}` : ""}
+            </div>
+          )}
+          <span className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-semibold text-sky-600 dark:text-sky-400">
+            clique p/ editar
           </span>
         </div>
       </div>
@@ -717,10 +1243,13 @@ function SheetMonitorTable({
 
   const handleRowDragOver = useCallback((e: React.DragEvent, lh: string) => {
     if (!dragLhRef.current) return;
+    // A fila (reordenação) é só das linhas da PLANILHA. Cargas do sistema (LH
+    // livre/vazio) e reservas não entram — nega o drop nelas.
+    if (!lh) { e.preventDefault(); e.dataTransfer.dropEffect = "none"; setDropTarget(null); return; }
     // Não dá para soltar numa linha travada (status já em atribuição no ASPX)
     // nem numa linha FIXA (motorista/veículo intocável).
     const targetRow = rowsRef.current.find((r) => r.lh === lh);
-    if (targetRow && (targetRow.reserva || !allocEditPolicy(targetRow).editable || targetRow.pinned)) {
+    if (targetRow && (targetRow.source === "sistema" || targetRow.reserva || !allocEditPolicy(targetRow).editable || targetRow.pinned)) {
       e.preventDefault();
       e.dataTransfer.dropEffect = "none";
       setDropTarget(null);
@@ -748,10 +1277,13 @@ function SheetMonitorTable({
     setDragLh(null);
     setDropTarget(null);
     if (!src) return;
+    // Soltar numa carga do sistema (LH vazio) não reordena fila — ignora.
+    if (!lh) return;
     const list = rowsRef.current;
     const srcIdx = list.findIndex((r) => r.lh === src);
     const dstIdx = list.findIndex((r) => r.lh === lh);
     if (srcIdx < 0 || dstIdx < 0) return;
+    if (list[dstIdx]?.source === "sistema") return;
     const items = list.map((r) => ({ lh: r.lh, alloc: { motorista: r.motoristas || "", cavalo: r.cavalo || "", carreta: r.carreta || "" } }));
     const intent = intentFromEvent(e);
     const moves =
@@ -762,8 +1294,8 @@ function SheetMonitorTable({
     // Bloqueia se qualquer linha afetada (alvo ou intermediárias do "descer
     // fila") estiver FIXA ou travada por status (já em atribuição no ASPX).
     const affected = moves.map((m) => list.find((x) => x.lh === m.lh)).filter(Boolean) as SheetMonitorRowType[];
-    if (affected.some((r) => r.reserva)) {
-      toast.error("Linha de reserva não entra na reordenação da fila.");
+    if (affected.some((r) => r.reserva || r.source === "sistema")) {
+      toast.error("Linha de reserva ou carga do sistema não entra na reordenação da fila.");
       return;
     }
     // Só reordena dentro da MESMA rota. Um arrasto que cruzaria rotas (troca entre
@@ -830,7 +1362,7 @@ function SheetMonitorTable({
           <tbody className="divide-y divide-border/40">
             {rows.map((row, idx) => (
               <SheetMonitorRow
-                key={`${row.lh}-${idx}`}
+                key={row.rowKey ?? `${row.lh}-${idx}`}
                 row={row}
                 enriched={enrichedByLh[row.lh]}
                 selected={row.lh === selectedLh}
@@ -1338,6 +1870,9 @@ export default function SheetMonitor() {
   itemsRef.current = items;
   // Ação pendente aguardando confirmação no pop-up de ASPX (edição inline / arrastar).
   const [aspxConfirm, setAspxConfirm] = useState<{ count: number; run: () => void } | null>(null);
+  const [aspxAssignOpen, setAspxAssignOpen] = useState(false);
+  const [editingSystemRow, setEditingSystemRow] = useState<SheetMonitorRowType | null>(null);
+  const [newCargoOpen, setNewCargoOpen] = useState(false);
 
   const sheetConfigured = monitorData?.meta?.sheetConfigured ?? true;
   const noSnapshot = monitorData?.meta?.noSnapshot ?? false;
@@ -1624,6 +2159,11 @@ export default function SheetMonitor() {
   const isRefreshing = (isFetching && !loading) || refreshMutation.isPending;
 
   const handleSelectRow = useCallback((row: SheetMonitorRowType) => {
+    // Carga do sistema → modal de edição (planilha-like); planilha → detalhe.
+    if (row.source === "sistema") {
+      setEditingSystemRow(row);
+      return;
+    }
     setSelectedRow((prev) => (prev?.lh === row.lh ? null : row));
   }, []);
 
@@ -1797,6 +2337,18 @@ export default function SheetMonitor() {
               )}
 
 
+              <button type="button" onClick={() => setNewCargoOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2.5 text-xs font-semibold text-sky-700 hover:bg-sky-500/20 dark:text-sky-300">
+                <FileSpreadsheet className="h-3.5 w-3.5" />
+                Nova carga
+              </button>
+
+              <button type="button" onClick={() => setAspxAssignOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300">
+                <Send className="h-3.5 w-3.5" />
+                Atribuir no ASPX
+              </button>
+
               <button type="button" onClick={() => refreshMutation.mutate()} disabled={isRefreshing}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2.5 text-xs font-semibold text-primary hover:bg-primary/10 disabled:opacity-50">
                 <RefreshCw className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")} />
@@ -1890,6 +2442,20 @@ export default function SheetMonitor() {
         onConfirm={() => { aspxConfirm?.run(); setAspxConfirm(null); }}
         onCancel={() => setAspxConfirm(null)}
       />
+
+      {/* ── Atribuir no ASPX (preview + confirmação) ── */}
+      <AspxAssignModal open={aspxAssignOpen} onClose={() => setAspxAssignOpen(false)} />
+
+      {/* ── Editar carga do sistema (grid unificado) ── */}
+      <SystemCargoEditModal
+        row={editingSystemRow}
+        open={editingSystemRow !== null}
+        onClose={() => setEditingSystemRow(null)}
+        statusOptions={OPERATIONAL_STATUS_OPTIONS}
+      />
+
+      {/* ── Nova carga (sistema) ── */}
+      <NewCargoModal open={newCargoOpen} onClose={() => setNewCargoOpen(false)} statusOptions={OPERATIONAL_STATUS_OPTIONS} />
     </div>
   );
 }
