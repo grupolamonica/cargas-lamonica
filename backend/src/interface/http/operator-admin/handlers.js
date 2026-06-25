@@ -232,12 +232,22 @@ export async function resolveCreateOperatorCargoResponse(request) {
       delete payload.bonus;
     }
 
-    return createOperatorCargo({
+    const result = await createOperatorCargo({
       operatorId,
       payload,
       requestIp,
       correlationId,
     });
+
+    // Carga nasce CONSULTADA: enriquece (Angellira/ASPX) em background, sem
+    // bloquear a resposta. Mesmo sem motorista grava a linha esqueleto → o selo
+    // nunca fica "não consultado". Best-effort.
+    const newCargoId = result?.payload?.id;
+    if (newCargoId) {
+      const { enrichSystemCargoById } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+      void enrichSystemCargoById(createSupabaseAdminClient(), newCargoId, { correlationId }).catch(() => {});
+    }
+    return result;
     },
   );
 }
@@ -892,15 +902,21 @@ export async function resolveSheetMonitorResponse(request) {
     }
 
     if (snapshot) {
-      // Read enriched data in parallel — non-fatal if missing
+      // Read enriched data in parallel — non-fatal if missing.
+      // enrichedByLh = linhas da planilha; enrichedByCargoId = cargas do sistema
+      // (casadas por cargo_id, já que o LH delas é livre/vazio).
       let enrichedByLh = {};
+      let enrichedByCargoId = {};
       try {
         const { data: enrichedRows } = await supabaseClient
           .from("sheet_monitor_enriched")
           .select("*")
           .limit(50000);
         if (enrichedRows) {
-          for (const r of enrichedRows) enrichedByLh[r.lh] = r;
+          for (const r of enrichedRows) {
+            if (r.lh) enrichedByLh[r.lh] = r;
+            if (r.cargo_id) enrichedByCargoId[r.cargo_id] = r;
+          }
         }
       } catch (enrichErr) {
         logStructuredEvent("warn", "sheet-monitor.enrich-read-failed", {
@@ -922,6 +938,7 @@ export async function resolveSheetMonitorResponse(request) {
           items: unified.items,
           summary: unified.summary,
           enrichedByLh,
+          enrichedByCargoId,
           allocByLh,
           meta: {
             correlationId,
@@ -994,7 +1011,12 @@ export async function resolveUpdateMonitorCargoResponse(request) {
     },
     async ({ correlationId, requestIp, operatorId }) => {
       const { cargoId, ...fields } = sheetMonitorCargoUpdateBodySchema.parse(await parseJsonBody(request));
-      return updateMonitorCargo({ cargoId, operatorId, payload: fields, requestIp, correlationId });
+      const result = await updateMonitorCargo({ cargoId, operatorId, payload: fields, requestIp, correlationId });
+      // Re-enriquece a carga em background (motorista/placa podem ter mudado) p/
+      // o selo Angellira/ASPX refletir o novo motorista. Best-effort, com cache.
+      const { enrichSystemCargoById } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+      void enrichSystemCargoById(createSupabaseAdminClient(), cargoId, { correlationId }).catch(() => {});
+      return result;
     },
   );
 }

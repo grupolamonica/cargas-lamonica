@@ -666,6 +666,7 @@ export async function fetchSheetMonitor({ refresh = false }: { refresh?: boolean
     items: SheetMonitorRow[];
     summary: SheetMonitorSummary;
     enrichedByLh: Record<string, SheetMonitorEnrichedRow>;
+    enrichedByCargoId?: Record<string, SheetMonitorEnrichedRow>;
     allocByLh?: Record<string, SheetMonitorAllocation>;
     meta: {
       correlationId: string;

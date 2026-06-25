@@ -1258,6 +1258,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
 function SheetMonitorTable({
   rows,
   enrichedByLh,
+  enrichedByCargoId,
   allocByLh,
   selectedLh,
   editingLh,
@@ -1274,6 +1275,7 @@ function SheetMonitorTable({
 }: {
   rows: SheetMonitorRowType[];
   enrichedByLh: Record<string, SheetMonitorEnrichedRow>;
+  enrichedByCargoId: Record<string, SheetMonitorEnrichedRow>;
   allocByLh: Record<string, SheetMonitorAllocation>;
   selectedLh: string | null;
   editingLh: string | null;
@@ -1435,7 +1437,7 @@ function SheetMonitorTable({
               <SheetMonitorRow
                 key={row.rowKey ?? `${row.lh}-${idx}`}
                 row={row}
-                enriched={enrichedByLh[row.lh]}
+                enriched={row.source === "sistema" ? enrichedByCargoId[row.cargoId ?? ""] : enrichedByLh[row.lh]}
                 selected={row.lh === selectedLh}
                 editing={row.lh === editingLh}
                 saving={row.lh === savingLh}
@@ -1911,6 +1913,7 @@ export default function SheetMonitor() {
 
   const rawItems = monitorData?.items ?? EMPTY_ROWS;
   const enrichedByLh = monitorData?.enrichedByLh ?? EMPTY_ENRICHED;
+  const enrichedByCargoId = monitorData?.enrichedByCargoId ?? EMPTY_ENRICHED;
   const allocByLh = monitorData?.allocByLh ?? EMPTY_ALLOC;
 
   // Alocação efetiva: o override do operador (alloc_*) sobrepõe o valor da
@@ -2454,6 +2457,7 @@ export default function SheetMonitor() {
               <SheetMonitorTable
                 rows={paginatedRows}
                 enrichedByLh={enrichedByLh}
+                enrichedByCargoId={enrichedByCargoId}
                 allocByLh={allocByLh}
                 selectedLh={selectedRow?.lh ?? null}
                 editingLh={editingLh}
