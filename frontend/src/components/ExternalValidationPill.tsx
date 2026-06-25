@@ -10,14 +10,13 @@ import { cn } from "@/lib/utils";
 export function ExternalValidationPill({
   label,
   found,
-  okText,
   noText,
   scope,
   compact = false,
 }: {
   label: string;
   found: boolean | null | undefined;
-  okText: string;
+  /** Texto mostrado quando NÃO encontrado (ex.: "Não encontrado", "Não cadastrado"). */
   noText: string;
   scope?: string;
   compact?: boolean;
@@ -30,7 +29,8 @@ export function ExternalValidationPill({
         ? "border-red-300/60 bg-red-50 text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300"
         : "border-border/60 bg-muted/40 text-muted-foreground/70";
   const Icon = state === "no" ? XCircle : BadgeCheck;
-  const text = state === "unknown" ? `${label}: não consultado` : `${label}: ${found ? okText : noText}`;
+  // Verificado (ok): só o selo + o nome (Angellira/ASPX) — sem texto de status.
+  const text = state === "ok" ? label : state === "no" ? `${label}: ${noText}` : `${label}: não consultado`;
   return (
     <span
       className={cn(

@@ -1656,13 +1656,11 @@ const Motoristas = () => {
                           <ExternalValidationPill
                             label="Angellira"
                             found={driver.externalValidation.hasAngelira}
-                            okText="✓ Verificado"
                             noText="Não encontrado"
                           />
                           <ExternalValidationPill
                             label="ASPX"
                             found={driver.externalValidation.hasAspx}
-                            okText="✓ Cadastrado"
                             noText="Não cadastrado"
                           />
                         </>
