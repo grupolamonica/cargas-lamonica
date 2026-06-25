@@ -838,6 +838,8 @@ export interface AspxAllocationItem {
   assignedDriver: string;
   /** ASPX tem um motorista DIFERENTE do sistema (conflito). */
   divergent: boolean;
+  /** Divergente que PODE ser trocada no ASPX (trip_id + motorista do sistema resolvidos). */
+  reassignable?: boolean;
   /** Agenda da carga (DD/MM/YYYY HH:MM). */
   carregamentoLabel: string | null;
   descargaLabel: string | null;

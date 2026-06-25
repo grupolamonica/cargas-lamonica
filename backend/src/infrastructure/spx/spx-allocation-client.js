@@ -112,6 +112,7 @@ export async function fetchTripIndex({ daysBack = 45 } = {}, opts = {}) {
       const num = String(t.trip_number ?? "").trim();
       if (!num || byNumber.has(num)) continue;
       byNumber.set(num, {
+        tripId: typeof t.trip_id === "number" ? t.trip_id : (t.trip_id ? Number(t.trip_id) : null),
         status: typeof t.trip_status === "number" ? t.trip_status : null,
         statusName: t.trip_status_name ?? "",
         driver: (t.driver_name ?? "").trim(),

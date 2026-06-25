@@ -181,6 +181,7 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
         realStatus: null,
         assignedDriver: "",
         divergent: false,
+        reassignable: false,
         reason: operational ? "status operacional (simulado)" : null,
       };
     }
@@ -193,15 +194,20 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
     if (trip) {
       const driverId = driverByName.get(normName(c.motorista)) ?? null;
       if (!driverId) {
-        return { ...base, simulated: false, tripId: trip.trip_id, driverId: null, state: "pending", realStatus: real?.statusName ?? null, assignedDriver: "", divergent: false, reason: "motorista não encontrado no ASPX" };
+        return { ...base, simulated: false, tripId: trip.trip_id, driverId: null, state: "pending", realStatus: real?.statusName ?? null, assignedDriver: "", divergent: false, reassignable: false, reason: "motorista não encontrado no ASPX" };
       }
-      return { ...base, simulated: false, tripId: trip.trip_id, driverId, state: "assign", realStatus: real?.statusName ?? null, assignedDriver: "", divergent: false, reason: null };
+      return { ...base, simulated: false, tripId: trip.trip_id, driverId, state: "assign", realStatus: real?.statusName ?? null, assignedDriver: "", divergent: false, reassignable: false, reason: null };
     }
 
     // 2) Não atribuível → classifica pelo ESTADO REAL (check positivo).
     if (real) {
       const state = classifyByStatus(real.status, real.driver);
       const divergent = isDivergent(state, c.motorista, real.driver);
+      // Divergente: resolve trip_id (do índice) + driver_id do motorista do SISTEMA
+      // p/ permitir TROCAR no ASPX (reassign). Só é acionável se ambos resolverem.
+      const tripId = divergent ? (real.tripId ?? null) : null;
+      const driverId = divergent ? (driverByName.get(normName(c.motorista)) ?? null) : null;
+      const reassignable = divergent && tripId != null && driverId != null;
       const reasonByState = {
         assigned: real.driver ? `já atribuída a ${real.driver}` : "já atribuída no ASPX",
         in_progress: `em operação (${real.statusName})${real.driver ? ` — ${real.driver}` : ""}`,
@@ -211,13 +217,13 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
         unknown: `status ${real.statusName || "desconhecido"} — não atribuível`,
       };
       const reason = divergent
-        ? `divergente — sistema: ${c.motorista} · ASPX: ${real.driver}`
+        ? `divergente — sistema: ${c.motorista} · ASPX: ${real.driver}${reassignable ? "" : " (motorista do sistema não está disponível no ASPX p/ trocar)"}`
         : (reasonByState[state] ?? null);
-      return { ...base, simulated: false, tripId: null, driverId: null, state, realStatus: real.statusName, assignedDriver: real.driver || "", divergent, reason };
+      return { ...base, simulated: false, tripId, driverId, state, realStatus: real.statusName, assignedDriver: real.driver || "", divergent, reassignable, reason };
     }
 
     // 3) Não está em nenhuma lista → não confirmado (NÃO afirma "já atribuída").
-    return { ...base, simulated: false, tripId: null, driverId: null, state: "unknown", realStatus: null, assignedDriver: "", divergent: false, reason: "não encontrada no ASPX (status não confirmado)" };
+    return { ...base, simulated: false, tripId: null, driverId: null, state: "unknown", realStatus: null, assignedDriver: "", divergent: false, reassignable: false, reason: "não encontrada no ASPX (status não confirmado)" };
   });
 
   // Mostra SÓ o que vai ser alterado ou está diferente no ASPX:

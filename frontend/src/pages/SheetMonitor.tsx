@@ -454,7 +454,8 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
   });
 
   const items = useMemo(() => data?.items ?? [], [data]);
-  const assignable = useMemo(() => items.filter((i) => i.state === "assign"), [items]);
+  // Selecionáveis = vão atribuir (assign) + divergentes que dá pra TROCAR (reassignable).
+  const assignable = useMemo(() => items.filter((i) => i.state === "assign" || i.reassignable === true), [items]);
   const allSelected = assignable.length > 0 && assignable.every((i) => selected.has(i.lh));
 
   const toggle = (lh: string) =>
@@ -473,7 +474,7 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
   }, [result]);
 
   const confirmLabel = data?.writeEnabled && !data?.simulated
-    ? `Atribuir ${selected.size} no ASPX`
+    ? `Aplicar ${selected.size} no ASPX`
     : `Simular ${selected.size} (dry-run)`;
 
   return (
@@ -579,7 +580,7 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
               <tbody>
                 {items.map((it) => {
                   const meta = aspxStateMeta(it.state);
-                  const selectable = it.state === "assign";
+                  const selectable = it.state === "assign" || it.reassignable === true;
                   const sentState = resultByLh.get(it.lh);
                   return (
                     <tr key={it.lh} className={cn("border-t border-border/40", !selectable && "opacity-60", it.divergent && "bg-red-50/50 dark:bg-red-500/10")}>

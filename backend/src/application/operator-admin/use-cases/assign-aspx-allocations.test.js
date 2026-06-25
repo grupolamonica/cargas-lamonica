@@ -29,6 +29,7 @@ function baseDeps(assignSpy) {
       { driver_id: 91, name: "JOAO SILVA" },
       { driver_id: 92, name: "Maria Souza" },
     ],
+    fetchIndex: async () => ({ byNumber: new Map(), truncated: false, partial: false }),
     assignTrip: assignSpy,
   };
 }
@@ -41,6 +42,26 @@ afterEach(() => {
 describe("assignAspxAllocations", () => {
   it("rejeita quando nenhum LH é selecionado", async () => {
     await expect(assignAspxAllocations({ lhs: [], operatorId: "op" })).rejects.toThrow();
+  });
+
+  it("reassign: LH fora da fila mas no índice → usa trip_id do índice (trocar motorista)", async () => {
+    const spy = vi.fn().mockResolvedValue({ dry_run: true });
+    const res = await assignAspxAllocations({
+      lhs: ["LH1"],
+      operatorId: "op",
+      deps: {
+        ...baseDeps(spy),
+        fetchTrips: async () => [], // LH1 NÃO está atribuível (já tem motorista no ASPX)
+        fetchIndex: async () => ({
+          byNumber: new Map([["LH1", { tripId: 777, status: 5, statusName: "Assigned", driver: "OUTRO" }]]),
+          truncated: false,
+          partial: false,
+        }),
+      },
+    });
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ tripId: 777, driverIds: [91] }));
+    expect(res.payload.results[0].reassign).toBe(true);
+    expect(res.payload.results[0].state).toBe("dry_run");
   });
 
   it("kill switch off → força dry_run (não envia ao ASPX)", async () => {

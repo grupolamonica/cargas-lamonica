@@ -52,17 +52,17 @@ describe("previewAspxAllocation — só mostra o que muda/diverge", () => {
     expect(res.payload.summary.pending).toBe(1);
   });
 
-  it("divergente aparece; já-em-dia e cancelada são OCULTADAS", async () => {
+  it("divergente aparece (reassignable c/ trip_id+driver); já-em-dia e cancelada OCULTADAS", async () => {
     const res = await previewAspxAllocation({
       deps: {
         listCandidates: async () => [CANDIDATES[0], CANDIDATES[1], CANDIDATES[2]],
         fetchTrips: async () => [],
-        fetchDrivers: async () => [],
+        fetchDrivers: async () => [{ driver_id: 91, name: "JOAO SILVA" }], // motorista do sistema disponível p/ trocar
         fetchIndex: async () => ({
           byNumber: new Map([
-            ["LH1", { status: 5, statusName: "Assigned", driver: "OUTRO MOTORISTA" }], // diverge de João Silva
-            ["LH2", { status: 5, statusName: "Assigned", driver: "Maria Souza" }], // igual → oculta
-            ["LH3", { status: 100, statusName: "Cancelled", driver: "" }], // cancelada → oculta
+            ["LH1", { tripId: 555, status: 5, statusName: "Assigned", driver: "OUTRO MOTORISTA" }], // diverge de João Silva
+            ["LH2", { tripId: 556, status: 5, statusName: "Assigned", driver: "Maria Souza" }], // igual → oculta
+            ["LH3", { tripId: 557, status: 100, statusName: "Cancelled", driver: "" }], // cancelada → oculta
           ]),
           truncated: false,
           partial: false,
@@ -74,11 +74,32 @@ describe("previewAspxAllocation — só mostra o que muda/diverge", () => {
     expect(it0.lh).toBe("LH1");
     expect(it0.divergent).toBe(true);
     expect(it0.assignedDriver).toBe("OUTRO MOTORISTA");
+    expect(it0.reassignable).toBe(true); // trip_id (555) + driver do sistema (91) resolvidos
+    expect(it0.tripId).toBe(555);
+    expect(it0.driverId).toBe(91);
     expect(res.payload.summary.divergent).toBe(1);
     expect(res.payload.summary.alreadyAssigned).toBe(2); // LH1 + LH2 (contexto)
     expect(res.payload.summary.cancelled).toBe(1);
     expect(res.payload.summary.hidden).toBe(2); // LH2 + LH3 ocultadas
     expect(res.payload.summary.totalCandidates).toBe(3);
+  });
+
+  it("divergente SEM motorista do sistema no ASPX → aparece, mas NÃO reassignable", async () => {
+    const res = await previewAspxAllocation({
+      deps: {
+        listCandidates: async () => [CANDIDATES[0]],
+        fetchTrips: async () => [],
+        fetchDrivers: async () => [], // João Silva não está disponível
+        fetchIndex: async () => ({
+          byNumber: new Map([["LH1", { tripId: 555, status: 5, statusName: "Assigned", driver: "OUTRO" }]]),
+          truncated: false,
+          partial: false,
+        }),
+      },
+    });
+    expect(res.payload.items).toHaveLength(1);
+    expect(res.payload.items[0].divergent).toBe(true);
+    expect(res.payload.items[0].reassignable).toBe(false);
   });
 
   it("status 4 (Assigning) COM motorista divergente → assigned + divergent (aparece)", async () => {

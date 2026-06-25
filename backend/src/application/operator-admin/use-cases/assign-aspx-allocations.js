@@ -4,6 +4,7 @@ import { ValidationError } from "../../../domain/load-claims/errors.js";
 import {
   fetchAssignableTrips,
   fetchAssignableDrivers,
+  fetchTripIndex,
   assignTrip,
   isAspxWriteEnabled,
 } from "../../../infrastructure/spx/spx-allocation-client.js";
@@ -45,6 +46,7 @@ export async function assignAspxAllocations({ lhs, operatorId, dryRun = false, r
   const listByLhs = deps.listByLhs || defaultListByLhs;
   const getTrips = deps.fetchTrips || fetchAssignableTrips;
   const getDrivers = deps.fetchDrivers || fetchAssignableDrivers;
+  const getIndex = deps.fetchIndex || fetchTripIndex;
   const sendAssign = deps.assignTrip || assignTrip;
 
   const writeEnabled = isAspxWriteEnabled();
@@ -64,8 +66,20 @@ export async function assignAspxAllocations({ lhs, operatorId, dryRun = false, r
     simulated = true;
   }
 
+  // Índice de status real (best-effort) — dá o trip_id de viagens NÃO-atribuíveis
+  // (já com motorista), p/ TROCAR o motorista (reassign) das divergentes.
+  let index = null;
+  if (!simulated) {
+    try {
+      index = await getIndex();
+    } catch {
+      /* sem índice → reassign indisponível; assign normal segue */
+    }
+  }
+
   const tripByLh = new Map((trips || []).map((t) => [String(t.trip_number ?? "").trim(), t]));
   const driverByName = new Map((drivers || []).map((d) => [normName(d.name), d.driver_id]));
+  const indexByLh = index?.byNumber instanceof Map ? index.byNumber : new Map();
 
   const results = [];
   for (const lh of lhs) {
@@ -78,15 +92,19 @@ export async function assignAspxAllocations({ lhs, operatorId, dryRun = false, r
       results.push({ lh, state: "simulated", reason: "sidecar SPX indisponível — nada enviado" });
       continue;
     }
-    const trip = tripByLh.get(String(lh).trim());
+    const assignableTrip = tripByLh.get(String(lh).trim());
+    const idx = indexByLh.get(String(lh).trim());
+    // trip_id: da fila atribuível (assign novo) OU do índice (reassign/trocar).
+    const tripId = assignableTrip?.trip_id ?? (idx?.tripId ?? null);
+    const isReassign = !assignableTrip && tripId != null;
     const driverId = driverByName.get(normName(c.motorista)) ?? null;
-    if (!trip) { results.push({ lh, state: "skipped", reason: "não atribuível (provavelmente já atribuída)" }); continue; }
+    if (tripId == null) { results.push({ lh, state: "skipped", reason: "não atribuível (não está na fila nem no índice do ASPX)" }); continue; }
     if (!driverId) { results.push({ lh, state: "pending", reason: "motorista não encontrado no ASPX" }); continue; }
 
     const plates = [c.cavalo, c.carreta].filter((p) => (p || "").trim() !== "");
     try {
-      const r = await sendAssign({ tripId: trip.trip_id, driverIds: [driverId], vehiclePlates: plates, dryRun: effectiveDryRun });
-      results.push({ lh, state: effectiveDryRun ? "dry_run" : "assigned", tripId: trip.trip_id, driverId, sidecar: r });
+      const r = await sendAssign({ tripId, driverIds: [driverId], vehiclePlates: plates, dryRun: effectiveDryRun });
+      results.push({ lh, state: effectiveDryRun ? "dry_run" : "assigned", reassign: isReassign, tripId, driverId, sidecar: r });
     } catch (err) {
       results.push({ lh, state: "error", reason: err instanceof Error ? err.message : String(err) });
     }
