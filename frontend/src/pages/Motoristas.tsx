@@ -1653,16 +1653,8 @@ const Motoristas = () => {
                         </>
                       ) : driver.externalValidation ? (
                         <>
-                          <ExternalValidationPill
-                            label="Angellira"
-                            found={driver.externalValidation.hasAngelira}
-                            noText="Não encontrado"
-                          />
-                          <ExternalValidationPill
-                            label="ASPX"
-                            found={driver.externalValidation.hasAspx}
-                            noText="Não cadastrado"
-                          />
+                          <ExternalValidationPill label="Angellira" found={driver.externalValidation.hasAngelira} />
+                          <ExternalValidationPill label="ASPX" found={driver.externalValidation.hasAspx} />
                         </>
                       ) : null}
                     </div>

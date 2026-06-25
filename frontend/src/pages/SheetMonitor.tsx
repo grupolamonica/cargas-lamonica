@@ -237,12 +237,8 @@ function DriverChecks({ enriched }: { enriched: SheetMonitorEnrichedRow | undefi
       <ExternalValidationPill
         compact scope="motorista" label="Angellira"
         found={angelliraVigente(enriched?.angellira_driver_found, enriched?.angellira_driver_valid_until)}
-        noText="Não encontrado"
       />
-      <ExternalValidationPill
-        compact scope="motorista" label="ASPX"
-        found={aspxCadastroState(enriched)} noText="Não cadastrado"
-      />
+      <ExternalValidationPill compact scope="motorista" label="ASPX" found={aspxCadastroState(enriched)} />
     </div>
   );
 }
@@ -254,16 +250,14 @@ function VehicleChecks({ enriched, hasCavalo, hasCarreta }: { enriched: SheetMon
     <div className="mt-0.5 flex flex-wrap items-center gap-1">
       {hasCavalo && (
         <ExternalValidationPill
-          compact scope="cavalo" label="Angellira"
+          compact scope="Angellira do cavalo" label="Cavalo"
           found={angelliraVigente(enriched?.cavalo_angellira_found, enriched?.cavalo_angellira_valid_until)}
-          noText="Não encontrado"
         />
       )}
       {hasCarreta && (
         <ExternalValidationPill
-          compact scope="carreta" label="Angellira"
+          compact scope="Angellira da carreta" label="Carreta"
           found={angelliraVigente(enriched?.carreta_angellira_found, enriched?.carreta_angellira_valid_until)}
-          noText="Não encontrado"
         />
       )}
     </div>
