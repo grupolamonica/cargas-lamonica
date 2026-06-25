@@ -135,6 +135,54 @@ export async function syncOperatorCargasSheet() {
   });
 }
 
+export interface ImportCargoRowPreview {
+  cod_carga: string | null;
+  perfil: string;
+  data: string;
+  horario: string;
+  data_descarga: string | null;
+  origem: string;
+  destino: string;
+  status: string;
+}
+
+export interface ImportCargoRowResult {
+  line: number;
+  ok: boolean;
+  errors: string[];
+  preview: ImportCargoRowPreview;
+  duplicate: boolean;
+}
+
+export interface ImportCargasResponse {
+  ok: boolean;
+  dryRun: boolean;
+  headerError?: string;
+  summary: {
+    total: number;
+    valid: number;
+    invalid: number;
+    duplicated: number;
+    importable: number;
+    imported: number;
+  };
+  rows: ImportCargoRowResult[];
+  meta: { correlationId: string };
+}
+
+/**
+ * Importa cargas a partir de um CSV. Com `dryRun: true` apenas valida e devolve
+ * o preview por linha (sem gravar); com `dryRun: false` grava as linhas válidas.
+ */
+export async function importOperatorCargas(csv: string, dryRun: boolean) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<ImportCargasResponse>("/api/operator/cargas/import", {
+    method: "POST",
+    accessToken,
+    body: { csv, dryRun },
+  });
+}
+
 export async function duplicateOperatorCargo(cargoId: string) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<MutationResponse>(`/api/operator/cargas/${cargoId}/duplicate`, {
