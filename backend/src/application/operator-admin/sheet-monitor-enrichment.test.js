@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildEnrichedUpsertRow } from "./sheet-monitor-enrichment.js";
+import { buildEnrichedUpsertRow, mergePreservingGood } from "./sheet-monitor-enrichment.js";
 
 const ctx = (over = {}) => ({
   nameToCpf: {},
@@ -55,5 +55,53 @@ describe("buildEnrichedUpsertRow", () => {
     expect(r.cavalo_plate).toBe("ABC1234"); // normalizado
     expect(r.cavalo_source).toBe("db");
     expect(r.cavalo_angellira_found).toBe(true);
+  });
+});
+
+describe("mergePreservingGood — não perde dado bom em falha transitória", () => {
+  const prevFound = {
+    lh: "LH1", driver_name: "João Silva", aspx_cpf: "123", aspx_display_name: "JOAO",
+    angellira_driver_found: true, angellira_driver_status: "FOUND", angellira_driver_valid_until: "2027-01-01", angellira_driver_status_text: "VIGENTE",
+    cavalo_plate: "ABC1234", cavalo_angellira_found: true, cavalo_angellira_status: "FOUND",
+  };
+
+  it("nova consulta UNAVAILABLE (mesmo motorista) → mantém o FOUND anterior", () => {
+    const next = { lh: "LH1", driver_name: "João Silva", aspx_cpf: "123", angellira_driver_found: false, angellira_driver_status: "UNAVAILABLE", angellira_driver_valid_until: null, angellira_driver_status_text: null };
+    const m = mergePreservingGood(next, prevFound);
+    expect(m.angellira_driver_found).toBe(true);
+    expect(m.angellira_driver_status).toBe("FOUND");
+    expect(m.angellira_driver_valid_until).toBe("2027-01-01");
+  });
+
+  it("aspx_cpf sumiu (match ASPX falhou) mesmo motorista → mantém o cpf anterior", () => {
+    const next = { lh: "LH1", driver_name: "João Silva", aspx_cpf: null, aspx_display_name: null, angellira_driver_status: null };
+    const m = mergePreservingGood(next, prevFound);
+    expect(m.aspx_cpf).toBe("123");
+    expect(m.angellira_driver_found).toBe(true); // sem cpf → angellira null → preserva
+  });
+
+  it("motorista DIFERENTE → NÃO preserva (usa o novo, mesmo UNAVAILABLE)", () => {
+    const next = { lh: "LH1", driver_name: "Outro Motorista", aspx_cpf: null, angellira_driver_found: false, angellira_driver_status: "UNAVAILABLE" };
+    const m = mergePreservingGood(next, prevFound);
+    expect(m.aspx_cpf).toBeNull();
+    expect(m.angellira_driver_status).toBe("UNAVAILABLE");
+  });
+
+  it("nova consulta FOUND → usa o novo (atualiza)", () => {
+    const next = { lh: "LH1", driver_name: "João Silva", aspx_cpf: "123", angellira_driver_found: true, angellira_driver_status: "FOUND", angellira_driver_valid_until: "2028-05-05" };
+    const m = mergePreservingGood(next, prevFound);
+    expect(m.angellira_driver_valid_until).toBe("2028-05-05");
+  });
+
+  it("cavalo UNAVAILABLE (mesma placa) → mantém o anterior", () => {
+    const next = { lh: "LH1", driver_name: "X", cavalo_plate: "ABC1234", cavalo_angellira_found: false, cavalo_angellira_status: "UNAVAILABLE" };
+    const m = mergePreservingGood(next, prevFound);
+    expect(m.cavalo_angellira_found).toBe(true);
+    expect(m.cavalo_angellira_status).toBe("FOUND");
+  });
+
+  it("sem registro anterior → retorna o novo", () => {
+    const next = { lh: "LH9", driver_name: "Z", angellira_driver_status: "UNAVAILABLE" };
+    expect(mergePreservingGood(next, undefined)).toBe(next);
   });
 });

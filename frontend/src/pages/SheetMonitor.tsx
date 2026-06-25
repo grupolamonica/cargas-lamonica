@@ -2226,6 +2226,17 @@ export default function SheetMonitor() {
   const loading = isLoading && items.length === 0;
   const isRefreshing = (isFetching && !loading) || refreshMutation.isPending;
 
+  // Consulta TODOS automaticamente ao abrir o Monitor: dispara o loop de enrich
+  // (force=false → só pendentes/novas; barato com cache) uma vez por sessão, p/
+  // nada ficar "não consultado" sem o operador clicar em "Atualizar planilha".
+  const autoEnrichedRef = useRef(false);
+  useEffect(() => {
+    if (autoEnrichedRef.current || !monitorData || items.length === 0) return;
+    autoEnrichedRef.current = true;
+    if (!enrichingRef.current) handleStartEnrich(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monitorData, items.length]);
+
   const handleSelectRow = useCallback((row: SheetMonitorRowType) => {
     // Carga do sistema → modal de edição (planilha-like); planilha → detalhe.
     if (row.source === "sistema") {

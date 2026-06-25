@@ -127,6 +127,61 @@ export function buildEnrichedUpsertRow(row, ctx) {
   };
 }
 
+const isUnavail = (s) => !s || s === "UNAVAILABLE";
+const isReal = (s) => Boolean(s) && s !== "UNAVAILABLE";
+
+/**
+ * Funde a nova linha enriquecida com a ANTERIOR preservando dado bom: se a nova
+ * consulta veio UNAVAILABLE/vazia (falha transitória) mas já havia status real,
+ * mantém o anterior. Só preserva quando é o MESMO motorista/placa (senão troca
+ * de motorista carregaria dado errado). enriched_at sempre avança (marca consulta).
+ */
+export function mergePreservingGood(next, prev) {
+  if (!prev) return next;
+  const m = { ...next };
+
+  // Motorista (Angellira + cadastro ASPX) — só se for o mesmo motorista
+  if (next.driver_name && next.driver_name === prev.driver_name) {
+    if (!next.aspx_cpf && prev.aspx_cpf) {
+      m.aspx_cpf = prev.aspx_cpf;
+      m.aspx_display_name = prev.aspx_display_name ?? m.aspx_display_name;
+    }
+    if (isUnavail(next.angellira_driver_status) && isReal(prev.angellira_driver_status)) {
+      m.angellira_driver_found = prev.angellira_driver_found;
+      m.angellira_driver_status = prev.angellira_driver_status;
+      m.angellira_driver_valid_until = prev.angellira_driver_valid_until;
+      m.angellira_driver_status_text = prev.angellira_driver_status_text;
+      m.angellira_driver_details = prev.angellira_driver_details ?? m.angellira_driver_details;
+    }
+  }
+
+  // Cavalo — só se for a mesma placa
+  if (next.cavalo_plate && next.cavalo_plate === prev.cavalo_plate && isUnavail(next.cavalo_angellira_status) && isReal(prev.cavalo_angellira_status)) {
+    m.cavalo_source = prev.cavalo_source;
+    m.cavalo_type = prev.cavalo_type ?? m.cavalo_type;
+    m.cavalo_angellira_found = prev.cavalo_angellira_found;
+    m.cavalo_angellira_status = prev.cavalo_angellira_status;
+    m.cavalo_angellira_valid_until = prev.cavalo_angellira_valid_until;
+    m.cavalo_angellira_status_text = prev.cavalo_angellira_status_text;
+    m.cavalo_angellira_display = prev.cavalo_angellira_display ?? m.cavalo_angellira_display;
+    m.cavalo_details = prev.cavalo_details ?? m.cavalo_details;
+  }
+
+  // Carreta — só se for a mesma placa
+  if (next.carreta_plate && next.carreta_plate === prev.carreta_plate && isUnavail(next.carreta_angellira_status) && isReal(prev.carreta_angellira_status)) {
+    m.carreta_source = prev.carreta_source;
+    m.carreta_type = prev.carreta_type ?? m.carreta_type;
+    m.carreta_angellira_found = prev.carreta_angellira_found;
+    m.carreta_angellira_status = prev.carreta_angellira_status;
+    m.carreta_angellira_valid_until = prev.carreta_angellira_valid_until;
+    m.carreta_angellira_status_text = prev.carreta_angellira_status_text;
+    m.carreta_angellira_display = prev.carreta_angellira_display ?? m.carreta_angellira_display;
+    m.carreta_details = prev.carreta_details ?? m.carreta_details;
+  }
+
+  return m;
+}
+
 /**
  * Núcleo: resolve ASPX/Angellira (com cache) p/ um conjunto de linhas e faz
  * upsert em sheet_monitor_enriched (onConflict lh). Linhas da planilha e do
@@ -229,9 +284,28 @@ async function enrichRows(supabaseClient, batch, correlationId) {
   const ctx = { nameToCpf, nameToCpfDisplay, angelliraDrivers, vehiclesByPlate, angelliraVehicles };
   const upsertRows = batch.map((row) => buildEnrichedUpsertRow(row, ctx));
 
+  // NÃO PERDER DADO BOM: se a nova consulta falhou (UNAVAILABLE) ou não achou
+  // (Angellira/ASPX fora, timeout, tabela ASPX incompleta), preserva o dado
+  // válido que já existia — só atualiza enriched_at. Evita o selo verde virar
+  // vermelho/cinza por falha transitória.
+  let existingByLh = {};
+  try {
+    const lhs = upsertRows.map((r) => r.lh);
+    if (lhs.length > 0) {
+      const { data: prevRows } = await supabaseClient
+        .from("sheet_monitor_enriched")
+        .select("*")
+        .in("lh", lhs);
+      for (const r of prevRows || []) existingByLh[r.lh] = r;
+    }
+  } catch {
+    existingByLh = {};
+  }
+  const finalRows = upsertRows.map((r) => mergePreservingGood(r, existingByLh[r.lh]));
+
   const { error: upsertError } = await supabaseClient
     .from("sheet_monitor_enriched")
-    .upsert(upsertRows, { onConflict: "lh" });
+    .upsert(finalRows, { onConflict: "lh" });
 
   if (upsertError) {
     logStructuredEvent("error", "sheet-monitor-enrich.upsert-error", { correlationId, message: upsertError.message });
