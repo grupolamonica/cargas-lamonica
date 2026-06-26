@@ -241,30 +241,32 @@ def _login_playwright(email: str, senha: str, device_id: str) -> dict:
                 ctx = p.chromium.launch_persistent_context(pdir, headless=True, args=launch_args)
                 try:
                     page = ctx.pages[0] if ctx.pages else ctx.new_page()
-                    # networkidle: o redirect logistics→SSO leva ~10-15s no
-                    # container; domcontentloaded retorna antes do form existir.
+                    # domcontentloaded + POLLING do DOM. networkidle e' instavel
+                    # nesse SPA (mantem conexoes abertas → estoura 60s e o form nao
+                    # aparece). O redirect logistics→SSO leva ~10-15s; pollamos pelo
+                    # campo de login (placeholder "Email"; type="text", NAO "email"
+                    # — erro do codigo antigo) ate ele aparecer. Com perfil
+                    # persistente ja logado, _is_authenticated corta cedo (sem re-login).
                     try:
-                        page.goto(PORTAL_URL, wait_until="networkidle", timeout=60000)
+                        page.goto(PORTAL_URL, wait_until="domcontentloaded", timeout=60000)
                     except Exception as exc:  # noqa: BLE001 — segue com o estado atual
                         print(f"[login] navegacao parcial: {exc}", file=sys.stderr)
-                    page.wait_for_timeout(2000)
 
-                    if not (_is_authenticated(ctx.cookies()) and "accounts.myagencyservice" not in page.url):
-                        # Espera o form do SSO aparecer (campo placeholder "Email";
-                        # type="text", NAO type="email" — erro do codigo antigo).
-                        try:
-                            page.wait_for_selector('input[placeholder="Email"]', timeout=30000)
-                        except Exception as exc:  # noqa: BLE001
-                            print(f"[login] form de login nao apareceu: {exc}", file=sys.stderr)
-                        if not _is_authenticated(ctx.cookies()):
-                            page.fill('input[placeholder="Email"]', email, timeout=15000)
-                            page.fill('input[placeholder="Password"]', senha, timeout=15000)
-                            page.get_by_role("button", name="Log In").click(timeout=15000)
-                            deadline = time.time() + 45
-                            while time.time() < deadline:
-                                if _is_authenticated(ctx.cookies()) and "accounts.myagencyservice" not in page.url:
-                                    break
-                                time.sleep(2)
+                    deadline = time.time() + 75
+                    filled = False
+                    while time.time() < deadline:
+                        if _is_authenticated(ctx.cookies()) and "accounts.myagencyservice" not in page.url:
+                            break
+                        if not filled:
+                            try:
+                                if page.locator('input[placeholder="Email"]').count() > 0:
+                                    page.fill('input[placeholder="Email"]', email, timeout=10000)
+                                    page.fill('input[placeholder="Password"]', senha, timeout=10000)
+                                    page.get_by_role("button", name="Log In").click(timeout=10000)
+                                    filled = True
+                            except Exception as exc:  # noqa: BLE001 — re-tenta no proximo tick
+                                print(f"[login] preenchimento: {exc}", file=sys.stderr)
+                        time.sleep(2)
 
                     raw = ctx.cookies()
                 finally:
