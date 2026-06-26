@@ -295,6 +295,14 @@ def obter_sessao(
     session.headers.update(_headers(device_id))
 
     if forcar:
+        # Sem Playwright (default em prod): NAO invalidamos o cookie compartilhado
+        # — quem renova e' o spx-bot (keep-alive por rotacao) ou o botao "Atualizar
+        # cookies" do painel. Invalidar aqui derrubaria a sessao do spx-bot junto.
+        if not ALLOW_PLAYWRIGHT_LOGIN:
+            raise SystemExit(
+                "Cookies SPX expirados/invalidos. Renovacao e' feita pelo spx-bot "
+                "(keep-alive) ou pelo botao 'Atualizar cookies' do painel — sync ASPX aguarda."
+            )
         _invalidar_cache()
         cookies = _login_playwright(email, senha, device_id)
     else:
@@ -572,28 +580,33 @@ def service_loop() -> None:
     )
 
     while True:
-        # 1) Garante cookies validos antes da sync
+        # 1) Garante cookies validos antes da sync.
+        #    Default em prod: SEM Playwright (login programatico nao existe no SPX).
+        #    A renovacao e' do spx-bot (keep-alive por rotacao de cookie) e do botao
+        #    "Atualizar cookies" do painel. Aqui so CONSUMIMOS: sincronizamos enquanto
+        #    o cookie for valido e aguardamos quando expirar (sem invalidar nada).
         try:
             remaining = _cookies_remaining_seconds()
-            if remaining is None or remaining < _RENEW_THRESHOLD_SEC:
-                if ALLOW_PLAYWRIGHT_LOGIN:
-                    msg = (
-                        "expirado/ausente"
-                        if remaining is None
-                        else f"expira em {int(remaining // 3600)}h"
-                    )
-                    print(f"[service-loop] Cookie {msg} — renovando via Playwright...")
-                    email, senha, device_id = carregar_credenciais_aspx()
-                    _login_playwright(email, senha, device_id)
-                    print("[service-loop] Cookie renovado.")
-                else:
-                    print(
-                        "[service-loop] Cookie precisa renovar mas Playwright "
-                        "desabilitado — pulando sync desta iteracao.",
-                        file=sys.stderr,
-                    )
-                    time.sleep(_SYNC_INTERVAL_SEC)
-                    continue
+            if ALLOW_PLAYWRIGHT_LOGIN and (remaining is None or remaining < _RENEW_THRESHOLD_SEC):
+                # Caminho legacy (login stateless) — so para ambientes locais; nao
+                # funciona no portal SPX atual. Mantido por compatibilidade.
+                msg = (
+                    "expirado/ausente"
+                    if remaining is None
+                    else f"expira em {int(remaining // 3600)}h"
+                )
+                print(f"[service-loop] Cookie {msg} — renovando via Playwright (legacy)...")
+                email, senha, device_id = carregar_credenciais_aspx()
+                _login_playwright(email, senha, device_id)
+                print("[service-loop] Cookie renovado.")
+            elif remaining is None or remaining <= 0:
+                print(
+                    "[service-loop] Cookie expirado/ausente — aguardando renovacao "
+                    "(spx-bot keep-alive / botao do painel). Pulando sync desta iteracao.",
+                    file=sys.stderr,
+                )
+                time.sleep(_SYNC_INTERVAL_SEC)
+                continue
             else:
                 print(
                     f"[service-loop] Cookie valido por mais {int(remaining // 3600)}h."

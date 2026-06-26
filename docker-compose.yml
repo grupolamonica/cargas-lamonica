@@ -299,7 +299,12 @@ services:
       aspx-renewal:
         condition: service_started
 
-  # ── ASPX cookie renewal (persistent container on VPS) ────────────────────
+  # ── ASPX driver sync (persistent container on VPS) ───────────────────────
+  # Só SINCRONIZA aspx_drivers (consome os cookies). NÃO renova mais cookie via
+  # Playwright: o portal SPX não tem login programático (SSO HTTPOnly + captcha),
+  # então o login headless stateless nunca emitia spx_cid. A renovação agora é:
+  #   1. spx-bot keep-alive — rotação de cookie a cada chamada válida (automático)
+  #   2. botão "Atualizar cookies" do painel — cole do Cookie-Editor (bootstrap)
   aspx-renewal:
     build:
       context: ./scripts/aspx-sync
@@ -311,13 +316,13 @@ services:
     env_file:
       - backend.env
     environment:
-      ASPX_ALLOW_PLAYWRIGHT_LOGIN: "1"
+      # 0 = não tenta login Playwright (impossível neste portal). Apenas consome
+      # cookie e sincroniza; aguarda quando expirado, sem invalidar a sessão.
+      ASPX_ALLOW_PLAYWRIGHT_LOGIN: "0"
       PYTHONUNBUFFERED: "1"
-    # Playwright/Chromium é caro em RAM. 512m era apertado para o launch do
-    # Chromium durante o login (risco de OOM-kill no meio da renovação). 768m dá
-    # folga ao headless single-page sem soltar a rédea no host.
-    mem_limit: 768m
-    mem_reservation: 192m
+    # Sem Chromium agora — container leve (só requests). Limites enxutos.
+    mem_limit: 256m
+    mem_reservation: 64m
     cpus: 0.50
     logging:
       driver: json-file
