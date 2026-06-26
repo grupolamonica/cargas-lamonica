@@ -727,6 +727,27 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary })
   return { items, summary };
 }
 
+// Lê os mapas de enriquecimento (planilha por lh, sistema por cargo_id). Usado
+// no read E no refresh — o refresh NÃO pode devolver vazio, senão o frontend
+// sobrescreve e "perde" todas as consultas (selos viram "não consultado").
+async function readEnrichedMaps(supabaseClient, correlationId) {
+  const enrichedByLh = {};
+  const enrichedByCargoId = {};
+  try {
+    const { data } = await supabaseClient.from("sheet_monitor_enriched").select("*").limit(50000);
+    for (const r of data || []) {
+      if (r.lh) enrichedByLh[r.lh] = r;
+      if (r.cargo_id) enrichedByCargoId[r.cargo_id] = r;
+    }
+  } catch (e) {
+    logStructuredEvent("warn", "sheet-monitor.enrich-read-failed", {
+      correlationId,
+      message: e instanceof Error ? e.message : String(e),
+    });
+  }
+  return { enrichedByLh, enrichedByCargoId };
+}
+
 export async function resolveSheetMonitorResponse(request) {
   return withOperatorSession(request, "sheet-monitor", async ({ correlationId }) => {
     const supabaseClient = createSupabaseAdminClient();
@@ -846,12 +867,16 @@ export async function resolveSheetMonitorResponse(request) {
           }
 
           // Return the freshly-parsed rows immediately — no extra DB read needed.
+          // Inclui o enriquecimento JÁ salvo (senão o refresh "apaga" os selos).
           const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary });
+          const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
           return {
             statusCode: 200,
             payload: {
               items: unified.items,
               summary: unified.summary,
+              enrichedByLh,
+              enrichedByCargoId,
               allocByLh,
               meta: {
                 correlationId,
@@ -902,28 +927,8 @@ export async function resolveSheetMonitorResponse(request) {
     }
 
     if (snapshot) {
-      // Read enriched data in parallel — non-fatal if missing.
-      // enrichedByLh = linhas da planilha; enrichedByCargoId = cargas do sistema
-      // (casadas por cargo_id, já que o LH delas é livre/vazio).
-      let enrichedByLh = {};
-      let enrichedByCargoId = {};
-      try {
-        const { data: enrichedRows } = await supabaseClient
-          .from("sheet_monitor_enriched")
-          .select("*")
-          .limit(50000);
-        if (enrichedRows) {
-          for (const r of enrichedRows) {
-            if (r.lh) enrichedByLh[r.lh] = r;
-            if (r.cargo_id) enrichedByCargoId[r.cargo_id] = r;
-          }
-        }
-      } catch (enrichErr) {
-        logStructuredEvent("warn", "sheet-monitor.enrich-read-failed", {
-          correlationId,
-          message: enrichErr instanceof Error ? enrichErr.message : String(enrichErr),
-        });
-      }
+      // Enriquecimento salvo: planilha por lh, sistema por cargo_id.
+      const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
 
       const baseRows = snapshot.rows_json ?? [];
       const unified = buildUnifiedMonitor({
@@ -953,11 +958,14 @@ export async function resolveSheetMonitorResponse(request) {
     // cargas do sistema (+ reservas) devem aparecer no Monitor.
     const { getSheetExportUrl: getUrl } = await import("../../../application/google-sheets/google-sheet-loads.js");
     const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary });
+    const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
     return {
       statusCode: 200,
       payload: {
         items: unified.items,
         summary: systemRows.length ? unified.summary : emptySummary,
+        enrichedByLh,
+        enrichedByCargoId,
         allocByLh,
         meta: {
           correlationId,
