@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { buildEnrichedUpsertRow, mergePreservingGood } from "./sheet-monitor-enrichment.js";
+import { buildEnrichedUpsertRow, mergePreservingGood, matchAspxDriver, indexAspxList } from "./sheet-monitor-enrichment.js";
+
+describe("matchAspxDriver — tolerante a acento e mojibake", () => {
+  const aspx = indexAspxList([
+    { cpf: "111", display_name: "JOSE MARIO DE OLIVEIRA" },
+    { cpf: "222", display_name: "JANICLERTON FLORENCIO MAIA" },
+    { cpf: "333", display_name: "MARIA DA SILVA" },
+  ]);
+
+  it("casa ignorando acento (José Mário → JOSE MARIO)", () => {
+    expect(matchAspxDriver("José Mário de Oliveira", aspx)?.cpf).toBe("111");
+  });
+  it("casa mojibake ('?' = coringa): Jos? M?rio → JOSE MARIO", () => {
+    expect(matchAspxDriver("Jos? M?rio de Oliveira", aspx)?.cpf).toBe("111");
+    expect(matchAspxDriver("JANICLERTON FLOR?NCIO MAIA", aspx)?.cpf).toBe("222");
+  });
+  it("ignora placeholders (NOSHOW/AGREGADO) → null", () => {
+    expect(matchAspxDriver("NOSHOW", aspx)).toBeNull();
+    expect(matchAspxDriver("AGREGADO", aspx)).toBeNull();
+  });
+  it("não casa quem não está no diretório → null", () => {
+    expect(matchAspxDriver("ZURIEL SCHWARZ", aspx)).toBeNull();
+  });
+});
 
 const ctx = (over = {}) => ({
   nameToCpf: {},

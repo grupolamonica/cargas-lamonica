@@ -29,19 +29,51 @@ async function runConcurrent(tasks, concurrency) {
   await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, worker));
 }
 
-// Best-effort fuzzy match: driver name (from sheet) → aspx record
-function matchAspxDriver(name, aspxList) {
-  if (!name) return null;
-  const nl = name.toLowerCase().trim();
-  let match = aspxList.find((d) => d.display_name?.toLowerCase().includes(nl));
-  if (match) return match;
-  match = aspxList.find((d) => d.display_name && d.display_name.length > 4 && nl.includes(d.display_name.toLowerCase()));
-  if (match) return match;
-  const firstWord = nl.split(/\s+/)[0];
-  if (firstWord.length > 3) {
-    match = aspxList.find((d) => d.display_name?.toLowerCase().startsWith(firstWord));
+// Normaliza nome: sem acento (NFD), minúsculo, espaço único. Casa "José" com
+// "Jose" — recupera divergências de acentuação entre planilha e ASPX.
+export function normNameForMatch(s) {
+  return (s ?? "").toString().normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// Pré-normaliza a lista do ASPX uma vez (evita normalizar 1600 nomes por motorista).
+export function indexAspxList(aspxList) {
+  return (aspxList || []).map((d) => ({ cpf: d.cpf, display_name: d.display_name, norm: normNameForMatch(d.display_name) }));
+}
+
+const NON_DRIVER = new Set(["noshow", "no show", "agregado", "sem motorista"]);
+
+/**
+ * Match difuso nome→ASPX, tolerante a ACENTO (normaliza) e a MOJIBAKE (`?` que
+ * substitui acento corrompido) — o `?` vira coringa de 1 char. Recebe a lista já
+ * indexada (com `.norm`). Conservador: o coringa só roda quando há `?` no nome.
+ */
+export function matchAspxDriver(name, aspxIndexed) {
+  const nl = normNameForMatch(name);
+  if (!nl || NON_DRIVER.has(nl)) return null;
+  const list = aspxIndexed && aspxIndexed[0] && "norm" in aspxIndexed[0] ? aspxIndexed : indexAspxList(aspxIndexed);
+
+  let m = list.find((d) => d.norm.includes(nl));
+  if (m) return m;
+  m = list.find((d) => d.norm.length > 4 && nl.includes(d.norm));
+  if (m) return m;
+
+  // Mojibake: "flor?ncio" → /flor.ncio/ casa "florencio". Só quando há '?'.
+  if (nl.includes("?")) {
+    const pattern = nl.split("").map((c) => (c === "?" ? "." : c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("");
+    try {
+      const rx = new RegExp(pattern);
+      m = list.find((d) => rx.test(d.norm));
+      if (m) return m;
+    } catch {
+      /* regex inválida — ignora */
+    }
   }
-  return match ?? null;
+
+  const firstWord = nl.split(/\s+/)[0];
+  if (firstWord.length > 3 && !firstWord.includes("?")) {
+    m = list.find((d) => d.norm.startsWith(firstWord));
+  }
+  return m ?? null;
 }
 
 /**
@@ -195,7 +227,7 @@ async function enrichRows(supabaseClient, batch, correlationId) {
     .from("aspx_drivers")
     .select("cpf, display_name")
     .order("last_seen_at", { ascending: false });
-  const aspxList = aspxRows || [];
+  const aspxList = indexAspxList(aspxRows || []); // pré-normaliza uma vez (acento/lower)
 
   // Plates from vehicles cache
   const uniquePlates = [
