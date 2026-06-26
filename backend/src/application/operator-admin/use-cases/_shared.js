@@ -609,7 +609,10 @@ export function assertCargoOwnership(cargo, operatorId, options = {}) {
   }
 }
 
-export async function writeCargo(client, { cargoId, operatorId, payload, requestIp, correlationId }) {
+export async function writeCargo(
+  client,
+  { cargoId, operatorId, payload, requestIp, correlationId, skipRouteMetrics = false },
+) {
   const existingCargo = cargoId ? await findCargoById(client, cargoId, { lock: true }) : null;
 
   if (cargoId && !existingCargo) {
@@ -620,10 +623,18 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
     throw new ForbiddenError("Somente cargas em rascunho ou abertas podem ter o status alterado manualmente.");
   }
 
-  const resolvedMetrics = await resolveRouteMetricsIfNeeded(payload.origem, payload.destino, {
-    distancia_km: payload.distancia_km,
-    duracao_horas: payload.duracao_horas,
-  });
+  // Em importações em lote evitamos chamadas externas (Geoapify) por linha
+  // dentro da transação: usamos só as métricas informadas (ou null).
+  const resolvedMetrics = skipRouteMetrics
+    ? {
+        distancia_km: typeof payload.distancia_km === "number" ? payload.distancia_km : null,
+        duracao_horas: typeof payload.duracao_horas === "number" ? payload.duracao_horas : null,
+        degraded: false,
+      }
+    : await resolveRouteMetricsIfNeeded(payload.origem, payload.destino, {
+        distancia_km: payload.distancia_km,
+        duracao_horas: payload.duracao_horas,
+      });
 
   const shouldLockSheetClient = Boolean(existingCargo?.sheet_lh);
   const sheetClientId = shouldLockSheetClient ? await findSheetClientId(client) : null;

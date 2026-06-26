@@ -106,6 +106,16 @@ export const cargoCreateMutationSchema = z
   })
   .strict();
 
+// Importação de programação via CSV (texto bruto + dry-run para preview).
+// Teto de 900 KB fica abaixo do limite de 1 MB do express.json (com folga para
+// o envelope JSON). Importações maiores devem ser quebradas em arquivos.
+export const cargoImportMutationSchema = z
+  .object({
+    csv: z.string().min(1).max(900_000),
+    dryRun: z.boolean().optional().default(false),
+  })
+  .strict();
+
 export const cargoUpdateMutationSchema = z
   .object({
     ...cargoMutationBaseShape,

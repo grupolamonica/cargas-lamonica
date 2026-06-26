@@ -73,6 +73,7 @@ const schemaSql = `
     status text NOT NULL DEFAULT 'DRAFT',
     is_template boolean NOT NULL DEFAULT false,
     sheet_lh text,
+    sheet_tipo text,
     sheet_data_carregamento text,
     sheet_data_descarga text,
     sheet_motorista text,

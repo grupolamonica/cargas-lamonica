@@ -16,6 +16,7 @@ import {
 } from "../http-utils.js";
 import {
   cargoCreateMutationSchema,
+  cargoImportMutationSchema,
   cargoUpdateMutationSchema,
   clienteMutationSchema,
   driverProfileUpdateMutationSchema,
@@ -38,6 +39,7 @@ import { dashboardQuerySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
+  importOperatorCargas,
   createOperatorCliente,
   createOperatorRoute,
   deleteOperatorCargo,
@@ -228,6 +230,28 @@ export async function resolveCreateOperatorCargoResponse(request) {
       requestIp,
       correlationId,
     });
+    },
+  );
+}
+
+export async function resolveImportOperatorCargasResponse(request) {
+  return withOperatorSession(
+    request,
+    "import-cargas",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem importar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { csv, dryRun } = cargoImportMutationSchema.parse(await parseJsonBody(request));
+
+      return importOperatorCargas({
+        operatorId,
+        csv,
+        dryRun,
+        requestIp,
+        correlationId,
+      });
     },
   );
 }

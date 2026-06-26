@@ -32,6 +32,7 @@ import {
 
 import {
   resolveCreateOperatorCargoResponse,
+  resolveImportOperatorCargasResponse,
   resolveAttachClienteRotaResponse,
   resolveCreateOperatorClienteResponse,
   resolveCreateOperatorRouteResponse,
@@ -331,6 +332,8 @@ export function registerRoutes(app) {
   // /api/operator/cargas/sync-sheet deve ser registrada antes de /api/operator/cargas/:cargoId
   // para que Express não interprete "sync-sheet" como valor de :cargoId.
   router.post("/api/operator/cargas/sync-sheet", wrap(resolveOperatorSheetSyncResponse));
+  // /import deve ser registrada antes de /:cargoId para Express não tratar "import" como id.
+  router.post("/api/operator/cargas/import", wrap(resolveImportOperatorCargasResponse));
   router.get("/api/operator/cargas", wrap(resolveOperatorCargoListReadModelResponse));
   router.post("/api/operator/cargas", wrap(resolveCreateOperatorCargoResponse));
   router.patch("/api/operator/cargas/:cargoId", wrap(resolveUpdateOperatorCargoResponse));
