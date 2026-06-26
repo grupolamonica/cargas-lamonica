@@ -83,10 +83,12 @@ export function matchAspxDriver(name, aspxIndexed) {
  * (mesmo sem motorista/placa) — a AUSÊNCIA de registro é o que vira "não consultado".
  */
 export function buildEnrichedUpsertRow(row, ctx) {
-  const { nameToCpf, nameToCpfDisplay, angelliraDrivers, vehiclesByPlate, angelliraVehicles } = ctx;
+  const { driverByName, vehiclesByPlate, angelliraVehicles } = ctx;
   const driverName = (row.motoristas || "").trim() || null;
-  const cpf = driverName ? (nameToCpf[driverName] ?? null) : null;
-  const dr = cpf ? angelliraDrivers[cpf] : null;
+  // Resolução unificada do motorista: motoristas_historico (CPF-verified) com
+  // fallback no aspx_drivers. aspxFound = está no ASPX; cpf p/ Angellira.
+  const driver = driverName ? (driverByName[driverName] ?? null) : null;
+  const dr = driver?.angellira ?? null;
 
   const cavaloPl = normalizePlate(row.cavalo) || null;
   const carretaPl = normalizePlate(row.carreta) || null;
@@ -127,13 +129,16 @@ export function buildEnrichedUpsertRow(row, ctx) {
     lh: row.lh,
     cargo_id: row.cargoId ?? null,
     driver_name: driverName,
-    aspx_cpf: cpf,
-    aspx_display_name: driverName ? (nameToCpfDisplay[driverName] ?? null) : null,
+    // aspx_cpf/display só quando o motorista ESTÁ no ASPX (aspxFound) — o selo
+    // "ASPX cadastrado" do frontend liga por aspx_cpf. O CPF p/ Angellira é
+    // resolvido à parte (não depende de estar no ASPX).
+    aspx_cpf: driver?.aspxFound ? (driver.cpf ?? null) : null,
+    aspx_display_name: driver?.aspxFound ? (driver.aspxDisplayName ?? null) : null,
     angellira_driver_found: dr?.found ?? null,
     angellira_driver_status: dr?.status ?? null,
     angellira_driver_valid_until: dr?.validUntil ?? null,
     angellira_driver_status_text: dr?.statusText ?? null,
-    angellira_driver_details: dr?.driverDetails ? dr.driverDetails : null,
+    angellira_driver_details: dr?.details ?? null,
 
     cavalo_plate: cavaloPl,
     cavalo_source: cavalo.source ?? null,
@@ -222,12 +227,35 @@ export function mergePreservingGood(next, prev) {
 async function enrichRows(supabaseClient, batch, correlationId) {
   if (!Array.isArray(batch) || batch.length === 0) return 0;
 
-  // ASPX drivers (full table — small, match in JS)
+  // BANCO DE MOTORISTA (motoristas_historico) — fonte PRIMÁRIA: tem CPF, ASPX já
+  // verificado por CPF (aspx_found) e Angellira já consultada (limit_date). Pagina
+  // (>1000). Indexado por nome (acento/mojibake-tolerante).
+  const mhRows = [];
+  try {
+    let from = 0;
+    for (;;) {
+      const { data } = await supabaseClient
+        .from("motoristas_historico")
+        .select("cpf, nome, aspx_found, aspx_display_name, angellira_query_id, angellira_limit_date")
+        .not("nome", "is", null)
+        .range(from, from + 999);
+      const b = data || [];
+      mhRows.push(...b);
+      if (b.length < 1000) break;
+      from += 1000;
+    }
+  } catch {
+    /* banco de motorista indisponível — cai no fallback aspx_drivers */
+  }
+  const mhByCpf = Object.fromEntries(mhRows.map((r) => [r.cpf, r]));
+  const mhIndex = indexAspxList(mhRows.map((r) => ({ cpf: r.cpf, display_name: r.nome })));
+
+  // ASPX drivers (diretório) — FALLBACK p/ quem não está no banco de motorista.
   const { data: aspxRows } = await supabaseClient
     .from("aspx_drivers")
     .select("cpf, display_name")
     .order("last_seen_at", { ascending: false });
-  const aspxList = indexAspxList(aspxRows || []); // pré-normaliza uma vez (acento/lower)
+  const aspxList = indexAspxList(aspxRows || []);
 
   // Plates from vehicles cache
   const uniquePlates = [
@@ -241,20 +269,39 @@ async function enrichRows(supabaseClient, batch, correlationId) {
     : { data: [] };
   const vehiclesByPlate = Object.fromEntries((dbVehicles || []).map((v) => [v.plate, v]));
 
-  // Resolve CPFs via ASPX match
-  const nameToCpf = {};
-  const nameToCpfDisplay = {};
+  // Resolve cada motorista: BANCO (motoristas_historico) primeiro — traz CPF +
+  // ASPX (aspx_found) + Angellira (limit_date) já prontos, SEM chamar API. Quem
+  // não está no banco cai no aspx_drivers (presença + CPF → Angellira via API).
+  const driverByName = {};
+  const aspxFallbackCpfs = [];
   for (const row of batch) {
     const name = (row.motoristas || "").trim();
-    if (!name) continue;
+    if (!name || driverByName[name]) continue;
+    const mh = matchAspxDriver(name, mhIndex);
+    if (mh) {
+      const r = mhByCpf[mh.cpf];
+      driverByName[name] = {
+        cpf: r?.cpf ?? null,
+        aspxFound: r?.aspx_found === true,
+        aspxDisplayName: r?.aspx_display_name ?? null,
+        angellira: {
+          found: r?.angellira_query_id != null,
+          status: r?.angellira_query_id != null ? "FOUND" : null,
+          validUntil: r?.angellira_limit_date ?? null,
+          statusText: null,
+          details: null,
+        },
+      };
+      continue;
+    }
     const aspx = matchAspxDriver(name, aspxList);
     if (aspx) {
-      nameToCpf[name] = aspx.cpf;
-      nameToCpfDisplay[name] = aspx.display_name;
+      driverByName[name] = { cpf: aspx.cpf, aspxFound: true, aspxDisplayName: aspx.display_name, angellira: null };
+      if (aspx.cpf) aspxFallbackCpfs.push(aspx.cpf);
     }
   }
 
-  const uniqueCpfs = [...new Set(Object.values(nameToCpf))];
+  const uniqueCpfs = [...new Set(aspxFallbackCpfs)];
 
   // Driver cache (driver_profiles) — pula Angellira p/ CPF já validado
   const driverCacheByNormalizedCpf = {};
@@ -313,7 +360,19 @@ async function enrichRows(supabaseClient, batch, correlationId) {
 
   await runConcurrent(tasks, CONCURRENCY);
 
-  const ctx = { nameToCpf, nameToCpfDisplay, angelliraDrivers, vehiclesByPlate, angelliraVehicles };
+  // Preenche a Angellira dos motoristas resolvidos pelo FALLBACK aspx_drivers
+  // (os do banco de motorista já vieram com Angellira da própria tabela).
+  for (const name of Object.keys(driverByName)) {
+    const d = driverByName[name];
+    if (d.angellira === null && d.cpf) {
+      const a = angelliraDrivers[d.cpf];
+      d.angellira = a
+        ? { found: a.found, status: a.status, validUntil: a.validUntil, statusText: a.statusText, details: a.driverDetails ?? null }
+        : null;
+    }
+  }
+
+  const ctx = { driverByName, vehiclesByPlate, angelliraVehicles };
   const upsertRows = batch.map((row) => buildEnrichedUpsertRow(row, ctx));
 
   // NÃO PERDER DADO BOM: se a nova consulta falhou (UNAVAILABLE) ou não achou

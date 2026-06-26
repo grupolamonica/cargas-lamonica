@@ -25,22 +25,23 @@ describe("matchAspxDriver — tolerante a acento e mojibake", () => {
 });
 
 const ctx = (over = {}) => ({
-  nameToCpf: {},
-  nameToCpfDisplay: {},
-  angelliraDrivers: {},
+  driverByName: {},
   vehiclesByPlate: {},
   angelliraVehicles: {},
   ...over,
 });
 
 describe("buildEnrichedUpsertRow", () => {
-  it("carga do sistema: grava lh 'cargo:<id>' + cargo_id + dados do motorista", () => {
+  it("motorista no ASPX: grava cargo_id + cpf + display + Angellira", () => {
     const r = buildEnrichedUpsertRow(
       { lh: "cargo:abc", cargoId: "abc", motoristas: "João Silva", cavalo: "", carreta: "" },
       ctx({
-        nameToCpf: { "João Silva": "12345" },
-        nameToCpfDisplay: { "João Silva": "JOAO SILVA" },
-        angelliraDrivers: { 12345: { found: true, status: "FOUND", validUntil: "2027-01-01", statusText: "VIGENTE" } },
+        driverByName: {
+          "João Silva": {
+            cpf: "12345", aspxFound: true, aspxDisplayName: "JOAO SILVA",
+            angellira: { found: true, status: "FOUND", validUntil: "2027-01-01", statusText: "VIGENTE" },
+          },
+        },
       }),
     );
     expect(r.lh).toBe("cargo:abc");
@@ -49,6 +50,20 @@ describe("buildEnrichedUpsertRow", () => {
     expect(r.aspx_display_name).toBe("JOAO SILVA");
     expect(r.angellira_driver_found).toBe(true);
     expect(r.angellira_driver_valid_until).toBe("2027-01-01");
+  });
+
+  it("motorista resolvido mas NÃO no ASPX (aspxFound=false): aspx_cpf null, mas Angellira vem", () => {
+    const r = buildEnrichedUpsertRow(
+      { lh: "cargo:zz", cargoId: "zz", motoristas: "Maria", cavalo: "", carreta: "" },
+      ctx({
+        driverByName: {
+          Maria: { cpf: "999", aspxFound: false, aspxDisplayName: null, angellira: { found: true, status: "FOUND", validUntil: "2028-01-01" } },
+        },
+      }),
+    );
+    expect(r.aspx_cpf).toBeNull(); // não está no ASPX → selo vermelho
+    expect(r.angellira_driver_found).toBe(true); // Angellira ainda vem (do banco)
+    expect(r.angellira_driver_valid_until).toBe("2028-01-01");
   });
 
   it("carga do sistema SEM motorista: linha esqueleto (cargo_id presente, campos null)", () => {
