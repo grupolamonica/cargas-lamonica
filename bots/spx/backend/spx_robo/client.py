@@ -244,6 +244,28 @@ class SPXClient:
             pass
         self._session.close()
 
+    def bump_supabase_session_ttl(self) -> bool:
+        """Estende cookies_expires_at no Supabase apos um ping bem-sucedido.
+
+        O keep-alive confirma que a sessao esta VIVA. Regravamos os cookies
+        atuais com TTL rolante MESMO que o valor nao tenha rotacionado — assim o
+        status nao expira enquanto a sessao funciona, independente de o servidor
+        SPX rotacionar (ou nao) o cookie nesse endpoint. So tem efeito em modo
+        Supabase; nunca levanta.
+        """
+        if not self._use_supabase:
+            return False
+        try:
+            snapshot = dict((c.name, c.value or "") for c in self._session.cookies)
+            ok = supabase_auth.salvar_cookies_supabase(snapshot)
+            if ok:
+                self._last_cookie_snapshot = snapshot
+                self._last_cookie_save_ts = time.time()
+            return ok
+        except Exception as exc:  # noqa: BLE001
+            log_alerta(f"[client] bump TTL falhou (continuando): {exc}")
+            return False
+
     # ── Persistencia de cookies (PERSIST. 2026-05-26) ──────────────────────
 
     def _persistir_cookies_se_mudaram(self, *, force: bool = False) -> None:
