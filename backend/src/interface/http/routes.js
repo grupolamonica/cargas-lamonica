@@ -6,6 +6,7 @@ import { Router } from "express";
 
 import {
   resolveAspxCookiesUpdateResponse,
+  resolveAspxSessionRefreshResponse,
   resolveAspxSyncHealthResponse,
   resolveAspxSyncStatusResponse,
   resolveAspxSyncTriggerResponse,
@@ -291,6 +292,8 @@ export function registerRoutes(app) {
   router.get("/api/operator/aspx/status", wrap(resolveAspxSyncStatusResponse));
   router.get("/api/admin/aspx-sync-health", wrap(resolveAspxSyncHealthResponse));
   router.post("/api/operator/aspx/sync", wrap(resolveAspxSyncTriggerResponse));
+  router.post("/api/operator/aspx/refresh", wrap(resolveAspxSessionRefreshResponse));
+  // /cookies: recuperação via API (seed sem tela), usado só quando a sessão morre de vez.
   router.post("/api/operator/aspx/cookies", wrap(resolveAspxCookiesUpdateResponse));
 
   // Motoristas

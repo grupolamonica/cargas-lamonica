@@ -336,3 +336,32 @@ export async function updateAspxCookies({ cookiesJson, correlationId } = {}) {
     },
   };
 }
+
+/**
+ * Renovação imediata da sessão SPX (botão "Renovar agora", 1 clique, sem digitar).
+ * Pede ao spx-bot pra recarregar cookies + ping + estender o prazo. Não faz
+ * login (impossível — captcha): se a sessão estiver morta, retorna alive:false.
+ */
+export async function refreshAspxSession({ correlationId } = {}) {
+  const base = (process.env.SPX_BOT_URL?.trim() || "http://spx-bot:8766").replace(/\/$/, "");
+  let data = {};
+  try {
+    const resp = await fetch(`${base}/spx/session/refresh`, { method: "POST" });
+    data = await resp.json().catch(() => ({}));
+  } catch (e) {
+    const err = new Error(`SPX_BOT_UNREACHABLE:${e.message}`);
+    err.code = "SPX_BOT_UNREACHABLE";
+    err.statusCode = 502;
+    throw err;
+  }
+
+  return {
+    statusCode: 200,
+    payload: {
+      ok: Boolean(data.ok),
+      alive: Boolean(data.alive),
+      detail: data.detail || null,
+      meta: { correlationId: correlationId || null },
+    },
+  };
+}
