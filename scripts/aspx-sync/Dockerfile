@@ -1,11 +1,11 @@
-# Container leve do sync ASPX (aspx_drivers). Só consome cookie + chama a API.
-# Playwright/Chromium foram REMOVIDOS: o portal SPX não tem login programático,
-# então o login headless nunca funcionou. A renovação de cookie agora é do
-# spx-bot (keep-alive) + botão "Atualizar cookies" do painel. Sem Chromium o
-# build é rápido e não falha no deploy.
+# Container do sync ASPX + self-heal da sessão SPX (login headless Playwright).
+# O login headless FUNCIONA na VPS (sem captcha no IP do servidor) com os
+# seletores corretos do SSO — ver _login_playwright em asp.py. Chromium é
+# necessário para esse login/refresh; o perfil persistente fica num volume.
 FROM python:3.12-slim
 
-RUN pip install --no-cache-dir requests
+RUN pip install --no-cache-dir requests playwright \
+ && playwright install --with-deps chromium
 
 WORKDIR /app
 COPY asp.py .

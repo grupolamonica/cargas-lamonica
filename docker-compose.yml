@@ -299,12 +299,12 @@ services:
       aspx-renewal:
         condition: service_started
 
-  # ── ASPX driver sync (persistent container on VPS) ───────────────────────
-  # Só SINCRONIZA aspx_drivers (consome os cookies). NÃO renova mais cookie via
-  # Playwright: o portal SPX não tem login programático (SSO HTTPOnly + captcha),
-  # então o login headless stateless nunca emitia spx_cid. A renovação agora é:
-  #   1. spx-bot keep-alive — rotação de cookie a cada chamada válida (automático)
-  #   2. botão "Atualizar cookies" do painel — cole do Cookie-Editor (bootstrap)
+  # ── ASPX driver sync + self-heal da sessão SPX (persistent container) ─────
+  # Sincroniza aspx_drivers E mantém a sessão SPX viva sozinha:
+  #   1. spx-bot keep-alive — rotação de cookie a cada chamada válida (gentil)
+  #   2. ESTE container — login headless Playwright (perfil persistente) quando a
+  #      sessão morre de vez. O login funciona na VPS (sem captcha no IP do
+  #      servidor) com os seletores corretos do SSO. 100% automático, sem humano.
   aspx-renewal:
     build:
       context: ./scripts/aspx-sync
@@ -316,13 +316,17 @@ services:
     env_file:
       - backend.env
     environment:
-      # 0 = não tenta login Playwright (impossível neste portal). Apenas consome
-      # cookie e sincroniza; aguarda quando expirado, sem invalidar a sessão.
-      ASPX_ALLOW_PLAYWRIGHT_LOGIN: "0"
+      # 1 = self-heal: faz login headless e grava no Supabase quando o cookie morre.
+      ASPX_ALLOW_PLAYWRIGHT_LOGIN: "1"
+      # Perfil persistente do Chromium (dispositivo confiável → menos risco de captcha).
+      SPX_PW_PROFILE_DIR: /data/pw_profile
       PYTHONUNBUFFERED: "1"
-    # Sem Chromium agora — container leve (só requests). Limites enxutos.
-    mem_limit: 256m
-    mem_reservation: 64m
+    volumes:
+      # Perfil do navegador persiste entre deploys (mantém a sessão/dispositivo).
+      - spx_pw_profile:/data
+    # Chromium headless é caro em RAM no momento do login. 768m dá folga.
+    mem_limit: 768m
+    mem_reservation: 192m
     cpus: 0.50
     logging:
       driver: json-file
@@ -334,6 +338,8 @@ services:
 volumes:
   cadastro_anexos:
     name: lamonica_cadastro_anexos
+  spx_pw_profile:
+    name: lamonica_spx_pw_profile
 
 # ── Networks ──────────────────────────────────────────────────────────────
 networks:
