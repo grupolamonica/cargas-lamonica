@@ -91,8 +91,8 @@ def carregar_cookies_supabase(timeout: float = 15.0) -> tuple[dict[str, str], st
       - SUPABASE_URL/KEY ausentes
       - aspx_credentials inexistente
       - cookies_json vazio
-      - cookies_expires_at venceu → operador precisa renovar via aspx-renewal
-        (container Playwright separado).
+      - cookies_expires_at venceu → a sessão SSO foi encerrada; precisa de novo
+        login no SPX (o keep-alive só mantém viva uma sessão já válida).
     """
     row = fetch_aspx_credentials(timeout=timeout)
     cookies_json = row.get("cookies_json") or {}
@@ -101,13 +101,14 @@ def carregar_cookies_supabase(timeout: float = 15.0) -> tuple[dict[str, str], st
 
     if not cookies_json:
         raise SupabaseAuthError(
-            "aspx_credentials.cookies_json vazio. Rode o container aspx-renewal "
-            "(ASPX_ALLOW_PLAYWRIGHT_LOGIN=1) pra capturar cookies do portal SPX."
+            "Nenhuma sessão SPX configurada (aspx_credentials.cookies_json vazio). "
+            "É preciso o login inicial no SPX."
         )
 
     if is_expired(expires_at):
         raise SupabaseAuthError(
-            f"Cookies SPX expirados em {expires_at}. Rode o container aspx-renewal pra renovar."
+            f"Sessão SPX expirada em {expires_at} — a Shopee encerrou a sessão; "
+            f"é preciso novo login no SPX."
         )
 
     if not isinstance(cookies_json, dict):
@@ -199,7 +200,8 @@ def invalidar_cookies(timeout: float = 10.0) -> bool:
     """Marca cookies como expirados (PATCH cookies_expires_at = now()).
 
     Chamado quando o bot detecta sessao invalida no SPX (401/redirect login).
-    O container aspx-renewal vai renovar na proxima execucao do loop.
+    Reflete o status real (expirado) no painel; a recuperacao e' um novo login
+    no SPX (o keep-alive so mantem viva uma sessao ja valida).
     Retorna True se conseguiu invalidar.
     """
     try:
@@ -213,7 +215,7 @@ def invalidar_cookies(timeout: float = 10.0) -> bool:
         )
         ok = response.status_code in (200, 204)
         if ok:
-            log_info("[supabase_auth] cookies marcados como expirados — aspx-renewal renovará")
+            log_info("[supabase_auth] cookies marcados como expirados — requer novo login no SPX")
         else:
             log_erro(f"[supabase_auth] falha ao invalidar cookies: HTTP {response.status_code}")
         return ok
