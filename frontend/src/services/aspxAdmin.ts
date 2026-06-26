@@ -39,23 +39,23 @@ export async function triggerAspxSync(): Promise<AspxSyncTriggerResult> {
   });
 }
 
-export interface AspxCookiesUpdateResult {
+export interface AspxSessionRefreshResult {
   ok: boolean;
-  cookies: { count: number; expiresAt: string; updatedAt: string };
-  botReloaded: boolean;
+  /** true = sessão viva e renovada; false = morta (precisa de novo login no SPX). */
+  alive: boolean;
+  detail: string | null;
   meta: { correlationId: string | null };
 }
 
 /**
- * Atualiza os cookies do SPX a partir do export colado do Cookie-Editor
- * (string JSON — array de objetos ou objeto {nome: valor}). O backend valida,
- * grava no Supabase e recarrega a sessão do spx-bot.
+ * Renova a sessão SPX na hora (botão "Renovar agora", 1 clique, sem digitar).
+ * O backend pede ao spx-bot pra recarregar cookies + ping + estender o prazo.
+ * Não faz login (impossível — captcha); se a sessão estiver morta, alive=false.
  */
-export async function updateAspxCookies(cookiesJson: string): Promise<AspxCookiesUpdateResult> {
+export async function refreshAspxSession(): Promise<AspxSessionRefreshResult> {
   const accessToken = await getOperatorAccessToken();
-  return requestJson<AspxCookiesUpdateResult>("/api/operator/aspx/cookies", {
+  return requestJson<AspxSessionRefreshResult>("/api/operator/aspx/refresh", {
     method: "POST",
     accessToken,
-    body: { cookies: cookiesJson },
   });
 }

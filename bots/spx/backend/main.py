@@ -873,6 +873,33 @@ def session_reset():
     return {"ok": True, "detail": "cookies serao recarregados na proxima chamada"}
 
 
+@app.post("/spx/session/refresh")
+def session_refresh():
+    """Renovacao imediata da sessao (botao 'Renovar agora' do painel).
+
+    Recarrega os cookies do Supabase, faz um ping (rotaciona o cookie) e estende
+    o prazo (bump_supabase_session_ttl) — tudo sem login/Playwright. NUNCA
+    levanta: reporta {ok, alive, detail}. Se a sessao estiver morta de vez,
+    alive=False (so um login humano recupera; nao da' pra automatizar o login).
+    """
+    reset_client()  # re-le cookies frescos do Supabase
+    try:
+        c = get_client()
+    except Exception as exc:  # noqa: BLE001 — cookies ausentes/expirados no Supabase
+        return {"ok": False, "alive": False, "detail": f"sem cookies validos no Supabase: {exc}"}
+    try:
+        if c.ping():
+            c.bump_supabase_session_ttl()
+            return {"ok": True, "alive": True, "detail": "sessao renovada"}
+        return {"ok": False, "alive": False, "detail": "sessao expirada — precisa de novo login no SPX"}
+    except SessaoExpirada as exc:
+        reset_client()
+        return {"ok": False, "alive": False, "detail": f"sessao expirada: {exc}"}
+    except Exception as exc:  # noqa: BLE001
+        log_erro(f"[main] /session/refresh falhou: {exc!r}")
+        return {"ok": False, "alive": False, "detail": f"{type(exc).__name__}: {exc}"}
+
+
 def main():
     host = os.getenv("SPX_SIDECAR_HOST") or "127.0.0.1"
     port = int(os.getenv("SPX_SIDECAR_PORT") or 8766)

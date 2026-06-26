@@ -5,6 +5,7 @@ import { assertOperatorPermission } from "../../../application/load-claims/opera
 import {
   getAspxSyncHealth,
   getAspxSyncStatus,
+  refreshAspxSession,
   triggerAspxSync,
   updateAspxCookies,
 } from "../../../application/aspx/aspx-admin.js";
@@ -97,6 +98,21 @@ export async function resolveAspxCookiesUpdateResponse(request) {
     const cookiesJson =
       body && typeof body === "object" && "cookies" in body ? body.cookies : body;
     return await updateAspxCookies({ cookiesJson, correlationId });
+  } catch (error) {
+    return toErrorResponse(error, correlationId);
+  }
+}
+
+export async function resolveAspxSessionRefreshResponse(request) {
+  const correlationId = getCorrelationId(request);
+  try {
+    const { user } = await requireOperatorSession(getAuthorizationHeader(request));
+    assertOperatorPermission(
+      user,
+      "leads:write",
+      "Somente operadores com acesso intermediario ou avancado podem renovar a sessao do SPX.",
+    );
+    return await refreshAspxSession({ correlationId });
   } catch (error) {
     return toErrorResponse(error, correlationId);
   }
