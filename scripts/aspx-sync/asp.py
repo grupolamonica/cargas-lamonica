@@ -156,8 +156,9 @@ def _cookies_do_cache() -> dict | None:
 
 
 def _salvar_cookies(cookies: dict) -> None:
-    # TTL: 4 dias (o cookie fms_user_skey dura ~5 dias; renova com folga)
-    ttl_sec = 4 * 24 * 3600
+    # TTL rolante (~14h): a sessao SSO real do SPX dura ~16h ociosa. O spx-bot
+    # (keep-alive) estende a cada ping; este login e' o self-heal quando ela morre.
+    ttl_sec = int(os.environ.get("SPX_COOKIE_TTL_SEC") or 14 * 3600)
     expires = datetime.fromtimestamp(time.time() + ttl_sec, tz=timezone.utc).isoformat()
     updated = datetime.now(timezone.utc).isoformat()
     url = f"{SUPABASE_URL}/rest/v1/aspx_credentials?id=eq.1"
@@ -186,76 +187,85 @@ def _invalidar_cache() -> None:
 
 
 # ==============================
-# LOGIN VIA PLAYWRIGHT (só local; CI nao consegue por IP bloqueado)
+# LOGIN VIA PLAYWRIGHT (headless, na VPS)
 # ==============================
+# IMPORTANTE (2026-06-26): o login headless FUNCIONA na VPS — nao ha captcha
+# bloqueando no IP do servidor. O codigo antigo falhava por SELETOR ERRADO
+# (input[type=email] + Enter, indo pra /#/workforce/...). Os seletores reais do
+# SSO sao placeholder "Email"/"Password" + botao "Log In", partindo da raiz do
+# portal. Usamos um PERFIL PERSISTENTE (volume) = "dispositivo confiavel", o que
+# reduz risco de captcha em re-logins.
+PORTAL_URL = f"{BASE}/"
+
+# Cookies que so aparecem APOS login (os SPC_* aparecem anonimos — nao contam).
+_AUTH_PREFIXES = (
+    "fms_user_skey", "fms_user_id", "spx_uk", "spx_uid", "spx_st",
+    "spx_cid", "SC_SESSION", "scfe_",
+)
+
+
+def _profile_dir() -> str:
+    return os.environ.get("SPX_PW_PROFILE_DIR") or "/data/pw_profile"
+
+
+def _is_authenticated(cookies: list) -> bool:
+    names = {c.get("name") for c in cookies if "myagencyservice" in (c.get("domain") or "")}
+    return any(n and n.startswith(_AUTH_PREFIXES) for n in names)
+
+
 def _login_playwright(email: str, senha: str, device_id: str) -> dict:
+    """Login/refresh headless da sessao SPX via Playwright (perfil persistente).
+
+    Revisita o portal no perfil dedicado; se a sessao expirou ou caiu no SSO,
+    preenche o form (placeholder Email/Password + botao 'Log In') e re-loga.
+    Grava os cookies no Supabase. Levanta SystemExit se Playwright desabilitado
+    ou se nao autenticar apos retries.
+    """
     if not ALLOW_PLAYWRIGHT_LOGIN:
         raise SystemExit(
-            "FALHA: cookies no Supabase expirados e Playwright desabilitado neste runner.\n"
-            "Rode localmente com ASPX_ALLOW_PLAYWRIGHT_LOGIN=1 para renovar a sessao."
+            "FALHA: cookies expirados e Playwright desabilitado (ASPX_ALLOW_PLAYWRIGHT_LOGIN=0)."
         )
 
     from playwright.sync_api import sync_playwright
 
-    print("Cache expirado - renovando sessao via browser headless...")
-
-    # Flags OBRIGATORIAS para Chromium headless em container rodando como root
-    # (python:3.12-slim no aspx-renewal). Sem elas o launch FALHA no container e
-    # a renovacao automatica nunca acontece (so funcionava manual, em maquina
-    # nao-root):
-    #   --no-sandbox / --disable-setuid-sandbox : Chromium recusa rodar como root
-    #     com sandbox ligado.
-    #   --disable-dev-shm-usage : o /dev/shm padrao de 64MB do Docker faz o
-    #     Chromium crashar (usa /tmp em disco em vez da memoria compartilhada).
-    launch_args = [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-    ]
+    pdir = _profile_dir()
+    os.makedirs(pdir, exist_ok=True)
+    # --no-sandbox/--disable-setuid-sandbox: Chromium recusa rodar como root com
+    # sandbox. --disable-dev-shm-usage: /dev/shm de 64MB do Docker crasha o Chromium.
+    launch_args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
 
     last_err: Exception | None = None
-    for attempt in range(1, 3):  # ate 2 tentativas (login transitorio)
+    for attempt in range(1, 3):
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True, args=launch_args)
+                ctx = p.chromium.launch_persistent_context(pdir, headless=True, args=launch_args)
                 try:
-                    ctx = browser.new_context(
-                        user_agent=(
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/136.0.0.0 Safari/537.36"
-                        )
-                    )
-                    page = ctx.new_page()
-
-                    page.goto(
-                        f"{BASE}/#/workforce/driver-profile/list",
-                        wait_until="networkidle",
-                        timeout=30000,
-                    )
-
-                    email_sel = "input[type='email'], input[placeholder='Email'], input[name='email']"
-                    page.wait_for_selector(email_sel, timeout=20000)
-
-                    page.fill(email_sel, email)
-                    page.wait_for_timeout(500)
-                    page.fill("input[type='password']", senha)
-                    page.wait_for_timeout(300)
-                    page.keyboard.press("Enter")
-
-                    page.wait_for_load_state("networkidle", timeout=30000)
+                    page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                    try:
+                        page.goto(PORTAL_URL, wait_until="domcontentloaded", timeout=60000)
+                    except Exception as exc:  # noqa: BLE001 — segue com o estado atual
+                        print(f"[login] navegacao parcial: {exc}", file=sys.stderr)
                     page.wait_for_timeout(3000)
+
+                    if ("accounts.myagencyservice.com.br" in page.url) or ("/login" in page.url) or not _is_authenticated(ctx.cookies()):
+                        page.get_by_placeholder("Email").fill(email, timeout=15000)
+                        page.get_by_placeholder("Password").fill(senha, timeout=15000)
+                        page.get_by_role("button", name="Log In").click(timeout=15000)
+                        deadline = time.time() + 45
+                        while time.time() < deadline:
+                            if _is_authenticated(ctx.cookies()) and "accounts.myagencyservice" not in page.url:
+                                break
+                            time.sleep(2)
 
                     raw = ctx.cookies()
                 finally:
-                    browser.close()
+                    ctx.close()
 
-            cookies = {c["name"]: c["value"] for c in raw}
-            if "spx_cid" not in cookies:
+            if not _is_authenticated(raw):
                 raise RuntimeError(
-                    f"login nao emitiu spx_cid. Cookies capturados: {sorted(cookies.keys())}"
+                    f"login nao autenticou (sem cookie auth-like). cookies={sorted({c.get('name') for c in raw})[:12]}"
                 )
+            cookies = {c["name"]: c["value"] for c in raw if "myagencyservice" in (c.get("domain") or "")}
             _salvar_cookies(cookies)
             print(f"Sessao renovada (tentativa {attempt}) - {len(cookies)} cookies salvos.")
             return cookies
@@ -295,15 +305,14 @@ def obter_sessao(
     session.headers.update(_headers(device_id))
 
     if forcar:
-        # Sem Playwright (default em prod): NAO invalidamos o cookie compartilhado
-        # — quem renova e' o spx-bot (keep-alive por rotacao) ou o botao "Atualizar
-        # cookies" do painel. Invalidar aqui derrubaria a sessao do spx-bot junto.
         if not ALLOW_PLAYWRIGHT_LOGIN:
+            # Sem Playwright: NAO invalida o cookie compartilhado (derrubaria o
+            # spx-bot junto); aguarda renovacao externa.
             raise SystemExit(
-                "Cookies SPX expirados/invalidos. Renovacao e' feita pelo spx-bot "
-                "(keep-alive) ou pelo botao 'Atualizar cookies' do painel — sync ASPX aguarda."
+                "Cookies SPX expirados/invalidos e Playwright off — aguardando renovacao externa."
             )
-        _invalidar_cache()
+        # Com Playwright: re-loga headless e grava no Supabase (sem invalidar antes
+        # — o login ja sobrescreve com cookies frescos).
         cookies = _login_playwright(email, senha, device_id)
     else:
         cookies = _cookies_do_cache()
@@ -581,28 +590,27 @@ def service_loop() -> None:
 
     while True:
         # 1) Garante cookies validos antes da sync.
-        #    Default em prod: SEM Playwright (login programatico nao existe no SPX).
-        #    A renovacao e' do spx-bot (keep-alive por rotacao de cookie) e do botao
-        #    "Atualizar cookies" do painel. Aqui so CONSUMIMOS: sincronizamos enquanto
-        #    o cookie for valido e aguardamos quando expirar (sem invalidar nada).
+        #    Com Playwright (ALLOW=1, default em prod): SELF-HEAL — se o cookie
+        #    expirou/vai expirar, faz login headless (perfil persistente) e grava
+        #    no Supabase. O spx-bot (keep-alive) mantem a sessao viva entre logins,
+        #    entao este caminho so dispara quando ela morre de vez. Sem Playwright,
+        #    apenas consome e aguarda renovacao externa.
         try:
             remaining = _cookies_remaining_seconds()
             if ALLOW_PLAYWRIGHT_LOGIN and (remaining is None or remaining < _RENEW_THRESHOLD_SEC):
-                # Caminho legacy (login stateless) — so para ambientes locais; nao
-                # funciona no portal SPX atual. Mantido por compatibilidade.
                 msg = (
                     "expirado/ausente"
                     if remaining is None
                     else f"expira em {int(remaining // 3600)}h"
                 )
-                print(f"[service-loop] Cookie {msg} — renovando via Playwright (legacy)...")
+                print(f"[service-loop] Cookie {msg} — renovando via login headless...")
                 email, senha, device_id = carregar_credenciais_aspx()
                 _login_playwright(email, senha, device_id)
                 print("[service-loop] Cookie renovado.")
             elif remaining is None or remaining <= 0:
                 print(
-                    "[service-loop] Cookie expirado/ausente — aguardando renovacao "
-                    "(spx-bot keep-alive / botao do painel). Pulando sync desta iteracao.",
+                    "[service-loop] Cookie expirado/ausente e Playwright off — "
+                    "aguardando renovacao externa. Pulando sync desta iteracao.",
                     file=sys.stderr,
                 )
                 time.sleep(_SYNC_INTERVAL_SEC)
