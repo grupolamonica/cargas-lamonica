@@ -886,7 +886,7 @@ def session_refresh():
     try:
         c = get_client()
     except Exception as exc:  # noqa: BLE001 — cookies ausentes/expirados no Supabase
-        return {"ok": False, "alive": False, "detail": f"sem cookies validos no Supabase: {exc}"}
+        return {"ok": False, "alive": False, "detail": str(exc)}
     try:
         if c.ping():
             c.bump_supabase_session_ttl()
