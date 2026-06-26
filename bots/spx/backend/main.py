@@ -158,11 +158,15 @@ def _keepalive_loop() -> None:
     time.sleep(min(120, _KEEPALIVE_INTERVAL_SEC))
     while True:
         try:
-            if get_client().ping():
-                log_info("[keepalive] ping OK — sessao SPX renovada (cookies rotacionados)")
+            client = get_client()
+            if client.ping():
+                # Sessao confirmada viva: estende o prazo no Supabase mesmo que o
+                # cookie nao tenha rotacionado — mantem o keep-alive 100% automatico.
+                client.bump_supabase_session_ttl()
+                log_info("[keepalive] ping OK — prazo da sessao SPX estendido")
             else:
                 # ping() ja invalidou os cookies no Supabase (401/redirect).
-                log_alerta("[keepalive] ping falhou — sessao expirada. Aguardando cookies novos (botao).")
+                log_alerta("[keepalive] ping falhou — sessao expirada. Aguardando re-login.")
                 reset_client()
         except Exception as exc:  # noqa: BLE001 — cookies ausentes/expirados, Supabase off, etc.
             log_alerta(f"[keepalive] indisponivel: {type(exc).__name__}: {exc}")

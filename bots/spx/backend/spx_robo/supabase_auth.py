@@ -137,11 +137,11 @@ def carregar_cookies_supabase(timeout: float = 15.0) -> tuple[dict[str, str], st
 
 
 # TTL rolante usado quando o cookie auth-like nao traz expiracao propria.
-# A sessao SSO do SPX dura ~16h ociosa e e' DESLIZANTE (cada chamada valida
-# rotaciona/estende). Com o keep-alive pingando bem antes disso, regravar
-# cookies_expires_at = now + 14h a cada rotacao mantem a sessao viva sozinha,
-# sem Playwright/login. Se o bot parar, o TTL conta pra tras naturalmente e um
-# eventual 401 chama invalidar_cookies() pra corrigir o status na hora.
+# A sessao SSO do SPX dura ~16h ociosa e e' DESLIZANTE (cada chamada valida a
+# estende). O keep-alive do spx-bot pinga a cada ~30min e, a cada ping
+# bem-sucedido, regrava cookies_expires_at = now + 14h — mantendo a sessao viva
+# sozinha, sem Playwright/login. Se o bot parar, o TTL conta pra tras
+# naturalmente e um eventual 401 chama invalidar_cookies() pra corrigir o status.
 ROLLING_TTL_SECONDS = int(os.getenv("SPX_COOKIE_ROLLING_TTL_SEC") or 14 * 3600)
 
 
