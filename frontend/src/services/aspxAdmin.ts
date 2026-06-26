@@ -38,3 +38,24 @@ export async function triggerAspxSync(): Promise<AspxSyncTriggerResult> {
     accessToken,
   });
 }
+
+export interface AspxCookiesUpdateResult {
+  ok: boolean;
+  cookies: { count: number; expiresAt: string; updatedAt: string };
+  botReloaded: boolean;
+  meta: { correlationId: string | null };
+}
+
+/**
+ * Atualiza os cookies do SPX a partir do export colado do Cookie-Editor
+ * (string JSON — array de objetos ou objeto {nome: valor}). O backend valida,
+ * grava no Supabase e recarrega a sessão do spx-bot.
+ */
+export async function updateAspxCookies(cookiesJson: string): Promise<AspxCookiesUpdateResult> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<AspxCookiesUpdateResult>("/api/operator/aspx/cookies", {
+    method: "POST",
+    accessToken,
+    body: { cookies: cookiesJson },
+  });
+}

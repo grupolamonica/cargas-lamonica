@@ -1,10 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Clock, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Clock, KeyRound, Loader2, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
-import { fetchAspxSyncStatus, triggerAspxSync, type AspxSyncStatus } from "@/services/aspxAdmin";
+import {
+  fetchAspxSyncStatus,
+  triggerAspxSync,
+  updateAspxCookies,
+  type AspxSyncStatus,
+} from "@/services/aspxAdmin";
 
 const STATUS_QUERY_KEY = ["operator", "aspx-sync-status"] as const;
 const POLL_AFTER_TRIGGER_MS = 5_000;
@@ -76,6 +81,26 @@ export function AspxSyncCard() {
     },
     onError: (err: Error) => {
       toast.error(err.message || "Não foi possível disparar o sync do ASPX.");
+    },
+  });
+
+  // Modal de atualização manual de cookies (cole do Cookie-Editor).
+  const [cookieModalOpen, setCookieModalOpen] = useState(false);
+  const [cookieText, setCookieText] = useState("");
+
+  const updateCookiesMutation = useMutation({
+    mutationFn: () => updateAspxCookies(cookieText),
+    onSuccess: (result) => {
+      toast.success(
+        `Cookies atualizados (${result.cookies.count}).` +
+          (result.botReloaded ? " Sessão SPX recarregada." : ""),
+      );
+      setCookieModalOpen(false);
+      setCookieText("");
+      queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Não foi possível atualizar os cookies.");
     },
   });
 
@@ -194,11 +219,8 @@ export function AspxSyncCard() {
             ) : null}
             {data?.cookies.expired ? (
               <p className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
-                Cookies expirados. Rode{" "}
-                <code className="rounded bg-white/60 px-1 py-0.5 text-[11px]">
-                  ASPX_ALLOW_PLAYWRIGHT_LOGIN=1 python scripts/aspx-sync/asp.py
-                </code>{" "}
-                em sua maquina local para renovar.
+                Cookies expirados. Clique em <strong>“Atualizar cookies”</strong> e cole o
+                export do Cookie-Editor do seu Chrome logado no SPX para renovar a sessão.
               </p>
             ) : null}
           </div>
@@ -217,6 +239,16 @@ export function AspxSyncCard() {
               <RefreshCw className="h-4 w-4" />
             )}
             Atualizar status
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setCookieModalOpen(true)}
+            title="Cole o export do Cookie-Editor do Chrome logado no SPX para renovar a sessão."
+            className="inline-flex items-center gap-2 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 shadow-sm transition hover:bg-amber-100"
+          >
+            <KeyRound className="h-4 w-4" />
+            Atualizar cookies
           </button>
 
           <button
@@ -243,6 +275,80 @@ export function AspxSyncCard() {
           </button>
         </div>
       </div>
+
+      {cookieModalOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => !updateCookiesMutation.isPending && setCookieModalOpen(false)}
+        >
+          <div
+            className="flex max-h-[88vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-card shadow-elevated"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border px-5 py-3">
+              <h3 className="flex items-center gap-2 text-sm font-bold text-foreground">
+                <KeyRound className="h-4 w-4 text-amber-600" />
+                Atualizar cookies do SPX
+              </h3>
+              <button
+                type="button"
+                onClick={() => setCookieModalOpen(false)}
+                disabled={updateCookiesMutation.isPending}
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted disabled:opacity-50"
+                title="Fechar"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 overflow-auto px-5 py-4">
+              <ol className="list-decimal space-y-1 pl-5 text-xs text-muted-foreground">
+                <li>No Chrome <strong>logado no SPX</strong> (logistics.myagencyservice.com.br).</li>
+                <li>Abra a extensão <strong>Cookie-Editor</strong> → <strong>Export</strong> → <strong>Export as JSON</strong> (copia pro clipboard).</li>
+                <li>Cole abaixo e clique em <strong>Salvar cookies</strong>.</li>
+              </ol>
+              <textarea
+                value={cookieText}
+                onChange={(e) => setCookieText(e.target.value)}
+                placeholder='[{"name":"spx_cid","value":"...","domain":".myagencyservice.com.br", ...}, ...]'
+                rows={10}
+                spellCheck={false}
+                className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Precisa conter os cookies de autenticação (ex.: <code>spx_cid</code>,{" "}
+                <code>fms_user_skey</code>, <code>SPC_*</code>). Os cookies ficam guardados no
+                servidor e mantidos vivos automaticamente — você só repete isto quando o SPX
+                forçar novo login.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
+              <button
+                type="button"
+                onClick={() => setCookieModalOpen(false)}
+                disabled={updateCookiesMutation.isPending}
+                className="rounded-xl border border-border bg-white px-4 py-2 text-sm font-semibold text-foreground hover:bg-muted/60 disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => updateCookiesMutation.mutate()}
+                disabled={updateCookiesMutation.isPending || cookieText.trim().length < 10}
+                className="inline-flex items-center gap-2 rounded-xl border border-primary/60 bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {updateCookiesMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ShieldCheck className="h-4 w-4" />
+                )}
+                Salvar cookies
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

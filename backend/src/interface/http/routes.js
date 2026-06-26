@@ -5,6 +5,7 @@
 import { Router } from "express";
 
 import {
+  resolveAspxCookiesUpdateResponse,
   resolveAspxSyncHealthResponse,
   resolveAspxSyncStatusResponse,
   resolveAspxSyncTriggerResponse,
@@ -290,6 +291,7 @@ export function registerRoutes(app) {
   router.get("/api/operator/aspx/status", wrap(resolveAspxSyncStatusResponse));
   router.get("/api/admin/aspx-sync-health", wrap(resolveAspxSyncHealthResponse));
   router.post("/api/operator/aspx/sync", wrap(resolveAspxSyncTriggerResponse));
+  router.post("/api/operator/aspx/cookies", wrap(resolveAspxCookiesUpdateResponse));
 
   // Motoristas
   router.get("/api/operator/motoristas", wrap(resolveOperatorDriversListReadModelResponse));

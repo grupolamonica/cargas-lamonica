@@ -1,13 +1,16 @@
-"""Carregamento de credenciais SPX a partir da tabela `aspx_credentials` no Supabase.
+"""Credenciais/cookies SPX na tabela `aspx_credentials` do Supabase.
 
-A renovação de cookies é responsabilidade do container `aspx-renewal` (já
-existente no docker-compose), que roda Playwright a cada 4 dias e atualiza
-`cookies_json` + `cookies_expires_at` no Supabase. Este sidecar SPX apenas
-**consome** os cookies — não renova.
+Lê (`carregar_cookies_supabase`) e regrava (`salvar_cookies_supabase`) os
+cookies SSO compartilhados (também usados pelo sync ASPX). O SPX **não tem login
+programático** (SSO HTTPOnly + captcha + App-Bound Encryption do Chrome), então
+a sessão é mantida viva pela ROTAÇÃO de cookies: cada chamada válida ao portal
+devolve Set-Cookie renovado, que o `SPXClient` regrava aqui (keep-alive). O
+bootstrap/recuperação quando o SSO morre de vez é o cole manual do export do
+Cookie-Editor pelo painel do operador.
 
 Para uso local/dev, mantém fallback pro arquivo `config/spx_cookies.json`.
 
-DC-111 / Sprint 1 — extensão SPX (2026-05-29).
+DC-111 / Sprint 1 — extensão SPX (2026-05-29). Keep-alive Supabase (2026-06-26).
 """
 from __future__ import annotations
 
@@ -131,6 +134,65 @@ def carregar_cookies_supabase(timeout: float = 15.0) -> tuple[dict[str, str], st
         )
 
     return {k: str(v) for k, v in cookies_json.items()}, device_id
+
+
+# TTL rolante usado quando o cookie auth-like nao traz expiracao propria.
+# A sessao SSO do SPX dura ~16h ociosa e e' DESLIZANTE (cada chamada valida
+# rotaciona/estende). Com o keep-alive pingando bem antes disso, regravar
+# cookies_expires_at = now + 14h a cada rotacao mantem a sessao viva sozinha,
+# sem Playwright/login. Se o bot parar, o TTL conta pra tras naturalmente e um
+# eventual 401 chama invalidar_cookies() pra corrigir o status na hora.
+ROLLING_TTL_SECONDS = int(os.getenv("SPX_COOKIE_ROLLING_TTL_SEC") or 14 * 3600)
+
+
+def salvar_cookies_supabase(
+    cookies: dict[str, str],
+    *,
+    expires_at: str | None = None,
+    timeout: float = 10.0,
+) -> bool:
+    """Regrava cookies_json no Supabase (PATCH aspx_credentials id=1).
+
+    Chamado pelo SPXClient apos uma chamada valida ao SPX: o servidor rotaciona
+    os cookies de sessao (Set-Cookie) e regravamos pra manter a sessao viva sem
+    login/Playwright (que e' impossivel nesse portal — SSO HTTPOnly + captcha).
+
+    `expires_at` (ISO 8601) deve refletir a expiracao real do cookie auth-like
+    quando conhecida (ex.: cole manual via Cookie-Editor); ausente, usa o TTL
+    rolante (ROLLING_TTL_SECONDS). `cookies` no formato {nome: valor}.
+
+    Retorna True se o PATCH foi aceito. Nunca levanta — falha e' logada.
+    """
+    if not cookies:
+        return False
+    if not expires_at:
+        expires_at = datetime.fromtimestamp(
+            time.time() + ROLLING_TTL_SECONDS, tz=timezone.utc
+        ).isoformat()
+    updated = datetime.now(timezone.utc).isoformat()
+    try:
+        url = f"{_supabase_url()}/rest/v1/aspx_credentials?id=eq.1"
+        body = json.dumps({
+            "cookies_json": cookies,
+            "cookies_expires_at": expires_at,
+            "cookies_updated_at": updated,
+        })
+        response = requests.patch(
+            url,
+            headers={**_headers(), "Prefer": "return=minimal"},
+            data=body,
+            timeout=timeout,
+        )
+        ok = response.status_code in (200, 204)
+        if not ok:
+            log_erro(
+                f"[supabase_auth] falha ao salvar cookies: "
+                f"HTTP {response.status_code} {response.text[:200]}"
+            )
+        return ok
+    except Exception as exc:  # noqa: BLE001
+        log_erro(f"[supabase_auth] falha ao salvar cookies: {exc}")
+        return False
 
 
 def invalidar_cookies(timeout: float = 10.0) -> bool:

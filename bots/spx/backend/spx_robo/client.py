@@ -255,11 +255,10 @@ class SPXClient:
         Estrategia:
         - Debounce: nao escreve mais que 1x a cada 30s (evita I/O excessivo)
         - Skip-if-unchanged: compara dict {name: value} pra detectar rotacao
+        - Modo Supabase: regrava cookies_json em aspx_credentials (keep-alive da
+          sessao, sem Playwright). Modo arquivo: regrava o JSON local.
         - Defensivo: nunca propaga excecao — falha silenciosa logada
         """
-        # Modo Supabase: não persiste em arquivo local — aspx-renewal cuida.
-        if self._use_supabase:
-            return
         try:
             now = time.time()
             if not force and (now - self._last_cookie_save_ts) < 30:
@@ -268,10 +267,19 @@ class SPXClient:
             if snapshot == self._last_cookie_snapshot:
                 self._last_cookie_save_ts = now
                 return
-            escreveu = auth.save_cookies_from_jar(self._session.cookies, self._cookie_file_path)
+
+            if self._use_supabase:
+                # Rotacao do servidor SPX mantem a sessao viva: regravamos o
+                # cookie atual no Supabase pra que reinicios/deploys e o sync
+                # ASPX leiam sempre a sessao mais recente.
+                escreveu = supabase_auth.salvar_cookies_supabase(snapshot)
+                origem = "Supabase"
+            else:
+                escreveu = auth.save_cookies_from_jar(self._session.cookies, self._cookie_file_path)
+                origem = "arquivo"
             if escreveu:
                 mudou = [n for n in snapshot if self._last_cookie_snapshot.get(n) != snapshot.get(n)]
-                log_info(f"[client] cookies persistidos — mudaram: {sorted(mudou)[:5]}{'...' if len(mudou) > 5 else ''}")
+                log_info(f"[client] cookies persistidos ({origem}) — mudaram: {sorted(mudou)[:5]}{'...' if len(mudou) > 5 else ''}")
             self._last_cookie_snapshot = snapshot
             self._last_cookie_save_ts = now
         except Exception as exc:
