@@ -208,7 +208,7 @@ jobs:
             export DOMAIN="cargas.grupolamonica.com"
 
             # Build only aspx-renewal locally (frontend/backend come from GHCR above)
-            docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.domain.yml -f docker-compose.deploy.yml build aspx-renewal
+            docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.domain.yml -f docker-compose.deploy.yml build aspx-renewal cadastro-ocr angelira-bot unificada-bot spx-bot
 
             # Bring up with pinned images (includes HTTPS Traefik routers via domain.yml)
             docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.domain.yml -f docker-compose.deploy.yml up -d --remove-orphans
