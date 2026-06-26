@@ -251,7 +251,6 @@ export function normalizeSpxCookies(input) {
 
   const nowSec = Date.now() / 1000;
   const cookies = {};
-  let earliestAuthExpiry = null;
 
   if (Array.isArray(raw)) {
     for (const c of raw) {
@@ -264,9 +263,6 @@ export function normalizeSpxCookies(input) {
       const exp = Number(c.expirationDate ?? c.expires ?? 0);
       if (exp && exp > 0 && exp < nowSec) continue; // já expirado — pula
       cookies[name] = String(value);
-      if (isAuthLikeCookie(name) && exp && exp > 0) {
-        if (earliestAuthExpiry === null || exp < earliestAuthExpiry) earliestAuthExpiry = exp;
-      }
     }
   } else if (raw && typeof raw === "object") {
     for (const [name, value] of Object.entries(raw)) {
@@ -290,9 +286,11 @@ export function normalizeSpxCookies(input) {
     );
   }
 
-  const expiresAtIso = earliestAuthExpiry
-    ? new Date(earliestAuthExpiry * 1000).toISOString()
-    : new Date(Date.now() + COOKIE_ROLLING_TTL_SECONDS * 1000).toISOString();
+  // Prazo do seed = TTL rolante (14h). NÃO usamos os expirationDate do export:
+  // cookies SPC_* curtos contaminavam o cálculo (prazo de segundos → nascia
+  // "expirado", e o bot recusa carregar cookie expirado, então o keep-alive nem
+  // pingava pra corrigir). O keep-alive do spx-bot estende o prazo a cada ping.
+  const expiresAtIso = new Date(Date.now() + COOKIE_ROLLING_TTL_SECONDS * 1000).toISOString();
 
   return { cookies, expiresAtIso, count: Object.keys(cookies).length };
 }
