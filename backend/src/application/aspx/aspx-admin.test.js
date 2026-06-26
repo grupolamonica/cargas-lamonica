@@ -137,15 +137,21 @@ describe("normalizeSpxCookies", () => {
     expect(cookies.ga_other).toBeUndefined();
   });
 
-  it("aceita string JSON e calcula expiresAt a partir do cookie auth-like", () => {
+  it("aceita string JSON e usa TTL rolante (~14h), ignorando expirationDate curto do export", () => {
+    // Um cookie SPC_* curto NÃO pode envenenar o prazo do seed (bug do prazo de
+    // segundos). O seed sempre nasce com ~14h; o keep-alive estende depois.
+    const soon = Math.floor(Date.now() / 1000) + 30; // 30s — curto de propósito
     const json = JSON.stringify([
       { name: "fms_user_skey", value: "k", domain: ".myagencyservice.com.br", expirationDate: future },
+      { name: "SPC_SI", value: "s", domain: ".myagencyservice.com.br", expirationDate: soon },
     ]);
 
     const { cookies, expiresAtIso } = normalizeSpxCookies(json);
 
     expect(cookies.fms_user_skey).toBe("k");
-    expect(new Date(expiresAtIso).getTime()).toBe(future * 1000);
+    const remainingMs = new Date(expiresAtIso).getTime() - Date.now();
+    expect(remainingMs).toBeGreaterThan(13 * 3600 * 1000); // bem mais que os 30s do SPC_SI
+    expect(remainingMs).toBeLessThanOrEqual(14 * 3600 * 1000 + 5000);
   });
 
   it("aceita objeto simples {nome: valor}", () => {
