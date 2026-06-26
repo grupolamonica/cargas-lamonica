@@ -211,6 +211,14 @@ def _construir_payload_veiculo(
         body_id = BAU_ID
         log_alerta(f"[flow_veiculo_api] bodyworkId default {BAU_ID} (BAU) para carreta — carroceria CRLV: {carroceria_txt!r}")
 
+    # CAVALO (typeId tração) NÃO aceita bodyworkId — a API responde 422
+    # "bodyworkId is not allowed". Carroceria só existe p/ CARRETA. Mesmo que
+    # o CRLV/OCR traga carroceria no cavalo (caso TEO7C91 -> body 128),
+    # descartamos aqui pra não derrubar o POST /vehicles do cavalo.
+    if (sub or "").lower() != "carreta" and body_id is not None:
+        log_alerta(f"[flow_veiculo_api] cavalo não aceita bodyworkId — descartando body_id={body_id}")
+        body_id = None
+
     body: dict[str, Any] = {
         "prime": prime,
         "typeId": type_id,

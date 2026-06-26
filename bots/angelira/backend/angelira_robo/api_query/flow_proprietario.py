@@ -253,8 +253,9 @@ def _construir_payload_pf(
         "name": limpar_texto(proprietario.get("nome") or ""),
         "cpf": cpf,
         "birth": _br_iso(proprietario.get("data_nascimento") or ""),
-        "father": limpar_texto(proprietario.get("nome_pai") or "") or None,
-        "mother": limpar_texto(proprietario.get("nome_mae") or "") or None,
+        # Pai/mae ausente -> "SEM FILIACAO" (AngelLira exige father/mother nao-vazios).
+        "father": limpar_texto(proprietario.get("nome_pai") or "") or "SEM FILIACAO",
+        "mother": limpar_texto(proprietario.get("nome_mae") or "") or "SEM FILIACAO",
         "naturalness": limpar_texto(proprietario.get("naturalidade") or "") or None,
         "rg": rg_value,
         "rgOrgan": limpar_texto(proprietario.get("rg_orgao") or "") or None,
@@ -516,6 +517,37 @@ def cadastrar_proprietario(
         log_info("[flow_proprietario_api] criando POST /owners")
         criado = _create_com_retry_query_em_andamento(client, body)
     except Exception as exc:
+        # FALLBACK (2026-06-25): o POST /owners de PJ às vezes volta 422
+        # `query_incomplete: companyId` (precisa do ownerId p/ a query da empresa) OU
+        # estoura timeout quando a API AngelLira está lenta — e nesses casos o owner
+        # pode já existir (criado num attempt anterior / lookup inicial deu falso-
+        # negativo sob carga). Re-busca por documento; se existir, completa pela query
+        # (companyId=ownerId), igual ao caminho de owner existente — em vez de erro duro.
+        msg = str(exc).lower()
+        recuperavel = any(s in msg for s in ("companyid", "query_incomplete", "query2", "timed out", "timeout"))
+        if recuperavel:
+            try:
+                ja = owners.find_by_cnpj(client, documento) if tipo_norm == "PJ" else owners.find_by_cpf(client, documento)
+            except Exception:
+                ja = None
+            owner_id_fb = (ja or {}).get("id")
+            if owner_id_fb:
+                log_info(f"[flow_proprietario_api] fallback: owner {owner_id_fb} ja existe — disparando query (companyId={owner_id_fb})")
+                try:
+                    qid_fb, raw_fb = queries.store_query(
+                        client, prime=0, query_type_id=queries.QUERY_TYPE_EMPRESA, company_id=owner_id_fb,
+                    )
+                    duracao = round(time.monotonic() - inicio, 2)
+                    return {"ok": True, "salvou": True, "etapa": "completo_fallback_existente",
+                            "ownerId": owner_id_fb, "queryId": qid_fb,
+                            "avisos": avisos_ocr + [
+                                "Owner recuperado por documento apos falha no POST /owners "
+                                "(companyId/timeout) — query disparada via fallback.",
+                            ],
+                            "erro": None, "duracao_s": duracao, "raw": raw_fb}
+                except Exception as exc2:
+                    return _erro("query_fallback", f"query no fallback falhou: {exc2}", inicio,
+                                 extra={"ownerId": owner_id_fb})
         return _erro("write", f"POST /owners falhou: {exc}", inicio)
 
     owner_id = criado.get("id")

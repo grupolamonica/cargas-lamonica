@@ -14,6 +14,8 @@ DRIVER_REPEAT = 271627140        # CPF ja cadastrado
 DRIVER_BLOCKED = 271617003       # Motorista bloqueado
 VALIDATE_DETAIL_REJECTED = 271626003  # validate/detail rejeitou - dados invalidos (placa/renavam/CRLV/dados conflitantes)
 CPF_INVALID = 271605007          # CPF invalido (observado em probe)
+LICENSE_OR_PHONE_TAKEN = 271605005  # validate/basic: o telefone OU a CNH informados pertencem a outro motorista (cross-agency quando valores REAIS; falso quando placeholder)
+VEHICLE_PARAM_INVALID = 271605029  # submit: parametro de veiculo invalido — comum: placa ja vinculada a OUTRO renavam no SPX (aninha 103702008 "car plate attached to another RENAVAM")
 DRIVER_IN_REVIEW = 271605008     # Motorista ja tem request em revisao na Shopee — aguarde aprovacao
 PHONE_INVALID = 271605009        # Telefone invalido
 DRAFT_EXISTS = 271605026         # Ja existe rascunho aberto — editar/complementar em vez de criar novo
@@ -22,6 +24,7 @@ DRIVER_REGISTERED_INACTIVE = 271605004  # Driver_profile existe mas esta inativo
 DRIVER_IN_OTHER_AGENCY = 271605035  # Motorista cadastrado em OUTRA agencia Shopee, telefone diverge
 LICENSE_ALREADY_REGISTERED = 271605059  # CNH ja registrada em algum motorista (cross-agency forte)
 LICENSE_EMPTY = 271605013  # CNH nao pode estar vazia (precheck precisa de placeholder)
+VALIDATE_FIELD_INVALID = 271690000  # submit/validate: campo invalido — tipicamente vehicle_manufacturer nao bate 1:1 com o OCR do CRLV, ou perfil importado veio vazio
 
 # Generic FE-only
 ERR_GENERIC_OPS = (991000001, 991000002, 991000003, 991000004)
@@ -39,12 +42,15 @@ RETCODE_MESSAGES = {
     DRIVER_BLOCKED: "Motorista bloqueado (DRIVER_BLOCKED)",
     VALIDATE_DETAIL_REJECTED: "validate/detail rejeitou - dados invalidos ou conflitantes (placa em uso por outro motorista, renavam duplicado, CRLV mal lido, etc)",
     CPF_INVALID: "CPF invalido",
+    LICENSE_OR_PHONE_TAKEN: "O telefone ou a CNH informados pertencem a outro motorista (provavel cadastro em outra agencia). Confirme os dados com o motorista ou contate a Shopee.",
+    VEHICLE_PARAM_INVALID: "Parametro de veiculo invalido no SPX. Comum: a placa ja esta vinculada a OUTRO renavam (cadastrada antes com renavam diferente). Confira placa/renavam no CRLV; se corretos, contate a Shopee ops.",
     DRIVER_IN_REVIEW: "Motorista em revisao na Shopee — aguarde a aprovacao antes de cadastrar novamente",
     PHONE_INVALID: "Telefone invalido (formato BR esperado: DDD + 9 digitos)",
     DRAFT_EXISTS: "Ja existe rascunho aberto pra esse motorista — edite/complete o rascunho em vez de criar novo",
     REQUEST_IN_PROGRESS: "Ja existe solicitacao em andamento para esse motorista — use withdraw ou edite o request existente",
     DRIVER_REGISTERED_INACTIVE: "Motorista ja registrado mas inativo na agencia — precisa ATIVAR via Agency > Driver Profile (ou /activation/update)",
     DRIVER_IN_OTHER_AGENCY: "Motorista esta cadastrado em OUTRA agencia da Shopee. Confirme o telefone com o motorista ou contate a Shopee.",
+    VALIDATE_FIELD_INVALID: "Dados invalidos no submit — confira se vehicle_manufacturer bate 1:1 com o CRLV (so a marca, ex.: 'VOLVO', nao 'VOLVO/FH 400'); se for importacao de outra agencia, o perfil pode ter vindo vazio.",
     OCR_FAILED: "OCR nao extraiu campos do CRLV",
     UPLOAD_BACKEND_FAIL: "Falha no upload (backend retornou erro)",
     UPLOAD_FILE_TYPE: "Upload: tipo de arquivo invalido",

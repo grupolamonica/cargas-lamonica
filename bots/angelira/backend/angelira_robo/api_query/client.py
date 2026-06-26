@@ -24,6 +24,11 @@ from ..logger import log_alerta, log_erro, log_info
 
 _API_BASE_DEFAULT = "https://api.angellira.com.br/profile"
 
+# JWT da AngelLira expira (~20 min). Re-logamos proativamente antes disso para
+# que owners/drivers/vehicles (que fazem GET/POST direto, sem retry de 401 —
+# só o /query renova) não tomem 401 quando o sidecar fica ocioso.
+_TOKEN_REFRESH_AFTER_S = 18 * 60
+
 
 def _api_base() -> str:
     return (os.getenv("ANGELIRA_API_BASE") or _API_BASE_DEFAULT).rstrip("/")
@@ -56,16 +61,25 @@ class AngellraAPIClient:
         self.base_url = (base_url or _api_base()).rstrip("/")
         self.default_timeout = default_timeout
         self._session = None  # type: ignore[var-annotated]  -- requests.Session
+        self._logged_at = 0.0  # monotonic do último login (refresh proativo)
 
     # ── Autenticacao ─────────────────────────────────────────────────────
 
     def login(self):
         """Cria/renova a sessao autenticada via auth.criar_sessao_api()."""
         self._session = auth.criar_sessao_api(timeout=30.0)
+        self._logged_at = time.monotonic()
         return self._session
 
     def _ensure_session(self):
+        # Refresh PROATIVO: o JWT expira (~20 min) e owners/drivers/vehicles
+        # fazem GET/POST direto, sem retry de 401 (só o /query renova). Sem
+        # isso, o sidecar ocioso > 20 min tomava 401 no primeiro lookup
+        # (find_by_cnpj) e derrubava o cadastro inteiro → circuit breaker.
         if self._session is None:
+            self.login()
+        elif (time.monotonic() - self._logged_at) > _TOKEN_REFRESH_AFTER_S:
+            log_info(f"[client] sessao AngelLira > {int(_TOKEN_REFRESH_AFTER_S // 60)}min — refresh proativo do token")
             self.login()
         return self._session
 

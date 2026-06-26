@@ -157,6 +157,50 @@ function mapBotError({ httpStatus, body, fallbackMessage }) {
       httpStatus, etapa, retcode, raw: body,
     });
   }
+  if (retcode === 271626003) {
+    return new SpxBotError({
+      code: "SPX_VALIDATE_DETAIL_REJECTED",
+      message: erroMsg || "SPX rejeitou os dados do veículo (validate/detail).",
+      acao: "Verifique: (1) a categoria da CNH permite o veículo (cavalo exige E — AE/BE/CE/DE/E); "
+        + "(2) a placa não está em uso por outro motorista; (3) vehicle_type/placa/renavam batem com o OCR do CRLV.",
+      httpStatus, etapa, retcode, raw: body,
+    });
+  }
+  if (retcode === 271690000) {
+    return new SpxBotError({
+      code: "SPX_DADOS_INVALIDOS",
+      message: erroMsg || "Dados inválidos no envio ao SPX.",
+      acao: "vehicle_manufacturer deve bater 1:1 com o CRLV (só a marca, ex.: 'VOLVO', não 'VOLVO/FH 400'); se for importação de outra agência, o perfil pode ter vindo vazio.",
+      httpStatus, etapa, retcode, raw: body,
+    });
+  }
+  if (retcode === 271605029) {
+    // SPX aninha o motivo real (ex.: 103702008 "This car plate is attached to
+    // another RENAVAM"). Conflito de DADO no cadastro de veículos do SPX, não nosso.
+    const placaConflito = /attached to another RENAVAM|103702008/i.test(String(erroMsg || ""));
+    return new SpxBotError({
+      code: "SPX_VEHICLE_PARAM_INVALIDO",
+      message: erroMsg || "Parâmetro de veículo inválido no SPX.",
+      acao: placaConflito
+        ? "A placa já está vinculada a OUTRO RENAVAM no cadastro de veículos do SPX (foi cadastrada antes com renavam diferente). Confira placa/renavam no CRLV — se estiverem corretos, contate a Shopee ops para ajustar o veículo no SPX."
+        : "Parâmetro de veículo rejeitado pelo SPX. Confira placa/renavam/tipo do veículo contra o CRLV; se persistir, contate a Shopee ops.",
+      httpStatus, etapa, retcode, raw: body,
+    });
+  }
+  if (retcode === 271606027) {
+    // SPX/Shopee rejeita veículo com mais de 20 anos de fabricação (validate/detail).
+    // O cadastro fica salvo como RASCUNHO (save_draft cria a request) mas NÃO submete
+    // — por isso aparece como "solicitação pendente"/editável sem nunca ser aprovado.
+    // Descoberto no teste do FLAVIO (SCANIA 1995/1996, ~31 anos). 2026-06-25.
+    return new SpxBotError({
+      code: "SPX_VEICULO_MUITO_ANTIGO",
+      message: erroMsg || "Veículo com mais de 20 anos — a Shopee não aceita.",
+      acao: "A Shopee/SPX só aceita veículos com até 20 anos de fabricação. O cadastro ficou "
+        + "salvo como RASCUNHO mas NÃO foi submetido com este veículo. Não há como concluir o "
+        + "SPX com um cavalo/carreta acima do limite de idade.",
+      httpStatus, etapa, retcode, raw: body,
+    });
+  }
   if (httpStatus === 502) {
     return new SpxBotError({
       code: "SPX_DOWNSTREAM_FAIL",
@@ -191,8 +235,14 @@ function mapBotError({ httpStatus, body, fallbackMessage }) {
   }
   return new SpxBotError({
     code: "SPX_UNKNOWN_ERROR",
-    message: fallbackMessage || `HTTP ${httpStatus} inesperado do sidecar SPX.`,
-    acao: "Contate o suporte com este código.",
+    // 2026-06-25: mostra o MOTIVO REAL que o SPX retornou (erroMsg) em vez de uma
+    // mensagem genérica — assim, mesmo p/ retcodes ainda não mapeados, o operador
+    // entende o porquê (ex.: "A idade do veículo não pode ser superior a 20 anos")
+    // em vez de só "Contate o suporte".
+    message: erroMsg || fallbackMessage || `HTTP ${httpStatus} inesperado do sidecar SPX.`,
+    acao: retcode
+      ? `O SPX recusou com o código ${retcode}. Veja o motivo acima; se não resolver, contate a Shopee com esse código.`
+      : "Contate o suporte com este código.",
     httpStatus, etapa, retcode, raw: body,
   });
 }
