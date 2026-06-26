@@ -8,7 +8,7 @@ vi.mock("../../infrastructure/supabase/admin-client.js", () => ({
   createSupabaseAdminClient: mockCreateSupabaseAdminClient,
 }));
 
-import { getAspxSyncHealth } from "./aspx-admin.js";
+import { getAspxSyncHealth, normalizeSpxCookies } from "./aspx-admin.js";
 
 /**
  * Builds a minimal supabase double covering only the calls that
@@ -117,5 +117,70 @@ describe("getAspxSyncHealth", () => {
     );
 
     await expect(getAspxSyncHealth()).rejects.toThrow(/ASPX_HEALTH_/);
+  });
+});
+
+describe("normalizeSpxCookies", () => {
+  const future = Math.floor(Date.now() / 1000) + 100_000;
+
+  it("normaliza array do Cookie-Editor para {nome: valor} filtrando domínio SPX", () => {
+    const input = [
+      { name: "spx_cid", value: "abc", domain: ".myagencyservice.com.br", expirationDate: future },
+      { name: "SPC_F", value: "f1", domain: "logistics.myagencyservice.com.br" },
+      { name: "ga_other", value: "x", domain: ".google.com" }, // domínio alheio — ignorado
+    ];
+
+    const { cookies, count } = normalizeSpxCookies(input);
+
+    expect(cookies).toEqual({ spx_cid: "abc", SPC_F: "f1" });
+    expect(count).toBe(2);
+    expect(cookies.ga_other).toBeUndefined();
+  });
+
+  it("aceita string JSON e calcula expiresAt a partir do cookie auth-like", () => {
+    const json = JSON.stringify([
+      { name: "fms_user_skey", value: "k", domain: ".myagencyservice.com.br", expirationDate: future },
+    ]);
+
+    const { cookies, expiresAtIso } = normalizeSpxCookies(json);
+
+    expect(cookies.fms_user_skey).toBe("k");
+    expect(new Date(expiresAtIso).getTime()).toBe(future * 1000);
+  });
+
+  it("aceita objeto simples {nome: valor}", () => {
+    const { cookies } = normalizeSpxCookies({ spx_cid: "z", SPC_T_ID: "t" });
+    expect(cookies).toEqual({ spx_cid: "z", SPC_T_ID: "t" });
+  });
+
+  it("ignora cookies já expirados", () => {
+    const past = Math.floor(Date.now() / 1000) - 10;
+    const { cookies } = normalizeSpxCookies([
+      { name: "spx_cid", value: "ok", domain: ".myagencyservice.com.br", expirationDate: future },
+      { name: "stale", value: "x", domain: ".myagencyservice.com.br", expirationDate: past },
+    ]);
+    expect(cookies.spx_cid).toBe("ok");
+    expect(cookies.stale).toBeUndefined();
+  });
+
+  it("rejeita quando não há cookie de autenticação (ASPX_COOKIES_NO_AUTH)", () => {
+    expect.assertions(2);
+    try {
+      normalizeSpxCookies([
+        { name: "language", value: "pt", domain: ".myagencyservice.com.br" },
+      ]);
+    } catch (e) {
+      expect(e.code).toBe("ASPX_COOKIES_NO_AUTH");
+      expect(e.statusCode).toBe(422);
+    }
+  });
+
+  it("rejeita JSON inválido (ASPX_COOKIES_INVALID_JSON)", () => {
+    expect.assertions(1);
+    try {
+      normalizeSpxCookies("{nao eh json");
+    } catch (e) {
+      expect(e.code).toBe("ASPX_COOKIES_INVALID_JSON");
+    }
   });
 });

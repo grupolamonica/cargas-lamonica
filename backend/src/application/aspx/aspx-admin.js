@@ -205,3 +205,136 @@ export async function triggerAspxSync({ correlationId } = {}) {
     },
   };
 }
+
+// ── Atualização manual de cookies (cole do Cookie-Editor) ────────────────────
+// O SPX não tem login programático (SSO HTTPOnly + captcha + App-Bound Encryption
+// do Chrome), então a sessão é mantida viva pela rotação de cookies no spx-bot.
+// Quando o SSO morre de vez, o operador cola aqui o export dos cookies do seu
+// Chrome logado — esta é a fonte de verdade que o spx-bot e o sync ASPX leem.
+
+const SPX_AUTH_PREFIXES = [
+  "spx_cid", "fms_user_skey", "fms_user_id", "spx_uk", "spx_uid", "spx_st",
+  "SPC_", "_csrftoken", "SC_SESSION", "scfe_",
+];
+const SPX_COOKIE_DOMAINS = ["myagencyservice.com.br"];
+const COOKIE_ROLLING_TTL_SECONDS = 14 * 60 * 60;
+
+function isAuthLikeCookie(name) {
+  return SPX_AUTH_PREFIXES.some((p) => name === p || name.startsWith(p));
+}
+
+function badRequest(message, code, statusCode = 400) {
+  const err = new Error(message);
+  err.code = code;
+  err.statusCode = statusCode;
+  return err;
+}
+
+/**
+ * Normaliza o que o operador colou — export do Cookie-Editor (array de objetos)
+ * ou objeto simples {nome: valor} — para { cookies: {nome: valor}, expiresAtIso }.
+ * Filtra os domínios SPX, descarta cookies expirados e exige ao menos um cookie
+ * de autenticação (sessão válida). Lança erro com statusCode amigável caso não.
+ */
+export function normalizeSpxCookies(input) {
+  let raw = input;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      throw badRequest("Os cookies colados não são um JSON válido.", "ASPX_COOKIES_INVALID_JSON");
+    }
+  }
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && Array.isArray(raw.cookies)) {
+    raw = raw.cookies;
+  }
+
+  const nowSec = Date.now() / 1000;
+  const cookies = {};
+  let earliestAuthExpiry = null;
+
+  if (Array.isArray(raw)) {
+    for (const c of raw) {
+      if (!c || typeof c !== "object") continue;
+      const name = typeof c.name === "string" ? c.name.trim() : "";
+      const value = c.value;
+      if (!name || value == null) continue;
+      const domain = String(c.domain || "").toLowerCase().replace(/^\./, "");
+      if (domain && !SPX_COOKIE_DOMAINS.some((d) => domain === d || domain.endsWith(d))) continue;
+      const exp = Number(c.expirationDate ?? c.expires ?? 0);
+      if (exp && exp > 0 && exp < nowSec) continue; // já expirado — pula
+      cookies[name] = String(value);
+      if (isAuthLikeCookie(name) && exp && exp > 0) {
+        if (earliestAuthExpiry === null || exp < earliestAuthExpiry) earliestAuthExpiry = exp;
+      }
+    }
+  } else if (raw && typeof raw === "object") {
+    for (const [name, value] of Object.entries(raw)) {
+      if (value == null) continue;
+      const cleanName = String(name).trim();
+      if (cleanName) cookies[cleanName] = String(value);
+    }
+  } else {
+    throw badRequest(
+      "Formato de cookies não reconhecido (esperado o array do Cookie-Editor ou um objeto {nome: valor}).",
+      "ASPX_COOKIES_BAD_FORMAT",
+    );
+  }
+
+  if (!Object.keys(cookies).some(isAuthLikeCookie)) {
+    throw badRequest(
+      "Nenhum cookie de autenticação SPX encontrado (ex.: spx_cid, fms_user_skey, SPC_*). " +
+        "Confirme que você está logado no SPX e exportou os cookies do domínio myagencyservice.com.br.",
+      "ASPX_COOKIES_NO_AUTH",
+      422,
+    );
+  }
+
+  const expiresAtIso = earliestAuthExpiry
+    ? new Date(earliestAuthExpiry * 1000).toISOString()
+    : new Date(Date.now() + COOKIE_ROLLING_TTL_SECONDS * 1000).toISOString();
+
+  return { cookies, expiresAtIso, count: Object.keys(cookies).length };
+}
+
+async function resetSpxBotSession() {
+  const base = (process.env.SPX_BOT_URL?.trim() || "http://spx-bot:8766").replace(/\/$/, "");
+  try {
+    const resp = await fetch(`${base}/spx/session/reset`, { method: "POST" });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function updateAspxCookies({ cookiesJson, correlationId } = {}) {
+  const { cookies, expiresAtIso, count } = normalizeSpxCookies(cookiesJson);
+
+  const supabase = createSupabaseAdminClient();
+  const nowIso = new Date().toISOString();
+  const { error } = await supabase
+    .from("aspx_credentials")
+    .update({
+      cookies_json: cookies,
+      cookies_expires_at: expiresAtIso,
+      cookies_updated_at: nowIso,
+    })
+    .eq("id", 1);
+
+  if (error) {
+    throw new Error(`ASPX_COOKIES_UPDATE_FAILED:${error.message}`);
+  }
+
+  // Recarrega a sessão do spx-bot imediatamente (best-effort — não falha o request).
+  const botReloaded = await resetSpxBotSession();
+
+  return {
+    statusCode: 200,
+    payload: {
+      ok: true,
+      cookies: { count, expiresAt: expiresAtIso, updatedAt: nowIso },
+      botReloaded,
+      meta: { correlationId: correlationId || null },
+    },
+  };
+}
