@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -56,6 +58,8 @@ async def lifespan(app: FastAPI):
             log_info(f"[spx] anexos antigos removidos no startup: {removidas} pastas")
     except Exception as exc:
         log_alerta(f"[spx] falha ao limpar anexos antigos no startup: {exc}")
+    # Keep-alive da sessao SPX — renova o cookie por rotacao (ver _keepalive_loop).
+    _start_keepalive()
     yield
 
 
@@ -136,6 +140,48 @@ def reset_client():
         except Exception:
             pass
     _CLIENT = None
+
+
+# ── Keep-alive da sessao SPX ─────────────────────────────────────────
+# O SPX nao tem login programatico; a sessao SSO so se mantem viva pela ROTACAO
+# de cookies que o servidor devolve a cada chamada valida. Como o portal pode
+# ficar ocioso (noite/fim de semana), um ping periodico forca essa rotacao e o
+# SPXClient regrava o cookie no Supabase — mantendo a sessao viva sem Playwright.
+# Quando a sessao morre de vez (evento de seguranca), o ping da 401 -> cookies
+# marcados expirados -> operador renova pelo botao "Atualizar cookies" do painel.
+_KEEPALIVE_INTERVAL_SEC = int(os.getenv("SPX_KEEPALIVE_INTERVAL_SEC") or 1800)  # 30min
+_keepalive_thread: threading.Thread | None = None
+
+
+def _keepalive_loop() -> None:
+    # Atraso inicial pra nao competir com o boot do uvicorn.
+    time.sleep(min(120, _KEEPALIVE_INTERVAL_SEC))
+    while True:
+        try:
+            if get_client().ping():
+                log_info("[keepalive] ping OK — sessao SPX renovada (cookies rotacionados)")
+            else:
+                # ping() ja invalidou os cookies no Supabase (401/redirect).
+                log_alerta("[keepalive] ping falhou — sessao expirada. Aguardando cookies novos (botao).")
+                reset_client()
+        except Exception as exc:  # noqa: BLE001 — cookies ausentes/expirados, Supabase off, etc.
+            log_alerta(f"[keepalive] indisponivel: {type(exc).__name__}: {exc}")
+            reset_client()
+        time.sleep(_KEEPALIVE_INTERVAL_SEC)
+
+
+def _start_keepalive() -> None:
+    """Inicia a thread de keep-alive. Chamado pelo lifespan no startup."""
+    global _keepalive_thread
+    if (os.getenv("SPX_KEEPALIVE_DISABLED") or "").strip().lower() in {"1", "true", "yes"}:
+        log_info("[keepalive] desabilitado via SPX_KEEPALIVE_DISABLED")
+        return
+    if _keepalive_thread is None:
+        _keepalive_thread = threading.Thread(
+            target=_keepalive_loop, daemon=True, name="spx-keepalive"
+        )
+        _keepalive_thread.start()
+        log_info(f"[keepalive] iniciado (intervalo {_KEEPALIVE_INTERVAL_SEC}s)")
 
 
 # ── Models ──────────────────────────────────────────────────────────
