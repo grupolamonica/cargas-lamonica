@@ -1220,6 +1220,17 @@ export async function syncGoogleSheetLoads({
     if (!existingLoad.sheet_lh?.trim()) continue;
     if (currentSheetKeys.has(existingLoad.sheet_lh)) continue;
 
+    // RESERVED é INTOCÁVEL pelo sync: uma reserva do portal (lead APPROVED +
+    // reserved_public_lead_id) só se resolve pelo ciclo de reserva (cancelar /
+    // confirmar). Se a planilha "fechasse" a linha (motorista preenchido) ou a
+    // removesse e o sync flipasse RESERVED→BOOKED, o cancelamento da reserva —
+    // que só reabre a carga para OPEN quando o status ainda é 'RESERVED' — parava
+    // de funcionar e a carga ficava presa em BOOKED, impossível de reabrir
+    // (MANUAL_CARGO_STATUSES = {DRAFT, OPEN}). Era o bug "trocar o motorista de uma
+    // carga reservada fazia a carga sumir e não dava pra voltar a aberta".
+    // O caminho de cargas disponíveis já preserva RESERVED; aqui fechamos a lacuna.
+    if (existingLoad.status === "RESERVED") continue;
+
     const sheetRow = allSheetRowsByLh.get(existingLoad.sheet_lh.trim());
     if (sheetRow) {
       staleInSheet.push({
@@ -1253,7 +1264,9 @@ export async function syncGoogleSheetLoads({
             sheet_data_descarga     = v.data_descarga,
             sheet_status            = v.sheet_status,
             sheet_synced_at         = $1,
-            status = CASE WHEN c.status IN ('OPEN', 'RESERVED') THEN 'BOOKED' ELSE c.status END
+            -- Só OPEN→BOOKED. RESERVED é preservado (já filtrado acima; o guard
+            -- aqui é defesa em profundidade contra corrida entre leitura e write).
+            status = CASE WHEN c.status = 'OPEN' THEN 'BOOKED' ELSE c.status END
           FROM (
             SELECT
               UNNEST($2::uuid[])  AS id,
@@ -1274,7 +1287,7 @@ export async function syncGoogleSheetLoads({
             -- pooler. O indicador global de ultimo sync (sheet_synced_at)
             -- segue fresco via o upsert das cargas disponíveis, não daqui.
             AND (
-              c.status IN ('OPEN', 'RESERVED')
+              c.status = 'OPEN'
               OR c.sheet_motorista         IS DISTINCT FROM v.motorista
               OR c.sheet_cavalo            IS DISTINCT FROM v.cavalo
               OR c.sheet_carreta           IS DISTINCT FROM v.carreta
@@ -1299,14 +1312,13 @@ export async function syncGoogleSheetLoads({
     });
 
     console.info(
-      `[google-sheet-loads] ${staleInSheet.length} cargas fechadas pela planilha (OPEN/RESERVED→BOOKED, sheet_lh preservado)`,
+      `[google-sheet-loads] ${staleInSheet.length} cargas fechadas pela planilha (OPEN→BOOKED, RESERVED preservado, sheet_lh preservado)`,
       { count: staleInSheet.length },
     );
   }
 
-  // Cargas completamente removidas da planilha: expira OPEN, transita RESERVED→BOOKED.
-  // sheet_lh preservado em cargas RESERVED (identidade permanente da carga na fila).
-  // Apenas cargas OPEN limpam sheet_lh ao expirar.
+  // Cargas completamente removidas da planilha: expira OPEN. Cargas RESERVED já
+  // foram filtradas do batch acima (intocáveis pelo sync — a reserva manda).
   if (staleTrulyGone.length > 0) {
     await withPgClient(async (pgClient) => {
       await pgClient.query(
@@ -1320,10 +1332,7 @@ export async function syncGoogleSheetLoads({
             sheet_cavalo           = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_cavalo END,
             sheet_carreta          = CASE WHEN status = 'OPEN' THEN NULL ELSE sheet_carreta END,
             sheet_synced_at = NULL,
-            status = CASE
-              WHEN status = 'OPEN' THEN 'EXPIRED'
-              WHEN status = 'RESERVED' THEN 'BOOKED'
-              ELSE status END
+            status = CASE WHEN status = 'OPEN' THEN 'EXPIRED' ELSE status END
           WHERE id = ANY($1::uuid[])
         `,
         [staleTrulyGone],
@@ -1331,7 +1340,7 @@ export async function syncGoogleSheetLoads({
     });
 
     console.info(
-      `[google-sheet-loads] ${staleTrulyGone.length} cargas removidas da planilha (OPEN→EXPIRED, RESERVED→BOOKED)`,
+      `[google-sheet-loads] ${staleTrulyGone.length} cargas removidas da planilha (OPEN→EXPIRED, RESERVED preservado)`,
       { count: staleTrulyGone.length },
     );
   }
