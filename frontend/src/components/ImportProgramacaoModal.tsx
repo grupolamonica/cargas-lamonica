@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Copy, Download, FileUp, Loader2, Upload, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Download, FileUp, Loader2, RefreshCw, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { formatCargoStatusLabel } from "@/lib/cargoStatus";
@@ -118,13 +118,18 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
     setIsImporting(true);
     try {
       const response = await importOperatorCargas(csvText, false);
-      const { imported, duplicated, invalid } = response.summary;
-      const extras = [
-        duplicated > 0 ? `${duplicated} já existente(s)` : null,
+      const { inserted, updated, skipped, invalid } = response.summary;
+      const parts = [
+        inserted > 0 ? `${inserted} nova(s)` : null,
+        updated > 0 ? `${updated} atualizada(s)` : null,
+      ].filter(Boolean);
+      const ignored = [
+        skipped > 0 ? `${skipped} pulada(s)` : null,
         invalid > 0 ? `${invalid} com erro` : null,
       ].filter(Boolean);
       toast.success(
-        `${imported} carga(s) importada(s)` + (extras.length > 0 ? ` — ${extras.join(", ")} ignorada(s).` : "."),
+        `Programação importada: ${parts.length > 0 ? parts.join(", ") : "nenhuma carga"}` +
+          (ignored.length > 0 ? ` — ${ignored.join(", ")}.` : "."),
       );
       await onImported();
       resetState();
@@ -218,12 +223,19 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
               <span className="rounded-full bg-muted px-3 py-1 font-medium text-foreground">
                 {summary.total} linha(s)
               </span>
-              <span className="rounded-full bg-emerald-100 px-3 py-1 font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-                {summary.importable} a importar
-              </span>
-              {summary.duplicated > 0 ? (
+              {summary.inserted > 0 ? (
+                <span className="rounded-full bg-emerald-100 px-3 py-1 font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                  {summary.inserted} nova(s)
+                </span>
+              ) : null}
+              {summary.updated > 0 ? (
+                <span className="rounded-full bg-sky-100 px-3 py-1 font-medium text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">
+                  {summary.updated} atualiza(m)
+                </span>
+              ) : null}
+              {summary.skipped > 0 ? (
                 <span className="rounded-full bg-amber-100 px-3 py-1 font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
-                  {summary.duplicated} já existe(m)
+                  {summary.skipped} pulada(s)
                 </span>
               ) : null}
               {summary.invalid > 0 ? (
@@ -258,7 +270,7 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
                       className={
                         !row.ok
                           ? "bg-red-50/60 dark:bg-red-500/5"
-                          : row.duplicate
+                          : row.action === "skip"
                             ? "bg-amber-50/60 dark:bg-amber-500/5"
                             : ""
                       }
@@ -283,13 +295,17 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
                               <li key={index}>• {message}</li>
                             ))}
                           </ul>
-                        ) : row.duplicate ? (
+                        ) : row.action === "skip" ? (
                           <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
-                            <Copy className="h-4 w-4" /> Já existe (será pulada)
+                            <Copy className="h-4 w-4" /> Pulada{row.reason ? ` — ${row.reason}` : ""}
+                          </span>
+                        ) : row.action === "update" ? (
+                          <span className="inline-flex items-center gap-1 text-sky-600 dark:text-sky-400">
+                            <RefreshCw className="h-4 w-4" /> Atualiza
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                            <CheckCircle2 className="h-4 w-4" /> OK
+                            <CheckCircle2 className="h-4 w-4" /> Nova
                           </span>
                         )}
                       </td>

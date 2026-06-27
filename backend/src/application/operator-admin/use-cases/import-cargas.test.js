@@ -4,6 +4,7 @@ import {
   closeTestDatabase,
   query,
   resetTestDatabase,
+  seedCargo,
   seedCliente,
   seedUser,
   withPgClient,
@@ -30,7 +31,7 @@ describe("importOperatorCargas (programação)", () => {
     await closeTestDatabase();
   });
 
-  it("dry-run valida sem gravar, reporta erros e não vaza payload", async () => {
+  it("dry-run classifica linhas (nova/erro) sem gravar e não vaza payload", async () => {
     const operator = await seedUser({ email: "op@teste.local" });
     await seedCliente({ nome: "Shopee" });
 
@@ -49,16 +50,17 @@ describe("importOperatorCargas (programação)", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.payload.summary).toMatchObject({ total: 2, valid: 1, invalid: 1, duplicated: 0, imported: 0 });
-    expect(response.payload.rows[1].ok).toBe(false);
+    expect(response.payload.summary).toMatchObject({ total: 2, inserted: 1, updated: 0, skipped: 0, invalid: 1 });
+    expect(response.payload.rows[0].action).toBe("insert");
     expect(response.payload.rows[0].payload).toBeUndefined();
+    expect(response.payload.rows[1].ok).toBe(false);
     expect(response.payload.rows[0].preview.cliente_nome).toBe("Shopee");
 
     const { rows } = await query("SELECT count(*)::int AS n FROM public.cargas");
     expect(rows[0].n).toBe(0);
   });
 
-  it("importa válidas resolvendo CLIENTE pelo nome; cliente em branco fica null", async () => {
+  it("insere novas resolvendo CLIENTE; cliente em branco fica null", async () => {
     const operator = await seedUser({ email: "op2@teste.local" });
     const cliente = await seedCliente({ nome: "Shopee" });
 
@@ -76,8 +78,7 @@ describe("importOperatorCargas (programação)", () => {
       correlationId: "corr-import",
     });
 
-    expect(response.payload.summary).toMatchObject({ total: 2, valid: 2, imported: 2 });
-
+    expect(response.payload.summary).toMatchObject({ total: 2, inserted: 2, updated: 0 });
     const { rows } = await query(
       "SELECT sheet_lh, perfil, sheet_tipo, status, cliente_id FROM public.cargas ORDER BY sheet_lh",
     );
@@ -85,67 +86,80 @@ describe("importOperatorCargas (programação)", () => {
     expect(rows[1]).toMatchObject({ sheet_lh: "LH-101", perfil: "TRUCK", status: "OPEN", cliente_id: null });
   });
 
-  it("rejeita linha cujo CLIENTE não existe (não grava a linha)", async () => {
+  it("reimportar o mesmo COD. CARGA ATUALIZA a carga (revive expirada com data nova)", async () => {
     const operator = await seedUser({ email: "op3@teste.local" });
+    await seedCargo({
+      id: buildSheetLoadId("LH-200"),
+      sheet_lh: "LH-200",
+      status: "EXPIRED",
+      data: "2026-06-17",
+      origem: "Velho",
+      destino: "Antigo",
+    });
+
+    const csv = [CSV_HEADER, "LH-200,Forecast,TRUCK,17/07/2026 10:00,,Sao Paulo,Rio,,ativa"].join("\n");
+    const response = await importOperatorCargas({ operatorId: operator.id, csv, dryRun: false, requestIp: "ip", correlationId: "c" });
+
+    expect(response.payload.summary).toMatchObject({ total: 1, inserted: 0, updated: 1, skipped: 0 });
+    expect(response.payload.rows[0].action).toBe("update");
+
+    const { rows } = await query("SELECT status, data, perfil, origem FROM public.cargas WHERE sheet_lh = 'LH-200'");
+    expect(rows).toHaveLength(1); // não duplicou
+    expect(rows[0]).toMatchObject({ status: "OPEN", perfil: "TRUCK", origem: "Sao Paulo" });
+    // pg-mem devolve DATE como objeto Date em UTC-meia-noite; compara em UTC.
+    expect(new Date(rows[0].data).toISOString().slice(0, 10)).toBe("2026-07-17");
+  });
+
+  it("NÃO sobrescreve carga com motorista/viagem (BOOKED) — pula", async () => {
+    const operator = await seedUser({ email: "op4@teste.local" });
+    await seedCargo({ id: buildSheetLoadId("LH-300"), sheet_lh: "LH-300", status: "BOOKED", origem: "Origem Reservada" });
+
+    const csv = [CSV_HEADER, "LH-300,Forecast,CARRETA,17/07/2026 10:00,,Nova Origem,Novo Destino,,ativa"].join("\n");
+    const response = await importOperatorCargas({ operatorId: operator.id, csv, dryRun: false, requestIp: "ip", correlationId: "c" });
+
+    expect(response.payload.summary).toMatchObject({ inserted: 0, updated: 0, skipped: 1 });
+    expect(response.payload.rows[0].action).toBe("skip");
+    expect(response.payload.rows[0].reason).toContain("BOOKED");
+
+    const { rows } = await query("SELECT status, origem FROM public.cargas WHERE sheet_lh = 'LH-300'");
+    expect(rows[0]).toMatchObject({ status: "BOOKED", origem: "Origem Reservada" }); // intacta
+  });
+
+  it("rejeita linha cujo CLIENTE não existe", async () => {
+    const operator = await seedUser({ email: "op5@teste.local" });
     await seedCliente({ nome: "Shopee" });
 
     const csv = [
       CSV_HEADER,
-      "LH-200,Forecast,CARRETA,15/07/2026 08:00,,Sao Paulo,Rio,Shopee,ativa",
-      "LH-201,Forecast,CARRETA,15/07/2026 08:00,,Sao Paulo,Rio,Cliente Fantasma,ativa",
+      "LH-400,Forecast,CARRETA,17/07/2026 10:00,,Sao Paulo,Rio,Shopee,ativa",
+      "LH-401,Forecast,CARRETA,17/07/2026 10:00,,Sao Paulo,Rio,Cliente Fantasma,ativa",
     ].join("\n");
 
-    const response = await importOperatorCargas({
-      operatorId: operator.id,
-      csv,
-      dryRun: false,
-      requestIp: "ip",
-      correlationId: "c",
-    });
+    const response = await importOperatorCargas({ operatorId: operator.id, csv, dryRun: false, requestIp: "ip", correlationId: "c" });
 
-    expect(response.payload.summary).toMatchObject({ total: 2, valid: 1, invalid: 1, imported: 1 });
+    expect(response.payload.summary).toMatchObject({ total: 2, inserted: 1, invalid: 1 });
     const { rows } = await query("SELECT sheet_lh FROM public.cargas ORDER BY sheet_lh");
-    expect(rows.map((r) => r.sheet_lh)).toEqual(["LH-200"]);
-  });
-
-  it("evita duplicata por COD. CARGA: reimportar o mesmo LH não cria carga nova", async () => {
-    const operator = await seedUser({ email: "op4@teste.local" });
-    const csv = [CSV_HEADER, "LH-300,Forecast,CARRETA,15/07/2026 08:00,,Sao Paulo,Rio,,ativa"].join("\n");
-
-    const first = await importOperatorCargas({ operatorId: operator.id, csv, dryRun: false, requestIp: "ip", correlationId: "c1" });
-    expect(first.payload.summary).toMatchObject({ imported: 1, duplicated: 0 });
-
-    const second = await importOperatorCargas({ operatorId: operator.id, csv, dryRun: false, requestIp: "ip", correlationId: "c2" });
-    expect(second.payload.summary).toMatchObject({ imported: 0, duplicated: 1 });
-
-    const { rows } = await query("SELECT count(*)::int AS n FROM public.cargas");
-    expect(rows[0].n).toBe(1);
+    expect(rows.map((r) => r.sheet_lh)).toEqual(["LH-400"]);
   });
 
   it("aceita CSV ;-delimitado sem coluna CLIENTE (arquivo real do Excel pt-BR)", async () => {
-    const operator = await seedUser({ email: "op5@teste.local" });
+    const operator = await seedUser({ email: "op6@teste.local" });
 
     const csv = [
       "COD. CARGA;TIPO;VEÍCULO;DATA CARREGAMENTO;DATA DESCARGA;Origem;Destino;STATUS",
-      "B101437150;Transferência;Truck;17/06/2026 10:00;21/06/2026 23:00;SAO BERNARDO DO CAMPO;FEIRA DE SANTANA;ATIVA",
+      "B101437150;Transferência;Truck;17/07/2026 10:00;21/07/2026 23:00;SAO BERNARDO DO CAMPO;FEIRA DE SANTANA;ATIVA",
       ";;;;;;;",
     ].join("\r\n");
 
-    const response = await importOperatorCargas({
-      operatorId: operator.id,
-      csv,
-      dryRun: false,
-      requestIp: "ip",
-      correlationId: "c",
-    });
+    const response = await importOperatorCargas({ operatorId: operator.id, csv, dryRun: false, requestIp: "ip", correlationId: "c" });
 
-    expect(response.payload.summary).toMatchObject({ total: 1, valid: 1, imported: 1 });
-    const { rows } = await query("SELECT sheet_lh, perfil, status, cliente_id FROM public.cargas");
-    expect(rows[0]).toMatchObject({ sheet_lh: "B101437150", perfil: "TRUCK", status: "OPEN", cliente_id: null });
+    expect(response.payload.summary).toMatchObject({ total: 1, inserted: 1 });
+    const { rows } = await query("SELECT sheet_lh, perfil, sheet_tipo, status FROM public.cargas");
+    expect(rows[0]).toMatchObject({ sheet_lh: "B101437150", perfil: "TRUCK", sheet_tipo: "Transferência", status: "OPEN" });
   });
 
   it("rejeita cabeçalho inválido sem gravar", async () => {
-    const operator = await seedUser({ email: "op6@teste.local" });
+    const operator = await seedUser({ email: "op7@teste.local" });
     const response = await importOperatorCargas({
       operatorId: operator.id,
       csv: "foo,bar\n1,2",

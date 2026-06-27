@@ -11,6 +11,11 @@ import { ValidationError } from "../../../domain/load-claims/errors.js";
 // Teto de segurança: importações maiores devem ser quebradas em arquivos.
 const MAX_IMPORT_ROWS = 500;
 
+// Cargas com motorista em processo / viagem concluída NÃO são sobrescritas por
+// re-importação (evita atropelar uma reserva ou um histórico). As demais
+// (rascunho/aberta/expirada/cancelada/falha) são atualizadas pelo COD. CARGA.
+const PROTECTED_STATUSES = new Set(["RESERVED", "BOOKED", "COMPLETED"]);
+
 // Mapa nome-normalizado → cliente, para resolver a coluna CLIENTE do CSV.
 async function loadClientesByName(client) {
   const { rows } = await client.query("SELECT id, nome FROM public.clientes");
@@ -65,28 +70,47 @@ function parseAndValidate(csv, clientesByName) {
   return { rows };
 }
 
-// Marca cada linha válida como duplicada se o COD. CARGA (= id determinístico)
-// já existe no banco OU já apareceu antes no próprio arquivo.
-async function markDuplicates(client, rows) {
+// Define a ação de cada linha válida por COD. CARGA (= id determinístico):
+//   insert  → COD. CARGA novo
+//   update  → já existe e pode ser sobrescrita (refresh / revive)
+//   skip    → já existe com motorista/viagem (protegida) ou repetida no arquivo
+async function classifyRows(client, rows) {
   const validRows = rows.filter((row) => row.ok);
   const ids = [...new Set(validRows.map((row) => row.payload.id))];
 
-  const existing = new Set();
+  const statusById = new Map();
   if (ids.length > 0) {
     const placeholders = ids.map((_, index) => `$${index + 1}`).join(", ");
     const { rows: found } = await client.query(
-      `SELECT id FROM public.cargas WHERE id IN (${placeholders})`,
+      `SELECT id, status FROM public.cargas WHERE id IN (${placeholders})`,
       ids,
     );
-    found.forEach((row) => existing.add(row.id));
+    found.forEach((row) => statusById.set(row.id, row.status));
   }
 
   const seenInFile = new Set();
   for (const row of rows) {
-    if (!row.ok) continue;
+    if (!row.ok) {
+      row.action = "invalid";
+      continue;
+    }
     const id = row.payload.id;
-    row.duplicate = existing.has(id) || seenInFile.has(id);
+    if (seenInFile.has(id)) {
+      row.action = "skip";
+      row.reason = "COD. CARGA repetido no arquivo";
+      continue;
+    }
     seenInFile.add(id);
+
+    const existingStatus = statusById.get(id);
+    if (!existingStatus) {
+      row.action = "insert";
+    } else if (PROTECTED_STATUSES.has(existingStatus)) {
+      row.action = "skip";
+      row.reason = `já existe com motorista/viagem (${existingStatus})`;
+    } else {
+      row.action = "update";
+    }
   }
 }
 
@@ -120,32 +144,60 @@ async function insertCargo(client, payload, operatorId) {
   );
 }
 
+// Atualiza a carga existente (mesmo COD. CARGA) com os valores do CSV. Preserva
+// id, sheet_lh, created_by e created_at.
+async function updateCargo(client, payload) {
+  await client.query(
+    `
+      UPDATE public.cargas
+      SET data = $2, horario = $3, origem = $4, destino = $5, perfil = $6,
+          status = $7, driver_visibility = $8, sheet_tipo = $9,
+          sheet_data_carregamento = $10, sheet_data_descarga = $11,
+          cliente_id = $12, updated_at = now()
+      WHERE id = $1
+    `,
+    [
+      payload.id,
+      payload.data,
+      payload.horario,
+      payload.origem,
+      payload.destino,
+      payload.perfil,
+      payload.status,
+      payload.driver_visibility,
+      payload.sheet_tipo,
+      payload.sheet_data_carregamento,
+      payload.sheet_data_descarga,
+      payload.cliente_id,
+    ],
+  );
+}
+
 function buildSummary(rows) {
-  const valid = rows.filter((row) => row.ok);
-  const duplicated = valid.filter((row) => row.duplicate).length;
-  const invalid = rows.length - valid.length;
-  return {
-    total: rows.length,
-    valid: valid.length,
-    invalid,
-    duplicated,
-    importable: valid.length - duplicated,
-  };
+  const counts = { total: rows.length, invalid: 0, skipped: 0, inserted: 0, updated: 0 };
+  for (const row of rows) {
+    if (!row.ok) counts.invalid += 1;
+    else if (row.action === "skip") counts.skipped += 1;
+    else if (row.action === "insert") counts.inserted += 1;
+    else if (row.action === "update") counts.updated += 1;
+  }
+  counts.importable = counts.inserted + counts.updated;
+  return counts;
 }
 
 // Remove o payload (uso interno) antes de devolver ao cliente.
-function toClientRow({ line, ok, errors, preview, duplicate }) {
-  return { line, ok, errors, preview, duplicate: Boolean(duplicate) };
+function toClientRow({ line, ok, errors, preview, action, reason }) {
+  return { line, ok, errors, preview, action: action ?? (ok ? "insert" : "invalid"), reason: reason ?? null };
 }
 
 /**
  * Importa programação de cargas a partir de um CSV. Em `dryRun`, apenas valida e
- * devolve o preview por linha (marcando duplicatas por COD. CARGA); caso
- * contrário, insere as linhas válidas e ainda não existentes numa transação
- * única (inválidas e duplicadas são puladas e reportadas).
+ * classifica cada linha (nova / atualiza / pulada / erro); caso contrário,
+ * insere as novas e atualiza as existentes (mesmo COD. CARGA) numa transação
+ * única. Cargas com motorista/viagem (RESERVED/BOOKED/COMPLETED) são preservadas.
  *
  * COD. CARGA = LH → id determinístico (mesmo do sync da planilha): reimportar o
- * mesmo COD. CARGA não duplica a carga.
+ * mesmo COD. CARGA atualiza a carga (não duplica).
  */
 export async function importOperatorCargas({ operatorId, csv, dryRun = false, requestIp, correlationId }) {
   if (typeof csv !== "string" || csv.trim() === "") {
@@ -156,7 +208,7 @@ export async function importOperatorCargas({ operatorId, csv, dryRun = false, re
     const { headerError, rows } = await withPgClient(async (client) => {
       const clientesByName = await loadClientesByName(client);
       const parsed = parseAndValidate(csv, clientesByName);
-      if (!parsed.headerError) await markDuplicates(client, parsed.rows);
+      if (!parsed.headerError) await classifyRows(client, parsed.rows);
       return parsed;
     });
 
@@ -172,7 +224,7 @@ export async function importOperatorCargas({ operatorId, csv, dryRun = false, re
       payload: {
         ok: true,
         dryRun: true,
-        summary: { ...buildSummary(rows), imported: 0 },
+        summary: buildSummary(rows),
         rows: rows.map(toClientRow),
         meta: { correlationId },
       },
@@ -190,14 +242,14 @@ export async function importOperatorCargas({ operatorId, csv, dryRun = false, re
       };
     }
 
-    await markDuplicates(client, rows);
+    await classifyRows(client, rows);
 
-    const toInsert = rows.filter((row) => row.ok && !row.duplicate);
-    for (const row of toInsert) {
-      await insertCargo(client, row.payload, operatorId);
+    for (const row of rows) {
+      if (row.action === "insert") await insertCargo(client, row.payload, operatorId);
+      else if (row.action === "update") await updateCargo(client, row.payload);
     }
 
-    const summary = { ...buildSummary(rows), imported: toInsert.length };
+    const summary = buildSummary(rows);
 
     await insertSecurityAuditEvent(client, {
       eventType: "operator.cargo.imported",
@@ -211,8 +263,9 @@ export async function importOperatorCargas({ operatorId, csv, dryRun = false, re
       correlationId,
       metadata: {
         total: summary.total,
-        imported: summary.imported,
-        duplicated: summary.duplicated,
+        inserted: summary.inserted,
+        updated: summary.updated,
+        skipped: summary.skipped,
         invalid: summary.invalid,
       },
     });

@@ -144,12 +144,15 @@ export interface ImportCargoRowPreview {
   status: string;
 }
 
+export type ImportCargoAction = "insert" | "update" | "skip" | "invalid";
+
 export interface ImportCargoRowResult {
   line: number;
   ok: boolean;
   errors: string[];
   preview: ImportCargoRowPreview;
-  duplicate: boolean;
+  action: ImportCargoAction;
+  reason: string | null;
 }
 
 export interface ImportCargasResponse {
@@ -158,11 +161,11 @@ export interface ImportCargasResponse {
   headerError?: string;
   summary: {
     total: number;
-    valid: number;
     invalid: number;
-    duplicated: number;
+    skipped: number;
+    inserted: number;
+    updated: number;
     importable: number;
-    imported: number;
   };
   rows: ImportCargoRowResult[];
   meta: { correlationId: string };
