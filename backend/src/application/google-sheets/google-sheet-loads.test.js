@@ -711,6 +711,100 @@ describe("google sheet loads sync", () => {
     });
   });
 
+  it("reopens an EXPIRED load to OPEN when the sheet lists it as available and its date is in the future", async () => {
+    // Carga foi expirada (cron, ou correção de uma alocação errada na planilha
+    // depois da data vencer) e ficou presa em EXPIRED. A planilha volta a
+    // listá-la disponível com data FUTURA → o sync deve reabrir para OPEN.
+    const futureCsv = SAMPLE_CSV.replace("03/04/2026 22:30:00", "31/12/2099 22:30:00");
+    const existingId = createSheetLoadId("LT0Q4302267L1");
+    const supabaseClient = createSupabaseMock({
+      existingSheetRows: [
+        {
+          id: existingId,
+          sheet_lh: "LT0Q4302267L1",
+          status: "EXPIRED",
+          // cron-expire NÃO limpa sheet_synced_at — carga continua "do sync".
+          sheet_synced_at: "2026-06-01T00:00:00.000Z",
+          valor: 5000,
+          perfil: "CARRETA",
+          bonus: null,
+          distancia_km: null,
+          duracao_horas: null,
+          cliente_id: SHEET_CLIENT_ID,
+          is_template: false,
+          created_by: null,
+        },
+      ],
+    });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(futureCsv)),
+      text: vi.fn().mockResolvedValue(futureCsv),
+    });
+
+    const result = await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    expect(result.revivedExpiredCount).toBe(1);
+
+    const upsertCall = supabaseClient.calls.find((call) => call[0] === "upsert");
+    expect(upsertCall).toBeTruthy();
+    const revived = upsertCall[2].find((row) => row.sheet_lh === "LT0Q4302267L1");
+    expect(revived).toMatchObject({ sheet_lh: "LT0Q4302267L1", status: "OPEN" });
+  });
+
+  it("keeps an EXPIRED load expired when the available sheet row is still in the past (no flapping)", async () => {
+    // Mesma carga EXPIRED, mas a data da planilha continua no passado: reabrir
+    // só para o cron reexpirar provocaria flapping (eventos realtime/egress).
+    // SAMPLE_CSV usa datas de abr/2026 (passado) → deve permanecer EXPIRED.
+    const existingId = createSheetLoadId("LT0Q4302267L1");
+    const supabaseClient = createSupabaseMock({
+      existingSheetRows: [
+        {
+          id: existingId,
+          sheet_lh: "LT0Q4302267L1",
+          status: "EXPIRED",
+          sheet_synced_at: "2026-06-01T00:00:00.000Z",
+          valor: 5000,
+          perfil: "CARRETA",
+          bonus: null,
+          distancia_km: null,
+          duracao_horas: null,
+          cliente_id: SHEET_CLIENT_ID,
+          is_template: false,
+          created_by: null,
+        },
+      ],
+    });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+
+    const result = await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    expect(result.revivedExpiredCount).toBe(0);
+
+    const upsertCall = supabaseClient.calls.find((call) => call[0] === "upsert");
+    expect(upsertCall).toBeTruthy();
+    const stale = upsertCall[2].find((row) => row.sheet_lh === "LT0Q4302267L1");
+    expect(stale).toMatchObject({ sheet_lh: "LT0Q4302267L1", status: "EXPIRED" });
+  });
+
   it("preserves operator-edited valor on existing loads even when sheet exports a different amount", async () => {
     const supabaseClient = createSupabaseMock({
       existingSheetRows: [

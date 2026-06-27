@@ -6,6 +6,7 @@ import { withPgClient } from "../../infrastructure/pg/postgres.js";
 import { createSupabaseAdminClient } from "../../infrastructure/supabase/admin-client.js";
 import { normalizeVehicleProfile } from "../../domain/vehicle-profiles.js";
 import { baseRouteValues as BASE_ROUTE_VALUES } from "../../domain/operator-admin/base-route-values.js";
+import { getSaoPauloWallClock } from "../../domain/sao-paulo-time.js";
 
 const DEFAULT_SHEET_ID = process.env.GOOGLE_SHEET_ID?.trim() || "";
 const DEFAULT_SHEET_GID = process.env.GOOGLE_SHEET_GID?.trim() || "0";
@@ -906,6 +907,31 @@ export async function fetchGoogleSheetCsv(fetchImpl, sheetUrl) {
   }
 }
 
+/**
+ * "A carga (data + horário) ainda está no futuro?" no relógio de São Paulo.
+ *
+ * Mesma definição de "vencida" usada pelo cron `expire-past-cargas.mjs`
+ * (NÃO vencida = `data > hoje` OU `data = hoje E (sem horário OU horário >= agora)`),
+ * para que reabrir e expirar nunca discordem e provoquem flapping. Sem `nowSp`
+ * ou sem `data`, trata como ativa (não bloqueia a reabertura).
+ */
+function isSheetLoadActive(load, nowSp) {
+  if (!nowSp || !load?.data) {
+    return true;
+  }
+
+  if (load.data > nowSp.dateIso) {
+    return true;
+  }
+
+  if (load.data < nowSp.dateIso) {
+    return false;
+  }
+
+  const loadTime = load.horario || "23:59:59";
+  return loadTime >= nowSp.timeIso;
+}
+
 function buildSheetLoadPayload({
   load,
   existingLoad,
@@ -913,6 +939,7 @@ function buildSheetLoadPayload({
   routeTemplateDefaultsByKey,
   fallbackSheetClientId,
   syncedAt,
+  nowSp,
 }) {
   const matchedRouteCatalogDefaults = resolveRouteDefaults(routeCatalogDefaultsByKey, load.origem, load.destino);
   const matchedRouteTemplateDefaults = resolveRouteDefaults(routeTemplateDefaultsByKey, load.origem, load.destino);
@@ -945,9 +972,22 @@ function buildSheetLoadPayload({
         bonus: existingLoad.bonus,
         distancia_km: existingLoad.distancia_km,
         duracao_horas: existingLoad.duracao_horas,
-        // Sheet cleared driver+status → BOOKED reverts to OPEN so the load re-enters the portal.
-        // RESERVED is kept: a portal driver claimed it before the sheet was updated.
-        status: existingLoad.status === "BOOKED" ? DEFAULT_PUBLISHED_STATUS : existingLoad.status || DEFAULT_PUBLISHED_STATUS,
+        // Planilha sem motorista/status → a carga "fechada" volta ao portal:
+        //   BOOKED  → OPEN sempre (operador removeu o motorista da planilha).
+        //   EXPIRED → OPEN só se a carga voltou a ser futura (trava de "ativa").
+        //     Sem esta porta, uma carga expirada pelo cron — ou pela correção de
+        //     uma alocação errada na planilha (motorista adicionado por engano,
+        //     depois removido após a data vencer) — ficava presa em EXPIRED:
+        //     invisível ao motorista e oculta na visão padrão do operador, mesmo
+        //     depois de a planilha voltar a listá-la disponível. A trava de
+        //     "ativa" evita reabrir/reexpirar cargas genuinamente vencidas
+        //     (flapping → tempestade de eventos realtime/egress).
+        //   RESERVED é mantido: um motorista do portal reservou antes do sync.
+        status:
+          existingLoad.status === "BOOKED" ||
+          (existingLoad.status === "EXPIRED" && isSheetLoadActive(load, nowSp))
+            ? DEFAULT_PUBLISHED_STATUS
+            : existingLoad.status || DEFAULT_PUBLISHED_STATUS,
         is_template: existingLoad.is_template ?? false,
         cliente_id: existingLoad.cliente_id || pickFirstNonEmptyString(fallbackSheetClientId),
         created_by: existingLoad.created_by ?? null,
@@ -1102,6 +1142,7 @@ export async function syncGoogleSheetLoads({
     onInvalidRow: (row) => invalidRows.push(row),
   });
   const syncedAt = new Date().toISOString();
+  const nowSp = getSaoPauloWallClock();
 
   if (invalidRows.length > 0) {
     console.warn("[google-sheet-loads] skipped rows with invalid datetime", {
@@ -1128,6 +1169,7 @@ export async function syncGoogleSheetLoads({
   const routeCatalogDefaultsByKey = createRouteCatalogDefaultsMap(routeCatalogRows);
   const routeTemplateDefaultsByKey = createRouteTemplateDefaultsMap(routeTemplateRows);
   let revertedToOpenCount = 0;
+  let revivedExpiredCount = 0;
   const sheetLoadPayloads = availableLoads.map((load) => {
     const existingLoad = existingLoadsBySheetLh.get(load.lh);
     const payload = buildSheetLoadPayload({
@@ -1137,9 +1179,13 @@ export async function syncGoogleSheetLoads({
       routeTemplateDefaultsByKey,
       fallbackSheetClientId,
       syncedAt,
+      nowSp,
     });
     if (existingLoad?.status === "BOOKED" && payload.status === DEFAULT_PUBLISHED_STATUS) {
       revertedToOpenCount += 1;
+    }
+    if (existingLoad?.status === "EXPIRED" && payload.status === DEFAULT_PUBLISHED_STATUS) {
+      revivedExpiredCount += 1;
     }
     return payload;
   });
@@ -1310,10 +1356,18 @@ export async function syncGoogleSheetLoads({
     );
   }
 
+  if (revivedExpiredCount > 0) {
+    console.info(
+      `[google-sheet-loads] ${revivedExpiredCount} cargas EXPIRED reabertas para OPEN (planilha voltou a listar a carga como disponível e futura)`,
+      { count: revivedExpiredCount },
+    );
+  }
+
   return {
     availableLoadsCount: sheetLoadPayloads.length,
     unlinkedLoadsCount: staleInSheet.length + staleTrulyGone.length,
     revertedToOpenCount,
+    revivedExpiredCount,
     skippedInvalidLoadsCount: invalidRows.length,
     sheetUrl,
   };
