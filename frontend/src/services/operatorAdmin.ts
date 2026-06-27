@@ -140,6 +140,7 @@ export interface ImportCargoRowPreview {
   data_descarga: string | null;
   origem: string;
   destino: string;
+  cliente_nome: string | null;
   status: string;
 }
 

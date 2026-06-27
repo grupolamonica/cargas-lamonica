@@ -1,10 +1,25 @@
 import { withPgClient, withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
-import { buildHeaderIndex, parseImportRow, splitCsvRows } from "../../../domain/operator-admin/import-programacao.js";
+import {
+  buildHeaderIndex,
+  normalizeClientName,
+  parseImportRow,
+  splitCsvRows,
+} from "../../../domain/operator-admin/import-programacao.js";
 import { ValidationError } from "../../../domain/load-claims/errors.js";
 
 // Teto de segurança: importações maiores devem ser quebradas em arquivos.
 const MAX_IMPORT_ROWS = 500;
+
+// Mapa nome-normalizado → cliente, para resolver a coluna CLIENTE do CSV.
+async function loadClientesByName(client) {
+  const { rows } = await client.query("SELECT id, nome FROM public.clientes");
+  const map = new Map();
+  for (const row of rows) {
+    map.set(normalizeClientName(row.nome), { id: row.id, nome: row.nome });
+  }
+  return map;
+}
 
 /**
  * Separa o CSV, mapeia o cabeçalho e valida cada linha. Não escreve nada — usado
@@ -12,7 +27,7 @@ const MAX_IMPORT_ROWS = 500;
  *
  * @returns {{headerError?: string, rows: Array}}
  */
-function parseAndValidate(csv) {
+function parseAndValidate(csv, clientesByName) {
   const matrix = splitCsvRows(csv);
 
   if (matrix.length === 0) {
@@ -37,7 +52,7 @@ function parseAndValidate(csv) {
   }
 
   const rows = dataRows.map((cells, offset) => {
-    const result = parseImportRow(cells, indexByColumn);
+    const result = parseImportRow(cells, indexByColumn, { clientesByName });
     return {
       line: offset + 2, // +1 do cabeçalho, +1 para base 1 (linha do arquivo)
       ok: result.ok,
@@ -81,9 +96,9 @@ async function insertCargo(client, payload, operatorId) {
       INSERT INTO public.cargas (
         id, data, horario, origem, destino, perfil, status, is_template,
         created_by, driver_visibility, sheet_lh, sheet_tipo,
-        sheet_data_carregamento, sheet_data_descarga
+        sheet_data_carregamento, sheet_data_descarga, cliente_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
     `,
     [
       payload.id,
@@ -100,6 +115,7 @@ async function insertCargo(client, payload, operatorId) {
       payload.sheet_tipo,
       payload.sheet_data_carregamento,
       payload.sheet_data_descarga,
+      payload.cliente_id,
     ],
   );
 }
@@ -138,7 +154,8 @@ export async function importOperatorCargas({ operatorId, csv, dryRun = false, re
 
   if (dryRun) {
     const { headerError, rows } = await withPgClient(async (client) => {
-      const parsed = parseAndValidate(csv);
+      const clientesByName = await loadClientesByName(client);
+      const parsed = parseAndValidate(csv, clientesByName);
       if (!parsed.headerError) await markDuplicates(client, parsed.rows);
       return parsed;
     });
@@ -163,7 +180,8 @@ export async function importOperatorCargas({ operatorId, csv, dryRun = false, re
   }
 
   return withPgTransaction(async (client) => {
-    const { headerError, rows } = parseAndValidate(csv);
+    const clientesByName = await loadClientesByName(client);
+    const { headerError, rows } = parseAndValidate(csv, clientesByName);
 
     if (headerError) {
       return {

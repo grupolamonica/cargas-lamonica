@@ -4,6 +4,7 @@ import {
   buildHeaderIndex,
   buildSheetLoadId,
   detectCsvDelimiter,
+  normalizeClientName,
   parseImportDate,
   parseImportDateTime,
   parseImportRow,
@@ -21,12 +22,18 @@ const HEADER = [
   "DATA DESCARGA",
   "Origem",
   "Destino",
+  "CLIENTE",
   "STATUS",
 ];
 
+const clientes = new Map([
+  [normalizeClientName("Shopee"), { id: "uuid-shopee", nome: "Shopee" }],
+  [normalizeClientName("São Paulo Express"), { id: "uuid-spx", nome: "São Paulo Express" }],
+]);
+
 function row(cells) {
   const { indexByColumn } = buildHeaderIndex(HEADER);
-  return parseImportRow(cells, indexByColumn);
+  return parseImportRow(cells, indexByColumn, { clientesByName: clientes });
 }
 
 describe("import-programacao parsing helpers", () => {
@@ -74,13 +81,13 @@ describe("buildHeaderIndex", () => {
     expect(indexByColumn.get("tipo")).toBe(1);
     expect(indexByColumn.get("veiculo")).toBe(2);
     expect(indexByColumn.get("status")).toBe(3);
-    // faltam DATA CARREGAMENTO, Origem e Destino (rótulos amigáveis)
+    // CLIENTE é opcional; faltam DATA CARREGAMENTO, Origem e Destino.
     expect(missingRequired).toEqual(["DATA CARREGAMENTO", "Origem", "Destino"]);
   });
 });
 
 describe("parseImportRow", () => {
-  it("VEÍCULO→perfil, TIPO(viagem)→sheet_tipo, COD.CARGA→sheet_lh+id", () => {
+  it("VEÍCULO→perfil, TIPO(viagem)→sheet_tipo, CLIENTE→cliente_id, COD.CARGA→sheet_lh+id", () => {
     const result = row([
       "LH-0012345",
       "Forecast",
@@ -89,6 +96,7 @@ describe("parseImportRow", () => {
       "16/07/2026 18:00",
       "São Paulo - SP",
       "Rio de Janeiro - RJ",
+      "shopee",
       "rascunho",
     ]);
     expect(result.ok).toBe(true);
@@ -98,37 +106,40 @@ describe("parseImportRow", () => {
       data: "2026-07-15",
       horario: "08:00",
       perfil: "CARRETA",
-      sheet_tipo: "Forecast", // TIPO = tipo da viagem
+      sheet_tipo: "Forecast",
+      cliente_id: "uuid-shopee", // resolvido pelo nome (case/acento-insensível)
       origem: "São Paulo - SP",
       destino: "Rio de Janeiro - RJ",
       status: "DRAFT",
-      sheet_data_carregamento: "15/07/2026 08:00",
       sheet_data_descarga: "16/07/2026 18:00",
     });
-    expect(result.preview.tipo).toBe("Forecast");
-    expect(result.preview.veiculo).toBe("CARRETA");
+    expect(result.preview.cliente_nome).toBe("Shopee");
   });
 
-  it("VEÍCULO não-veicular cai em CARRETA; TIPO(viagem) preservado cru", () => {
-    const result = row(["LH-1", "Spot", "FRIGORIFICA", "16/07/2026", "", "A B", "C D", "ativa"]);
+  it("CLIENTE em branco → cliente_id null (sem erro)", () => {
+    const result = row(["LH-1", "Spot", "TRUCK", "16/07/2026", "", "A B", "C D", "", "ativa"]);
     expect(result.ok).toBe(true);
-    expect(result.payload.perfil).toBe("CARRETA");
-    expect(result.payload.sheet_tipo).toBe("Spot");
-    expect(result.payload.horario).toBe("00:00"); // sem hora → 00:00
+    expect(result.payload.cliente_id).toBeNull();
+    expect(result.payload.perfil).toBe("TRUCK");
     expect(result.payload.status).toBe("OPEN");
-    expect(result.payload.sheet_data_descarga).toBeNull();
   });
 
-  it("TIPO e VEÍCULO vazios: perfil=CARRETA, sheet_tipo=null", () => {
-    const result = row(["LH-2", "", "", "16/07/2026", "", "A B", "C D", ""]);
+  it("CLIENTE inexistente → rejeita a linha", () => {
+    const result = row(["LH-2", "Forecast", "CARRETA", "16/07/2026", "", "A B", "C D", "Cliente Fantasma", "ativa"]);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toContain("Cliente não encontrado");
+  });
+
+  it("VEÍCULO vazio cai em CARRETA; sheet_tipo cru preservado", () => {
+    const result = row(["LH-3", "Transferência", "", "16/07/2026", "", "A B", "C D", "", ""]);
     expect(result.ok).toBe(true);
     expect(result.payload.perfil).toBe("CARRETA");
-    expect(result.payload.sheet_tipo).toBeNull();
+    expect(result.payload.sheet_tipo).toBe("Transferência");
     expect(result.payload.status).toBe("DRAFT");
   });
 
   it("rejects missing COD. CARGA and bad dates", () => {
-    const result = row(["", "Forecast", "CARRETA", "xx", "yy", "A B", "C D", "rascunho"]);
+    const result = row(["", "Forecast", "CARRETA", "xx", "yy", "A B", "C D", "", "rascunho"]);
     expect(result.ok).toBe(false);
     expect(result.errors.join(" ")).toContain("COD. CARGA é obrigatório");
     expect(result.errors.join(" ")).toContain("DATA CARREGAMENTO inválida");
@@ -136,7 +147,7 @@ describe("parseImportRow", () => {
   });
 
   it("rejects invalid STATUS", () => {
-    const result = row(["LH-9", "Forecast", "CARRETA", "16/07/2026", "", "A B", "C D", "PROGRAMADA"]);
+    const result = row(["LH-9", "Forecast", "CARRETA", "16/07/2026", "", "A B", "C D", "", "PROGRAMADA"]);
     expect(result.ok).toBe(false);
     expect(result.errors.join(" ")).toContain("Status inválido");
   });
@@ -149,7 +160,7 @@ describe("separador (Excel pt-BR usa ;)", () => {
     expect(detectCsvDelimiter("COD. CARGA;TIPO;VEÍCULO;DATA CARREGAMENTO")).toBe(";");
   });
 
-  it("parseia CSV ;-delimitado e descarta linhas vazias (arquivo real do operador)", () => {
+  it("parseia CSV ;-delimitado sem coluna CLIENTE e descarta linhas vazias (arquivo real)", () => {
     const csv = [
       "COD. CARGA;TIPO;VEÍCULO;DATA CARREGAMENTO;DATA DESCARGA;Origem;Destino;STATUS",
       "B101437150;Transferência;Truck;17/06/2026 10:00;21/06/2026 23:00;SAO BERNARDO DO CAMPO;FEIRA DE SANTANA;ATIVA",
@@ -158,12 +169,12 @@ describe("separador (Excel pt-BR usa ;)", () => {
     ].join("\r\n");
 
     const matrix = splitCsvRows(csv);
-    expect(matrix).toHaveLength(2); // cabeçalho + 1 linha (vazias descartadas)
+    expect(matrix).toHaveLength(2);
 
     const { indexByColumn, missingRequired } = buildHeaderIndex(matrix[0]);
     expect(missingRequired).toEqual([]);
 
-    const result = parseImportRow(matrix[1], indexByColumn);
+    const result = parseImportRow(matrix[1], indexByColumn, { clientesByName: clientes });
     expect(result.ok).toBe(true);
     expect(result.payload).toMatchObject({
       sheet_lh: "B101437150",
@@ -174,7 +185,7 @@ describe("separador (Excel pt-BR usa ;)", () => {
       origem: "SAO BERNARDO DO CAMPO",
       destino: "FEIRA DE SANTANA",
       status: "OPEN",
-      sheet_data_descarga: "21/06/2026 23:00",
+      cliente_id: null, // sem coluna CLIENTE
     });
   });
 });
@@ -189,6 +200,7 @@ describe("template", () => {
       "DATA DESCARGA",
       "Origem",
       "Destino",
+      "CLIENTE",
       "STATUS",
     ]);
     for (const example of TEMPLATE_EXAMPLE_ROWS) {

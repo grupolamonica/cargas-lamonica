@@ -8,6 +8,8 @@
 // do cargo (mesmo algoritmo do sync da planilha → dedupe por LH).
 // VEÍCULO é o tipo do veículo (CARRETA/TRUCK/...) → `perfil`.
 // TIPO é o tipo da viagem (Forecast, Spot, ...) → `sheet_tipo` (texto livre).
+// CLIENTE é localizado pelo nome → `cliente_id`; se não existir, a linha é
+// rejeitada; em branco, fica sem cliente.
 
 import crypto from "node:crypto";
 
@@ -36,6 +38,9 @@ const COLUMN_ALIASES = new Map([
   ["descarga", "data_descarga"],
   ["origem", "origem"],
   ["destino", "destino"],
+  ["cliente", "cliente"],
+  ["nome do cliente", "cliente"],
+  ["cliente nome", "cliente"],
   ["status", "status"],
   ["situacao", "status"],
 ]);
@@ -51,6 +56,7 @@ export const COLUMN_LABELS = {
   data_descarga: "DATA DESCARGA",
   origem: "Origem",
   destino: "Destino",
+  cliente: "CLIENTE",
   status: "STATUS",
 };
 
@@ -63,6 +69,7 @@ export const TEMPLATE_HEADERS = [
   "DATA DESCARGA",
   "Origem",
   "Destino",
+  "CLIENTE",
   "STATUS",
 ];
 
@@ -75,6 +82,7 @@ export const TEMPLATE_EXAMPLE_ROWS = [
     "16/07/2026 18:00",
     "São Paulo - SP",
     "Rio de Janeiro - RJ",
+    "Shopee",
     "rascunho",
   ],
   [
@@ -85,6 +93,7 @@ export const TEMPLATE_EXAMPLE_ROWS = [
     "17/07/2026 10:00",
     "Campinas - SP",
     "Belo Horizonte - MG",
+    "",
     "ativa",
   ],
 ];
@@ -187,6 +196,12 @@ export function normalizeHeaderKey(value) {
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+// Chave de comparação de nome de cliente (sem acento, minúsculo, espaços
+// colapsados; pontuação preservada). Use idêntica na escrita e na leitura.
+export function normalizeClientName(value) {
+  return normalizeText(value).replace(/\s+/g, " ");
 }
 
 function pad2(value) {
@@ -315,9 +330,11 @@ function cellAt(cells, indexByColumn, column) {
  *
  * @param {string[]} cells linha já separada
  * @param {Map<string, number>} indexByColumn saída de buildHeaderIndex
+ * @param {object} [opts]
+ * @param {Map<string, {id: string, nome: string}>} [opts.clientesByName] nome-normalizado → cliente
  * @returns {{ok: boolean, errors: string[], payload?: object, preview: object}}
  */
-export function parseImportRow(cells, indexByColumn) {
+export function parseImportRow(cells, indexByColumn, { clientesByName } = {}) {
   const errors = [];
 
   const codCarga = cellAt(cells, indexByColumn, "cod_carga");
@@ -327,6 +344,7 @@ export function parseImportRow(cells, indexByColumn) {
   const rawDescarga = cellAt(cells, indexByColumn, "data_descarga");
   const origem = cellAt(cells, indexByColumn, "origem");
   const destino = cellAt(cells, indexByColumn, "destino");
+  const rawCliente = cellAt(cells, indexByColumn, "cliente");
   const rawStatus = cellAt(cells, indexByColumn, "status");
 
   if (!codCarga) errors.push("COD. CARGA é obrigatório.");
@@ -358,6 +376,19 @@ export function parseImportRow(cells, indexByColumn) {
     else status = normalized;
   }
 
+  // CLIENTE localizado pelo nome; se informado e não existir, rejeita a linha.
+  let clienteId = null;
+  let clienteNome = null;
+  if (rawCliente) {
+    const match = clientesByName?.get(normalizeClientName(rawCliente));
+    if (match) {
+      clienteId = match.id;
+      clienteNome = match.nome;
+    } else {
+      errors.push(`Cliente não encontrado: "${rawCliente}". Cadastre o cliente antes de importar.`);
+    }
+  }
+
   const preview = {
     cod_carga: codCarga || null,
     tipo: rawTipo || null,
@@ -367,6 +398,7 @@ export function parseImportRow(cells, indexByColumn) {
     data_descarga: descargaLabel,
     origem,
     destino,
+    cliente_nome: clienteNome || rawCliente || null,
     status,
   };
 
@@ -387,6 +419,7 @@ export function parseImportRow(cells, indexByColumn) {
       destino,
       perfil,
       sheet_tipo: rawTipo || null,
+      cliente_id: clienteId,
       status,
       driver_visibility: "PUBLIC",
       is_template: false,

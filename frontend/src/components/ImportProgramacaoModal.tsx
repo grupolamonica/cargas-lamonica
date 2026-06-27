@@ -23,12 +23,13 @@ const TEMPLATE_HEADERS = [
   "DATA DESCARGA",
   "Origem",
   "Destino",
+  "CLIENTE",
   "STATUS",
 ];
 
 const TEMPLATE_EXAMPLE_ROWS = [
-  ["LH-0012345", "Forecast", "CARRETA", "15/07/2026 08:00", "16/07/2026 18:00", "São Paulo - SP", "Rio de Janeiro - RJ", "rascunho"],
-  ["LH-0012346", "Spot", "TRUCK", "16/07/2026 13:30", "17/07/2026 10:00", "Campinas - SP", "Belo Horizonte - MG", "ativa"],
+  ["LH-0012345", "Forecast", "CARRETA", "15/07/2026 08:00", "16/07/2026 18:00", "São Paulo - SP", "Rio de Janeiro - RJ", "Shopee", "rascunho"],
+  ["LH-0012346", "Spot", "TRUCK", "16/07/2026 13:30", "17/07/2026 10:00", "Campinas - SP", "Belo Horizonte - MG", "", "ativa"],
 ];
 
 // ';' é o separador padrão do Excel em pt-BR — o backend também aceita ','.
@@ -201,7 +202,8 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
           <p className="text-xs text-muted-foreground">
             Colunas: <code>{TEMPLATE_HEADERS.join(", ")}</code>. Obrigatórias: COD. CARGA, DATA CARREGAMENTO, Origem,
             Destino. O COD. CARGA é o LH — reimportar o mesmo código não duplica a carga. TIPO = tipo da viagem
-            (Forecast, Spot...); VEÍCULO = CARRETA, TRUCK, etc.
+            (Forecast, Spot...); VEÍCULO = CARRETA, TRUCK, etc. CLIENTE é localizado pelo nome — se não existir, a
+            linha é rejeitada (deixe em branco para sem cliente).
           </p>
 
           {headerError ? (
@@ -244,6 +246,7 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
                     <th className="px-3 py-2 font-semibold">Carregamento</th>
                     <th className="px-3 py-2 font-semibold">Descarga</th>
                     <th className="px-3 py-2 font-semibold">Trajeto</th>
+                    <th className="px-3 py-2 font-semibold">Cliente</th>
                     <th className="px-3 py-2 font-semibold">Status</th>
                     <th className="px-3 py-2 font-semibold">Situação</th>
                   </tr>
@@ -271,6 +274,7 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
                       <td className="px-3 py-2">
                         {row.preview.origem} → {row.preview.destino}
                       </td>
+                      <td className="whitespace-nowrap px-3 py-2">{row.preview.cliente_nome ?? "—"}</td>
                       <td className="whitespace-nowrap px-3 py-2">{formatCargoStatusLabel(row.preview.status)}</td>
                       <td className="px-3 py-2">
                         {!row.ok ? (
