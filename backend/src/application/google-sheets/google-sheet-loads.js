@@ -316,6 +316,10 @@ async function fetchExistingSheetLoads(supabaseClient) {
       .from(SHEET_LOADS_TABLE)
       .select("id, sheet_lh, valor, bonus, cliente_id, perfil, distancia_km, duracao_horas, status, is_template, created_by")
       .not("sheet_lh", "is", null)
+      // Só cargas que vieram do sync da planilha (sheet_synced_at preenchido).
+      // Cargas importadas manualmente têm sheet_lh mas sheet_synced_at NULL —
+      // não pertencem à planilha Shopee e NÃO devem ser expiradas pelo sync.
+      .not("sheet_synced_at", "is", null)
       .order("sheet_lh", { ascending: true })
       .range(offset, offset + EXISTING_SHEET_LOADS_PAGE_SIZE - 1);
 
