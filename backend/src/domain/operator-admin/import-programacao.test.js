@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildHeaderIndex,
   buildSheetLoadId,
+  detectCsvDelimiter,
   parseImportDate,
   parseImportDateTime,
   parseImportRow,
   parseImportTime,
+  splitCsvRows,
   TEMPLATE_EXAMPLE_ROWS,
   TEMPLATE_HEADERS,
 } from "./import-programacao.js";
@@ -137,6 +139,43 @@ describe("parseImportRow", () => {
     const result = row(["LH-9", "Forecast", "CARRETA", "16/07/2026", "", "A B", "C D", "PROGRAMADA"]);
     expect(result.ok).toBe(false);
     expect(result.errors.join(" ")).toContain("Status inválido");
+  });
+});
+
+describe("separador (Excel pt-BR usa ;)", () => {
+  it("detecta ',' e ';'", () => {
+    expect(detectCsvDelimiter("a,b,c")).toBe(",");
+    expect(detectCsvDelimiter("a;b;c")).toBe(";");
+    expect(detectCsvDelimiter("COD. CARGA;TIPO;VEÍCULO;DATA CARREGAMENTO")).toBe(";");
+  });
+
+  it("parseia CSV ;-delimitado e descarta linhas vazias (arquivo real do operador)", () => {
+    const csv = [
+      "COD. CARGA;TIPO;VEÍCULO;DATA CARREGAMENTO;DATA DESCARGA;Origem;Destino;STATUS",
+      "B101437150;Transferência;Truck;17/06/2026 10:00;21/06/2026 23:00;SAO BERNARDO DO CAMPO;FEIRA DE SANTANA;ATIVA",
+      ";;;;;;;",
+      ";;;;;;;",
+    ].join("\r\n");
+
+    const matrix = splitCsvRows(csv);
+    expect(matrix).toHaveLength(2); // cabeçalho + 1 linha (vazias descartadas)
+
+    const { indexByColumn, missingRequired } = buildHeaderIndex(matrix[0]);
+    expect(missingRequired).toEqual([]);
+
+    const result = parseImportRow(matrix[1], indexByColumn);
+    expect(result.ok).toBe(true);
+    expect(result.payload).toMatchObject({
+      sheet_lh: "B101437150",
+      sheet_tipo: "Transferência",
+      perfil: "TRUCK",
+      data: "2026-06-17",
+      horario: "10:00",
+      origem: "SAO BERNARDO DO CAMPO",
+      destino: "FEIRA DE SANTANA",
+      status: "OPEN",
+      sheet_data_descarga: "21/06/2026 23:00",
+    });
   });
 });
 

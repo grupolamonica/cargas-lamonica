@@ -31,12 +31,15 @@ const TEMPLATE_EXAMPLE_ROWS = [
   ["LH-0012346", "Spot", "TRUCK", "16/07/2026 13:30", "17/07/2026 10:00", "Campinas - SP", "Belo Horizonte - MG", "ativa"],
 ];
 
+// ';' é o separador padrão do Excel em pt-BR — o backend também aceita ','.
+const CSV_DELIMITER = ";";
+
 function csvCell(value: string) {
-  return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  return /[";,\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
 function buildTemplateCsv() {
-  const lines = [TEMPLATE_HEADERS, ...TEMPLATE_EXAMPLE_ROWS].map((row) => row.map(csvCell).join(","));
+  const lines = [TEMPLATE_HEADERS, ...TEMPLATE_EXAMPLE_ROWS].map((row) => row.map(csvCell).join(CSV_DELIMITER));
   // BOM (U+FEFF) garante que o Excel abra o CSV em UTF-8 (acentos corretos).
   const bom = String.fromCharCode(0xfeff);
   return `${bom}${lines.join("\r\n")}\r\n`;

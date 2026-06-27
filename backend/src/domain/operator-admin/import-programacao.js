@@ -100,11 +100,28 @@ const STATUS_ALIASES = new Map([
   ["publicada", "OPEN"],
 ]);
 
-// Separa texto CSV em matriz de células. Suporta aspas duplas (escape ""),
-// CRLF/LF e remove BOM inicial. Linhas totalmente vazias são descartadas.
+// Detecta o separador pela 1ª linha. Excel em pt-BR salva CSV com ';' (a vírgula
+// é o separador decimal), então aceitamos tanto ',' quanto ';'.
+export function detectCsvDelimiter(text) {
+  const firstLine = String(text ?? "").split(/\r?\n/, 1)[0] || "";
+  let commas = 0;
+  let semicolons = 0;
+  let insideQuotes = false;
+  for (const ch of firstLine) {
+    if (ch === '"') insideQuotes = !insideQuotes;
+    else if (!insideQuotes && ch === ",") commas += 1;
+    else if (!insideQuotes && ch === ";") semicolons += 1;
+  }
+  return semicolons > commas ? ";" : ",";
+}
+
+// Separa texto CSV em matriz de células. Detecta o separador (',' ou ';'),
+// suporta aspas duplas (escape ""), CRLF/LF e remove BOM inicial. Linhas
+// totalmente vazias são descartadas.
 export function splitCsvRows(text) {
   const raw = String(text ?? "");
   const sourceText = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  const delimiter = detectCsvDelimiter(sourceText);
   const rows = [];
   let row = [];
   let cell = "";
@@ -131,7 +148,7 @@ export function splitCsvRows(text) {
       insideQuotes = true;
       continue;
     }
-    if (char === ",") {
+    if (char === delimiter) {
       row.push(cell);
       cell = "";
       continue;
