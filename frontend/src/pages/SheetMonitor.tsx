@@ -1217,7 +1217,7 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
           </span>
         )}
       </div>
-      <div className="flex shrink-0 items-center gap-0.5">
+      <div className="flex shrink-0 flex-col items-end gap-0.5">
         {canEditAlloc && routeStandbyCount > 0 && onPullStandby && (
           <button
             type="button"
