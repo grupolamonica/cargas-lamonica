@@ -154,5 +154,7 @@ export async function cancelLoadCascade({ lh, operatorId, requestIp, correlation
     ).catch(() => {});
   }
 
-  return { statusCode: result.statusCode, payload: result.payload };
+  // movedLhs: linhas da rota cuja alocação efetiva mudou no remanejamento — o
+  // chamador re-enriquece todas p/ o selo não ficar "não consultado" no fan-out.
+  return { statusCode: result.statusCode, payload: result.payload, movedLhs: result.moves.map((m) => m.lh) };
 }
