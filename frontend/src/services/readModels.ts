@@ -570,6 +570,12 @@ export interface SheetMonitorRow {
   tipo: string | null;
   status: string;
   motoristas: string;
+  /** Cliente da carga (planilha → cliente da planilha, ex. Shopee; sistema → cliente_id→nome). */
+  cliente?: string | null;
+  /** Código sequencial da rota (operator-only) — usado no filtro de Rotas do Monitor. */
+  routeCodigo?: number | null;
+  /** false = trajeto (origem→destino) sem rota cadastrada no catálogo. */
+  routeRegistered?: boolean;
   origem: string;
   destino: string;
   data: string | null;
@@ -587,8 +593,12 @@ export interface SheetMonitorRow {
   // motorista/veículo é intocável (arrasto, edição e cascata).
   pinned?: boolean;
   // Linha sintética de RESERVA (motorista em standby na rota; não vem da
-  // planilha, não tem LH real). Só exibida — não arrasta/edita.
+  // planilha, não tem LH real). Arrastável p/ puxar o motorista pra uma carga.
   reserva?: boolean;
+  /** id da reserva (monitor_reservas) — só para reserva=true. */
+  reservaId?: string | null;
+  /** Quando entrou em standby (created_at da reserva, ISO) — só para reserva=true. */
+  standbyAt?: string | null;
   // ── Visão unificada (planilha ∪ sistema) ──
   // Identidade estável da linha: 'sheet:<lh>' | 'cargo:<uuid>' | 'reserva:<id>'.
   rowKey?: string;
@@ -654,6 +664,7 @@ export interface SheetMonitorAllocation {
   alloc_cavalo: string | null;
   alloc_carreta: string | null;
   alloc_status: string | null;
+  alloc_tipo: string | null;
   alloc_pinned: boolean | null;
   alloc_updated_at: string | null;
 }
@@ -689,6 +700,7 @@ export async function updateMonitorAllocation(input: {
   cavalo?: string | null;
   carreta?: string | null;
   status?: string | null;
+  tipo?: string | null;
 }) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{
@@ -723,6 +735,21 @@ export async function reassignMonitorAllocations(
 }
 
 /**
+ * Puxa um motorista em STANDBY (reserva) para uma carga, arrastando a reserva e
+ * soltando na linha da carga. Grava a alocação do standby na carga e dá baixa na
+ * reserva; se a carga já tinha motorista, esse vira uma nova reserva (swap).
+ */
+export async function assignReservaToCarga(input: { reservaId: string; targetLh: string }) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{
+    ok: boolean;
+    lh: string;
+    bumped: boolean;
+    meta: { correlationId: string };
+  }>("/api/operator/sheet-monitor/assign-reserva", { accessToken, method: "POST", body: input });
+}
+
+/**
  * Fixa ("fixo") ou desafixa a alocação de uma carga. Carga fixa = motorista/veículo
  * intocável (não move por arrasto, edição inline/modal, nem cascata de cancelamento).
  */
@@ -750,6 +777,7 @@ export interface MonitorCargoUpdate {
   horario?: string; // HH:MM (carregamento)
   descarga?: string; // datetime-local 'YYYY-MM-DDTHH:MM' ou '' p/ limpar
   lh?: string | null;
+  tipo?: string | null;
 }
 
 /**

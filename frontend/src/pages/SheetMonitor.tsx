@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Database,
   FileSpreadsheet,
   Filter,
   GripVertical,
@@ -21,7 +20,6 @@ import {
   Search,
   Send,
   ShieldX,
-  Sparkles,
   Truck,
   UserCheck,
   X,
@@ -53,6 +51,7 @@ import {
   fetchSheetMonitor,
   previewAspxAllocation,
   reassignMonitorAllocations,
+  assignReservaToCarga,
   setMonitorAllocationPin,
   updateMonitorAllocation,
   updateMonitorCargo,
@@ -149,7 +148,7 @@ function resolveSheetStatusStyle(status: string) {
 function StatusBadge({ status }: { status: string }) {
   const cfg = resolveSheetStatusStyle(status);
   return (
-    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.68rem] font-semibold", cfg.bg)}>
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.66rem] font-semibold leading-tight", cfg.bg)}>
       <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", cfg.dot)} />
       {cfg.label}
     </span>
@@ -212,17 +211,25 @@ function formatCurrency(value: number | undefined) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(value);
 }
 
+// Data/hora em que o motorista entrou em standby (created_at da reserva, ISO UTC)
+// → "DD/MM HH:MM" no fuso de São Paulo.
+function formatStandby(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo",
+  }).format(d);
+}
+
 // ─── Enriched status dot ──────────────────────────────────────────────────────
 
-// Angellira "vigente": encontrado E (sem validade OU validade no futuro). null = não consultado.
-function angelliraVigente(found: boolean | null | undefined, validUntil: string | null | undefined): boolean | null {
-  if (found === null || found === undefined) return null;
-  if (found === false) return false;
-  if (validUntil) {
-    const d = new Date(validUntil);
-    if (!Number.isNaN(d.getTime()) && d.getTime() < Date.now()) return false; // vencido
-  }
-  return true;
+// Selo de PRESENÇA (igual à tela de Motoristas): encontrado=azul, não=vermelho,
+// não consultado (null)=cinza. A cor reflete só se foi ENCONTRADO no Angellira —
+// validade vencida NÃO deixa o selo vermelho (aparece no detalhe/modal). Antes a
+// vigência derrubava o selo p/ vermelho mesmo conforme → divergia do Motoristas.
+function presenceState(found: boolean | null | undefined): boolean | null {
+  return found ?? null;
 }
 // Cadastro no ASPX (motorista): tem CPF/nome no diretório do ASPX. null = não enriquecido.
 function aspxCadastroState(e: SheetMonitorEnrichedRow | undefined): boolean | null {
@@ -230,13 +237,99 @@ function aspxCadastroState(e: SheetMonitorEnrichedRow | undefined): boolean | nu
   return Boolean(e.aspx_cpf || e.aspx_display_name);
 }
 
+// ── Selo por MOTORISTA/PLACA (não por carga) ──────────────────────────────────
+// O selo Angellira/ASPX é do MOTORISTA/VEÍCULO, não da carga. Resolvendo por
+// nome/placa, trocar a fila reflete NA HORA (o selo do motorista movido já é
+// conhecido de onde ele estava), sem esperar o re-enrich assíncrono (que era o
+// motivo do "não consultado" pós-troca).
+const normNameKey = (s: string | null | undefined) =>
+  (s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+const normPlateKey = (s: string | null | undefined) => (s ?? "").replace(/[\s\-.]/g, "").toUpperCase();
+
+type VehSelo = { plate: string; found: boolean | null; valid_until: string | null; status_text: string | null; display: string | null; type: string | null; source: string | null; details: unknown };
+type SeloMaps = { driverByName: Record<string, SheetMonitorEnrichedRow>; vehByPlate: Record<string, VehSelo> };
+
+function buildSeloMaps(
+  enrichedByLh: Record<string, SheetMonitorEnrichedRow>,
+  enrichedByCargoId: Record<string, SheetMonitorEnrichedRow>,
+): SeloMaps {
+  const driverByName: SeloMaps["driverByName"] = {};
+  const vehByPlate: SeloMaps["vehByPlate"] = {};
+  const driverScore = (e: SheetMonitorEnrichedRow) => (e.angellira_driver_found != null ? 2 : 0) + (e.aspx_cpf ? 1 : 0);
+  const consider = (e: SheetMonitorEnrichedRow) => {
+    if (e.driver_name) {
+      const k = normNameKey(e.driver_name);
+      const prev = driverByName[k];
+      if (!prev || driverScore(e) > driverScore(prev)) driverByName[k] = e;
+    }
+    for (const side of ["cavalo", "carreta"] as const) {
+      const plate = e[`${side}_plate`];
+      if (!plate) continue;
+      const k = normPlateKey(plate);
+      const found = e[`${side}_angellira_found`];
+      const prev = vehByPlate[k];
+      if (!prev || (prev.found == null && found != null)) {
+        vehByPlate[k] = {
+          plate,
+          found: found ?? null,
+          valid_until: e[`${side}_angellira_valid_until`] ?? null,
+          status_text: e[`${side}_angellira_status_text`] ?? null,
+          display: e[`${side}_angellira_display`] ?? null,
+          type: e[`${side}_type`] ?? null,
+          source: e[`${side}_source`] ?? null,
+          details: e[`${side}_details`] ?? null,
+        };
+      }
+    }
+  };
+  for (const e of Object.values(enrichedByLh)) consider(e);
+  for (const e of Object.values(enrichedByCargoId)) consider(e);
+  return { driverByName, vehByPlate };
+}
+
+// Monta um registro de selo (shape SheetMonitorEnrichedRow) para a linha a partir
+// do motorista/placa EFETIVOS — independe do lh, então a troca aparece na hora.
+function resolveRowSelo(row: SheetMonitorRowType, maps: SeloMaps): SheetMonitorEnrichedRow | undefined {
+  const d = row.motoristas ? maps.driverByName[normNameKey(row.motoristas)] : null;
+  const cav = row.cavalo ? maps.vehByPlate[normPlateKey(row.cavalo)] : null;
+  const car = row.carreta ? maps.vehByPlate[normPlateKey(row.carreta)] : null;
+  if (!d && !cav && !car) return undefined;
+  return {
+    lh: row.lh,
+    driver_name: row.motoristas || null,
+    aspx_cpf: d?.aspx_cpf ?? null,
+    aspx_display_name: d?.aspx_display_name ?? null,
+    angellira_driver_found: d?.angellira_driver_found ?? null,
+    angellira_driver_status: d?.angellira_driver_status ?? null,
+    angellira_driver_valid_until: d?.angellira_driver_valid_until ?? null,
+    angellira_driver_status_text: d?.angellira_driver_status_text ?? null,
+    angellira_driver_details: d?.angellira_driver_details ?? null,
+    cavalo_plate: cav?.plate ?? (row.cavalo ? normPlateKey(row.cavalo) : null),
+    cavalo_source: cav?.source ?? null,
+    cavalo_type: cav?.type ?? null,
+    cavalo_angellira_found: cav?.found ?? null,
+    cavalo_angellira_valid_until: cav?.valid_until ?? null,
+    cavalo_angellira_status_text: cav?.status_text ?? null,
+    cavalo_angellira_display: cav?.display ?? null,
+    cavalo_details: cav?.details ?? null,
+    carreta_plate: car?.plate ?? (row.carreta ? normPlateKey(row.carreta) : null),
+    carreta_source: car?.source ?? null,
+    carreta_type: car?.type ?? null,
+    carreta_angellira_found: car?.found ?? null,
+    carreta_angellira_valid_until: car?.valid_until ?? null,
+    carreta_angellira_status_text: car?.status_text ?? null,
+    carreta_angellira_display: car?.display ?? null,
+    carreta_details: car?.details ?? null,
+  } as SheetMonitorEnrichedRow;
+}
+
 // Selos do MOTORISTA: Angellira vigente + cadastro no ASPX (mesmo selo da tela de Motoristas).
 function DriverChecks({ enriched }: { enriched: SheetMonitorEnrichedRow | undefined }) {
   return (
-    <div className="mt-0.5 flex flex-wrap items-center gap-1">
+    <div className="flex shrink-0 items-center gap-1">
       <ExternalValidationPill
         compact scope="motorista" label="Angellira"
-        found={angelliraVigente(enriched?.angellira_driver_found, enriched?.angellira_driver_valid_until)}
+        found={presenceState(enriched?.angellira_driver_found)}
       />
       <ExternalValidationPill compact scope="motorista" label="ASPX" found={aspxCadastroState(enriched)} />
     </div>
@@ -247,17 +340,17 @@ function DriverChecks({ enriched }: { enriched: SheetMonitorEnrichedRow | undefi
 function VehicleChecks({ enriched, hasCavalo, hasCarreta }: { enriched: SheetMonitorEnrichedRow | undefined; hasCavalo: boolean; hasCarreta: boolean }) {
   if (!hasCavalo && !hasCarreta) return null;
   return (
-    <div className="mt-0.5 flex flex-wrap items-center gap-1">
+    <div className="flex shrink-0 items-center gap-1">
       {hasCavalo && (
         <ExternalValidationPill
           compact scope="Angellira do cavalo" label="Cavalo"
-          found={angelliraVigente(enriched?.cavalo_angellira_found, enriched?.cavalo_angellira_valid_until)}
+          found={presenceState(enriched?.cavalo_angellira_found)}
         />
       )}
       {hasCarreta && (
         <ExternalValidationPill
           compact scope="Angellira da carreta" label="Carreta"
-          found={angelliraVigente(enriched?.carreta_angellira_found, enriched?.carreta_angellira_valid_until)}
+          found={presenceState(enriched?.carreta_angellira_found)}
         />
       )}
     </div>
@@ -273,6 +366,7 @@ function VehicleChecks({ enriched, hasCavalo, hasCarreta }: { enriched: SheetMon
 const DRIVER_DATALIST_ID = "monitor-driver-options";
 const CAVALO_DATALIST_ID = "monitor-cavalo-options";
 const CARRETA_DATALIST_ID = "monitor-carreta-options";
+const TIPO_DATALIST_ID = "monitor-tipo-options";
 
 const INLINE_INPUT_CLASS =
   "h-7 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring";
@@ -283,9 +377,9 @@ function InlineAllocEditor({
   onSave,
   onCancel,
 }: {
-  initial: { motorista: string; cavalo: string; carreta: string };
+  initial: { motorista: string; cavalo: string; carreta: string; tipo: string };
   saving: boolean;
-  onSave: (value: { motorista: string; cavalo: string; carreta: string }) => void;
+  onSave: (value: { motorista: string; cavalo: string; carreta: string; tipo: string }) => void;
   onCancel: () => void;
 }) {
   const [form, setForm] = useState(initial);
@@ -299,6 +393,14 @@ function InlineAllocEditor({
         onChange={(e) => setForm((f) => ({ ...f, motorista: e.target.value }))}
         placeholder="Motorista"
         autoFocus
+        className={INLINE_INPUT_CLASS}
+        onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}
+      />
+      <input
+        list={TIPO_DATALIST_ID}
+        value={form.tipo}
+        onChange={(e) => setForm((f) => ({ ...f, tipo: e.target.value }))}
+        placeholder="Tipo (ForeCast, Spot…)"
         className={INLINE_INPUT_CLASS}
         onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}
       />
@@ -349,16 +451,19 @@ function MonitorDatalists({
   driverOptions,
   cavaloOptions,
   carretaOptions,
+  tipoOptions,
 }: {
   driverOptions: string[];
   cavaloOptions: string[];
   carretaOptions: string[];
+  tipoOptions: string[];
 }) {
   return (
     <>
       <datalist id={DRIVER_DATALIST_ID}>{driverOptions.map((o) => <option key={o} value={o} />)}</datalist>
       <datalist id={CAVALO_DATALIST_ID}>{cavaloOptions.map((o) => <option key={o} value={o} />)}</datalist>
       <datalist id={CARRETA_DATALIST_ID}>{carretaOptions.map((o) => <option key={o} value={o} />)}</datalist>
+      <datalist id={TIPO_DATALIST_ID}>{tipoOptions.map((o) => <option key={o} value={o} />)}</datalist>
     </>
   );
 }
@@ -728,7 +833,7 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
 // Cargas do sistema (sheet_lh nulo) são editadas como uma planilha: Status, LH,
 // Rota, Agenda, Motorista/Placa — todos editáveis (a carga é a fonte da verdade).
 
-type CargoForm = { lh: string; status: string; origem: string; destino: string; carregamento: string; descarga: string; motorista: string; cavalo: string; carreta: string };
+type CargoForm = { lh: string; status: string; tipo: string; origem: string; destino: string; carregamento: string; descarga: string; motorista: string; cavalo: string; carreta: string };
 
 function MonitorCargoFields({ form, setForm, statusOptions }: {
   form: CargoForm;
@@ -748,6 +853,9 @@ function MonitorCargoFields({ form, setForm, statusOptions }: {
           <option value="">(disponível)</option>
           {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
+      </label>
+      <label className="col-span-2 text-xs font-medium text-muted-foreground">Tipo (ForeCast, Spot…)
+        <input list={TIPO_DATALIST_ID} className={field} value={form.tipo} onChange={set("tipo")} placeholder="opcional" maxLength={60} />
       </label>
       <label className="col-span-1 text-xs font-medium text-muted-foreground">Origem
         <input className={field} value={form.origem} onChange={set("origem")} maxLength={180} />
@@ -774,7 +882,7 @@ function MonitorCargoFields({ form, setForm, statusOptions }: {
   );
 }
 
-const EMPTY_CARGO_FORM: CargoForm = { lh: "", status: "", origem: "", destino: "", carregamento: "", descarga: "", motorista: "", cavalo: "", carreta: "" };
+const EMPTY_CARGO_FORM: CargoForm = { lh: "", status: "", tipo: "", origem: "", destino: "", carregamento: "", descarga: "", motorista: "", cavalo: "", carreta: "" };
 
 // datetime-local 'YYYY-MM-DDTHH:MM' → { data:'YYYY-MM-DD', horario:'HH:MM' }
 function splitCarregamento(dt: string): { data: string; horario: string } {
@@ -796,6 +904,8 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
       setForm({
         lh: row.lh ?? "",
         status: row.status ?? "",
+        // "SISTEMA" é o rótulo padrão (sem tipo) — não pré-preenche o campo com ele.
+        tipo: row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "",
         origem: row.origem ?? "",
         destino: row.destino ?? "",
         carregamento: row.cargaAt ?? (row.data ? `${row.data}T${(row.horario ?? "00:00").slice(0, 5)}` : ""),
@@ -828,6 +938,7 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
       cargoId: row.cargoId,
       lh: form.lh.trim(),
       status: form.status.trim(),
+      tipo: form.tipo.trim(),
       origem: form.origem.trim(),
       destino: form.destino.trim(),
       data,
@@ -884,12 +995,13 @@ function NewCargoModal({ open, onClose, statusOptions }: { open: boolean; onClos
         descarga: form.descarga ? form.descarga.replace("T", " ") : undefined,
       });
       const cargoId = created?.cargo?.id || created?.id;
-      const extra = form.motorista || form.cavalo || form.carreta || form.status || form.lh;
+      const extra = form.motorista || form.cavalo || form.carreta || form.status || form.lh || form.tipo;
       if (cargoId && extra) {
         await updateMonitorCargo({
           cargoId,
           lh: form.lh.trim(),
           status: form.status.trim(),
+          tipo: form.tipo.trim(),
           motorista: form.motorista.trim(),
           cavalo: form.cavalo.trim(),
           carreta: form.carreta.trim(),
@@ -956,14 +1068,35 @@ type AllocCellProps = {
   onTogglePin: (lh: string, pinned: boolean) => void;
   onDragStartHandle: (lh: string) => void;
   onDragEndHandle: () => void;
+  // true enquanto este standby está sendo puxado pra uma carga (request em voo).
+  assigningReserva?: boolean;
 };
 
-function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle }: AllocCellProps) {
-  // Linha de RESERVA (standby na rota) — só exibe o motorista/veículo; não arrasta,
-  // não edita, não fixa (não é uma carga da planilha).
+function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle, assigningReserva }: AllocCellProps) {
+  // Linha de RESERVA (standby na rota) — exibe o motorista/veículo e um punho de
+  // arrasto: o operador puxa o standby para uma carga da MESMA rota (alocar).
   if (row.reserva) {
     return (
-      <div className="flex items-start gap-1.5 border-l-2 border-amber-400 pl-2">
+      <div className="group/rsv flex items-start gap-1.5 border-l-2 border-amber-400 pl-2">
+        {row.reservaId && (
+          <button
+            type="button"
+            aria-label="Arrastar standby para uma carga"
+            title={assigningReserva ? "Enviando…" : "Arraste para uma carga da mesma rota para alocar este standby"}
+            draggable={!assigningReserva}
+            onClick={(e) => e.stopPropagation()}
+            onDragStart={(e) => { if (assigningReserva) { e.preventDefault(); return; } e.stopPropagation(); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", `reserva:${row.reservaId}`); onDragStartHandle(`reserva:${row.reservaId}`); }}
+            onDragEnd={onDragEndHandle}
+            className={cn(
+              "mt-0.5 shrink-0 rounded p-0.5 text-amber-500/70 transition-colors",
+              assigningReserva
+                ? "cursor-wait opacity-40"
+                : "cursor-grab hover:bg-muted hover:text-amber-600 active:cursor-grabbing",
+            )}
+          >
+            {assigningReserva ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GripVertical className="h-3.5 w-3.5" />}
+          </button>
+        )}
         <div className="min-w-0 flex-1">
           {row.motoristas ? (
             <span className="truncate text-xs font-medium text-foreground">{row.motoristas}</span>
@@ -976,7 +1109,7 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
             </div>
           )}
           <span className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-semibold text-amber-600 dark:text-amber-400">
-            em reserva nesta rota
+            {assigningReserva ? "puxando p/ a carga…" : "standby — arraste p/ uma carga"}
           </span>
         </div>
       </div>
@@ -1013,7 +1146,7 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
   if (editing) {
     return (
       <InlineAllocEditor
-        initial={{ motorista: row.motoristas ?? "", cavalo: row.cavalo ?? "", carreta: row.carreta ?? "" }}
+        initial={{ motorista: row.motoristas ?? "", cavalo: row.cavalo ?? "", carreta: row.carreta ?? "", tipo: row.tipo ?? "" }}
         saving={saving}
         onSave={(v) => onSaveInline({ lh: row.lh, ...v, status: allocStatus ?? "" })}
         onCancel={onCancelEdit}
@@ -1054,16 +1187,16 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
       )}
       <div className="min-w-0 flex-1">
         {row.motoristas ? (
-          <div>
-            <span className="block truncate text-xs font-medium text-foreground">{row.motoristas}</span>
+          <div className="flex items-center gap-2">
+            <span className="w-[150px] shrink-0 truncate text-xs font-medium text-foreground" title={row.motoristas}>{row.motoristas}</span>
             <DriverChecks enriched={enriched} />
           </div>
         ) : (
           <span className="text-xs text-muted-foreground/50">Sem motorista</span>
         )}
         {row.cavalo && (
-          <div className="mt-0.5">
-            <span className="block truncate text-[0.62rem] text-muted-foreground">
+          <div className="mt-0.5 flex items-center gap-2">
+            <span className="w-[150px] shrink-0 truncate text-[0.62rem] text-muted-foreground" title={`${row.cavalo}${row.carreta ? ` · ${row.carreta}` : ""}`}>
               {row.cavalo}{row.carreta ? ` · ${row.carreta}` : ""}
             </span>
             <VehicleChecks enriched={enriched} hasCavalo={Boolean(row.cavalo)} hasCarreta={Boolean(row.carreta)} />
@@ -1116,7 +1249,7 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
 
 // ─── Table row ────────────────────────────────────────────────────────────────
 
-const ROW_VIRTUALIZATION_STYLE = { contentVisibility: "auto" as const, containIntrinsicSize: "0 48px" as const };
+const ROW_VIRTUALIZATION_STYLE = { contentVisibility: "auto" as const, containIntrinsicSize: "0 44px" as const };
 
 type RowDropIntent = "swap" | "before" | "after" | null;
 
@@ -1139,6 +1272,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   onDragEndHandle,
   onRowDragOver,
   onRowDrop,
+  assigningReserva,
 }: {
   row: SheetMonitorRowType;
   enriched: SheetMonitorEnrichedRow | undefined;
@@ -1160,6 +1294,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   onDragEndHandle: () => void;
   onRowDragOver: (e: React.DragEvent, lh: string) => void;
   onRowDrop: (e: React.DragEvent, lh: string) => void;
+  assigningReserva: boolean;
 }) {
   return (
     <tr
@@ -1187,42 +1322,65 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       )}
     >
       {/* Status */}
-      <td className="px-3 py-2"><StatusBadge status={!row.status && row.motoristas ? "Reservado" : row.status} /></td>
+      <td className="px-3 py-2 align-top"><StatusBadge status={!row.status && row.motoristas ? "Reservado" : row.status} /></td>
 
       {/* LH + Tipo */}
-      <td className="px-3 py-2">
+      <td className="px-3 py-2 align-top">
         {row.reserva ? (
           <span className="block text-[0.62rem] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">standby</span>
         ) : (
           <>
-            <span className="block font-mono text-xs font-semibold text-foreground/80">{row.lh}</span>
-            {row.tipo && <span className="block text-[0.62rem] text-muted-foreground">{row.tipo}</span>}
+            <span className="block font-mono text-xs font-semibold leading-tight text-foreground/80">{row.lh}</span>
+            {row.tipo && <span className="block text-[0.62rem] leading-tight text-muted-foreground">{row.tipo}</span>}
           </>
         )}
       </td>
 
-      {/* Rota */}
-      <td className="px-3 py-2 max-w-[180px]">
-        <p className="truncate text-xs font-medium text-foreground">{row.origem || "—"}</p>
-        <p className="truncate text-[0.62rem] text-muted-foreground">{row.destino || "—"}</p>
+      {/* Cliente */}
+      <td className="px-3 py-2 align-top">
+        <span className="block truncate text-xs font-medium text-foreground/90" title={row.cliente ?? undefined}>{row.cliente || "—"}</span>
       </td>
 
-      {/* Agenda: carga + descarga */}
-      <td className="px-3 py-2">
+      {/* Rota (com código operator-only antes da origem) */}
+      <td className="px-3 py-2 align-top">
+        <p className="truncate text-xs font-medium leading-tight text-foreground">
+          {row.routeCodigo != null && (
+            <span className="mr-1 font-mono text-[0.58rem] font-semibold text-muted-foreground/70" title="Código da rota">R{row.routeCodigo}</span>
+          )}
+          {row.origem || "—"}
+        </p>
+        <p className="truncate text-[0.62rem] leading-tight text-muted-foreground">{row.destino || "—"}</p>
+        {row.routeRegistered === false && (
+          <span
+            className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-semibold text-orange-600 dark:text-orange-400"
+            title="O trajeto origem→destino não tem rota cadastrada no catálogo"
+          >
+            <AlertTriangle className="h-3 w-3 shrink-0" /> sem rota cadastrada
+          </span>
+        )}
+      </td>
+
+      {/* Agenda: carga + descarga (compacto: C = carregamento, D = descarga) */}
+      <td className="px-3 py-2 align-top">
         {row.carregamentoLabel ? (
-          <div>
-            <p className="text-[0.58rem] font-semibold uppercase tracking-wide text-muted-foreground/50">Carga</p>
-            <p className="text-xs text-foreground">{row.carregamentoLabel}</p>
-          </div>
+          <p className="truncate text-xs leading-tight text-foreground" title={`Carregamento: ${row.carregamentoLabel}`}>
+            <span className="font-semibold text-muted-foreground/50">C</span> {row.carregamentoLabel}
+          </p>
         ) : null}
         {row.descargaLabel ? (
-          <div className={row.carregamentoLabel ? "mt-1" : ""}>
-            <p className="text-[0.58rem] font-semibold uppercase tracking-wide text-muted-foreground/50">Descarga</p>
-            <p className="text-xs text-muted-foreground">{row.descargaLabel}</p>
-          </div>
+          <p className="truncate text-[0.68rem] leading-tight text-muted-foreground" title={`Descarga: ${row.descargaLabel}`}>
+            <span className="font-semibold text-muted-foreground/50">D</span> {row.descargaLabel}
+          </p>
         ) : null}
         {!row.carregamentoLabel && !row.descargaLabel && (
-          <span className="text-xs text-muted-foreground/40">—</span>
+          row.reserva && row.standbyAt ? (
+            <div className="leading-tight" title={`Em standby desde ${formatStandby(row.standbyAt)}`}>
+              <p className="text-[0.58rem] font-semibold uppercase tracking-wide text-amber-600/80 dark:text-amber-400/80">Standby desde</p>
+              <p className="text-xs text-amber-700 dark:text-amber-300">{formatStandby(row.standbyAt)}</p>
+            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground/40">—</span>
+          )
         )}
       </td>
 
@@ -1241,6 +1399,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
           onTogglePin={onTogglePin}
           onDragStartHandle={onDragStartHandle}
           onDragEndHandle={onDragEndHandle}
+          assigningReserva={assigningReserva}
         />
       </td>
     </tr>
@@ -1251,8 +1410,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
 
 function SheetMonitorTable({
   rows,
-  enrichedByLh,
-  enrichedByCargoId,
+  resolveEnriched,
   allocByLh,
   selectedLh,
   editingLh,
@@ -1266,10 +1424,11 @@ function SheetMonitorTable({
   onSaveInline,
   onTogglePin,
   onReassign,
+  onAssignReserva,
+  assigningReservaId,
 }: {
   rows: SheetMonitorRowType[];
-  enrichedByLh: Record<string, SheetMonitorEnrichedRow>;
-  enrichedByCargoId: Record<string, SheetMonitorEnrichedRow>;
+  resolveEnriched: (row: SheetMonitorRowType) => SheetMonitorEnrichedRow | undefined;
   allocByLh: Record<string, SheetMonitorAllocation>;
   selectedLh: string | null;
   editingLh: string | null;
@@ -1283,6 +1442,8 @@ function SheetMonitorTable({
   onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
   onTogglePin: (lh: string, pinned: boolean) => void;
   onReassign: (moves: Array<{ lh: string; motorista: string; cavalo: string; carreta: string }>) => void;
+  onAssignReserva: (input: { reservaId: string; targetLh: string }) => void;
+  assigningReservaId: string | null;
 }) {
   // Arrastar a fila de motoristas/veículos entre cargas (as viagens são fixas).
   // Modo auto-identificável pelo ponto de soltura: corpo da linha = trocar
@@ -1309,7 +1470,25 @@ function SheetMonitorTable({
   };
 
   const handleRowDragOver = useCallback((e: React.DragEvent, lh: string) => {
-    if (!dragLhRef.current) return;
+    const dragging = dragLhRef.current;
+    if (!dragging) return;
+    // Arrastando um STANDBY (reserva) → solta numa carga da planilha (mesma rota),
+    // editável e não fixa. Sempre intent "swap" (linha toda destacada = aloca aqui).
+    if (dragging.startsWith("reserva:")) {
+      const targetRow = lh ? rowsRef.current.find((r) => r.lh === lh) : undefined;
+      const reservaRow = rowsRef.current.find((r) => r.reserva && `reserva:${r.reservaId}` === dragging);
+      const blocked =
+        !targetRow || targetRow.source === "sistema" || targetRow.reserva ||
+        !allocEditPolicy(targetRow).editable || targetRow.pinned ||
+        // fail-closed: se a reserva arrastada saiu da página (refetch no meio do
+        // arrasto), nega — não dá pra confirmar que é a mesma rota.
+        reservaRow == null || routeKeyOf(targetRow) !== routeKeyOf(reservaRow);
+      if (blocked) { e.preventDefault(); e.dataTransfer.dropEffect = "none"; setDropTarget(null); return; }
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      setDropTarget((prev) => (prev && prev.lh === lh && prev.intent === "swap" ? prev : { lh, intent: "swap" }));
+      return;
+    }
     // A fila (reordenação) é só das linhas da PLANILHA. Cargas do sistema (LH
     // livre/vazio) e reservas não entram — nega o drop nelas.
     if (!lh) { e.preventDefault(); e.dataTransfer.dropEffect = "none"; setDropTarget(null); return; }
@@ -1344,6 +1523,28 @@ function SheetMonitorTable({
     setDragLh(null);
     setDropTarget(null);
     if (!src) return;
+    // Arrastando um STANDBY (reserva) → puxa para a carga de destino (mesma rota).
+    if (src.startsWith("reserva:")) {
+      if (!lh) return;
+      const reservaId = src.slice("reserva:".length);
+      const targetRow = rowsRef.current.find((r) => r.lh === lh);
+      const reservaRow = rowsRef.current.find((r) => r.reserva && `reserva:${r.reservaId}` === src);
+      if (!targetRow || targetRow.source === "sistema" || targetRow.reserva) {
+        toast.error("Solte o standby numa carga da planilha.");
+        return;
+      }
+      if (targetRow.pinned) { toast.error("A carga de destino está fixada. Desafixe antes de puxar o standby."); return; }
+      if (!allocEditPolicy(targetRow).editable) { toast.error("A carga de destino está travada (já em atribuição no ASPX)."); return; }
+      // fail-closed: sem a reserva na página (refetch no meio do arrasto) não dá pra
+      // validar a rota — aborta em vez de arriscar puxar pra rota errada.
+      if (!reservaRow) { toast.error("A lista atualizou durante o arrasto. Tente puxar o standby de novo."); return; }
+      if (routeKeyOf(targetRow) !== routeKeyOf(reservaRow)) {
+        toast.error("O standby é de outra rota. Puxe para uma carga da mesma rota (origem → destino).");
+        return;
+      }
+      onAssignReserva({ reservaId, targetLh: lh });
+      return;
+    }
     // Soltar numa carga do sistema (LH vazio) não reordena fila — ignora.
     if (!lh) return;
     const list = rowsRef.current;
@@ -1382,7 +1583,7 @@ function SheetMonitorTable({
       return;
     }
     onReassign(moves);
-  }, [onReassign]);
+  }, [onReassign, onAssignReserva]);
 
   if (loading) {
     return (
@@ -1409,18 +1610,19 @@ function SheetMonitorTable({
         </div>
       )}
       <div className="overflow-x-auto overscroll-x-contain pb-1">
-        <table className="w-full min-w-[720px] table-fixed text-sm">
+        <table className="w-full min-w-[1040px] table-fixed text-sm">
           <colgroup>
-            <col className="w-[130px]" />
-            <col className="w-[100px]" />
-            <col />
             <col className="w-[140px]" />
-            <col className="w-[230px]" />
+            <col className="w-[96px]" />
+            <col className="w-[120px]" />
+            <col />
+            <col className="w-[150px]" />
+            <col className="w-[360px]" />
           </colgroup>
           <thead>
             <tr className="border-b border-border/60 bg-primary/[0.028]">
-              {(["Status", "LH", "Rota", "Agenda", "Motorista / Placa"] as const).map((col) => (
-                <th key={col} className="px-3 py-2.5 text-left text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
+              {(["Status", "LH", "Cliente", "Rota", "Agenda", "Motorista / Placa"] as const).map((col) => (
+                <th key={col} className="px-3 py-2 text-left text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
                   {col}
                 </th>
               ))}
@@ -1431,7 +1633,7 @@ function SheetMonitorTable({
               <SheetMonitorRow
                 key={row.rowKey ?? `${row.lh}-${idx}`}
                 row={row}
-                enriched={row.source === "sistema" ? enrichedByCargoId[row.cargoId ?? ""] : enrichedByLh[row.lh]}
+                enriched={resolveEnriched(row)}
                 selected={row.lh === selectedLh}
                 editing={row.lh === editingLh}
                 saving={row.lh === savingLh}
@@ -1448,6 +1650,7 @@ function SheetMonitorTable({
                 onDragEndHandle={handleDragEndHandle}
                 onRowDragOver={handleRowDragOver}
                 onRowDrop={handleRowDrop}
+                assigningReserva={!!row.reserva && !!row.reservaId && row.reservaId === assigningReservaId}
               />
             ))}
           </tbody>
@@ -1549,7 +1752,7 @@ function RowDetailModal({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "" });
+  const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "", tipo: "" });
   const [confirmAspx, setConfirmAspx] = useState(false);
 
   // Pré-preenche com a alocação EFETIVA: override do operador (alloc_*) ?? planilha.
@@ -1560,6 +1763,7 @@ function RowDetailModal({
       cavalo: alloc?.alloc_cavalo ?? row.cavalo ?? "",
       carreta: alloc?.alloc_carreta ?? row.carreta ?? "",
       status: alloc?.alloc_status ?? row.status ?? "",
+      tipo: alloc?.alloc_tipo ?? (row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "") ?? "",
     });
   }, [row, alloc, open]);
 
@@ -1568,6 +1772,9 @@ function RowDetailModal({
     onSuccess: () => {
       toast.success("Alocação salva no sistema.");
       void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      // O selo Angellira/ASPX é re-enriquecido no backend em background (motorista
+      // efetivo) — refetch atrasado p/ ele aparecer sem ficar "não consultado".
+      setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
       onClose();
     },
     onError: (err) => {
@@ -1603,6 +1810,7 @@ function RowDetailModal({
       cavalo: allocEditable ? allocForm.cavalo : (alloc?.alloc_cavalo ?? ""),
       carreta: allocEditable ? allocForm.carreta : (alloc?.alloc_carreta ?? ""),
       status: allocForm.status,
+      tipo: allocForm.tipo, // tipo é livre (não trava por pinned/status)
     });
   };
 
@@ -1682,6 +1890,16 @@ function RowDetailModal({
                     placeholder="Nome do motorista alocado"
                     disabled={!allocEditable}
                     className="h-8 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Tipo (ForeCast, Spot…)</label>
+                  <Input
+                    list={TIPO_DATALIST_ID}
+                    value={allocForm.tipo}
+                    onChange={(e) => setAllocForm((f) => ({ ...f, tipo: e.target.value }))}
+                    placeholder="opcional"
+                    className="h-8 text-xs"
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -1784,6 +2002,14 @@ function RowDetailModal({
                           }
                         />
                       )}
+                      {/* CPF confirmado no Angellira — sempre disponível p/ re-consultar,
+                          mesmo quando o motorista não está no ASPX. */}
+                      {(() => {
+                        const d = enriched.angellira_driver_details as { cpf?: string | null } | null;
+                        const angCpf = d?.cpf ?? null;
+                        if (enriched.aspx_cpf || !angCpf) return null;
+                        return <ModalRow label="CPF (Angellira)" value={<span className="font-mono">{angCpf}</span>} />;
+                      })()}
                       <ModalRow
                         label="Angellira"
                         value={<AngelliraStatusBadge found={enriched.angellira_driver_found} statusText={enriched.angellira_driver_status_text} />}
@@ -1909,6 +2135,9 @@ export default function SheetMonitor() {
   const enrichedByLh = monitorData?.enrichedByLh ?? EMPTY_ENRICHED;
   const enrichedByCargoId = monitorData?.enrichedByCargoId ?? EMPTY_ENRICHED;
   const allocByLh = monitorData?.allocByLh ?? EMPTY_ALLOC;
+  // Selo resolvido por MOTORISTA/PLACA (não por lh) → troca na fila reflete na hora.
+  const seloMaps = useMemo(() => buildSeloMaps(enrichedByLh, enrichedByCargoId), [enrichedByLh, enrichedByCargoId]);
+  const resolveEnriched = useCallback((row: SheetMonitorRowType) => resolveRowSelo(row, seloMaps), [seloMaps]);
 
   // Alocação efetiva: o override do operador (alloc_*) sobrepõe o valor da
   // planilha. Reflete na tabela/contadores o que foi editado no Monitor.
@@ -1925,6 +2154,7 @@ export default function SheetMonitor() {
         cavalo: a.alloc_cavalo ?? row.cavalo,
         carreta: a.alloc_carreta ?? row.carreta,
         status,
+        tipo: a.alloc_tipo ?? row.tipo,
         pinned: a.alloc_pinned ?? false,
         hasDriver: Boolean(motoristas),
         isAvailable: !motoristas && !status,
@@ -2001,6 +2231,8 @@ export default function SheetMonitor() {
       toast.success("Alocação salva no sistema.");
       setEditingLh(null);
       void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      // Selo re-enriquecido em background → refetch atrasado p/ aparecer.
+      setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "Não foi possível salvar a alocação.");
@@ -2011,7 +2243,7 @@ export default function SheetMonitor() {
   const handleStartEdit = useCallback((lh: string) => setEditingLh(lh), []);
   const handleCancelEdit = useCallback(() => setEditingLh(null), []);
   const handleSaveInline = useCallback(
-    (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => {
+    (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string; tipo: string }) => {
       const target = itemsRef.current.find((r) => r.lh === payload.lh);
       const run = () => mutateInlineAlloc(payload);
       // "Aguardando chegar no cliente" → confirma a troca (motorista/veículo no ASPX).
@@ -2024,12 +2256,33 @@ export default function SheetMonitor() {
   // ── Reordenar a fila de motoristas/veículos (F3) ──────────────────────────────
   const { mutate: mutateReassign, isPending: reassigning } = useMutation({
     mutationFn: reassignMonitorAllocations,
+    // OTIMISTA: aplica a troca NA HORA no cache (allocByLh) — a fila reordenada
+    // aparece instantâneo p/ o operador; o servidor confirma logo em seguida e o
+    // selo (resolvido por motorista/placa) já acompanha. Rollback se falhar.
+    onMutate: async (moves) => {
+      await queryClient.cancelQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      const prev = queryClient.getQueryData<Awaited<ReturnType<typeof fetchSheetMonitor>>>([...SHEET_MONITOR_QUERY_KEY]);
+      queryClient.setQueryData<Awaited<ReturnType<typeof fetchSheetMonitor>>>([...SHEET_MONITOR_QUERY_KEY], (old) => {
+        if (!old) return old;
+        const allocByLh = { ...(old.allocByLh ?? {}) };
+        const now = new Date().toISOString();
+        for (const m of moves) {
+          const base = allocByLh[m.lh] ?? { sheet_lh: m.lh, alloc_status: null, alloc_tipo: null, alloc_pinned: false, alloc_updated_at: null };
+          allocByLh[m.lh] = { ...base, alloc_motorista: m.motorista, alloc_cavalo: m.cavalo, alloc_carreta: m.carreta, alloc_updated_at: now };
+        }
+        return { ...old, allocByLh };
+      });
+      return { prev };
+    },
+    onError: (err, _moves, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData([...SHEET_MONITOR_QUERY_KEY], ctx.prev);
+      toast.error(err instanceof Error ? err.message : "Não foi possível reordenar a fila.");
+    },
     onSuccess: (data) => {
       toast.success(`Fila atualizada — ${data.count} carga${data.count === 1 ? "" : "s"} realocada${data.count === 1 ? "" : "s"}.`);
       void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Não foi possível reordenar a fila.");
+      // Selos das linhas movidas são re-enriquecidos em background → refetch atrasado.
+      setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
     },
   });
   const handleReassign = useCallback(
@@ -2046,6 +2299,37 @@ export default function SheetMonitor() {
     },
     [mutateReassign],
   );
+
+  // ── Puxar um standby (reserva) para uma carga (arrastar reserva → carga) ───────
+  const { mutate: mutateAssignReserva, isPending: assigningReserva, variables: assignReservaVars } = useMutation({
+    mutationFn: assignReservaToCarga,
+    onSuccess: (data) => {
+      toast.success(
+        data.bumped
+          ? "Standby alocado — o motorista anterior voltou para a reserva."
+          : "Standby alocado na carga.",
+      );
+      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      // O selo Angellira/ASPX da carga é re-enriquecido em background → refetch atrasado.
+      setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Não foi possível puxar o standby para a carga.");
+    },
+  });
+  const handleAssignReserva = useCallback(
+    (input: { reservaId: string; targetLh: string }) => {
+      const run = () => mutateAssignReserva(input);
+      // Se a carga de destino está "aguardando chegar no cliente", confirma antes.
+      const target = itemsRef.current.find((x) => x.lh === input.targetLh);
+      if (target && allocEditPolicy(target).aspxWarning) setAspxConfirm({ count: 1, run });
+      else run();
+    },
+    [mutateAssignReserva],
+  );
+  // reservaId em voo (puxando pra carga) → trava o punho desse standby p/ não
+  // arrastar de novo enquanto a request não volta (evita toast confuso de "já usada").
+  const assigningReservaId = assigningReserva ? (assignReservaVars?.reservaId ?? null) : null;
 
   // ── Fixar / desafixar a alocação (fixo) ───────────────────────────────────────
   const {
@@ -2067,10 +2351,6 @@ export default function SheetMonitor() {
     (lh: string, pinned: boolean) => mutatePin({ lh, pinned }),
     [mutatePin],
   );
-
-  const pendingEnrich = items.length > 0
-    ? items.filter((r) => !r.reserva).length - Object.keys(enrichedByLh).length
-    : 0;
 
   const summary = useMemo(() => {
     if (items.length === 0) {
@@ -2103,11 +2383,45 @@ export default function SheetMonitor() {
     return Array.from(s).sort();
   }, [items]);
 
+  // Rotas do filtro: quando há filtro de DATA, mostra só as rotas que têm carga
+  // no intervalo (as "principais" do dia) — não todas. Mesma lógica de data do
+  // filteredRows; reserva (standby, sem data) sempre entra.
   const routeOptions = useMemo(() => {
-    const s = new Set<string>();
-    items.forEach((item) => s.add(routeKeyOf(item)));
-    return Array.from(s).sort((a, b) => a.localeCompare(b, "pt-BR"));
-  }, [items]);
+    const fromTs = dateFromFilter ? new Date(dateFromFilter).getTime() : null;
+    const toTs = dateToFilter ? new Date(dateToFilter).getTime() : null;
+    const inDate = (row: SheetMonitorRowType) => {
+      if (fromTs === null && toTs === null) return true;
+      if (row.reserva) return true;
+      if (!row.data) return false;
+      const horario = row.horario || "00:00:00";
+      const ts = new Date(`${row.data}T${horario.length === 5 ? `${horario}:00` : horario}`).getTime();
+      if (!Number.isFinite(ts)) return false;
+      if (fromTs !== null && ts < fromTs) return false;
+      if (toTs !== null && ts > toTs) return false;
+      return true;
+    };
+    const byKey = new Map<string, number | null>();
+    items.forEach((item) => {
+      if (!inDate(item)) return;
+      const k = routeKeyOf(item);
+      if (!byKey.has(k)) byKey.set(k, item.routeCodigo ?? null);
+    });
+    // Ordena por CÓDIGO da rota (operator-only); rotas sem código ainda por nome.
+    return Array.from(byKey.entries())
+      .map(([key, codigo]) => ({ key, codigo }))
+      .sort((a, b) => {
+        if (a.codigo != null && b.codigo != null) return a.codigo - b.codigo;
+        if (a.codigo != null) return -1;
+        if (b.codigo != null) return 1;
+        return a.key.localeCompare(b.key, "pt-BR");
+      });
+  }, [items, dateFromFilter, dateToFilter]);
+
+  // Se a rota selecionada deixar de existir (ex.: filtro de data a removeu),
+  // volta para "todos" pra não ficar travado num filtro sem resultado.
+  useEffect(() => {
+    if (routeFilter !== "todos" && !routeOptions.some((r) => r.key === routeFilter)) setRouteFilter("todos");
+  }, [routeOptions, routeFilter]);
 
   const filteredRows = useMemo(() => {
     let result = items;
@@ -2152,7 +2466,36 @@ export default function SheetMonitor() {
       });
     }
 
-    return result;
+    // Ordem da fila: grupo de status (Disponível → Reservado → outros → standby)
+    // e, dentro de cada grupo, por data + horário DESC (mais recente no topo,
+    // igual ao snapshot). Status/motorista são os EFETIVOS (já com overlay alloc).
+    const statusGroup = (r: SheetMonitorRowType) => {
+      if (r.reserva) return 3; // standby (reserva sem carga) sempre por último
+      const s = (r.status || "").trim().toLowerCase();
+      if (!s) return r.motoristas ? 1 : 0; // sem status: com motorista=Reservado, sem=Disponível
+      if (/dispon/.test(s)) return 0;
+      if (/reserv/.test(s)) return 1;
+      return 2;
+    };
+    const dtKey = (r: SheetMonitorRowType) => (r.data ? `${r.data} ${r.horario || ""}` : "");
+    return [...result].sort((a, b) => {
+      const g = statusGroup(a) - statusGroup(b);
+      if (g !== 0) return g;
+      // Standby (reserva): mais ANTIGO primeiro (FIFO — quem está esperando há mais tempo).
+      if (a.reserva && b.reserva) {
+        const sa = a.standbyAt || "";
+        const sb = b.standbyAt || "";
+        if (sa === sb) return 0;
+        return sa < sb ? -1 : 1;
+      }
+      const ka = dtKey(a);
+      const kb = dtKey(b);
+      if (!ka && !kb) return 0;
+      if (!ka) return 1; // sem data por último dentro do grupo
+      if (!kb) return -1;
+      if (ka === kb) return 0;
+      return ka < kb ? 1 : -1; // data+horário DESC
+    });
   }, [items, deferredSearch, statusFilter, tipoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter]);
 
   const hasActiveFilters =
@@ -2176,6 +2519,9 @@ export default function SheetMonitor() {
       // ByCargoId) do backend, então os selos NÃO somem. A verificação é feita
       // uma vez (ao abrir o Monitor) e persistida no banco.
       queryClient.setQueryData([...SHEET_MONITOR_QUERY_KEY], freshData);
+      // Limpa o banner "consulta concluída" de uma re-consulta manual anterior —
+      // senão ele fica pendurado até desmontar a tela.
+      setEnrichProgress(null);
       // Fila operacional usa status da planilha — invalidar para refletir status novo apos sync.
       queryClient.invalidateQueries({ queryKey: ["operator", "public-load-leads"] });
     },
@@ -2223,16 +2569,11 @@ export default function SheetMonitor() {
   const loading = isLoading && items.length === 0;
   const isRefreshing = (isFetching && !loading) || refreshMutation.isPending;
 
-  // Consulta TODOS automaticamente ao abrir o Monitor: dispara o loop de enrich
-  // (force=false → só pendentes/novas; barato com cache) uma vez por sessão, p/
-  // nada ficar "não consultado" sem o operador clicar em "Atualizar planilha".
-  const autoEnrichedRef = useRef(false);
-  useEffect(() => {
-    if (autoEnrichedRef.current || !monitorData || items.length === 0) return;
-    autoEnrichedRef.current = true;
-    if (!enrichingRef.current) handleStartEnrich(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [monitorData, items.length]);
+  // Abrir o Monitor NÃO re-consulta nada — apenas LÊ os selos já salvos no banco
+  // (enrichedByLh/ByCargoId vêm prontos do backend). A consulta Angellira/ASPX é
+  // feita 1x por linha no backend: ao inserir/atualizar carga, ao sincronizar a
+  // planilha (linhas novas, em background) e via backfill (script/botão abaixo).
+  // Re-consulta manual sob demanda fica no botão "Atualizar consultas".
 
   const handleSelectRow = useCallback((row: SheetMonitorRowType) => {
     // Carga do sistema → modal de edição (planilha-like); planilha → detalhe.
@@ -2378,7 +2719,9 @@ export default function SheetMonitor() {
                 title="Filtrar por rota" aria-label="Filtrar por rota"
                 className="max-w-[220px] rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10">
                 <option value="todos">Todas as rotas</option>
-                {routeOptions.map((r) => <option key={r} value={r}>{r}</option>)}
+                {routeOptions.map((r) => (
+                  <option key={r.key} value={r.key}>{r.codigo != null ? `R${r.codigo} — ${r.key}` : r.key}</option>
+                ))}
               </select>
 
               <select value={assignmentFilter} onChange={(e) => setAssignmentFilter(e.target.value)}
@@ -2430,6 +2773,13 @@ export default function SheetMonitor() {
                 <RefreshCw className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")} />
                 {refreshMutation.isPending ? "Buscando planilha..." : "Atualizar planilha"}
               </button>
+
+              <button type="button" onClick={() => handleStartEnrich(true)} disabled={isEnriching}
+                title="Re-consulta Angellira/ASPX de todas as linhas e atualiza os selos no banco"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2.5 text-xs font-semibold text-sky-700 hover:bg-sky-500/20 disabled:opacity-50 dark:text-sky-300">
+                <BadgeCheck className={cn("h-3.5 w-3.5", isEnriching && "animate-pulse")} />
+                {isEnriching ? "Consultando..." : "Atualizar consultas"}
+              </button>
             </div>
 
             {cachedAt && (
@@ -2453,13 +2803,12 @@ export default function SheetMonitor() {
         {/* ── Tabela + datalists ── */}
         {!noSnapshot && (
           <>
-            <MonitorDatalists driverOptions={driverOptions} cavaloOptions={cavaloOptions} carretaOptions={carretaOptions} />
+            <MonitorDatalists driverOptions={driverOptions} cavaloOptions={cavaloOptions} carretaOptions={carretaOptions} tipoOptions={tipoOptions} />
 
             <section className="admin-panel overflow-hidden">
               <SheetMonitorTable
                 rows={paginatedRows}
-                enrichedByLh={enrichedByLh}
-                enrichedByCargoId={enrichedByCargoId}
+                resolveEnriched={resolveEnriched}
                 allocByLh={allocByLh}
                 selectedLh={selectedRow?.lh ?? null}
                 editingLh={editingLh}
@@ -2473,6 +2822,8 @@ export default function SheetMonitor() {
                 onSaveInline={handleSaveInline}
                 onTogglePin={handleTogglePin}
                 onReassign={handleReassign}
+                onAssignReserva={handleAssignReserva}
+                assigningReservaId={assigningReservaId}
               />
               {!loading && filteredRows.length > PAGE_SIZE && (
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 px-4 py-3 text-xs text-muted-foreground">
@@ -2505,7 +2856,7 @@ export default function SheetMonitor() {
       {/* ── Detail modal ── */}
       <RowDetailModal
         row={selectedRow}
-        enriched={selectedRow ? enrichedByLh[selectedRow.lh] : undefined}
+        enriched={selectedRow ? resolveEnriched(selectedRow) : undefined}
         alloc={selectedRow ? allocByLh[selectedRow.lh] : undefined}
         open={selectedRow !== null}
         onClose={() => setSelectedRow(null)}
