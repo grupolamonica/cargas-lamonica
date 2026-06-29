@@ -57,6 +57,7 @@ import {
   resolveSheetMonitorRowDetailResponse,
   resolveUpdateMonitorAllocationResponse,
   resolveReassignMonitorAllocationsResponse,
+  resolveAssignReservaResponse,
   resolveSetMonitorAllocationPinResponse,
   resolveUpdateMonitorCargoResponse,
   resolvePreviewAspxAllocationResponse,
@@ -336,6 +337,7 @@ export function registerRoutes(app) {
   router.post("/api/operator/sheet-monitor/enrich", wrap(resolveSheetMonitorEnrichResponse));
   router.patch("/api/operator/sheet-monitor", wrap(resolveUpdateMonitorAllocationResponse));
   router.post("/api/operator/sheet-monitor/reassign", wrap(resolveReassignMonitorAllocationsResponse));
+  router.post("/api/operator/sheet-monitor/assign-reserva", wrap(resolveAssignReservaResponse));
   router.post("/api/operator/sheet-monitor/pin", wrap(resolveSetMonitorAllocationPinResponse));
   router.patch("/api/operator/sheet-monitor/cargo", wrap(resolveUpdateMonitorCargoResponse));
   router.post("/api/operator/sheet-monitor/aspx-preview", wrap(resolvePreviewAspxAllocationResponse));

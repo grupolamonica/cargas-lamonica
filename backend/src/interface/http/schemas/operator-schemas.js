@@ -27,6 +27,8 @@ export const sheetMonitorAllocationBodySchema = z.object({
   cavalo: z.string().trim().max(40).nullable().optional(),
   carreta: z.string().trim().max(40).nullable().optional(),
   status: z.string().trim().max(60).nullable().optional(),
+  // Tipo da carga (ForeCast/Spot/Tendência) — override editável no Monitor.
+  tipo: z.string().trim().max(60).nullable().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/reassign — reordenar a fila de
@@ -39,6 +41,13 @@ export const sheetMonitorReassignBodySchema = z.object({
     cavalo: z.string().trim().max(40).optional().default(""),
     carreta: z.string().trim().max(40).optional().default(""),
   })).min(1).max(500),
+}).strict();
+
+/** Body for POST /api/operator/sheet-monitor/assign-reserva — puxa um motorista
+ *  em standby (monitor_reservas) para uma carga da planilha (arrastar reserva → carga). */
+export const sheetMonitorAssignReservaBodySchema = z.object({
+  reservaId: z.string().uuid(),
+  targetLh: z.string().trim().min(1).max(120),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/pin — fixar/desafixar a alocação de
@@ -65,6 +74,8 @@ export const sheetMonitorCargoUpdateBodySchema = z.object({
   // Descarga (data+hora juntas) — datetime-local 'YYYY-MM-DDTHH:MM' ou '' p/ limpar.
   descarga: z.string().trim().max(40).optional(),
   lh: z.string().trim().max(120).nullable().optional(),
+  // Tipo da carga (ForeCast/Spot/Tendência) — gravado em alloc_tipo.
+  tipo: z.string().trim().max(60).nullable().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/aspx-assign — confirma a atribuição

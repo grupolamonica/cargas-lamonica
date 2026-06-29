@@ -6,6 +6,8 @@ import { ZodError } from "zod";
 
 import { insertSecurityAuditEvent, recordSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
+import { selectAllPaginated } from "../../../infrastructure/supabase/paginate.js";
+import { readEnrichedMapsCached } from "../../../application/operator-admin/sheet-monitor-enriched-cache.js";
 import {
   getAuthorizationHeader,
   getCorrelationId,
@@ -35,7 +37,7 @@ import {
 } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
-import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema } from "../schemas/operator-schemas.js";
+import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
@@ -69,10 +71,13 @@ import { listDraftRegistrations } from "../../../application/operator-admin/use-
 import { submitDraftAsOperator } from "../../../application/operator-admin/use-cases/submit-draft-as-operator.js";
 import { updateMonitorAllocation } from "../../../application/operator-admin/use-cases/update-monitor-allocation.js";
 import { reassignMonitorAllocations } from "../../../application/operator-admin/use-cases/reassign-monitor-allocations.js";
+import { assignReservaToCarga } from "../../../application/operator-admin/use-cases/assign-reserva-to-carga.js";
 import { setMonitorAllocationPin } from "../../../application/operator-admin/use-cases/set-monitor-allocation-pin.js";
 import { listSystemCargasForMonitor } from "../../../application/operator-admin/use-cases/list-system-cargas-monitor.js";
+import { attachRouteCodes } from "../../../application/operator-admin/use-cases/route-codes.js";
+import { attachRouteRegistration } from "../../../application/operator-admin/use-cases/attach-route-registration.js";
 import { updateMonitorCargo } from "../../../application/operator-admin/use-cases/update-monitor-cargo.js";
-import { buildSheetSummary } from "../../../application/google-sheets/google-sheet-loads.js";
+import { buildSheetSummary, getSheetClientName } from "../../../application/google-sheets/google-sheet-loads.js";
 import { previewAspxAllocation } from "../../../application/operator-admin/use-cases/preview-aspx-allocation.js";
 import { assignAspxAllocations } from "../../../application/operator-admin/use-cases/assign-aspx-allocations.js";
 import { candidaturaSubmitSchema } from "../schemas/candidatura-schemas.js";
@@ -719,7 +724,13 @@ function compareMonitorRows(a, b) {
 // (intercaladas por data), com reservas no fim. Cada linha ganha rowKey/source.
 // Summary recalculado sobre as linhas operacionais quando há cargas do sistema.
 function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary }) {
-  const sheetRows = baseRows.map((r) => (r.rowKey ? r : { ...r, rowKey: `sheet:${r.lh}`, source: "planilha" }));
+  // A planilha inteira é de um cliente (ex.: Shopee) — anexa o nome a cada linha
+  // da planilha. Cargas do sistema já trazem o próprio cliente (cliente_id→nome).
+  const sheetClient = getSheetClientName();
+  const sheetRows = baseRows.map((r) => ({
+    ...(r.rowKey ? r : { ...r, rowKey: `sheet:${r.lh}`, source: "planilha" }),
+    cliente: r.cliente ?? sheetClient,
+  }));
   const operational = [...sheetRows, ...systemRows].sort(compareMonitorRows);
   const reservas = reservaRows.map((r) => (r.rowKey ? r : { ...r, rowKey: `reserva:${r.lh}`, source: "reserva" }));
   const items = reservas.length ? [...operational, ...reservas] : operational;
@@ -730,22 +741,13 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary })
 // Lê os mapas de enriquecimento (planilha por lh, sistema por cargo_id). Usado
 // no read E no refresh — o refresh NÃO pode devolver vazio, senão o frontend
 // sobrescreve e "perde" todas as consultas (selos viram "não consultado").
+// Selos do Monitor — servidos por cache (TTL curto + single-flight + bust no
+// enrich). A leitura por baixo é paginada em PARALELO (count + Promise.all; a
+// tabela passa de 5k linhas e o modo sequencial levava ~2.6s). ATÔMICO: em falha
+// de página LANÇA (não devolve mapa parcial) — resposta 200 sempre com selos
+// completos; blip transitório vira erro (cliente mantém o último estado bom).
 async function readEnrichedMaps(supabaseClient, correlationId) {
-  const enrichedByLh = {};
-  const enrichedByCargoId = {};
-  try {
-    const { data } = await supabaseClient.from("sheet_monitor_enriched").select("*").limit(50000);
-    for (const r of data || []) {
-      if (r.lh) enrichedByLh[r.lh] = r;
-      if (r.cargo_id) enrichedByCargoId[r.cargo_id] = r;
-    }
-  } catch (e) {
-    logStructuredEvent("warn", "sheet-monitor.enrich-read-failed", {
-      correlationId,
-      message: e instanceof Error ? e.message : String(e),
-    });
-  }
-  return { enrichedByLh, enrichedByCargoId };
+  return readEnrichedMapsCached(supabaseClient, correlationId);
 }
 
 export async function resolveSheetMonitorResponse(request) {
@@ -759,16 +761,21 @@ export async function resolveSheetMonitorResponse(request) {
     // efetivo = alloc_* ?? valor da planilha. Não-fatal se a coluna ainda não existe.
     let allocByLh = {};
     try {
-      const { data: allocRows } = await supabaseClient
-        .from("cargas")
-        .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_pinned, alloc_updated_at")
-        .not("sheet_lh", "is", null)
-        .not("alloc_updated_at", "is", null)
-        .limit(50000);
-      if (allocRows) {
-        for (const r of allocRows) {
-          if (r.sheet_lh) allocByLh[r.sheet_lh] = r;
-        }
+      // Overlay de alocações (decisões persistentes do operador) — pode passar de
+      // 1000; paginar (best-effort) p/ não perder alocações além da linha 1000.
+      const allocRows = await selectAllPaginated(
+        (from, to) =>
+          supabaseClient
+            .from("cargas")
+            .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_pinned, alloc_updated_at")
+            .not("sheet_lh", "is", null)
+            .not("alloc_updated_at", "is", null)
+            .order("sheet_lh", { ascending: true })
+            .range(from, to),
+        { label: "cargas_alloc", correlationId, partialOnError: true },
+      );
+      for (const r of allocRows) {
+        if (r.sheet_lh) allocByLh[r.sheet_lh] = r;
       }
     } catch (allocErr) {
       logStructuredEvent("warn", "sheet-monitor.alloc-read-failed", {
@@ -807,6 +814,10 @@ export async function resolveSheetMonitorResponse(request) {
           isAvailable: false,
           hasDriver: Boolean(r.motorista),
           reserva: true,
+          reservaId: r.id,
+          // Quando o motorista entrou em standby (created_at da reserva) — usado
+          // pra exibir "standby desde …" e ordenar a fila de standby (mais antigo 1º).
+          standbyAt: r.created_at,
         }));
       }
     } catch (reservaErr) {
@@ -866,9 +877,20 @@ export async function resolveSheetMonitorResponse(request) {
             });
           }
 
+          // Linhas NOVAS da planilha (sem enriquecimento ainda) são consultadas
+          // UMA vez, em background (fire-and-forget, não bloqueia a resposta).
+          // NÃO re-consulta o que já existe — "Atualizar planilha" segue só
+          // atualizando a planilha; a verificação acontece 1x por linha.
+          if (persisted) {
+            const { enrichAllPendingMonitorRows } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+            void enrichAllPendingMonitorRows(createSupabaseAdminClient(), correlationId, { onlyMissing: true }).catch(() => {});
+          }
+
           // Return the freshly-parsed rows immediately — no extra DB read needed.
           // Inclui o enriquecimento JÁ salvo (senão o refresh "apaga" os selos).
           const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary });
+          await attachRouteCodes(supabaseClient, unified.items, correlationId);
+          await attachRouteRegistration(supabaseClient, unified.items, correlationId);
           const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
           return {
             statusCode: 200,
@@ -937,6 +959,8 @@ export async function resolveSheetMonitorResponse(request) {
         reservaRows,
         baseSummary: snapshot.summary_json ?? emptySummary,
       });
+      await attachRouteCodes(supabaseClient, unified.items, correlationId);
+      await attachRouteRegistration(supabaseClient, unified.items, correlationId);
       return {
         statusCode: 200,
         payload: {
@@ -958,6 +982,8 @@ export async function resolveSheetMonitorResponse(request) {
     // cargas do sistema (+ reservas) devem aparecer no Monitor.
     const { getSheetExportUrl: getUrl } = await import("../../../application/google-sheets/google-sheet-loads.js");
     const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary });
+    await attachRouteCodes(supabaseClient, unified.items, correlationId);
+    await attachRouteRegistration(supabaseClient, unified.items, correlationId);
     const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
     return {
       statusCode: 200,
@@ -989,7 +1015,13 @@ export async function resolveUpdateMonitorAllocationResponse(request) {
     },
     async ({ correlationId, requestIp, operatorId }) => {
       const { lh, ...allocation } = sheetMonitorAllocationBodySchema.parse(await parseJsonBody(request));
-      return updateMonitorAllocation({ lh, operatorId, payload: allocation, requestIp, correlationId });
+      const result = await updateMonitorAllocation({ lh, operatorId, payload: allocation, requestIp, correlationId });
+      // Re-enriquece a linha editada + o fan-out da cascata de cancelamento com o
+      // motorista/placa EFETIVO, p/ o selo não ficar "não consultado". Fire-and-
+      // forget (não bloqueia o save; o front faz refetch atrasado). Nunca lança.
+      const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+      void enrichSheetRowsByLh(createSupabaseAdminClient(), [lh, ...(result.movedLhs ?? [])], { correlationId }).catch(() => {});
+      return { statusCode: result.statusCode, payload: result.payload };
     },
   );
 }
@@ -1004,7 +1036,37 @@ export async function resolveReassignMonitorAllocationsResponse(request) {
     },
     async ({ correlationId, requestIp, operatorId }) => {
       const { moves } = sheetMonitorReassignBodySchema.parse(await parseJsonBody(request));
-      return reassignMonitorAllocations({ moves, operatorId, requestIp, correlationId });
+      const result = await reassignMonitorAllocations({ moves, operatorId, requestIp, correlationId });
+      // Re-enriquece TODAS as linhas movidas com o motorista/placa EFETIVO, p/ a
+      // fila reordenada não ficar "não consultado". Fire-and-forget (não bloqueia
+      // o reorder; o front faz refetch atrasado). enrichSheetRowsByLh nunca lança.
+      const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+      void enrichSheetRowsByLh(
+        createSupabaseAdminClient(),
+        moves.map((m) => m.lh),
+        { correlationId },
+      ).catch(() => {});
+      return result;
+    },
+  );
+}
+
+export async function resolveAssignReservaResponse(request) {
+  return withOperatorSession(
+    request,
+    "assign-reserva-to-carga",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { reservaId, targetLh } = sheetMonitorAssignReservaBodySchema.parse(await parseJsonBody(request));
+      const result = await assignReservaToCarga({ reservaId, targetLh, operatorId, requestIp, correlationId });
+      // Re-enriquece a carga de destino (motorista/placa mudaram) p/ o selo
+      // Angellira/ASPX refletir o standby puxado. Fire-and-forget, nunca lança.
+      const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+      void enrichSheetRowsByLh(createSupabaseAdminClient(), [targetLh], { correlationId }).catch(() => {});
+      return result;
     },
   );
 }
