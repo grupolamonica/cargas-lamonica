@@ -29,11 +29,15 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
   const cavalo = norm(payload.cavalo);
   const carreta = norm(payload.carreta);
   const status = norm(payload.status);
+  // tipo (ForeCast/Spot/…): override NÃO travado por pinned. undefined = não
+  // enviado → preserva o valor atual (não apaga ao editar só motorista/placa).
+  const tipoProvided = payload.tipo !== undefined;
+  const tipo = norm(payload.tipo);
 
   const result = await withPgTransaction(async (client) => {
     const { rows } = await client.query(
       `SELECT id, sheet_lh, sheet_motorista, sheet_cavalo, sheet_carreta,
-              alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta
+              alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_tipo
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
       [cargoId],
     );
@@ -50,6 +54,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     const finalMotorista = pinned ? (sheetRow.alloc_motorista ?? null) : motorista;
     const finalCavalo = pinned ? (sheetRow.alloc_cavalo ?? null) : cavalo;
     const finalCarreta = pinned ? (sheetRow.alloc_carreta ?? null) : carreta;
+    const finalTipo = tipoProvided ? tipo : (sheetRow.alloc_tipo ?? null);
 
     await client.query(
       `
@@ -58,13 +63,14 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
             alloc_cavalo = $3,
             alloc_carreta = $4,
             alloc_status = $5,
+            alloc_tipo = $7,
             alloc_source = 'operator',
             alloc_updated_at = now(),
             alloc_updated_by = $6,
             updated_at = now()
         WHERE id = $1
       `,
-      [cargoId, finalMotorista, finalCavalo, finalCarreta, status, operatorId],
+      [cargoId, finalMotorista, finalCavalo, finalCarreta, status, operatorId, finalTipo],
     );
 
     await insertSecurityAuditEvent(client, {
@@ -130,11 +136,13 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     void writeAllocationsToSheet([{ lh, ...result.effective }]).catch(() => {});
   }
 
+  let cascadeMovedLhs = [];
   if (willCascade) {
     // Best-effort: a edição de status já está commitada; se a cascata falhar, o
     // sweep do próximo sync recupera (cancelLoadCascade é idempotente).
     try {
-      await cancelLoadCascade({ lh, operatorId, requestIp, correlationId });
+      const cascade = await cancelLoadCascade({ lh, operatorId, requestIp, correlationId });
+      cascadeMovedLhs = cascade.movedLhs ?? [];
     } catch (cascadeErr) {
       console.warn(
         `[update-monitor-allocation] cascata de cancelamento falhou para ${lh}:`,
@@ -143,5 +151,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     }
   }
 
-  return { statusCode: result.statusCode, payload: result.payload };
+  // movedLhs: o lh editado já é re-enriquecido pelo handler; aqui devolvemos as
+  // linhas que a cascata realocou p/ o handler re-enriquecer também (fan-out).
+  return { statusCode: result.statusCode, payload: result.payload, movedLhs: cascadeMovedLhs };
 }

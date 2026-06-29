@@ -38,6 +38,19 @@ describe("mapSystemCargoToMonitorRow", () => {
     expect(r.descargaAt).toBe("2026-06-26T18:00");
   });
 
+  it("resolve o cliente da carga via clientesById (id→nome); null sem id/match", () => {
+    const base = { id: "x", origem: "A", destino: "B", data: "2026-06-25", horario: "08:00:00" };
+    expect(mapSystemCargoToMonitorRow({ ...base, cliente_id: "c1" }, { c1: "Mercado Livre" }).cliente).toBe("Mercado Livre");
+    expect(mapSystemCargoToMonitorRow({ ...base }).cliente).toBeNull(); // sem cliente_id
+    expect(mapSystemCargoToMonitorRow({ ...base, cliente_id: "zzz" }, { c1: "X" }).cliente).toBeNull(); // sem match
+  });
+
+  it("tipo da carga do sistema = alloc_tipo (override) ?? 'SISTEMA'", () => {
+    const base = { id: "x", origem: "A", destino: "B", data: "2026-06-25", horario: "08:00:00" };
+    expect(mapSystemCargoToMonitorRow({ ...base }).tipo).toBe("SISTEMA");
+    expect(mapSystemCargoToMonitorRow({ ...base, alloc_tipo: "Spot" }).tipo).toBe("Spot");
+  });
+
   it("data ISO (UTC-midnight) é fatiada corretamente; sem motorista = disponível", () => {
     const r = mapSystemCargoToMonitorRow({
       id: "22222222-2222-2222-2222-222222222222",

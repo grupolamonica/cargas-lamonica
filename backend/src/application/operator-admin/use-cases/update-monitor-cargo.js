@@ -50,7 +50,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
   return withPgTransaction(async (client) => {
     const { rows } = await client.query(
       `SELECT id, sheet_lh, alloc_pinned,
-              alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status,
+              alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
               origem, destino, data, horario, lh_manual, sheet_data_descarga
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
       [cargoId],
@@ -73,6 +73,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     const allocCavalo = has("cavalo") && !pinned ? normAlloc(payload.cavalo) : row.alloc_cavalo;
     const allocCarreta = has("carreta") && !pinned ? normAlloc(payload.carreta) : row.alloc_carreta;
     const allocStatus = has("status") ? normAlloc(payload.status) : row.alloc_status;
+    const allocTipo = has("tipo") ? normAlloc(payload.tipo) : row.alloc_tipo;
 
     // canônicos (Rota/Agenda) — NOT NULL: só sobrescreve se vier valor válido
     const origem = has("origem") ? payload.origem : row.origem;
@@ -83,7 +84,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     // Descarga (data+hora) → sheet_data_descarga (texto 'YYYY-MM-DD HH:MM').
     const descarga = has("descarga") ? normDescarga(payload.descarga) : row.sheet_data_descarga;
 
-    const touchesAlloc = has("motorista") || has("cavalo") || has("carreta") || has("status");
+    const touchesAlloc = has("motorista") || has("cavalo") || has("carreta") || has("status") || has("tipo");
 
     await client.query(
       `
@@ -92,6 +93,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             alloc_cavalo = $3,
             alloc_carreta = $4,
             alloc_status = $5,
+            alloc_tipo = $14,
             origem = $6,
             destino = $7,
             data = $8,
@@ -104,7 +106,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             updated_at = now()
         WHERE id = $1
       `,
-      [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga],
+      [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga, allocTipo],
     );
 
     await insertSecurityAuditEvent(client, {

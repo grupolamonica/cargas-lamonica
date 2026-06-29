@@ -8,7 +8,7 @@
 // canônicas da carga. lh = lh_manual (editável no grid).
 
 const SELECT_COLS =
-  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_pinned, status, lh_manual";
+  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_pinned, status, lh_manual, cliente_id";
 
 /** DATE do Postgres pode chegar como '2026-06-25' ou ISO '2026-06-25T00:00:00.000Z'.
  *  Fatiar os 10 primeiros chars dá a data de parede correta (igual ao fix do
@@ -43,8 +43,9 @@ function parseDescarga(v) {
   return { label: s, at: null };
 }
 
-/** Projeta uma carga do sistema no shape de linha do Monitor. Puro/testável. */
-export function mapSystemCargoToMonitorRow(c) {
+/** Projeta uma carga do sistema no shape de linha do Monitor. Puro/testável.
+ *  clientesById: mapa id→nome do cliente (p/ exibir o cliente da carga na linha). */
+export function mapSystemCargoToMonitorRow(c, clientesById = {}) {
   const motoristas = (c.alloc_motorista || "").trim();
   const status = (c.alloc_status || "").trim();
   const cavalo = (c.alloc_cavalo || "").trim();
@@ -54,9 +55,10 @@ export function mapSystemCargoToMonitorRow(c) {
   const descarga = parseDescarga(c.sheet_data_descarga);
   return {
     lh: (c.lh_manual || "").trim(),
-    tipo: "SISTEMA",
+    tipo: (c.alloc_tipo || "").trim() || "SISTEMA",
     status,
     motoristas,
+    cliente: c.cliente_id ? (clientesById[c.cliente_id] ?? null) : null,
     origem: c.origem || "",
     destino: c.destino || "",
     data: dataStr,
@@ -92,6 +94,16 @@ export function mapSystemCargoToMonitorRow(c) {
  * @param {{ pageSize?: number, maxRows?: number }} [opts]
  */
 export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 1000, maxRows = 10000 } = {}) {
+  // Mapa cliente_id→nome (tabela pequena) p/ exibir o cliente de cada carga.
+  // Best-effort: sem clientes, o cliente da linha fica null.
+  const clientesById = {};
+  try {
+    const { data: clientes } = await supabaseClient.from("clientes").select("id, nome");
+    for (const cl of clientes || []) clientesById[cl.id] = cl.nome;
+  } catch {
+    /* sem clientes — cliente da linha fica null */
+  }
+
   const out = [];
   for (let from = 0; from < maxRows; from += pageSize) {
     const { data, error } = await supabaseClient
@@ -104,7 +116,7 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
       .range(from, from + pageSize - 1);
     if (error) throw error;
     const batch = data || [];
-    for (const c of batch) out.push(mapSystemCargoToMonitorRow(c));
+    for (const c of batch) out.push(mapSystemCargoToMonitorRow(c, clientesById));
     if (batch.length < pageSize) break;
   }
   return out;

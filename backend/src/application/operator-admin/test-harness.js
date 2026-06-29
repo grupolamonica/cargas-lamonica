@@ -83,6 +83,7 @@ const schemaSql = `
     alloc_cavalo text,
     alloc_carreta text,
     alloc_status text,
+    alloc_tipo text,
     alloc_source text,
     alloc_updated_at timestamptz,
     alloc_updated_by uuid,
