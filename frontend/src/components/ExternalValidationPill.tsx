@@ -1,5 +1,6 @@
 import { BadgeCheck, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
  * Selo de validação externa (Angellira / ASPX), reutilizado na tela de Motoristas
@@ -29,16 +30,20 @@ export function ExternalValidationPill({
   const statusWord = state === "ok" ? "ok" : state === "no" ? "não encontrado" : "não consultado";
   const tip = `${label}${scope ? ` (${scope})` : ""}: ${statusWord}`;
   return (
-    <span
-      title={tip}
-      className={cn(
-        "inline-flex items-center rounded-full border font-semibold leading-none",
-        compact ? "gap-1 px-1.5 py-1 text-[0.6rem]" : "gap-1.5 px-2.5 py-1 text-xs",
-        cls,
-      )}
-    >
-      <Icon className={compact ? "h-3 w-3 shrink-0" : "h-3.5 w-3.5 shrink-0"} />
-      {label}
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            "inline-flex cursor-default items-center rounded-full border font-semibold leading-none",
+            compact ? "gap-1 px-1.5 py-1 text-[0.6rem]" : "gap-1.5 px-2.5 py-1 text-xs",
+            cls,
+          )}
+        >
+          <Icon className={compact ? "h-3 w-3 shrink-0" : "h-3.5 w-3.5 shrink-0"} />
+          {label}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{tip}</TooltipContent>
+    </Tooltip>
   );
 }
