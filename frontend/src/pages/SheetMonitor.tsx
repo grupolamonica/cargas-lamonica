@@ -22,6 +22,7 @@ import {
   ShieldX,
   Truck,
   UserCheck,
+  UserPlus,
   X,
   XCircle,
 } from "lucide-react";
@@ -1070,9 +1071,12 @@ type AllocCellProps = {
   onDragEndHandle: () => void;
   // true enquanto este standby está sendo puxado pra uma carga (request em voo).
   assigningReserva?: boolean;
+  // nº de standbys da MESMA rota desta carga; >0 habilita o botão "puxar standby".
+  routeStandbyCount?: number;
+  onPullStandby?: (lh: string) => void;
 };
 
-function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle, assigningReserva }: AllocCellProps) {
+function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle, assigningReserva, routeStandbyCount = 0, onPullStandby }: AllocCellProps) {
   // Linha de RESERVA (standby na rota) — exibe o motorista/veículo e um punho de
   // arrasto: o operador puxa o standby para uma carga da MESMA rota (alocar).
   if (row.reserva) {
@@ -1214,6 +1218,17 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
         )}
       </div>
       <div className="flex shrink-0 items-center gap-0.5">
+        {canEditAlloc && routeStandbyCount > 0 && onPullStandby && (
+          <button
+            type="button"
+            title={`Puxar um motorista em standby desta rota (${routeStandbyCount} disponíve${routeStandbyCount === 1 ? "l" : "is"})`}
+            aria-label="Puxar standby para esta carga"
+            onClick={(e) => { e.stopPropagation(); onPullStandby(row.lh); }}
+            className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[0.6rem] font-semibold text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700 dark:text-amber-400 dark:hover:bg-amber-500/10"
+          >
+            <UserPlus className="h-3 w-3" /> {routeStandbyCount}
+          </button>
+        )}
         {(row.motoristas || pinned) && (
           <button
             type="button"
@@ -1273,6 +1288,8 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   onRowDragOver,
   onRowDrop,
   assigningReserva,
+  standbyCountByRoute,
+  onPullStandby,
 }: {
   row: SheetMonitorRowType;
   enriched: SheetMonitorEnrichedRow | undefined;
@@ -1295,7 +1312,12 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   onRowDragOver: (e: React.DragEvent, lh: string) => void;
   onRowDrop: (e: React.DragEvent, lh: string) => void;
   assigningReserva: boolean;
+  standbyCountByRoute: Map<string, number>;
+  onPullStandby: (lh: string) => void;
 }) {
+  // Standbys da MESMA rota (de toda a base, não só desta página) → habilita o
+  // botão "puxar standby" em cargas editáveis, independente da paginação.
+  const routeStandbyCount = row.reserva || row.source === "sistema" ? 0 : (standbyCountByRoute.get(routeKeyOf(row)) ?? 0);
   return (
     <tr
       style={ROW_VIRTUALIZATION_STYLE}
@@ -1400,6 +1422,8 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
           onDragStartHandle={onDragStartHandle}
           onDragEndHandle={onDragEndHandle}
           assigningReserva={assigningReserva}
+          routeStandbyCount={routeStandbyCount}
+          onPullStandby={onPullStandby}
         />
       </td>
     </tr>
@@ -1426,6 +1450,8 @@ function SheetMonitorTable({
   onReassign,
   onAssignReserva,
   assigningReservaId,
+  standbyCountByRoute,
+  onPullStandby,
 }: {
   rows: SheetMonitorRowType[];
   resolveEnriched: (row: SheetMonitorRowType) => SheetMonitorEnrichedRow | undefined;
@@ -1444,6 +1470,8 @@ function SheetMonitorTable({
   onReassign: (moves: Array<{ lh: string; motorista: string; cavalo: string; carreta: string }>) => void;
   onAssignReserva: (input: { reservaId: string; targetLh: string }) => void;
   assigningReservaId: string | null;
+  standbyCountByRoute: Map<string, number>;
+  onPullStandby: (lh: string) => void;
 }) {
   // Arrastar a fila de motoristas/veículos entre cargas (as viagens são fixas).
   // Modo auto-identificável pelo ponto de soltura: corpo da linha = trocar
@@ -1651,6 +1679,8 @@ function SheetMonitorTable({
                 onRowDragOver={handleRowDragOver}
                 onRowDrop={handleRowDrop}
                 assigningReserva={!!row.reserva && !!row.reservaId && row.reservaId === assigningReservaId}
+                standbyCountByRoute={standbyCountByRoute}
+                onPullStandby={onPullStandby}
               />
             ))}
           </tbody>
@@ -2104,6 +2134,62 @@ function RowDetailModal({
   );
 }
 
+// Seletor de standby — alternativa ao arrastar (funciona mesmo com o standby
+// noutra página). Lista os motoristas em standby da MESMA rota da carga.
+function StandbyPickerModal({ open, carga, standbys, onPick, onClose }: {
+  open: boolean;
+  carga: SheetMonitorRowType | null;
+  standbys: SheetMonitorRowType[];
+  onPick: (reservaId: string) => void;
+  onClose: () => void;
+}) {
+  // Mantém o último conteúdo enquanto o modal anima a saída: ao fechar, carga/lista
+  // viram null/[] no mesmo render — se o conteúdo "esvaziar" durante a animação de
+  // saída, o Radix Presence trava e o diálogo não desmonta. Congela o que mostrar.
+  const lastRef = useRef<{ carga: SheetMonitorRowType | null; standbys: SheetMonitorRowType[] }>({ carga: null, standbys: [] });
+  if (open && carga) lastRef.current = { carga, standbys };
+  const viewCarga = open ? carga : lastRef.current.carga;
+  const viewStandbys = open ? standbys : lastRef.current.standbys;
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <UserPlus className="h-4 w-4 text-amber-500" /> Puxar standby para a carga
+          </DialogTitle>
+          <DialogDescription className="pt-1 text-sm text-muted-foreground">
+            {viewCarga ? (
+              <>Carga <span className="font-mono font-semibold text-foreground">{viewCarga.lh}</span> — {routeKeyOf(viewCarga)}. Escolha um motorista em standby desta rota:</>
+            ) : "—"}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[55vh] space-y-1.5 overflow-y-auto pr-1">
+          {viewStandbys.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">Nenhum motorista em standby nesta rota.</p>
+          ) : viewStandbys.map((s) => (
+            <button
+              key={s.reservaId ?? s.rowKey}
+              type="button"
+              disabled={!s.reservaId}
+              onClick={() => { if (s.reservaId) { onPick(s.reservaId); onClose(); } }}
+              className="flex w-full items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2 text-left transition-colors hover:border-amber-400 hover:bg-amber-50/60 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-amber-500/10"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-foreground">{s.motoristas || "—"}</p>
+                <p className="truncate text-[0.7rem] text-muted-foreground">
+                  {s.cavalo || "—"}{s.carreta ? ` · ${s.carreta}` : ""}
+                  {s.standbyAt ? ` · standby desde ${formatStandby(s.standbyAt)}` : ""}
+                </p>
+              </div>
+              <UserPlus className="h-4 w-4 shrink-0 text-amber-500" />
+            </button>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function SheetMonitor() {
@@ -2166,6 +2252,31 @@ export default function SheetMonitor() {
   // política de edição sem virar dependência (mantém os callbacks estáveis).
   const itemsRef = useRef(items);
   itemsRef.current = items;
+
+  // Standbys (reservas ativas) agrupados por rota — de TODA a base (não só da
+  // página atual), p/ o botão "puxar standby" listar os candidatos mesmo quando
+  // o standby cairia noutra página da paginação.
+  const standbysByRoute = useMemo(() => {
+    const m = new Map<string, SheetMonitorRowType[]>();
+    for (const r of items) {
+      if (!r.reserva || !r.reservaId) continue;
+      const k = routeKeyOf(r);
+      const arr = m.get(k);
+      if (arr) arr.push(r); else m.set(k, [r]);
+    }
+    for (const arr of m.values()) arr.sort((a, b) => (a.standbyAt ?? "").localeCompare(b.standbyAt ?? ""));
+    return m;
+  }, [items]);
+  const standbyCountByRoute = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const [k, arr] of standbysByRoute) m.set(k, arr.length);
+    return m;
+  }, [standbysByRoute]);
+  // Carga-alvo do seletor de standby (botão "puxar standby" → modal de escolha).
+  const [standbyPickerLh, setStandbyPickerLh] = useState<string | null>(null);
+  const handlePullStandby = useCallback((lh: string) => setStandbyPickerLh(lh), []);
+  const standbyPickerCarga = standbyPickerLh ? items.find((r) => r.lh === standbyPickerLh) ?? null : null;
+  const standbyPickerList = standbyPickerCarga ? (standbysByRoute.get(routeKeyOf(standbyPickerCarga)) ?? []) : [];
   // Ação pendente aguardando confirmação no pop-up de ASPX (edição inline / arrastar).
   const [aspxConfirm, setAspxConfirm] = useState<{ count: number; run: () => void } | null>(null);
   const [aspxAssignOpen, setAspxAssignOpen] = useState(false);
@@ -2824,6 +2935,8 @@ export default function SheetMonitor() {
                 onReassign={handleReassign}
                 onAssignReserva={handleAssignReserva}
                 assigningReservaId={assigningReservaId}
+                standbyCountByRoute={standbyCountByRoute}
+                onPullStandby={handlePullStandby}
               />
               {!loading && filteredRows.length > PAGE_SIZE && (
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 px-4 py-3 text-xs text-muted-foreground">
@@ -2884,6 +2997,15 @@ export default function SheetMonitor() {
 
       {/* ── Nova carga (sistema) ── */}
       <NewCargoModal open={newCargoOpen} onClose={() => setNewCargoOpen(false)} statusOptions={OPERATIONAL_STATUS_OPTIONS} />
+
+      {/* ── Puxar standby para uma carga (alternativa ao arrastar) ── */}
+      <StandbyPickerModal
+        open={standbyPickerLh !== null}
+        carga={standbyPickerCarga}
+        standbys={standbyPickerList}
+        onPick={(reservaId) => { if (standbyPickerLh) handleAssignReserva({ reservaId, targetLh: standbyPickerLh }); }}
+        onClose={() => setStandbyPickerLh(null)}
+      />
     </div>
   );
 }
