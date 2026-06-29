@@ -1070,6 +1070,7 @@ export async function resolveOperatorCadastrosPendentesResponse(request) {
     const query = request.query || {};
     return fetchPendingDriverRegistrations({
       status: typeof query.status === "string" ? query.status.trim() : null,
+      search: typeof query.search === "string" ? query.search.trim() : null,
       page: query.page,
       pageSize: query.pageSize,
       correlationId,

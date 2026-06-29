@@ -641,6 +641,8 @@ const Motoristas = () => {
 
   // ─── Pendentes ───────────────────────────────────────────────────────────────
   const [pendentesStatusFilter, setPendentesStatusFilter] = useState("pendente");
+  const [pendentesSearch, setPendentesSearch] = useState("");
+  const deferredPendentesSearch = useDeferredValue(pendentesSearch.trim());
   const [pendentesPage, setPendentesPage] = useState(1);
   const [selectedPendente, setSelectedPendente] = useState<PendingDriverRegistrationItem | null>(null);
   const [rejectObs, setRejectObs] = useState("");
@@ -697,10 +699,11 @@ const Motoristas = () => {
   const migratedDocs = migratedDocsData?.docs ?? [];
 
   const { data: pendentesData, isLoading: pendentesLoading, isFetching: pendentesFetching, error: pendentesError } = useQuery({
-    queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, pendentesPage],
+    queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, deferredPendentesSearch, pendentesPage],
     queryFn: () =>
       fetchCadastrosPendentes({
         status: pendentesStatusFilter || undefined,
+        search: deferredPendentesSearch || undefined,
         page: pendentesPage,
         pageSize: 20,
       }),
@@ -1016,17 +1019,28 @@ const Motoristas = () => {
                   <h2 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">Revisão de candidatos</h2>
                   <p className="mt-1 text-sm text-muted-foreground">Cadastros enviados pelo formulário público /cadastro aguardando revisão.</p>
                 </div>
-                <select
-                  value={pendentesStatusFilter}
-                  onChange={(e) => { setPendentesStatusFilter(e.target.value); setPendentesPage(1); }}
-                  className="h-10 rounded-xl border border-border/80 bg-white/92 px-3 text-sm text-foreground outline-none"
-                >
-                  <option value="">Todos</option>
-                  <option value="pendente">Pendentes</option>
-                  <option value="em_revisao">Em revisão</option>
-                  <option value="aprovado">Aprovados</option>
-                  <option value="rejeitado">Rejeitados</option>
-                </select>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={pendentesSearch}
+                      onChange={(e) => { setPendentesSearch(e.target.value); setPendentesPage(1); }}
+                      placeholder="Buscar por nome, CPF ou placa..."
+                      className="h-10 w-72 rounded-xl border-border/80 bg-white/92 pl-9 pr-3"
+                    />
+                  </div>
+                  <select
+                    value={pendentesStatusFilter}
+                    onChange={(e) => { setPendentesStatusFilter(e.target.value); setPendentesPage(1); }}
+                    className="h-10 rounded-xl border border-border/80 bg-white/92 px-3 text-sm text-foreground outline-none"
+                  >
+                    <option value="">Todos</option>
+                    <option value="pendente">Pendentes</option>
+                    <option value="em_revisao">Em revisão</option>
+                    <option value="aprovado">Aprovados</option>
+                    <option value="rejeitado">Rejeitados</option>
+                  </select>
+                </div>
               </div>
             </section>
 

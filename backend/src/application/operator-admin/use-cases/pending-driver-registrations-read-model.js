@@ -14,7 +14,7 @@ const PENDING_DRIVER_MAX_PAGE_SIZE = 100;
  * @param {number} opts.pageSize
  * @param {string} [opts.correlationId]
  */
-export async function fetchPendingDriverRegistrations({ status, page, pageSize, correlationId }) {
+export async function fetchPendingDriverRegistrations({ status, search, page, pageSize, correlationId }) {
   const safePage = Math.max(1, Number.parseInt(String(page || 1), 10) || 1);
   const safePageSize = Math.min(
     PENDING_DRIVER_MAX_PAGE_SIZE,
@@ -22,6 +22,25 @@ export async function fetchPendingDriverRegistrations({ status, page, pageSize, 
   );
   const offset = (safePage - 1) * safePageSize;
   const statusFilter = typeof status === "string" && status.trim() ? status.trim() : null;
+  // Busca livre: nome do motorista, placa do cavalo/carretas, id_cadastro (ILIKE),
+  // e CPF por dígitos (o CPF é armazenado só com dígitos no `dados`).
+  const searchTerm = typeof search === "string" && search.trim() ? search.trim() : null;
+  const searchDigits = searchTerm ? searchTerm.replace(/\D/g, "") : "";
+  const searchDigitsFilter = searchDigits.length >= 3 ? searchDigits : null;
+
+  // WHERE compartilhado entre a query de itens e a de contagem ($1=status, $2=termo, $3=dígitos).
+  const whereClause = `
+        WHERE ($1::text IS NULL OR status = $1)
+          AND ($2::text IS NULL OR (
+                dados->'motorista'->>'nome' ILIKE '%' || $2 || '%'
+             OR dados->'cavalo'->>'placa'   ILIKE '%' || $2 || '%'
+             OR id_cadastro                 ILIKE '%' || $2 || '%'
+             OR EXISTS (
+                  SELECT 1 FROM jsonb_array_elements(COALESCE(dados->'carretas', '[]'::jsonb)) AS carreta
+                  WHERE carreta->>'placa' ILIKE '%' || $2 || '%'
+                )
+             OR ($3::text IS NOT NULL AND dados->'motorista'->>'cpf' LIKE '%' || $3 || '%')
+          ))`;
 
   return withPgClient(async (client) => {
     const [itemsResult, countResult] = await Promise.all([
@@ -40,19 +59,19 @@ export async function fetchPendingDriverRegistrations({ status, page, pageSize, 
           dados->'cavalo'->>'placa'    AS placa_cavalo,
           dados                        AS dados
         FROM public.pending_driver_registrations
-        WHERE ($1::text IS NULL OR status = $1)
+        ${whereClause}
         ORDER BY created_at DESC
-        LIMIT $2 OFFSET $3
+        LIMIT $4 OFFSET $5
         `,
-        [statusFilter, safePageSize, offset],
+        [statusFilter, searchTerm, searchDigitsFilter, safePageSize, offset],
       ),
       client.query(
         `
         SELECT COUNT(*)::int AS total
         FROM public.pending_driver_registrations
-        WHERE ($1::text IS NULL OR status = $1)
+        ${whereClause}
         `,
-        [statusFilter],
+        [statusFilter, searchTerm, searchDigitsFilter],
       ),
     ]);
 

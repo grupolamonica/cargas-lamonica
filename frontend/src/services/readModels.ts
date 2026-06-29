@@ -875,6 +875,7 @@ export interface PendingDriverRegistrationItem {
 
 export async function fetchCadastrosPendentes(params: {
   status?: string;
+  search?: string;
   page?: number;
   pageSize?: number;
 }) {
