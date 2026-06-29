@@ -1192,7 +1192,7 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
       <div className="min-w-0 flex-1">
         {row.motoristas ? (
           <div className="flex items-center gap-2">
-            <span className="w-[150px] shrink-0 truncate text-xs font-medium text-foreground" title={row.motoristas}>{row.motoristas}</span>
+            <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground" title={row.motoristas}>{row.motoristas}</span>
             <DriverChecks enriched={enriched} />
           </div>
         ) : (
@@ -1200,7 +1200,7 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
         )}
         {row.cavalo && (
           <div className="mt-0.5 flex items-center gap-2">
-            <span className="w-[150px] shrink-0 truncate text-[0.62rem] text-muted-foreground" title={`${row.cavalo}${row.carreta ? ` · ${row.carreta}` : ""}`}>
+            <span className="min-w-0 flex-1 truncate text-[0.62rem] text-muted-foreground" title={`${row.cavalo}${row.carreta ? ` · ${row.carreta}` : ""}`}>
               {row.cavalo}{row.carreta ? ` · ${row.carreta}` : ""}
             </span>
             <VehicleChecks enriched={enriched} hasCavalo={Boolean(row.cavalo)} hasCarreta={Boolean(row.carreta)} />
