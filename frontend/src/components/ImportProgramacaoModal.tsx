@@ -142,6 +142,7 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
   };
 
   const summary = preview?.summary;
+  const routesNotRegistered = preview?.rows.filter((r) => r.ok && r.preview.route_registered === false).length ?? 0;
   const canImport = Boolean(summary && summary.importable > 0) && !isImporting && !isValidating;
 
   return (
@@ -243,6 +244,11 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
                   {summary.invalid} com erro
                 </span>
               ) : null}
+              {routesNotRegistered > 0 ? (
+                <span className="rounded-full bg-orange-100 px-3 py-1 font-medium text-orange-700 dark:bg-orange-500/15 dark:text-orange-300">
+                  {routesNotRegistered} sem rota cadastrada
+                </span>
+              ) : null}
             </div>
           ) : null}
 
@@ -285,6 +291,11 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
                       <td className="whitespace-nowrap px-3 py-2">{row.preview.data_descarga ?? "—"}</td>
                       <td className="px-3 py-2">
                         {row.preview.origem} → {row.preview.destino}
+                        {row.ok && row.preview.route_registered === false ? (
+                          <span className="mt-0.5 flex items-center gap-1 text-xs text-orange-600 dark:text-orange-400">
+                            <AlertTriangle className="h-3 w-3 shrink-0" /> sem rota cadastrada
+                          </span>
+                        ) : null}
                       </td>
                       <td className="whitespace-nowrap px-3 py-2">{row.preview.cliente_nome ?? "—"}</td>
                       <td className="whitespace-nowrap px-3 py-2">{formatCargoStatusLabel(row.preview.status)}</td>

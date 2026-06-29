@@ -7,6 +7,7 @@ import {
   splitCsvRows,
 } from "../../../domain/operator-admin/import-programacao.js";
 import { ValidationError } from "../../../domain/load-claims/errors.js";
+import { fetchRouteCatalogMetricsByLoadId } from "./_shared.js";
 
 // Teto de segurança: importações maiores devem ser quebradas em arquivos.
 const MAX_IMPORT_ROWS = 500;
@@ -114,6 +115,24 @@ async function classifyRows(client, rows) {
   }
 }
 
+// Marca, por linha válida, se a rota (origem→destino) tem cadastro no catálogo
+// (route_metrics_cache). Apenas informativo no preview — não bloqueia o import.
+async function markRouteRegistration(client, rows) {
+  const validRows = rows.filter((row) => row.ok);
+  if (validRows.length === 0) return;
+
+  const loadRows = validRows.map((row) => ({
+    id: row.payload.id,
+    origem: row.payload.origem,
+    destino: row.payload.destino,
+  }));
+  const metricsById = await fetchRouteCatalogMetricsByLoadId(client, loadRows);
+
+  for (const row of validRows) {
+    row.preview.route_registered = metricsById.get(row.payload.id) != null;
+  }
+}
+
 async function insertCargo(client, payload, operatorId) {
   await client.query(
     `
@@ -208,7 +227,10 @@ export async function importOperatorCargas({ operatorId, csv, dryRun = false, re
     const { headerError, rows } = await withPgClient(async (client) => {
       const clientesByName = await loadClientesByName(client);
       const parsed = parseAndValidate(csv, clientesByName);
-      if (!parsed.headerError) await classifyRows(client, parsed.rows);
+      if (!parsed.headerError) {
+        await classifyRows(client, parsed.rows);
+        await markRouteRegistration(client, parsed.rows);
+      }
       return parsed;
     });
 
@@ -243,6 +265,7 @@ export async function importOperatorCargas({ operatorId, csv, dryRun = false, re
     }
 
     await classifyRows(client, rows);
+    await markRouteRegistration(client, rows);
 
     for (const row of rows) {
       if (row.action === "insert") await insertCargo(client, row.payload, operatorId);

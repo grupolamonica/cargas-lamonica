@@ -142,6 +142,8 @@ export interface ImportCargoRowPreview {
   destino: string;
   cliente_nome: string | null;
   status: string;
+  // false = trajeto (origem→destino) sem rota cadastrada no catálogo.
+  route_registered?: boolean;
 }
 
 export type ImportCargoAction = "insert" | "update" | "skip" | "invalid";

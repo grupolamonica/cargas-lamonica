@@ -6,6 +6,7 @@ import {
   resetTestDatabase,
   seedCargo,
   seedCliente,
+  seedRoute,
   seedUser,
   withPgClient,
   withPgTransaction,
@@ -156,6 +157,22 @@ describe("importOperatorCargas (programação)", () => {
     expect(response.payload.summary).toMatchObject({ total: 1, inserted: 1 });
     const { rows } = await query("SELECT sheet_lh, perfil, sheet_tipo, status FROM public.cargas");
     expect(rows[0]).toMatchObject({ sheet_lh: "B101437150", perfil: "TRUCK", sheet_tipo: "Transferência", status: "OPEN" });
+  });
+
+  it("marca route_registered: rota no catálogo vs sem cadastro", async () => {
+    const operator = await seedUser({ email: "oprota@teste.local" });
+    await seedRoute({}); // catálogo: Salvador / BA -> Simoes Filho / BA (defaults do harness)
+
+    const csv = [
+      CSV_HEADER,
+      "LH-R1,Forecast,CARRETA,18/07/2026 08:00,,Salvador / BA,Simoes Filho / BA,,ativa",
+      "LH-R2,Forecast,CARRETA,18/07/2026 09:00,,Cidade Inexistente,Outro Lugar,,ativa",
+    ].join("\n");
+
+    const response = await importOperatorCargas({ operatorId: operator.id, csv, dryRun: true, requestIp: "ip", correlationId: "c" });
+    const byLh = Object.fromEntries(response.payload.rows.map((r) => [r.preview.cod_carga, r.preview.route_registered]));
+    expect(byLh["LH-R1"]).toBe(true); // trajeto cadastrado no route_metrics_cache
+    expect(byLh["LH-R2"]).toBe(false); // sem cadastro
   });
 
   it("rejeita cabeçalho inválido sem gravar", async () => {
