@@ -313,6 +313,7 @@ export interface OperatorDriverListItem {
     warnings: string[];
     hasAngelira: boolean;
     hasAspx: boolean;
+    hasBrk: boolean;
     checkedAt: string | null;
   } | null;
   angelliraVigency: {
@@ -321,6 +322,15 @@ export interface OperatorDriverListItem {
     validUntil: string | null;
     daysUntilExpiry: number | null;
     alertLevel: "OK" | "EXPIRING_SOON" | "EXPIRED" | null;
+    checkedAt: string | null;
+  } | null;
+  brkVigency: {
+    status: string | null;
+    statusText: string | null;
+    validUntil: string | null;
+    daysUntilExpiry: number | null;
+    alertLevel: "OK" | "EXPIRING_SOON" | "EXPIRED" | null;
+    conjuntoApto: boolean | null;
     checkedAt: string | null;
   } | null;
   angelliraDetails: {
