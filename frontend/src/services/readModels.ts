@@ -186,6 +186,7 @@ export interface OperatorCargoListItem {
   distancia_km: number | null;
   duracao_horas: number | null;
   perfil: string;
+  eixos?: number | null;
   valor: number | null;
   bonus: number | null;
   bonus_exigencias: string | null;
@@ -247,6 +248,7 @@ export interface OperatorRouteListItem {
   duracao_horas: number | null;
   tempo_estimado_horas: number | null;
   perfil_padrao: string | null;
+  eixos?: number | null;
   valor_padrao: number | null;
   bonus_padrao: number | null;
   bonus_exigencias: string | null;
@@ -1097,6 +1099,39 @@ export async function retryAngelliraStep(id: string, step: AngelliraJobStep) {
 export async function listExternalJobs(id: string) {
   return getOperator<{ ok: boolean; jobs: ExternalRegistrationJob[] }>(
     `/api/operator/cadastros/${id}/external-jobs`,
+  );
+}
+
+// ── Preview de payloads (G3 — inspeção read-only antes do disparo) ─────────
+export type PreviewProprietario =
+  | { tipo: "PF" | "PJ"; payload: Record<string, unknown>; owner_is_driver?: boolean }
+  | { reused_from_cavalo: true }
+  | { skipped: true; reason: string };
+
+export type PreviewVeiculo =
+  | {
+      payload: Record<string, unknown>;
+      owner_cpf: string | null;
+      owner_cnpj: string | null;
+      rntrc_fallback: string | null;
+    }
+  | { skipped: true; reason: string };
+
+export type PreviewPayloadsResult = {
+  ok: boolean;
+  angellira: {
+    proprietario_cavalo: PreviewProprietario;
+    proprietario_carreta: PreviewProprietario;
+    motorista: { payload: Record<string, unknown> };
+    cavalo: PreviewVeiculo;
+    carreta: PreviewVeiculo;
+  };
+  spx: { payload: Record<string, unknown> } | { skipped: true; reason: string } | null;
+};
+
+export async function previewPayloads(id: string) {
+  return getOperator<PreviewPayloadsResult>(
+    `/api/operator/cadastros/${id}/preview-payloads`,
   );
 }
 

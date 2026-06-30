@@ -16,6 +16,7 @@ export interface OperatorCargoPayload {
   origem: string;
   destino: string;
   perfil: string;
+  eixos?: number | null;
   valor: number | null;
   bonus: number | null;
   bonus_exigencias: string | null;
@@ -65,6 +66,7 @@ export interface OperatorRoutePayload {
   duracao_horas: number | null;
   tempo_estimado_horas: number | null;
   perfil_padrao: string | null;
+  eixos?: number;
   valor_padrao: number | null;
   bonus_padrao: number | null;
   bonus_exigencias: string | null;

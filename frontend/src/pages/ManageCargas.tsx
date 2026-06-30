@@ -51,6 +51,7 @@ interface CargoFormData {
   origem: string;
   destino: string;
   perfil: string;
+  eixos?: number;
   valor?: string;
   bonus?: string;
   bonus_exigencias?: string;
@@ -493,6 +494,7 @@ const ManageCargas = () => {
         distancia_km: routeMetrics.distancia_km,
         duracao_horas: routeMetrics.duracao_horas,
         perfil: autoAssignedCargo.perfil,
+        eixos: autoAssignedCargo.eixos ?? null,
         valor: parseMoneyInput(autoAssignedCargo.valor),
         bonus: parseMoneyInput(autoAssignedCargo.bonus),
         bonus_exigencias: autoAssignedCargo.bonus_exigencias?.trim() || null,
@@ -1227,6 +1229,7 @@ const ManageCargas = () => {
                 origem: editingCargo.origem,
                 destino: editingCargo.destino,
                 perfil: editingCargo.perfil,
+                eixos: editingCargo.eixos ?? 0,
                 valor: editingCargo.valor?.toString() || "",
                 bonus: editingCargo.bonus?.toString() || "",
                 bonus_exigencias: editingCargo.bonus_exigencias || "",

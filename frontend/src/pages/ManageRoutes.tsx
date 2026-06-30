@@ -56,6 +56,7 @@ function mapRouteToFormData(route: RouteCatalogRow): RouteFormData {
     distancia_km: String(route.distancia_km ?? ""),
     tempo_estimado_horas: route.tempo_estimado_horas !== null ? String(route.tempo_estimado_horas) : "",
     perfil_padrao: route.perfil_padrao || "CARRETA",
+    eixos: route.eixos ?? 0,
     valor_padrao: route.valor_padrao !== null ? String(route.valor_padrao) : "",
     bonus_padrao: route.bonus_padrao !== null ? String(route.bonus_padrao) : "",
     bonus_exigencias: route.bonus_exigencias ?? "",
@@ -190,6 +191,7 @@ const ManageRoutes = () => {
       duracao_horas: tempoEstimadoHoras,
       tempo_estimado_horas: tempoEstimadoHoras,
       perfil_padrao: trimTextOrNull(formData.perfil_padrao),
+      eixos: formData.eixos,
       valor_padrao: parseMoneyInput(formData.valor_padrao),
       bonus_padrao: parseMoneyInput(formData.bonus_padrao),
       bonus_exigencias: trimTextOrNull(formData.bonus_exigencias),
@@ -401,6 +403,7 @@ const ManageRoutes = () => {
                           ) : null}
                           <Badge variant="outline" className="border-border/60 bg-white/70 text-foreground">
                             {routeItem.perfil_padrao || "Sem perfil"}
+                            {routeItem.eixos ? ` · ${routeItem.eixos} eixos` : ""}
                           </Badge>
                         </div>
 
@@ -541,7 +544,10 @@ const ManageRoutes = () => {
                         <Truck className="h-3.5 w-3.5 text-primary" />
                         Perfil sugerido
                       </div>
-                      <p className="mt-2 text-sm font-semibold text-foreground">{detailRoute.perfil_padrao || "Não definido"}</p>
+                      <p className="mt-2 text-sm font-semibold text-foreground">
+                        {detailRoute.perfil_padrao || "Não definido"}
+                        {detailRoute.eixos ? ` · ${detailRoute.eixos} eixos` : ""}
+                      </p>
                     </CardContent>
                   </Card>
                   <Card className="border-border/60 bg-muted/20 shadow-none">

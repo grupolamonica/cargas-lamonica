@@ -3,11 +3,13 @@ import { Lock, X } from "lucide-react";
 
 import {
   applyAssignableRouteToCargoDraft,
-  findAssignableRouteByLocations,
+  applyRouteVehiclePricingToCargoDraft,
+  findAssignableRouteByVehicle,
   getAssignableRouteLabel,
   type AssignableRouteOption,
 } from "@/lib/assignableRoutes";
-import { VEHICLE_PROFILE_OPTIONS, normalizeVehicleProfile } from "@/lib/vehicleProfiles";
+import { VEHICLE_PROFILE_OPTIONS, EIXOS_OPTIONS, normalizeVehicleProfile } from "@/lib/vehicleProfiles";
+import { CitySelector } from "@/components/CitySelector";
 
 interface CargoData {
   data: string;
@@ -16,6 +18,7 @@ interface CargoData {
   origem: string;
   destino: string;
   perfil: string;
+  eixos?: number;
   valor?: string;
   bonus?: string;
   bonus_exigencias?: string;
@@ -96,6 +99,7 @@ const CargoModal = ({
     origem: "",
     destino: "",
     perfil: "CARRETA",
+    eixos: 0,
     valor: "",
     bonus: "",
     bonus_exigencias: "",
@@ -110,6 +114,7 @@ const CargoModal = ({
       setForm({
         ...initialData,
         perfil: normalizeVehicleProfile(initialData.perfil),
+        eixos: initialData.eixos ?? 0,
       });
       return;
     }
@@ -120,6 +125,7 @@ const CargoModal = ({
       origem: "",
       destino: "",
       perfil: "CARRETA",
+      eixos: 0,
       valor: "",
       bonus: "",
       bonus_exigencias: "",
@@ -140,8 +146,8 @@ const CargoModal = ({
   const isClientLocked = lockedClientId.trim() !== "";
   const selectableRoutes = routes.filter((route) => route.ativa || route.route_key === form.route_key);
   const autoMatchedRoute = useMemo(
-    () => findAssignableRouteByLocations(selectableRoutes, form.origem, form.destino),
-    [form.destino, form.origem, selectableRoutes],
+    () => findAssignableRouteByVehicle(selectableRoutes, form.origem, form.destino, form.perfil, form.eixos),
+    [form.destino, form.origem, form.perfil, form.eixos, selectableRoutes],
   );
   const selectedRoute = selectableRoutes.find((route) => route.route_key === form.route_key) || autoMatchedRoute || null;
 
@@ -153,7 +159,9 @@ const CargoModal = ({
       return;
     }
 
-    setForm((currentForm) => applyAssignableRouteToCargoDraft(currentForm, autoMatchedRoute));
+    // Preenche só valor/bônus da rota do veículo escolhido — não sobrescreve
+    // o perfil/eixos que o operador selecionou.
+    setForm((currentForm) => applyRouteVehiclePricingToCargoDraft(currentForm, autoMatchedRoute));
   }, [autoMatchedRoute]);
 
   useEffect(() => {
@@ -256,6 +264,8 @@ const CargoModal = ({
               {selectableRoutes.map((route) => (
                 <option key={route.id} value={route.route_key}>
                   {getAssignableRouteLabel(route)}
+                  {route.perfil_padrao ? ` — ${route.perfil_padrao}` : ""}
+                  {route.eixos ? ` ${route.eixos} eixos` : ""}
                 </option>
               ))}
             </select>
@@ -356,39 +366,49 @@ const CargoModal = ({
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Origem *</label>
-              <input
-                type="text"
-                placeholder="Ex: São Paulo/SP"
+              <CitySelector
                 value={form.origem}
-                onChange={(event) => setForm({ ...form, route_key: "", origem: event.target.value })}
+                onChange={(value) => setForm((current) => ({ ...current, route_key: "", origem: value }))}
+                placeholder="Buscar cidade de origem"
                 required
-                className={inputClass}
               />
             </div>
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Destino *</label>
-              <input
-                type="text"
-                placeholder="Ex: Salvador/BA"
+              <CitySelector
                 value={form.destino}
-                onChange={(event) => setForm({ ...form, route_key: "", destino: event.target.value })}
+                onChange={(value) => setForm((current) => ({ ...current, route_key: "", destino: value }))}
+                placeholder="Buscar cidade de destino"
                 required
-                className={inputClass}
               />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2">
+            <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Perfil do Caminhão *</label>
               <select
                 value={form.perfil}
-                onChange={(event) => { hasUserEditedValuesRef.current = true; setForm({ ...form, perfil: event.target.value }); }}
+                onChange={(event) => setForm({ ...form, perfil: event.target.value })}
                 className={`${inputClass} cursor-pointer`}
               >
                 {VEHICLE_PROFILE_OPTIONS.map((perfil) => (
                   <option key={perfil.value} value={perfil.value}>
                     {perfil.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Eixos</label>
+              <select
+                value={form.eixos ?? 0}
+                onChange={(event) => setForm({ ...form, eixos: Number(event.target.value) })}
+                className={`${inputClass} cursor-pointer`}
+              >
+                {EIXOS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
                   </option>
                 ))}
               </select>
