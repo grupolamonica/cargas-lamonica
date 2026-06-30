@@ -38,6 +38,38 @@ describe("mapSystemCargoToMonitorRow", () => {
     expect(r.descargaAt).toBe("2026-06-26T18:00");
   });
 
+  it("status do Monitor: só OPEN é 'Disponível'; demais ciclos mostram o status real", () => {
+    const base = { id: "x", origem: "A", destino: "B", data: "2026-06-25", horario: "08:00:00", alloc_motorista: null, alloc_status: null };
+    // OPEN (aberta pro motorista), sem motorista → Disponível (status vazio).
+    const open = mapSystemCargoToMonitorRow({ ...base, status: "OPEN" });
+    expect(open.status).toBe("");
+    expect(open.isAvailable).toBe(true);
+    // BOOKED não está aberta → NÃO é "Disponível".
+    const booked = mapSystemCargoToMonitorRow({ ...base, status: "BOOKED" });
+    expect(booked.status).toBe("Reservado");
+    expect(booked.isAvailable).toBe(false);
+    // DRAFT (rascunho) e CANCELLED idem.
+    expect(mapSystemCargoToMonitorRow({ ...base, status: "DRAFT" }).status).toBe("Rascunho");
+    expect(mapSystemCargoToMonitorRow({ ...base, status: "CANCELLED" }).status).toBe("Cancelado");
+    // Status operacional (alloc_status) tem precedência sobre o ciclo de vida.
+    expect(mapSystemCargoToMonitorRow({ ...base, status: "BOOKED", alloc_status: "DESCARREGADO" }).status).toBe("DESCARREGADO");
+  });
+
+  it("'Disponível' exige a MESMA regra do painel do motorista: OPEN + pública + sem motorista + carregamento futuro", () => {
+    const now = { todayIso: "2026-06-30", nowTimeIso: "12:00" };
+    const base = { id: "x", origem: "A", destino: "B", status: "OPEN", alloc_motorista: null, alloc_status: null, driver_visibility: "PUBLIC" };
+    // OPEN, pública, futura → Disponível ("")
+    expect(mapSystemCargoToMonitorRow({ ...base, data: "2026-07-05", horario: "08:00:00" }, {}, now).status).toBe("");
+    // OPEN mas PASSADA → não aparece pro motorista → "Em aberto"
+    expect(mapSystemCargoToMonitorRow({ ...base, data: "2026-06-20", horario: "08:00:00" }, {}, now).status).toBe("Em aberto");
+    // OPEN futura mas PRIVADA → "Em aberto"
+    expect(mapSystemCargoToMonitorRow({ ...base, data: "2026-07-05", driver_visibility: "PRIVATE" }, {}, now).status).toBe("Em aberto");
+    // OPEN futura com motorista → não é Disponível (badge mostra "Reservado"); isAvailable=false
+    const comMot = mapSystemCargoToMonitorRow({ ...base, data: "2026-07-05", alloc_motorista: "FULANO" }, {}, now);
+    expect(comMot.status).toBe("");
+    expect(comMot.isAvailable).toBe(false);
+  });
+
   it("resolve o cliente da carga via clientesById (id→nome); null sem id/match", () => {
     const base = { id: "x", origem: "A", destino: "B", data: "2026-06-25", horario: "08:00:00" };
     expect(mapSystemCargoToMonitorRow({ ...base, cliente_id: "c1" }, { c1: "Mercado Livre" }).cliente).toBe("Mercado Livre");

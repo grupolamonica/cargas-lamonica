@@ -7,8 +7,10 @@
 // elas são simplesmente "o valor"). origem/destino/data/horario são as colunas
 // canônicas da carga. lh = lh_manual (editável no grid).
 
+import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
+
 const SELECT_COLS =
-  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_pinned, status, lh_manual, cliente_id";
+  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_pinned, status, driver_visibility, lh_manual, cliente_id";
 
 /** DATE do Postgres pode chegar como '2026-06-25' ou ISO '2026-06-25T00:00:00.000Z'.
  *  Fatiar os 10 primeiros chars dá a data de parede correta (igual ao fix do
@@ -43,16 +45,46 @@ function parseDescarga(v) {
   return { label: s, at: null };
 }
 
+// Ciclo de vida da carga (coluna `status`) → rótulo exibido no Monitor quando NÃO
+// há status operacional (alloc_status). Só "OPEN" (aberta pro motorista) aparece
+// como "Disponível" (badge vazio); as demais mostram o status real — pedido do
+// operador: nada que não esteja aberto pro motorista deve parecer "Disponível".
+const SYSTEM_LIFECYCLE_LABEL = {
+  DRAFT: "Rascunho",
+  BOOKED: "Reservado",
+  CANCELLED: "Cancelado",
+  EXPIRED: "Expirada",
+};
+
 /** Projeta uma carga do sistema no shape de linha do Monitor. Puro/testável.
- *  clientesById: mapa id→nome do cliente (p/ exibir o cliente da carga na linha). */
-export function mapSystemCargoToMonitorRow(c, clientesById = {}) {
+ *  clientesById: mapa id→nome do cliente (p/ exibir o cliente da carga na linha).
+ *  now: { todayIso, nowTimeIso } (relógio de São Paulo) p/ a checagem de futuro;
+ *  sem now, não checa a data (assume futura). */
+export function mapSystemCargoToMonitorRow(c, clientesById = {}, now = null) {
   const motoristas = (c.alloc_motorista || "").trim();
-  const status = (c.alloc_status || "").trim();
   const cavalo = (c.alloc_cavalo || "").trim();
   const carreta = (c.alloc_carreta || "").trim();
   const dataStr = toDateStr(c.data);
   const horaStr = toTimeStr(c.horario);
   const descarga = parseDescarga(c.sheet_data_descarga);
+
+  // Status EXIBIDO no Monitor. "Disponível" SÓ quando a carga aparece no painel do
+  // motorista — mesma regra do buildDriverLoadFilters: ciclo de vida OPEN, pública,
+  // sem motorista efetivo e carregamento no futuro (relógio de São Paulo). O status
+  // operacional (alloc_status), quando o operador define, tem precedência.
+  const opStatus = (c.alloc_status || "").trim();
+  const lifecycle = (c.status || "").trim().toUpperCase();
+  const isPublic = (c.driver_visibility || "PUBLIC").toString().toUpperCase() === "PUBLIC";
+  const isFuture = !now || !dataStr || dataStr > now.todayIso
+    || (dataStr === now.todayIso && (!horaStr || horaStr >= now.nowTimeIso));
+  const openToDriver = lifecycle === "OPEN" && isPublic && motoristas === "" && isFuture;
+  let status = opStatus;
+  if (!opStatus) {
+    if (openToDriver) status = "";                          // aparece pro motorista → Disponível
+    else if (motoristas) status = "";                       // tem motorista → badge mostra "Reservado"
+    else if (lifecycle === "OPEN") status = "Em aberto";    // OPEN mas não listada (passada/privada)
+    else if (lifecycle) status = SYSTEM_LIFECYCLE_LABEL[lifecycle] ?? lifecycle;
+  }
   return {
     lh: (c.lh_manual || "").trim(),
     tipo: (c.alloc_tipo || "").trim() || "SISTEMA",
@@ -104,6 +136,11 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
     /* sem clientes — cliente da linha fica null */
   }
 
+  // "Agora" no relógio de São Paulo (carga.data/horario são horário do Brasil) —
+  // usado p/ decidir se a carga está no futuro (aparece pro motorista). Uma vez só.
+  const { dateIso, timeIso } = getSaoPauloWallClock();
+  const now = { todayIso: dateIso, nowTimeIso: timeIso };
+
   const out = [];
   for (let from = 0; from < maxRows; from += pageSize) {
     const { data, error } = await supabaseClient
@@ -116,7 +153,7 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
       .range(from, from + pageSize - 1);
     if (error) throw error;
     const batch = data || [];
-    for (const c of batch) out.push(mapSystemCargoToMonitorRow(c, clientesById));
+    for (const c of batch) out.push(mapSystemCargoToMonitorRow(c, clientesById, now));
     if (batch.length < pageSize) break;
   }
   return out;
