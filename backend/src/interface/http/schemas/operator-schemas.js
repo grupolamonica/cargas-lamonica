@@ -36,10 +36,14 @@ export const sheetMonitorAllocationBodySchema = z.object({
  *  "" = vazio explícito (sobrepõe a planilha → carga sem motorista). */
 export const sheetMonitorReassignBodySchema = z.object({
   moves: z.array(z.object({
-    lh: z.string().trim().min(1).max(120),
+    // Carga da planilha → lh; carga do SISTEMA → cargoId (uuid). Ao menos um.
+    lh: z.string().trim().max(120).optional(),
+    cargoId: z.string().uuid().optional(),
     motorista: z.string().trim().max(180).optional().default(""),
     cavalo: z.string().trim().max(40).optional().default(""),
     carreta: z.string().trim().max(40).optional().default(""),
+  }).refine((m) => (m.lh && m.lh.length > 0) || !!m.cargoId, {
+    message: "Cada movimentação precisa de lh ou cargoId.",
   })).min(1).max(500),
 }).strict();
 

@@ -721,9 +721,10 @@ export async function updateMonitorAllocation(input: {
  * Reordena a "fila" de motoristas/veículos do Monitor (F3): move a alocação
  * motorista+cavalo+carreta entre cargas, em lote/transação. `""` = vazio
  * explícito (carga fica sem motorista). Não toca o status operacional.
+ * Carga da planilha → `lh`; carga do sistema → `cargoId` (uuid). Cada move usa um.
  */
 export async function reassignMonitorAllocations(
-  moves: Array<{ lh: string; motorista: string; cavalo: string; carreta: string }>,
+  moves: Array<{ lh?: string; cargoId?: string; motorista: string; cavalo: string; carreta: string }>,
 ) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{

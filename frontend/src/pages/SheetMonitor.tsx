@@ -1309,8 +1309,8 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   onTogglePin: (lh: string, pinned: boolean) => void;
   onDragStartHandle: (lh: string) => void;
   onDragEndHandle: () => void;
-  onRowDragOver: (e: React.DragEvent, lh: string) => void;
-  onRowDrop: (e: React.DragEvent, lh: string) => void;
+  onRowDragOver: (e: React.DragEvent, row: SheetMonitorRowType) => void;
+  onRowDrop: (e: React.DragEvent, row: SheetMonitorRowType) => void;
   assigningReserva: boolean;
   standbyCountByRoute: Map<string, number>;
   onPullStandby: (lh: string) => void;
@@ -1322,8 +1322,8 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
     <tr
       style={ROW_VIRTUALIZATION_STYLE}
       onClick={() => { if (!row.reserva) onSelect(row); }}
-      onDragOver={(e) => onRowDragOver(e, row.lh)}
-      onDrop={(e) => onRowDrop(e, row.lh)}
+      onDragOver={(e) => onRowDragOver(e, row)}
+      onDrop={(e) => onRowDrop(e, row)}
       className={cn(
         "transition-colors duration-100",
         row.reserva ? "cursor-default" : "cursor-pointer",
@@ -1467,7 +1467,7 @@ function SheetMonitorTable({
   onCancelEdit: () => void;
   onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
   onTogglePin: (lh: string, pinned: boolean) => void;
-  onReassign: (moves: Array<{ lh: string; motorista: string; cavalo: string; carreta: string }>) => void;
+  onReassign: (moves: Array<{ lh?: string; cargoId?: string; motorista: string; cavalo: string; carreta: string }>) => void;
   onAssignReserva: (input: { reservaId: string; targetLh: string }) => void;
   assigningReservaId: string | null;
   standbyCountByRoute: Map<string, number>;
@@ -1477,7 +1477,7 @@ function SheetMonitorTable({
   // Modo auto-identificável pelo ponto de soltura: corpo da linha = trocar
   // (linha azul); borda da linha = descer/subir a fila (borda azul).
   const [dragLh, setDragLh] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<{ lh: string; intent: "swap" | "before" | "after" } | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ key: string; intent: "swap" | "before" | "after" } | null>(null);
   const dragLhRef = useRef<string | null>(null);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
@@ -1497,89 +1497,93 @@ function SheetMonitorTable({
     return "swap";                      // miolo (20%) → troca
   };
 
-  const handleRowDragOver = useCallback((e: React.DragEvent, lh: string) => {
+  const handleRowDragOver = useCallback((e: React.DragEvent, targetRow: SheetMonitorRowType) => {
     const dragging = dragLhRef.current;
     if (!dragging) return;
-    // Arrastando um STANDBY (reserva) → solta numa carga da planilha (mesma rota),
-    // editável e não fixa. Sempre intent "swap" (linha toda destacada = aloca aqui).
-    if (dragging.startsWith("reserva:")) {
-      const targetRow = lh ? rowsRef.current.find((r) => r.lh === lh) : undefined;
-      const reservaRow = rowsRef.current.find((r) => r.reserva && `reserva:${r.reservaId}` === dragging);
-      const blocked =
-        !targetRow || targetRow.source === "sistema" || targetRow.reserva ||
-        !allocEditPolicy(targetRow).editable || targetRow.pinned ||
-        // fail-closed: se a reserva arrastada saiu da página (refetch no meio do
-        // arrasto), nega — não dá pra confirmar que é a mesma rota.
-        reservaRow == null || routeKeyOf(targetRow) !== routeKeyOf(reservaRow);
-      if (blocked) { e.preventDefault(); e.dataTransfer.dropEffect = "none"; setDropTarget(null); return; }
+    const block = () => { e.preventDefault(); e.dataTransfer.dropEffect = "none"; setDropTarget(null); };
+    const allowSwap = () => {
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-      setDropTarget((prev) => (prev && prev.lh === lh && prev.intent === "swap" ? prev : { lh, intent: "swap" }));
-      return;
+      setDropTarget((prev) => (prev && prev.key === targetRow.rowKey && prev.intent === "swap" ? prev : { key: targetRow.rowKey, intent: "swap" }));
+    };
+    // Arrastando um STANDBY (reserva) → solta numa carga da PLANILHA (mesma rota),
+    // editável e não fixa. Sempre "swap" (linha toda destacada = aloca aqui).
+    if (dragging.startsWith("reserva:")) {
+      const reservaRow = rowsRef.current.find((r) => r.reserva && `reserva:${r.reservaId}` === dragging);
+      // fail-closed: sem a reserva na página (refetch no meio do arrasto), nega.
+      if (!targetRow || targetRow.source === "sistema" || targetRow.reserva ||
+          !allocEditPolicy(targetRow).editable || targetRow.pinned ||
+          reservaRow == null || routeKeyOf(targetRow) !== routeKeyOf(reservaRow)) return block();
+      return allowSwap();
     }
-    // A fila (reordenação) é só das linhas da PLANILHA. Cargas do sistema (LH
-    // livre/vazio) e reservas não entram — nega o drop nelas.
-    if (!lh) { e.preventDefault(); e.dataTransfer.dropEffect = "none"; setDropTarget(null); return; }
-    // Não dá para soltar numa linha travada (status já em atribuição no ASPX)
-    // nem numa linha FIXA (motorista/veículo intocável).
-    const targetRow = rowsRef.current.find((r) => r.lh === lh);
-    if (targetRow && (targetRow.source === "sistema" || targetRow.reserva || !allocEditPolicy(targetRow).editable || targetRow.pinned)) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "none";
-      setDropTarget(null);
-      return;
+    // Arrastando a ALOCAÇÃO de uma carga da planilha. Não solta em reserva, linha
+    // travada (ASPX) nem fixa.
+    if (!targetRow || targetRow.reserva || !allocEditPolicy(targetRow).editable || targetRow.pinned) return block();
+    // Só dentro da MESMA rota — vale também p/ carga do sistema como alvo.
+    const sourceRow = rowsRef.current.find((r) => r.lh === dragging);
+    if (sourceRow && routeKeyOf(targetRow) !== routeKeyOf(sourceRow)) return block();
+    // Carga do SISTEMA como alvo: só troca (não tem posição na fila) → swap.
+    if (targetRow.source === "sistema") {
+      if (!targetRow.cargoId) return block();
+      return allowSwap();
     }
-    // Só arrasta dentro da MESMA rota — soltar numa linha de outra rota é negado.
-    const sourceRow = rowsRef.current.find((r) => r.lh === dragLhRef.current);
-    if (targetRow && sourceRow && routeKeyOf(targetRow) !== routeKeyOf(sourceRow)) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "none";
-      setDropTarget(null);
-      return;
-    }
+    // Carga da planilha alvo: corpo = trocar; borda = descer/subir a fila.
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
-    if (lh === dragLhRef.current) { setDropTarget(null); return; }
+    if (targetRow.lh === dragging) { setDropTarget(null); return; }
     const intent = intentFromEvent(e);
-    setDropTarget((prev) => (prev && prev.lh === lh && prev.intent === intent ? prev : { lh, intent }));
+    setDropTarget((prev) => (prev && prev.key === targetRow.rowKey && prev.intent === intent ? prev : { key: targetRow.rowKey, intent }));
   }, []);
 
-  const handleRowDrop = useCallback((e: React.DragEvent, lh: string) => {
+  const handleRowDrop = useCallback((e: React.DragEvent, targetRow: SheetMonitorRowType) => {
     e.preventDefault();
     const src = dragLhRef.current;
     dragLhRef.current = null;
     setDragLh(null);
     setDropTarget(null);
-    if (!src) return;
+    if (!src || !targetRow) return;
     // Arrastando um STANDBY (reserva) → puxa para a carga de destino (mesma rota).
     if (src.startsWith("reserva:")) {
-      if (!lh) return;
+      if (targetRow.source === "sistema" || targetRow.reserva) { toast.error("Solte o standby numa carga da planilha."); return; }
       const reservaId = src.slice("reserva:".length);
-      const targetRow = rowsRef.current.find((r) => r.lh === lh);
       const reservaRow = rowsRef.current.find((r) => r.reserva && `reserva:${r.reservaId}` === src);
-      if (!targetRow || targetRow.source === "sistema" || targetRow.reserva) {
-        toast.error("Solte o standby numa carga da planilha.");
-        return;
-      }
       if (targetRow.pinned) { toast.error("A carga de destino está fixada. Desafixe antes de puxar o standby."); return; }
       if (!allocEditPolicy(targetRow).editable) { toast.error("A carga de destino está travada (já em atribuição no ASPX)."); return; }
-      // fail-closed: sem a reserva na página (refetch no meio do arrasto) não dá pra
-      // validar a rota — aborta em vez de arriscar puxar pra rota errada.
       if (!reservaRow) { toast.error("A lista atualizou durante o arrasto. Tente puxar o standby de novo."); return; }
       if (routeKeyOf(targetRow) !== routeKeyOf(reservaRow)) {
         toast.error("O standby é de outra rota. Puxe para uma carga da mesma rota (origem → destino).");
         return;
       }
-      onAssignReserva({ reservaId, targetLh: lh });
+      onAssignReserva({ reservaId, targetLh: targetRow.lh });
       return;
     }
-    // Soltar numa carga do sistema (LH vazio) não reordena fila — ignora.
-    if (!lh) return;
     const list = rowsRef.current;
+    const srcRow = list.find((r) => r.lh === src);
+    if (!srcRow || targetRow.reserva) return;
+
+    // ALVO = carga do SISTEMA → troca (swap) a alocação entre a carga da planilha
+    // (origem do arrasto) e a carga do sistema. Mesma rota é obrigatório.
+    if (targetRow.source === "sistema") {
+      if (!targetRow.cargoId) { toast.error("Carga do sistema sem identificador."); return; }
+      if (targetRow.pinned) { toast.error("A carga do sistema está fixada. Desafixe antes."); return; }
+      if (!allocEditPolicy(targetRow).editable) { toast.error("A carga do sistema está travada (já em atribuição no ASPX)."); return; }
+      if (routeKeyOf(targetRow) !== routeKeyOf(srcRow)) {
+        toast.error("Só dá pra arrastar para uma carga do sistema da MESMA rota (origem → destino).");
+        return;
+      }
+      // swap: o sistema recebe o motorista/veículo da planilha; a planilha fica com
+      // quem estava no sistema (vazia, se o sistema estava sem motorista).
+      onReassign([
+        { lh: srcRow.lh, motorista: targetRow.motoristas || "", cavalo: targetRow.cavalo || "", carreta: targetRow.carreta || "" },
+        { cargoId: targetRow.cargoId, motorista: srcRow.motoristas || "", cavalo: srcRow.cavalo || "", carreta: srcRow.carreta || "" },
+      ]);
+      return;
+    }
+
+    // ALVO = carga da PLANILHA → reordenação da fila por posição (comportamento atual).
     const srcIdx = list.findIndex((r) => r.lh === src);
-    const dstIdx = list.findIndex((r) => r.lh === lh);
+    const dstIdx = list.findIndex((r) => r.rowKey === targetRow.rowKey);
     if (srcIdx < 0 || dstIdx < 0) return;
-    if (list[dstIdx]?.source === "sistema") return;
     const items = list.map((r) => ({ lh: r.lh, alloc: { motorista: r.motoristas || "", cavalo: r.cavalo || "", carreta: r.carreta || "" } }));
     const intent = intentFromEvent(e);
     const moves =
@@ -1587,18 +1591,14 @@ function SheetMonitorTable({
         : intent === "before" ? computeShiftMoves(items, srcIdx, dstIdx)
           : computeShiftMoves(items, srcIdx, dstIdx + 1);
     if (moves.length === 0) return;
-    // Bloqueia se qualquer linha afetada (alvo ou intermediárias do "descer
-    // fila") estiver FIXA ou travada por status (já em atribuição no ASPX).
+    // Bloqueia se qualquer linha afetada (alvo ou intermediárias do "descer fila")
+    // for reserva/sistema, fixa, de outra rota ou travada por status (ASPX).
     const affected = moves.map((m) => list.find((x) => x.lh === m.lh)).filter(Boolean) as SheetMonitorRowType[];
     if (affected.some((r) => r.reserva || r.source === "sistema")) {
       toast.error("Linha de reserva ou carga do sistema não entra na reordenação da fila.");
       return;
     }
-    // Só reordena dentro da MESMA rota. Um arrasto que cruzaria rotas (troca entre
-    // rotas, ou descer a fila atravessando linhas de outra rota) é bloqueado —
-    // rota diferente muda manualmente, sem arrastar.
-    const srcRow = list[srcIdx];
-    if (srcRow && affected.some((r) => routeKeyOf(r) !== routeKeyOf(srcRow))) {
+    if (affected.some((r) => routeKeyOf(r) !== routeKeyOf(srcRow))) {
       toast.error("Só dá pra arrastar dentro da mesma rota (origem → destino). Para mudar entre rotas, edite manualmente.");
       return;
     }
@@ -1668,7 +1668,7 @@ function SheetMonitorTable({
                 pinning={row.lh === pinningLh}
                 allocStatus={allocByLh[row.lh]?.alloc_status ?? null}
                 isDragSource={row.lh === dragLh}
-                dropIntent={dropTarget?.lh === row.lh ? dropTarget.intent : null}
+                dropIntent={dropTarget?.key === row.rowKey ? dropTarget.intent : null}
                 onSelect={onSelect}
                 onStartEdit={onStartEdit}
                 onCancelEdit={onCancelEdit}
@@ -2378,6 +2378,9 @@ export default function SheetMonitor() {
         const allocByLh = { ...(old.allocByLh ?? {}) };
         const now = new Date().toISOString();
         for (const m of moves) {
+          // Otimismo só nas cargas da PLANILHA (allocByLh é keyed por sheet_lh). Cargas
+          // do sistema (cargoId) atualizam no refetch — não entram aqui.
+          if (!m.lh) continue;
           const base = allocByLh[m.lh] ?? { sheet_lh: m.lh, alloc_status: null, alloc_tipo: null, alloc_pinned: false, alloc_updated_at: null };
           allocByLh[m.lh] = { ...base, alloc_motorista: m.motorista, alloc_cavalo: m.cavalo, alloc_carreta: m.carreta, alloc_updated_at: now };
         }
@@ -2397,10 +2400,10 @@ export default function SheetMonitor() {
     },
   });
   const handleReassign = useCallback(
-    (moves: Array<{ lh: string; motorista: string; cavalo: string; carreta: string }>) => {
+    (moves: Array<{ lh?: string; cargoId?: string; motorista: string; cavalo: string; carreta: string }>) => {
       const run = () => mutateReassign(moves);
       const aspxCount = moves.filter((m) => {
-        const r = itemsRef.current.find((x) => x.lh === m.lh);
+        const r = m.lh ? itemsRef.current.find((x) => x.lh === m.lh) : itemsRef.current.find((x) => x.cargoId === m.cargoId);
         return r && allocEditPolicy(r).aspxWarning;
       }).length;
       // Se a troca/reordenação toca alguma carga "aguardando chegar no cliente",

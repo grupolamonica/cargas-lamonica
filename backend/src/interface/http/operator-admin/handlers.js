@@ -1037,15 +1037,15 @@ export async function resolveReassignMonitorAllocationsResponse(request) {
     async ({ correlationId, requestIp, operatorId }) => {
       const { moves } = sheetMonitorReassignBodySchema.parse(await parseJsonBody(request));
       const result = await reassignMonitorAllocations({ moves, operatorId, requestIp, correlationId });
-      // Re-enriquece TODAS as linhas movidas com o motorista/placa EFETIVO, p/ a
+      // Re-enriquece TODAS as cargas movidas com o motorista/placa EFETIVO, p/ a
       // fila reordenada não ficar "não consultado". Fire-and-forget (não bloqueia
-      // o reorder; o front faz refetch atrasado). enrichSheetRowsByLh nunca lança.
-      const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
-      void enrichSheetRowsByLh(
-        createSupabaseAdminClient(),
-        moves.map((m) => m.lh),
-        { correlationId },
-      ).catch(() => {});
+      // o reorder; o front faz refetch atrasado). Nunca lança.
+      const admin = createSupabaseAdminClient();
+      const { enrichSheetRowsByLh, enrichSystemCargoById } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+      const lhs = moves.map((m) => m.lh).filter(Boolean);
+      const cargoIds = moves.map((m) => m.cargoId).filter(Boolean);
+      if (lhs.length) void enrichSheetRowsByLh(admin, lhs, { correlationId }).catch(() => {});
+      for (const cargoId of cargoIds) void enrichSystemCargoById(admin, cargoId, { correlationId }).catch(() => {});
       return result;
     },
   );
