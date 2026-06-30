@@ -7,6 +7,7 @@ import {
   resolveRouteMetricsIfNeeded,
 } from "./_shared.js";
 import { createRouteLookupKeys } from "../../../domain/operator-admin/route-utils.js";
+import { normalizeVehicleProfile } from "../../../domain/vehicle-profiles.js";
 
 export async function updateOperatorRoute({ routeId, operatorId, payload, requestIp, correlationId }) {
   return withPgTransaction(async (client) => {
@@ -28,6 +29,9 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
 
     const originKey = normalizeClientName(payload.origem).replace(/\s+/g, " ");
     const destinationKey = normalizeClientName(payload.destino).replace(/\s+/g, " ");
+    // perfil nunca nulo (compõe a chave única); eixos 0 = genérico.
+    const perfilPadrao = payload.perfil_padrao || "CARRETA";
+    const eixos = payload.eixos ?? 0;
     const warnings = [];
 
     try {
@@ -38,15 +42,15 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
             origin_key = $2, destination_key = $3, origem = $4, destino = $5,
             distancia_km = $6, duracao_horas = $7, tempo_estimado_horas = $8,
             perfil_padrao = $9, valor_padrao = $10, bonus_padrao = $11,
-            bonus_exigencias = $12, ativa = $13, observacoes = $14, updated_at = now()
+            bonus_exigencias = $12, ativa = $13, observacoes = $14, eixos = $15, updated_at = now()
           WHERE id = $1
         `,
         [
           routeId, originKey, destinationKey, payload.origem, payload.destino,
           resolvedMetrics.distancia_km, resolvedMetrics.duracao_horas,
           payload.tempo_estimado_horas ?? resolvedMetrics.duracao_horas,
-          payload.perfil_padrao, payload.valor_padrao, payload.bonus_padrao,
-          payload.bonus_exigencias, payload.ativa, payload.observacoes,
+          perfilPadrao, payload.valor_padrao, payload.bonus_padrao,
+          payload.bonus_exigencias, payload.ativa, payload.observacoes, eixos,
         ],
       );
     } catch (error) {
@@ -77,12 +81,20 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
       // AL-05: LIMIT defensivo — sem ele, todas as cargas abertas carregam em memória
       // dentro de uma transaction com FOR UPDATE, ampliando o tempo de lock.
       const { rows: openCargas } = await client.query(
-        `SELECT id, origem, destino FROM public.cargas WHERE status IN ('OPEN', 'DRAFT') LIMIT 500`,
+        `SELECT id, origem, destino, perfil, eixos FROM public.cargas WHERE status IN ('OPEN', 'DRAFT') LIMIT 500`,
       );
 
       const routeKey = `${originKey}|${destinationKey}`;
+      // Uma rota por veículo: a cascata só atinge cargas do MESMO trecho E
+      // perfil E nº de eixos. Senão, editar a rota "Carreta 4 eixos"
+      // sobrescreveria a carga "Bitrem" do mesmo trecho.
       const matchingIds = openCargas
-        .filter((row) => createRouteLookupKeys(row.origem, row.destino).includes(routeKey))
+        .filter(
+          (row) =>
+            createRouteLookupKeys(row.origem, row.destino).includes(routeKey) &&
+            normalizeVehicleProfile(row.perfil, "CARRETA") === perfilPadrao &&
+            (row.eixos ?? 0) === eixos,
+        )
         .map((row) => row.id);
 
       if (matchingIds.length > 0) {
@@ -96,7 +108,7 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
             WHERE id = ANY($6::uuid[])
           `,
           [
-            payload.valor_padrao, payload.bonus_padrao, payload.perfil_padrao,
+            payload.valor_padrao, payload.bonus_padrao, perfilPadrao,
             resolvedMetrics.distancia_km, resolvedMetrics.duracao_horas,
             matchingIds,
           ],

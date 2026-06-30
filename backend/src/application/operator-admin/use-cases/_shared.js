@@ -15,6 +15,7 @@ import {
 } from "../../../domain/operator-admin/route-utils.js";
 import { baseRouteValues } from "../../../domain/operator-admin/base-route-values.js";
 import { parseDriverLoadsQuery } from "../../../domain/operator-admin/schemas.js";
+import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -81,6 +82,11 @@ export function isMissingDriverVisibilityColumnError(error) {
   return combinedMessage.includes("driver_visibility");
 }
 
+export function isMissingEixosColumnError(error) {
+  const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
+  return combinedMessage.includes("eixos");
+}
+
 // Phase 10 (cargas-casadas): se a tabela cargas_casadas / coluna viagem_id ainda nao
 // foi aplicada na DB (rollout incremental), a query principal de driver-loads
 // faz fallback para a versao sem JOIN de pacote — comportamento pre-Phase 10.
@@ -136,7 +142,11 @@ export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
       [Array.from(originKeys), Array.from(destinationKeys)],
     );
 
-    const routeMetricsByKey = new Map();
+    // Uma rota por veículo: várias linhas podem compartilhar o mesmo trecho
+    // (origem|destino) divergindo só no perfil/eixos. Agrupamos por trecho e,
+    // no match, preferimos a linha cujo perfil casa com o da carga (fallback:
+    // primeira linha do trecho). Preserva o comportamento legado com 1 só linha.
+    const routeMetricsByLocation = new Map();
 
     rows.forEach((row) => {
       const distanceKm = parseNullableNumber(row.distancia_km);
@@ -161,24 +171,37 @@ export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
         return;
       }
 
-      routeMetricsByKey.set(`${row.origin_key}|${row.destination_key}`, {
-        distancia_km: distanceKm,
-        tempo_estimado_horas: routeEstimatedHours,
-        duracao_horas: durationHours,
+      const locationKey = `${row.origin_key}|${row.destination_key}`;
+      if (!routeMetricsByLocation.has(locationKey)) {
+        routeMetricsByLocation.set(locationKey, []);
+      }
+      routeMetricsByLocation.get(locationKey).push({
         perfil_padrao: profile,
-        valor_padrao: value,
-        bonus_padrao: bonus,
+        metrics: {
+          distancia_km: distanceKm,
+          tempo_estimado_horas: routeEstimatedHours,
+          duracao_horas: durationHours,
+          perfil_padrao: profile,
+          valor_padrao: value,
+          bonus_padrao: bonus,
+        },
       });
     });
 
-    return new Map(
-      loadRows.map((row) => {
-        const matchedRouteKey = createRouteLookupKeys(row.origem, row.destino).find((routeKey) =>
-          routeMetricsByKey.has(routeKey),
-        );
-        return [row.id, matchedRouteKey ? routeMetricsByKey.get(matchedRouteKey) : null];
-      }),
-    );
+    const pickRouteMetrics = (row) => {
+      const locationKey = createRouteLookupKeys(row.origem, row.destino).find((routeKey) =>
+        routeMetricsByLocation.has(routeKey),
+      );
+      if (!locationKey) return null;
+      const candidates = routeMetricsByLocation.get(locationKey);
+      const cargoProfile = String(row.perfil ?? "").trim().toUpperCase();
+      const matched =
+        (cargoProfile && candidates.find((c) => String(c.perfil_padrao ?? "").toUpperCase() === cargoProfile)) ||
+        candidates[0];
+      return matched ? matched.metrics : null;
+    };
+
+    return new Map(loadRows.map((row) => [row.id, pickRouteMetrics(row)]));
   } catch (error) {
     if (isMissingRouteCatalogTableError(error) || isMissingRouteCatalogColumnsError(error)) {
       return new Map();
@@ -661,7 +684,8 @@ export async function writeCargo(
             distancia_km = $6, duracao_horas = $7, perfil = $8,
             valor = $9, bonus = $10, bonus_exigencias = $11,
             driver_visibility = $12, cliente_id = $13, status = $14,
-            is_template = $15, sheet_data_carregamento = $16, sheet_data_descarga = $17
+            is_template = $15, sheet_data_carregamento = $16, sheet_data_descarga = $17,
+            eixos = $18
           WHERE id = $1
         `,
         [
@@ -670,6 +694,7 @@ export async function writeCargo(
           resolvedValor, resolvedBonus, payload.bonus_exigencias, nextDriverVisibility,
           clienteId, nextStatus, payload.is_template,
           payload.sheet_data_carregamento ?? null, payload.sheet_data_descarga ?? null,
+          payload.eixos ?? null,
         ],
       );
     } catch (error) {
@@ -677,7 +702,8 @@ export async function writeCargo(
         !isMissingRouteColumnError(error) &&
         !isMissingBonusRequirementsColumnError(error) &&
         !isMissingDriverVisibilityColumnError(error) &&
-        !isMissingSheetScheduleColumnsError(error)
+        !isMissingSheetScheduleColumnsError(error) &&
+        !isMissingEixosColumnError(error)
       ) {
         throw error;
       }
@@ -705,9 +731,9 @@ export async function writeCargo(
             data, horario, origem, destino, distancia_km, duracao_horas,
             perfil, valor, bonus, bonus_exigencias, driver_visibility,
             cliente_id, status, is_template, created_by,
-            sheet_data_carregamento, sheet_data_descarga
+            sheet_data_carregamento, sheet_data_descarga, eixos
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         `,
         [
           payload.data, payload.horario, payload.origem, payload.destino,
@@ -715,6 +741,7 @@ export async function writeCargo(
           resolvedValor, resolvedBonus, payload.bonus_exigencias, nextDriverVisibility,
           clienteId, nextStatus, payload.is_template, operatorId,
           payload.sheet_data_carregamento ?? null, payload.sheet_data_descarga ?? null,
+          payload.eixos ?? null,
         ],
       );
     } catch (error) {
@@ -722,7 +749,8 @@ export async function writeCargo(
         !isMissingRouteColumnError(error) &&
         !isMissingBonusRequirementsColumnError(error) &&
         !isMissingDriverVisibilityColumnError(error) &&
-        !isMissingSheetScheduleColumnsError(error)
+        !isMissingSheetScheduleColumnsError(error) &&
+        !isMissingEixosColumnError(error)
       ) {
         throw error;
       }
@@ -805,9 +833,11 @@ export function buildDriverLoadFilters(query, {
   // cadastrando ainda). Quando horario for NULL, comparamos só pela data.
   //
   // Parameterizado pq pg-mem nao suporta CURRENT_DATE/CURRENT_TIME nativos.
-  const nowDate = new Date();
-  const todayIso = nowDate.toISOString().slice(0, 10); // YYYY-MM-DD
-  const nowTimeIso = nowDate.toTimeString().slice(0, 8); // HH:MM:SS (local TZ)
+  //
+  // O "agora" tem que ser o relógio de Sao Paulo: o container roda em UTC e
+  // cargas.data/horario são horário local do Brasil. Misturar fusos (data UTC +
+  // hora local) escondia cargas de hoje até ~3h cedo e o dia todo após 21h BRT.
+  const { dateIso: todayIso, timeIso: nowTimeIso } = getSaoPauloWallClock();
   clauses.push(
     `(cargas.data IS NULL OR cargas.data > $${index} OR (cargas.data = $${index + 1} AND (cargas.horario IS NULL OR cargas.horario >= $${index + 2})))`,
   );

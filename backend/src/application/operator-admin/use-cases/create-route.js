@@ -17,6 +17,10 @@ export async function createOperatorRoute({ operatorId, payload, requestIp, corr
 
     const originKey = normalizeClientName(payload.origem).replace(/\s+/g, " ");
     const destinationKey = normalizeClientName(payload.destino).replace(/\s+/g, " ");
+    // perfil + eixos compõem a identidade da rota (uma rota por veículo).
+    // perfil nunca nulo (compõe a chave única); eixos 0 = genérico.
+    const perfilPadrao = payload.perfil_padrao || "CARRETA";
+    const eixos = payload.eixos ?? 0;
     const warnings = [];
     let routeId = null;
 
@@ -26,14 +30,14 @@ export async function createOperatorRoute({ operatorId, payload, requestIp, corr
           INSERT INTO public.route_metrics_cache (
             origin_key, destination_key, origem, destino,
             distancia_km, duracao_horas, tempo_estimado_horas,
-            perfil_padrao, valor_padrao, bonus_padrao, bonus_exigencias, ativa, observacoes
+            perfil_padrao, eixos, valor_padrao, bonus_padrao, bonus_exigencias, ativa, observacoes
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-          ON CONFLICT (origin_key, destination_key) DO UPDATE SET
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          ON CONFLICT (origin_key, destination_key, perfil_padrao, eixos) DO UPDATE SET
             origem = EXCLUDED.origem, destino = EXCLUDED.destino,
             distancia_km = EXCLUDED.distancia_km, duracao_horas = EXCLUDED.duracao_horas,
             tempo_estimado_horas = EXCLUDED.tempo_estimado_horas,
-            perfil_padrao = EXCLUDED.perfil_padrao, valor_padrao = EXCLUDED.valor_padrao,
+            valor_padrao = EXCLUDED.valor_padrao,
             bonus_padrao = EXCLUDED.bonus_padrao, bonus_exigencias = EXCLUDED.bonus_exigencias,
             ativa = EXCLUDED.ativa, observacoes = EXCLUDED.observacoes, updated_at = now()
           RETURNING id
@@ -42,7 +46,7 @@ export async function createOperatorRoute({ operatorId, payload, requestIp, corr
           originKey, destinationKey, payload.origem, payload.destino,
           resolvedMetrics.distancia_km, resolvedMetrics.duracao_horas,
           payload.tempo_estimado_horas ?? resolvedMetrics.duracao_horas,
-          payload.perfil_padrao, payload.valor_padrao, payload.bonus_padrao,
+          perfilPadrao, eixos, payload.valor_padrao, payload.bonus_padrao,
           payload.bonus_exigencias, payload.ativa, payload.observacoes,
         ],
       );
