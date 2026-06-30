@@ -6,6 +6,7 @@ import { withPgClient } from "../../infrastructure/pg/postgres.js";
 import { createSupabaseAdminClient } from "../../infrastructure/supabase/admin-client.js";
 import { normalizeVehicleProfile } from "../../domain/vehicle-profiles.js";
 import { baseRouteValues as BASE_ROUTE_VALUES } from "../../domain/operator-admin/base-route-values.js";
+import { getSaoPauloWallClock } from "../../domain/sao-paulo-time.js";
 
 const DEFAULT_SHEET_ID = process.env.GOOGLE_SHEET_ID?.trim() || "";
 const DEFAULT_SHEET_GID = process.env.GOOGLE_SHEET_GID?.trim() || "0";
@@ -917,11 +918,24 @@ function buildSheetLoadPayload({
   routeTemplateDefaultsByKey,
   fallbackSheetClientId,
   syncedAt,
+  now = null,
 }) {
   const matchedRouteCatalogDefaults = resolveRouteDefaults(routeCatalogDefaultsByKey, load.origem, load.destino);
   const matchedRouteTemplateDefaults = resolveRouteDefaults(routeTemplateDefaultsByKey, load.origem, load.destino);
   const matchedBaseRouteValue = resolveRouteDefaults(BASE_ROUTE_VALUES_BY_KEY, load.origem, load.destino);
   const isExistingLoad = Boolean(existingLoad);
+
+  // A carga (data/horário da planilha) está no futuro? (relógio de São Paulo, mesma
+  // regra do portal/expire). Sem `now`, assume futura. Usado p/ decidir se uma carga
+  // EXPIRED deve voltar a OPEN: só faz sentido reabrir uma carga que voltou a ser
+  // FUTURA — uma carga genuinamente passada continua EXPIRED (o cron a re-expira).
+  const loadDateStr = load.data ? String(load.data).slice(0, 10) : null;
+  const loadTimeStr = load.horario ? String(load.horario).slice(0, 5) : null;
+  const isFutureLoad =
+    !now ||
+    !loadDateStr ||
+    loadDateStr > now.todayIso ||
+    (loadDateStr === now.todayIso && (!loadTimeStr || loadTimeStr >= now.nowTimeIso));
 
   // Sheet-sourced fields: always updated from the Google Sheet (source of truth for scheduling/routing)
   const sheetFields = {
@@ -949,9 +963,18 @@ function buildSheetLoadPayload({
         bonus: existingLoad.bonus,
         distancia_km: existingLoad.distancia_km,
         duracao_horas: existingLoad.duracao_horas,
-        // Sheet cleared driver+status → BOOKED reverts to OPEN so the load re-enters the portal.
-        // RESERVED is kept: a portal driver claimed it before the sheet was updated.
-        status: existingLoad.status === "BOOKED" ? DEFAULT_PUBLISHED_STATUS : existingLoad.status || DEFAULT_PUBLISHED_STATUS,
+        // A planilha listou a carga sem motorista/status → DISPONÍVEL: ela deve voltar
+        // a OPEN p/ reentrar no portal do motorista.
+        //   • BOOKED → OPEN sempre (a planilha limpou o motorista).
+        //   • EXPIRED → OPEN só se a carga voltou a ser FUTURA (a planilha re-listou com
+        //     data futura). Senão ficaria presa em EXPIRED p/ sempre — invisível no
+        //     /motorista, mas "Disponível" no Monitor. Passada continua EXPIRED.
+        //   • RESERVED é mantido: um motorista do portal reivindicou antes do sync.
+        status:
+          existingLoad.status === "BOOKED" ||
+          (existingLoad.status === "EXPIRED" && isFutureLoad)
+            ? DEFAULT_PUBLISHED_STATUS
+            : existingLoad.status || DEFAULT_PUBLISHED_STATUS,
         is_template: existingLoad.is_template ?? false,
         cliente_id: existingLoad.cliente_id || pickFirstNonEmptyString(fallbackSheetClientId),
         created_by: existingLoad.created_by ?? null,
@@ -1113,6 +1136,10 @@ export async function syncGoogleSheetLoads({
     onInvalidRow: (row) => invalidRows.push(row),
   });
   const syncedAt = new Date().toISOString();
+  // "Agora" no relógio de São Paulo (carga.data/horario são horário do Brasil) — usado
+  // p/ reabrir (EXPIRED→OPEN) só as cargas que voltaram a ser futuras na planilha.
+  const { dateIso: spDateIso, timeIso: spTimeIso } = getSaoPauloWallClock();
+  const nowSp = { todayIso: spDateIso, nowTimeIso: spTimeIso };
 
   if (invalidRows.length > 0) {
     console.warn("[google-sheet-loads] skipped rows with invalid datetime", {
@@ -1148,8 +1175,12 @@ export async function syncGoogleSheetLoads({
       routeTemplateDefaultsByKey,
       fallbackSheetClientId,
       syncedAt,
+      now: nowSp,
     });
-    if (existingLoad?.status === "BOOKED" && payload.status === DEFAULT_PUBLISHED_STATUS) {
+    if (
+      (existingLoad?.status === "BOOKED" || existingLoad?.status === "EXPIRED") &&
+      payload.status === DEFAULT_PUBLISHED_STATUS
+    ) {
       revertedToOpenCount += 1;
     }
     return payload;
