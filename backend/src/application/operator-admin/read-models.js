@@ -938,7 +938,15 @@ function resolveDriverApplicationFilter(applicationStatus) {
 
 function isMissingAngelliraColumnError(error) {
   const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
-  return combinedMessage.includes("angellira_status") || combinedMessage.includes("angellira_valid_until");
+  return (
+    combinedMessage.includes("angellira_status") ||
+    combinedMessage.includes("angellira_valid_until") ||
+    // Colunas BRK vivem na mesma driver_profiles e compartilham o mesmo fallback
+    // (migracao BRK ainda nao aplicada -> NULL em vez de quebrar a listagem).
+    combinedMessage.includes("brk_status") ||
+    combinedMessage.includes("brk_valid_until") ||
+    combinedMessage.includes("brk_conjunto_apto")
+  );
 }
 
 function buildRegisteredDriverSummaryQuery(includeAngelliraFields = true) {
@@ -947,12 +955,24 @@ function buildRegisteredDriverSummaryQuery(includeAngelliraFields = true) {
       dp.angellira_valid_until,
       dp.angellira_status_text,
       dp.angellira_checked_at,
-      dp.angellira_details,`
+      dp.angellira_details,
+      dp.brk_status,
+      dp.brk_conjunto_apto,
+      dp.brk_valid_until,
+      dp.brk_status_text,
+      dp.brk_checked_at,
+      dp.brk_details,`
     : `NULL::text AS angellira_status,
       NULL::date AS angellira_valid_until,
       NULL::text AS angellira_status_text,
       NULL::timestamptz AS angellira_checked_at,
-      NULL::jsonb AS angellira_details,`;
+      NULL::jsonb AS angellira_details,
+      NULL::text AS brk_status,
+      NULL::boolean AS brk_conjunto_apto,
+      NULL::date AS brk_valid_until,
+      NULL::text AS brk_status_text,
+      NULL::timestamptz AS brk_checked_at,
+      NULL::jsonb AS brk_details,`;
 
   const angelliraGroupBy = includeAngelliraFields
     ? `,
@@ -960,7 +980,13 @@ function buildRegisteredDriverSummaryQuery(includeAngelliraFields = true) {
       dp.angellira_valid_until,
       dp.angellira_status_text,
       dp.angellira_checked_at,
-      dp.angellira_details`
+      dp.angellira_details,
+      dp.brk_status,
+      dp.brk_conjunto_apto,
+      dp.brk_valid_until,
+      dp.brk_status_text,
+      dp.brk_checked_at,
+      dp.brk_details`
     : "";
 
   return `
@@ -1288,6 +1314,48 @@ function buildAngelliraVigency(row) {
   };
 }
 
+// Espelha buildAngelliraVigency para a consulta BRK (Brasil Risk). O BRK e uma
+// consulta read-only de aptidao do conjunto (motorista + cavalo + carreta).
+// Os campos brk_* so existem em driver_profiles (REGISTERED); para PUBLIC_LEAD/
+// HISTORICO row.brk_* vem undefined -> retorna null (badge nao aparece).
+function buildBrkVigency(row) {
+  if (!row.brk_status && !row.brk_valid_until && row.brk_conjunto_apto == null) {
+    return null;
+  }
+
+  const validUntil = row.brk_valid_until
+    ? new Date(row.brk_valid_until).toISOString().slice(0, 10)
+    : null;
+
+  let daysUntilExpiry = null;
+  let alertLevel = null;
+
+  if (validUntil) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const expiryDate = new Date(validUntil + "T00:00:00Z");
+    daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (daysUntilExpiry < 0) {
+      alertLevel = "EXPIRED";
+    } else if (daysUntilExpiry <= 30) {
+      alertLevel = "EXPIRING_SOON";
+    } else {
+      alertLevel = "OK";
+    }
+  }
+
+  return {
+    status: row.brk_status || null,
+    statusText: row.brk_status_text || null,
+    validUntil,
+    daysUntilExpiry,
+    alertLevel,
+    conjuntoApto: typeof row.brk_conjunto_apto === "boolean" ? row.brk_conjunto_apto : null,
+    checkedAt: row.brk_checked_at || null,
+  };
+}
+
 /**
  * For PUBLIC_LEAD drivers, the Angellira data lives inside the validation_summary_json
  * of their applications (not in driver_profiles). This function extracts whatever is
@@ -1399,6 +1467,8 @@ function mapDriverSummaryRowToItem(row, applications) {
 
   let displayName = row.display_name;
   let angelliraVigency = buildAngelliraVigency(row);
+  const brkVigency = buildBrkVigency(row);
+  const hasBrk = row.brk_conjunto_apto === true || row.brk_status === "vigente";
 
   // For PUBLIC_LEAD drivers, extract Angellira data from validation summaries
   // since they have no driver_profiles row with angellira_* columns.
@@ -1436,8 +1506,9 @@ function mapDriverSummaryRowToItem(row, applications) {
       monitoringCapable: row.monitoring_capable ?? null,
       operationalBlocked: row.operational_blocked ?? null,
     },
-    externalValidation,
+    externalValidation: externalValidation ? { ...externalValidation, hasBrk } : null,
     angelliraVigency,
+    brkVigency,
     angelliraDetails,
     stats: {
       totalApplications: row.total_applications ?? 0,

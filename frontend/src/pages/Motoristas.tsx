@@ -230,6 +230,77 @@ function renderAngelliraVigencyBadge(driver: OperatorDriverListItem) {
   return null;
 }
 
+// Espelha renderAngelliraVigencyBadge para o BRK (Brasil Risk). Mesma logica de
+// cor por alertLevel. Renderizacao defensiva: se driver.brkVigency for null
+// (feature-flag desligada -> campos vem null), nenhum badge aparece.
+function renderBrkVigencyBadge(driver: OperatorDriverListItem) {
+  const vigency = driver.brkVigency;
+
+  if (!vigency) {
+    return null;
+  }
+
+  const { alertLevel, daysUntilExpiry, validUntil, statusText } = vigency;
+
+  if (alertLevel === "EXPIRED") {
+    return (
+      <div className="admin-tint-danger inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <XCircle className="h-3.5 w-3.5" />
+        BRK: Vigência vencida{validUntil ? ` (${parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""})` : ""}
+      </div>
+    );
+  }
+
+  if (alertLevel === "EXPIRING_SOON") {
+    return (
+      <div className="admin-tint-warning inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold animate-pulse">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        BRK: Vence em {daysUntilExpiry} dia{daysUntilExpiry !== 1 ? "s" : ""}
+        {validUntil ? ` (${parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""})` : ""}
+      </div>
+    );
+  }
+
+  if (alertLevel === "OK" && validUntil) {
+    return (
+      <div className="admin-tint-success inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        BRK: ✓ Apto · vence {parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""}
+      </div>
+    );
+  }
+
+  if (vigency.status === "vigente" || vigency.conjuntoApto === true) {
+    return (
+      <div className="admin-tint-success inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <BadgeCheck className="h-3.5 w-3.5" />
+        BRK: ✓ Apto{statusText ? ` · ${statusText}` : ""}
+      </div>
+    );
+  }
+
+  if (vigency.status === "nao_cadastrado") {
+    return (
+      <div className="admin-tint-neutral inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <CalendarClock className="h-3.5 w-3.5" />
+        BRK: Não cadastrado
+      </div>
+    );
+  }
+
+  // Demais status com sinal (nao_conforme/parcial/expirado sem data): mostra o texto.
+  if (vigency.status) {
+    return (
+      <div className="admin-tint-neutral inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <CalendarClock className="h-3.5 w-3.5" />
+        BRK: {statusText || vigency.status}
+      </div>
+    );
+  }
+
+  return null;
+}
+
 async function updateDriverProfile(driverId: string, payload: Record<string, unknown>) {
   const accessToken = await getOperatorAccessToken();
   const response = await fetch(`/api/operator/motoristas/${driverId}`, {
@@ -1690,6 +1761,9 @@ const Motoristas = () => {
                   {/* ── ALWAYS VISIBLE: Angellira vigency badge ── */}
                   {renderAngelliraVigencyBadge(driver)}
 
+                  {/* ── ALWAYS VISIBLE: BRK (Brasil Risk) vigency badge ── */}
+                  {renderBrkVigencyBadge(driver)}
+
                   {/* ── Sinais do perfil (sempre visíveis) ── */}
                   {(driver.registrationStatus === "REGISTERED" || driver.externalValidation) ? (
                     <div className="mt-2 flex flex-wrap gap-2">
@@ -1712,6 +1786,10 @@ const Motoristas = () => {
                           <span className="inline-flex items-center gap-2 rounded-full border border-primary/15 bg-primary/8 px-3 py-1.5 text-xs font-semibold text-primary">
                             <BadgeCheck className="h-3.5 w-3.5" />
                             ASPX: {driver.externalValidation.hasAspx ? "✓ Cadastrado" : "Não cadastrado"}
+                          </span>
+                          <span className="inline-flex items-center gap-2 rounded-full border border-primary/15 bg-primary/8 px-3 py-1.5 text-xs font-semibold text-primary">
+                            <BadgeCheck className="h-3.5 w-3.5" />
+                            BRK: {driver.externalValidation.hasBrk ? "✓ Apto" : "Não cadastrado"}
                           </span>
                         </>
                       ) : null}
