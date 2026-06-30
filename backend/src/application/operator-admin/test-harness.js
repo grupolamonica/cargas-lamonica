@@ -69,6 +69,7 @@ const schemaSql = `
     valor numeric,
     bonus numeric,
     bonus_exigencias text,
+    eixos smallint,
     driver_visibility text NOT NULL DEFAULT 'PUBLIC',
     status text NOT NULL DEFAULT 'DRAFT',
     is_template boolean NOT NULL DEFAULT false,
@@ -131,14 +132,16 @@ const schemaSql = `
     distancia_km numeric,
     duracao_horas numeric,
     tempo_estimado_horas numeric,
-    perfil_padrao text,
+    perfil_padrao text NOT NULL DEFAULT 'CARRETA',
     valor_padrao numeric,
     bonus_padrao numeric,
+    bonus_exigencias text,
+    eixos smallint NOT NULL DEFAULT 0,
     ativa boolean NOT NULL DEFAULT true,
     observacoes text,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT route_metrics_cache_origin_destination_key_unique UNIQUE (origin_key, destination_key)
+    CONSTRAINT route_metrics_cache_origin_dest_perfil_eixos_unique UNIQUE (origin_key, destination_key, perfil_padrao, eixos)
   );
 
   CREATE TABLE public.load_public_leads (

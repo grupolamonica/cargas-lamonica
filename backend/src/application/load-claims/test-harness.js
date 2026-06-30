@@ -76,6 +76,7 @@ const schemaSql = `
     perfil text NOT NULL DEFAULT 'CARRETA',
     valor numeric,
     bonus numeric,
+    eixos smallint,
     status text NOT NULL DEFAULT 'DRAFT',
     is_template boolean NOT NULL DEFAULT false,
     created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
