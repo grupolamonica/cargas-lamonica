@@ -871,13 +871,13 @@ function MonitorCargoFields({ form, setForm, statusOptions }: {
         <input type="datetime-local" className={field} value={form.descarga} onChange={set("descarga")} />
       </label>
       <label className="col-span-2 text-xs font-medium text-muted-foreground">Motorista
-        <input className={field} value={form.motorista} onChange={set("motorista")} maxLength={180} />
+        <input list={DRIVER_DATALIST_ID} autoComplete="off" className={field} value={form.motorista} onChange={set("motorista")} placeholder="digite p/ buscar nos cadastrados" maxLength={180} />
       </label>
       <label className="col-span-1 text-xs font-medium text-muted-foreground">Cavalo
-        <input className={field} value={form.cavalo} onChange={set("cavalo")} maxLength={40} />
+        <input list={CAVALO_DATALIST_ID} autoComplete="off" className={field} value={form.cavalo} onChange={set("cavalo")} maxLength={40} />
       </label>
       <label className="col-span-1 text-xs font-medium text-muted-foreground">Carreta
-        <input className={field} value={form.carreta} onChange={set("carreta")} maxLength={40} />
+        <input list={CARRETA_DATALIST_ID} autoComplete="off" className={field} value={form.carreta} onChange={set("carreta")} maxLength={40} />
       </label>
     </div>
   );
