@@ -945,7 +945,10 @@ function isMissingAngelliraColumnError(error) {
     // (migracao BRK ainda nao aplicada -> NULL em vez de quebrar a listagem).
     combinedMessage.includes("brk_status") ||
     combinedMessage.includes("brk_valid_until") ||
-    combinedMessage.includes("brk_conjunto_apto")
+    combinedMessage.includes("brk_conjunto_apto") ||
+    // Idem para as colunas de situacao SPX (migracao spx_vigency ainda nao aplicada).
+    combinedMessage.includes("spx_vigency_status") ||
+    combinedMessage.includes("spx_vigency_encontrado")
   );
 }
 
@@ -961,7 +964,12 @@ function buildRegisteredDriverSummaryQuery(includeAngelliraFields = true) {
       dp.brk_valid_until,
       dp.brk_status_text,
       dp.brk_checked_at,
-      dp.brk_details,`
+      dp.brk_details,
+      dp.spx_vigency_status,
+      dp.spx_vigency_status_text,
+      dp.spx_vigency_encontrado,
+      dp.spx_vigency_checked_at,
+      dp.spx_vigency_details,`
     : `NULL::text AS angellira_status,
       NULL::date AS angellira_valid_until,
       NULL::text AS angellira_status_text,
@@ -972,7 +980,12 @@ function buildRegisteredDriverSummaryQuery(includeAngelliraFields = true) {
       NULL::date AS brk_valid_until,
       NULL::text AS brk_status_text,
       NULL::timestamptz AS brk_checked_at,
-      NULL::jsonb AS brk_details,`;
+      NULL::jsonb AS brk_details,
+      NULL::text AS spx_vigency_status,
+      NULL::text AS spx_vigency_status_text,
+      NULL::boolean AS spx_vigency_encontrado,
+      NULL::timestamptz AS spx_vigency_checked_at,
+      NULL::jsonb AS spx_vigency_details,`;
 
   const angelliraGroupBy = includeAngelliraFields
     ? `,
@@ -986,7 +999,12 @@ function buildRegisteredDriverSummaryQuery(includeAngelliraFields = true) {
       dp.brk_valid_until,
       dp.brk_status_text,
       dp.brk_checked_at,
-      dp.brk_details`
+      dp.brk_details,
+      dp.spx_vigency_status,
+      dp.spx_vigency_status_text,
+      dp.spx_vigency_encontrado,
+      dp.spx_vigency_checked_at,
+      dp.spx_vigency_details`
     : "";
 
   return `
@@ -1356,6 +1374,24 @@ function buildBrkVigency(row) {
   };
 }
 
+// Situacao do motorista no SPX (Shopee Express). Diferente de Angellira/BRK, o SPX
+// nao tem data de validade — o sinal e o SITUACIONAL (ativo/inativo/outra agencia/
+// pendente/bloqueado/nao cadastrado), obtido por lookup read-only. Os campos
+// spx_vigency_* so existem em driver_profiles (REGISTERED); para PUBLIC_LEAD/
+// HISTORICO row.spx_vigency_* vem undefined -> retorna null (badge nao aparece).
+function buildSpxVigency(row) {
+  if (!row.spx_vigency_status && row.spx_vigency_encontrado == null) {
+    return null;
+  }
+
+  return {
+    status: row.spx_vigency_status || null,
+    statusText: row.spx_vigency_status_text || null,
+    encontrado: typeof row.spx_vigency_encontrado === "boolean" ? row.spx_vigency_encontrado : null,
+    checkedAt: row.spx_vigency_checked_at || null,
+  };
+}
+
 /**
  * For PUBLIC_LEAD drivers, the Angellira data lives inside the validation_summary_json
  * of their applications (not in driver_profiles). This function extracts whatever is
@@ -1468,6 +1504,7 @@ function mapDriverSummaryRowToItem(row, applications) {
   let displayName = row.display_name;
   let angelliraVigency = buildAngelliraVigency(row);
   const brkVigency = buildBrkVigency(row);
+  const spxVigency = buildSpxVigency(row);
   const hasBrk = row.brk_conjunto_apto === true || row.brk_status === "vigente";
 
   // For PUBLIC_LEAD drivers, extract Angellira data from validation summaries
@@ -1509,6 +1546,7 @@ function mapDriverSummaryRowToItem(row, applications) {
     externalValidation: externalValidation ? { ...externalValidation, hasBrk } : null,
     angelliraVigency,
     brkVigency,
+    spxVigency,
     angelliraDetails,
     stats: {
       totalApplications: row.total_applications ?? 0,
