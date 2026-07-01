@@ -42,7 +42,11 @@ export function normalizeClientName(value) {
 
 export function isMissingRouteColumnError(error) {
   const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
-  return combinedMessage.includes("distancia_km") || combinedMessage.includes("duracao_horas");
+  return (
+    combinedMessage.includes("distancia_km") ||
+    combinedMessage.includes("duracao_horas") ||
+    combinedMessage.includes("eixos")
+  );
 }
 
 export function isMissingRouteCatalogTableError(error) {
@@ -366,6 +370,7 @@ export function mapDriverLoadReadModelItem(row) {
     duracao_horas: parseNullableNumber(row.duracao_horas),
     tempo_estimado_horas: parseNullableNumber(row.tempo_estimado_horas),
     perfil: row.perfil,
+    eixos: parseNullableNumber(row.eixos),
     valor: parseNullableNumber(row.valor),
     bonus: parseNullableNumber(row.bonus),
     clienteId: row.clienteId ?? null,
@@ -462,6 +467,7 @@ export async function queryDriverLoadCandidateRows(
             ${withRouteColumns ? "cargas.distancia_km" : "NULL::numeric AS distancia_km"},
             ${withRouteColumns ? "cargas.duracao_horas" : "NULL::numeric AS duracao_horas"},
             cargas.perfil,
+            ${withRouteColumns ? "cargas.eixos" : "NULL::smallint AS eixos"},
             cargas.valor,
             cargas.bonus,
             cargas.cliente_id AS "clienteId",

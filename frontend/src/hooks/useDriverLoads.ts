@@ -20,6 +20,7 @@ export interface Cargo {
   duracao_horas?: number | null;
   tempo_estimado_horas?: number | null;
   perfil: string;
+  eixos?: number | null;
   valor: number | null;
   bonus: number | null;
   clienteId?: string | null;

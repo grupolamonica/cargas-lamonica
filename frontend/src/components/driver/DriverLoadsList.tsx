@@ -124,6 +124,7 @@ export function DriverLoadsList({
           destinoCidade={destination.city}
           destinoEstado={destination.uf}
           tipoVeiculo={cargo.perfil}
+          eixos={cargo.eixos}
           secondaryLabel="Percurso recomendado"
           SecondaryIcon={Navigation}
           secondaryValue={routeDistanceLabel}

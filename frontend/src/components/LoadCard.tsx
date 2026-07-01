@@ -40,6 +40,7 @@ interface LoadCardProps {
   destinoCidade: string;
   destinoEstado: string;
   tipoVeiculo: string;
+  eixos?: number | null;
   secondaryValue: string;
   secondarySupportText?: string;
   pagamento: string;
@@ -85,6 +86,7 @@ const LoadCard = memo(({
   destinoCidade,
   destinoEstado,
   tipoVeiculo,
+  eixos,
   secondaryValue,
   secondarySupportText,
   pagamento,
@@ -116,6 +118,8 @@ const LoadCard = memo(({
   const originLabel = origemEstado ? `${safeOrigemCidade}, ${origemEstado}` : safeOrigemCidade;
   const destinationLabel = destinoEstado ? `${safeDestinoCidade}, ${destinoEstado}` : safeDestinoCidade;
   const topRightLabel = safeClienteNome || "Cliente não informado";
+  // Rotula o veículo com o nº de eixos quando informado (ex.: "Carreta · 6 eixos").
+  const vehicleLabel = eixos ? `${tipoVeiculo} · ${eixos} eixos` : tipoVeiculo;
   const loadingLabel = carregamentoLabel?.trim() || "A confirmar";
   const unloadingLabel = descargaLabel?.trim() || "A confirmar";
   const kmLabel = routeDistanceLabel || "A confirmar";
@@ -134,7 +138,7 @@ const LoadCard = memo(({
     const hasBonus = typeof bonusValor === "number" && Number.isFinite(bonusValor) && bonusValor > 0;
     const hasBreakdown = hasValor || hasBonus;
     const lines: string[] = ["🚚 *CARGA DISPONÍVEL*", ""];
-    lines.push(`🚛 Veículo: ${tipoVeiculo}`);
+    lines.push(`🚛 Veículo: ${vehicleLabel}`);
     const nomeCliente = clienteNome?.trim();
     if (nomeCliente) lines.push(`🏢 Cliente: ${nomeCliente}`);
     lines.push("", `📍 Coleta: ${originLabel}`);
@@ -156,7 +160,7 @@ const LoadCard = memo(({
     }
     lines.push("", "🔗 Detalhes e candidatura:", shareUrl);
     return lines.join("\n");
-  }, [shareUrl, originLabel, destinationLabel, tipoVeiculo, pagamento, clienteNome, valorCarga, bonusValor, loadingLabel, unloadingLabel, kmLabel, routeDurationValue]);
+  }, [shareUrl, originLabel, destinationLabel, vehicleLabel, pagamento, clienteNome, valorCarga, bonusValor, loadingLabel, unloadingLabel, kmLabel, routeDurationValue]);
 
   const renderSharePopover = (trigger: React.ReactNode) => {
     if (!shareUrl) return null;
@@ -555,7 +559,7 @@ const LoadCard = memo(({
                 Veículo
               </span>
             </div>
-            <p className="text-xs font-extrabold text-card-foreground">{tipoVeiculo}</p>
+            <p className="text-xs font-extrabold text-card-foreground">{vehicleLabel}</p>
           </div>
 
           <div className="rounded-xl border border-border/30 bg-muted/40 p-2.5">
@@ -587,7 +591,7 @@ const LoadCard = memo(({
               Veículo
             </span>
           </div>
-          <p className="text-xs font-extrabold text-card-foreground sm:text-sm">{tipoVeiculo}</p>
+          <p className="text-xs font-extrabold text-card-foreground sm:text-sm">{vehicleLabel}</p>
         </div>
         <div className="flex-1 rounded-xl border border-border/30 bg-muted/40 p-2.5 transition-colors duration-200 group-hover:bg-muted/60 sm:rounded-2xl sm:p-3.5">
           <div className="mb-1 flex items-center gap-1.5 sm:mb-1.5 sm:gap-2">
@@ -722,7 +726,7 @@ const LoadCard = memo(({
               Veículo
             </p>
             <p className="mt-2 text-[1.02rem] font-bold tracking-tight text-card-foreground">
-              {tipoVeiculo}
+              {vehicleLabel}
             </p>
           </div>
         </div>
