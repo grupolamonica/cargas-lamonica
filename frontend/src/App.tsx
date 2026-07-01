@@ -20,6 +20,8 @@ const HistoricoFila = lazy(() => import("./pages/HistoricoFila"));
 const Motoristas = lazy(() => import("./pages/Motoristas"));
 const AdminLogin = lazy(() => import("./pages/AdminLogin"));
 const DriverPortal = lazy(() => import("./pages/DriverPortal"));
+const DriverPortalPreview = lazy(() => import("./pages/DriverPortalPreview"));
+const DriverPortalLegacy = lazy(() => import("./pages/DriverPortalLegacy"));
 const DriverCargoDetails = lazy(() => import("./pages/DriverCargoDetails"));
 const DriverClientDetails = lazy(() => import("./pages/DriverClientDetails"));
 const OperatorDashboard = lazy(() => import("./pages/OperatorDashboard"));
@@ -27,7 +29,7 @@ const Veiculos = lazy(() => import("./pages/Veiculos"));
 const SheetMonitor = lazy(() => import("./pages/SheetMonitor"));
 const OperatorAuditLogs = lazy(() => import("./pages/OperatorAuditLogs"));
 const NotFound = lazy(() => import("./pages/NotFound"));
-const CadastroDocumentos = lazy(() => import("./pages/CadastroDocumentos"));
+const CadastroDocumentos = lazy(() => import("./modules/cadastro-motorista/CadastroDocumentos"));
 
 const RouteFallback = () => (
   <div className="driver-theme flex min-h-screen items-center justify-center bg-background px-6 text-center">
@@ -77,6 +79,8 @@ const App = () => {
                 <Route path="/cadastro" element={<CadastroDocumentos />} />
                 {/* Driver (mobile-first) */}
                 <Route path="/motorista" element={<DriverPortal />} />
+                <Route path="/motorista-preview" element={<DriverPortalPreview />} />
+                <Route path="/motorista-legacy" element={<DriverPortalLegacy />} />
                 <Route path="/motorista/cargas/:cargoId" element={<DriverCargoDetails />} />
                 <Route path="/motorista/cliente/:clienteId" element={<DriverClientDetails />} />
                 <Route path="/cargas/:cargoId" element={<DriverCargoDetails />} />

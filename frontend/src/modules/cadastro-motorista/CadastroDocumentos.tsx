@@ -44,7 +44,7 @@ import {
   ocrCnh,
   ocrComprovante,
   ocrCrlv,
-} from "@/lib/cadastroApi";
+} from "./cadastroApi";
 import {
   validateCep,
   validateChassi,
@@ -297,6 +297,15 @@ const emptyProprietarioPF: ProprietarioPF = {
   dados_bancarios: { ...emptyDadosBancarios },
 };
 
+// Gera um id de sessao curto e URL-safe ([A-Za-z0-9_-]) usado como nome
+// inicial da pasta em anexos_tmp/. Quando o OCR da CNH retorna o nome do
+// motorista, o backend renomeia a pasta e devolve o slug pelo campo
+// idCadastroPasta — atualizamos o state com setForm.
+function genIdCadastro(): string {
+  const random = Math.random().toString(36).slice(2, 10);
+  return `cad_${Date.now().toString(36)}_${random}`;
+}
+
 const initialForm: FormData = {
   id_cadastro: "",
   tipo_composicao: "1_carreta",
@@ -457,7 +466,7 @@ const BANCOS_COMUNS = [
 // ───────────────────────────── Classes de UI ─────────────────────────────
 
 const inputBase =
-  "admin-input-surface w-full rounded-2xl border py-3 text-sm outline-none transition-all duration-200 placeholder:text-muted-foreground focus:border-primary/30 focus:ring-4 focus:ring-primary/10";
+  "admin-input-surface w-full rounded-xl border py-3 text-sm outline-none transition-all duration-200 placeholder:text-muted-foreground focus:border-primary/30 focus:ring-4 focus:ring-primary/10";
 const inputWithIcon = `${inputBase} pl-11 pr-4`;
 const inputNoIcon = `${inputBase} px-4`;
 const labelClasses = "text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground";
@@ -583,7 +592,7 @@ const FileUploadField = ({
       <label className={labelClasses}>{label}</label>
       <label
         htmlFor={id}
-        className={`admin-input-surface flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-sm transition-all duration-200 hover:border-primary/30 ${
+        className={`admin-input-surface flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-sm transition-all duration-200 hover:border-primary/30 ${
           busy ? "cursor-wait opacity-80" : "cursor-pointer"
         }`}
       >
@@ -670,7 +679,7 @@ const TelefonesField = ({
                   <button
                     type="button"
                     onClick={() => remove(idx)}
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-border text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
                     aria-label="Remover telefone"
                   >
                     <X className="h-4 w-4" />
@@ -840,7 +849,7 @@ const EnderecoFields = ({
                 type="button"
                 onClick={handleCepLookup}
                 disabled={cepLoading || !value.cep}
-                className="admin-input-surface inline-flex h-12 shrink-0 items-center gap-2 rounded-2xl border px-4 text-sm font-semibold text-foreground/80 transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
+                className="admin-input-surface inline-flex h-12 shrink-0 items-center gap-2 rounded-xl border px-4 text-sm font-semibold text-foreground/80 transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Buscar endereco via CEP"
               >
                 {cepLoading ? (
@@ -1198,7 +1207,7 @@ const CnpjLookupField = ({
           type="button"
           onClick={onLookup}
           disabled={loading || !value || !!cnpjError}
-          className="admin-input-surface inline-flex h-12 shrink-0 items-center gap-2 rounded-2xl border px-4 text-sm font-semibold text-foreground/80 transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
+          className="admin-input-surface inline-flex h-12 shrink-0 items-center gap-2 rounded-xl border px-4 text-sm font-semibold text-foreground/80 transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
           title="Buscar dados via CNPJ"
         >
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
@@ -1491,7 +1500,7 @@ const Section = ({
   );
 
   return (
-    <section className="admin-card-surface overflow-hidden rounded-[24px] border shadow-[0_2px_12px_-8px_rgba(15,23,42,0.08)]">
+    <section className="admin-card-surface overflow-hidden rounded-xl border shadow-[0_2px_12px_-8px_rgba(15,23,42,0.08)]">
       {collapsible ? (
         <button
           type="button"
@@ -1638,7 +1647,7 @@ const CrlvStatusCard = ({
   const Icon = s.Icon;
 
   return (
-    <div className={`sm:col-span-2 rounded-2xl border px-4 py-4 ${s.border} ${s.bg}`}>
+    <div className={`sm:col-span-2 rounded-xl border px-4 py-4 ${s.border} ${s.bg}`}>
       <div className="flex items-start gap-3">
         <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${s.iconWrap}`}>
           <Icon className="h-4 w-4" />
@@ -1874,7 +1883,7 @@ const CnhStatusCard = ({
   const Icon = s.Icon;
 
   return (
-    <div className={`sm:col-span-2 rounded-2xl border px-4 py-4 ${s.border} ${s.bg}`}>
+    <div className={`sm:col-span-2 rounded-xl border px-4 py-4 ${s.border} ${s.bg}`}>
       <div className="flex items-start gap-3">
         <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${s.iconWrap}`}>
           <Icon className="h-4 w-4" />
@@ -1951,7 +1960,7 @@ const CnpjStatusCard = ({ result }: { result: CnpjConsultaResult }) => {
   };
 
   return (
-    <div className={`sm:col-span-2 rounded-2xl border px-4 py-4 ${styles.border} ${styles.bg}`}>
+    <div className={`sm:col-span-2 rounded-xl border px-4 py-4 ${styles.border} ${styles.bg}`}>
       <div className="flex items-start gap-3">
         <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${styles.iconWrap}`}>
           {ok ? <ShieldCheck className="h-4 w-4" /> : <ShieldAlert className="h-4 w-4" />}
@@ -2049,7 +2058,7 @@ const AnttStatusCard = ({
         type="button"
         onClick={onValidate}
         disabled={loading || !podeConsultar}
-        className="admin-input-surface inline-flex w-full items-center justify-center gap-2 rounded-2xl border px-5 py-3 text-sm font-semibold text-foreground/85 transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+        className="admin-input-surface inline-flex w-full items-center justify-center gap-2 rounded-xl border px-5 py-3 text-sm font-semibold text-foreground/85 transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
         title={podeConsultar ? "Consultar ANTT do veiculo" : "Preencha a placa primeiro"}
       >
         {loading ? (
@@ -2066,7 +2075,7 @@ const AnttStatusCard = ({
 
       {result && (
         <div
-          className={`rounded-2xl border px-4 py-4 ${
+          className={`rounded-xl border px-4 py-4 ${
             !result.found
               ? "border-amber-500/30 bg-amber-500/[0.06]"
               : result.ok
@@ -2154,8 +2163,8 @@ const AnttStatusCard = ({
 };
 
 const AutoExtractHint = () => (
-  <div className="sm:col-span-2 flex items-start gap-3 rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/[0.06] via-primary/[0.02] to-transparent px-4 py-3.5 text-xs leading-5">
-    <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+  <div className="sm:col-span-2 flex items-start gap-3 rounded-xl border border-primary/15 bg-gradient-to-br from-primary/[0.06] via-primary/[0.02] to-transparent px-4 py-3.5 text-xs leading-5">
+    <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
       <Sparkles className="h-3.5 w-3.5" />
     </span>
     <div className="flex-1 space-y-0.5">
@@ -2229,7 +2238,7 @@ const ProprietarioAnttSection = ({
       badge={badgeText}
     >
       <div className="sm:col-span-2">
-        <label className="flex items-start gap-3 rounded-2xl border border-primary/15 bg-primary/[0.04] px-4 py-3 text-sm">
+        <label className="flex items-start gap-3 rounded-xl border border-primary/15 bg-primary/[0.04] px-4 py-3 text-sm">
           <input
             type="checkbox"
             checked={igual}
@@ -2259,7 +2268,7 @@ const ProprietarioAnttSection = ({
                   key={tipo}
                   type="button"
                   onClick={() => onChange({ ...value, tipo })}
-                  className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition-all ${
+                  className={`rounded-xl border px-4 py-3 text-sm font-semibold transition-all ${
                     value.tipo === tipo
                       ? "admin-primary-button border-transparent text-white"
                       : "admin-input-surface text-foreground/80 hover:border-primary/30"
@@ -2437,7 +2446,10 @@ const TABS: TabDef[] = [
 ];
 
 const CadastroDocumentos = () => {
-  const [form, setForm] = useState<FormData>(initialForm);
+  const [form, setForm] = useState<FormData>(() => ({
+    ...initialForm,
+    id_cadastro: genIdCadastro(),
+  }));
   const [propTipo, setPropTipo] = useState<ProprietarioTipo>("");
   const [propCarretaTipo, setPropCarretaTipo] = useState<ProprietarioTipo>("");
   const [activeTab, setActiveTab] = useState<TabId>("motorista");
@@ -2791,9 +2803,12 @@ const CadastroDocumentos = () => {
   // ─── Handler: CNH motorista ───
   const handleCnhMotoristaFile = async (file: File) => {
     try {
-      const { pessoal, cnh } = await ocrCnh(file);
+      const { pessoal, cnh, idCadastroPasta } = await ocrCnh(file, form.id_cadastro);
       setForm((f) => ({
         ...f,
+        // Backend renomeou a pasta em anexos_tmp para o nome do motorista
+        // — adotamos o novo id pra todos os uploads subsequentes caírem lá.
+        id_cadastro: idCadastroPasta || f.id_cadastro,
         motorista: {
           ...f.motorista,
           nome: pessoal.nome || f.motorista.nome,
@@ -2829,7 +2844,7 @@ const CadastroDocumentos = () => {
   // para uf/cidade/bairro/logradouro; o numero permanece o que o OCR achou.
   const handleComprovanteMotoristaFile = async (file: File) => {
     try {
-      const ext = await ocrComprovante(file, concessionaria);
+      const ext = await ocrComprovante(file, concessionaria, form.id_cadastro);
       const cepDigits = onlyDigits(ext.cep);
 
       // 1) Auto-consulta o CEP extraido (Infosimples + fallback ViaCEP)
@@ -2891,7 +2906,7 @@ const CadastroDocumentos = () => {
         return;
       }
 
-      const ext = await ocrComprovante(file, concessionaria);
+      const ext = await ocrComprovante(file, concessionaria, `${form.id_cadastro}:proprietario`);
       const cepDigits = onlyDigits(ext.cep);
 
       let cepData: Awaited<ReturnType<typeof consultaCep>> | null = null;
@@ -3070,7 +3085,8 @@ const CadastroDocumentos = () => {
   //      bloco PF (CNH do proprietario complementa via outro upload).
   const handleCrlvFile = async (file: File, target: "cavalo" | "carreta") => {
     try {
-      const { veiculo, proprietario } = await ocrCrlv(file);
+      const idCrlv = target === "carreta" ? `${form.id_cadastro}:carreta` : form.id_cadastro;
+      const { veiculo, proprietario } = await ocrCrlv(file, idCrlv);
       console.debug(`[handleCrlvFile/${target}] proprietario:`, proprietario);
 
       // Guarda os valores originais do OCR para cross-check vs. o que o
@@ -3218,7 +3234,7 @@ const CadastroDocumentos = () => {
   // ─── Handler: Cartao CNPJ (cavalo) ───
   const handleCartaoCnpjFile = async (file: File) => {
     try {
-      const ext = await ocrCartaoCnpj(file);
+      const ext = await ocrCartaoCnpj(file, form.id_cadastro);
       setForm((f) => ({
         ...f,
         proprietario_pj: {
@@ -3242,7 +3258,7 @@ const CadastroDocumentos = () => {
   // ─── Handler: CNH proprietario PF (cavalo) ───
   const handleCnhProprietarioFile = async (file: File) => {
     try {
-      const { pessoal, cnh } = await ocrCnh(file);
+      const { pessoal, cnh } = await ocrCnh(file, `${form.id_cadastro}:proprietario`);
       setForm((f) => ({
         ...f,
         proprietario_pf: {
@@ -3277,7 +3293,7 @@ const CadastroDocumentos = () => {
   // ─── Handler: Cartao CNPJ (carreta) ───
   const handleCartaoCnpjCarretaFile = async (file: File) => {
     try {
-      const ext = await ocrCartaoCnpj(file);
+      const ext = await ocrCartaoCnpj(file, `${form.id_cadastro}:carreta`);
       setForm((f) => ({
         ...f,
         proprietario_pj_carreta: {
@@ -3337,14 +3353,14 @@ const CadastroDocumentos = () => {
     <div className="admin-theme admin-page-shell relative min-h-[100dvh] overflow-x-hidden overflow-y-auto bg-background">
       <div className="relative mx-auto flex min-h-[100dvh] w-full max-w-[1180px] items-start justify-center px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
         <section className="flex w-full justify-center">
-          <div className="admin-auth-panel relative w-full max-w-[920px] p-5 sm:p-7 lg:p-9">
+          <div className="admin-auth-panel relative w-full max-w-[920px] !rounded-xl p-5 sm:p-7 lg:p-9">
             {/* Header */}
             <div className="relative">
               <div className="flex flex-wrap items-center gap-3 sm:gap-4">
-                <div className="admin-card-surface inline-flex rounded-[20px] border px-3.5 py-2.5 shadow-[0_16px_36px_-28px_rgba(2,36,131,0.26)] backdrop-blur-xl sm:px-4">
+                <div className="admin-card-surface inline-flex rounded-xl border px-3.5 py-2.5 shadow-[0_16px_36px_-28px_rgba(2,36,131,0.26)] backdrop-blur-xl sm:px-4">
                   <Logo />
                 </div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-primary/12 bg-primary/[0.06] px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.26em] text-primary/70">
+                <div className="inline-flex items-center gap-2 rounded-xl border border-primary/12 bg-primary/[0.06] px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.26em] text-primary/70">
                   Cadastro motorista PJ
                 </div>
               </div>
@@ -3408,7 +3424,7 @@ const CadastroDocumentos = () => {
                                   ? "Conclua as etapas anteriores para liberar"
                                   : tab.label
                               }
-                              className={`relative z-10 flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 text-sm font-semibold transition-all data-[state=active]:bg-primary data-[state=active]:text-white ${
+                              className={`relative z-10 flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border-2 text-sm font-semibold transition-all data-[state=active]:bg-primary data-[state=active]:text-white ${
                                 isActive
                                   ? "border-primary bg-primary text-white shadow-[0_8px_24px_-12px_rgba(2,36,131,0.45)] ring-4 ring-primary/15"
                                   : complete
@@ -3515,7 +3531,7 @@ const CadastroDocumentos = () => {
                       }
                     />
                     <div className="sm:col-span-2">
-                      <label className="flex items-start gap-3 rounded-2xl border border-primary/15 bg-primary/[0.04] px-4 py-3 text-sm">
+                      <label className="flex items-start gap-3 rounded-xl border border-primary/15 bg-primary/[0.04] px-4 py-3 text-sm">
                         <input
                           type="checkbox"
                           checked={form.motorista.tambem_proprietario}
@@ -3667,7 +3683,7 @@ const CadastroDocumentos = () => {
                 {/* Carreta */}
                 <TabsContent value="carreta" className="mt-6 space-y-5">
                   {/* Tipo de composicao: define quantas carretas o cadastro tem */}
-                  <div className="rounded-2xl border border-primary/15 bg-primary/[0.04] p-4">
+                  <div className="rounded-xl border border-primary/15 bg-primary/[0.04] p-4">
                     <p className={`${labelClasses} mb-2`}>Tipo de composicao</p>
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                       {(
@@ -3711,7 +3727,7 @@ const CadastroDocumentos = () => {
 
                   {/* Aviso quando "sem carreta" */}
                   {form.tipo_composicao === "sem_carreta" && (
-                    <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.04] px-4 py-4 text-sm text-emerald-700 dark:text-emerald-400">
+                    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] px-4 py-4 text-sm text-emerald-700 dark:text-emerald-400">
                       <strong>Cadastro sem carreta.</strong>
                       <p className="mt-1 text-xs leading-5 text-muted-foreground">
                         Voce indicou que o cadastro tem apenas o cavalo. Pode prosseguir para a
@@ -3721,7 +3737,7 @@ const CadastroDocumentos = () => {
                   )}
 
                   {form.tipo_composicao !== "sem_carreta" && (
-                  <div className="rounded-2xl border border-primary/15 bg-primary/[0.04] px-4 py-3">
+                  <div className="rounded-xl border border-primary/15 bg-primary/[0.04] px-4 py-3">
                     <label className="flex items-start gap-3 text-sm">
                       <input
                         type="checkbox"
@@ -3858,7 +3874,7 @@ const CadastroDocumentos = () => {
                           }
                           onFile={async (file) => {
                             try {
-                              const { veiculo } = await ocrCrlv(file);
+                              const { veiculo } = await ocrCrlv(file, `${form.id_cadastro}:carreta`);
                               setForm((f) => ({
                                 ...f,
                                 carretas_extras: f.carretas_extras.map((c, i) =>
@@ -3945,7 +3961,7 @@ const CadastroDocumentos = () => {
                             ],
                           }));
                         }}
-                        className="admin-input-surface inline-flex items-center gap-2 rounded-2xl border border-dashed px-5 py-3 text-sm font-semibold text-foreground/80 transition-all hover:border-primary/40 hover:text-foreground"
+                        className="admin-input-surface inline-flex items-center gap-2 rounded-xl border border-dashed px-5 py-3 text-sm font-semibold text-foreground/80 transition-all hover:border-primary/40 hover:text-foreground"
                       >
                         <Plus className="h-4 w-4" />
                         Adicionar outra carreta
@@ -3985,7 +4001,7 @@ const CadastroDocumentos = () => {
                       />
                     </Field>
                     <Field label="Pancary">
-                      <label className="flex items-center gap-3 rounded-2xl border border-primary/15 bg-primary/[0.04] px-4 py-3 text-sm">
+                      <label className="flex items-center gap-3 rounded-xl border border-primary/15 bg-primary/[0.04] px-4 py-3 text-sm">
                         <input
                           type="checkbox"
                           checked={form.operacional.possui_pancary}
@@ -4069,7 +4085,7 @@ const CadastroDocumentos = () => {
                 <TabsContent value="proprietario" className="mt-6 space-y-5">
                   {/* Banner explicando o fluxo de auto-preenchimento */}
                   {(!motoristaIsProprietario || carretaDiferente) && (
-                    <div className="rounded-[24px] border border-primary/20 bg-primary/[0.05] p-5 sm:p-6">
+                    <div className="rounded-xl border border-primary/20 bg-primary/[0.05] p-5 sm:p-6">
                       <div className="flex items-start gap-3">
                         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
                           <Sparkles className="h-4 w-4" />
@@ -4179,7 +4195,7 @@ const CadastroDocumentos = () => {
                               key={tipo}
                               type="button"
                               onClick={() => setPropTipo(tipo)}
-                              className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition-all ${
+                              className={`rounded-xl border px-4 py-3 text-sm font-semibold transition-all ${
                                 propTipo === tipo
                                   ? "admin-primary-button border-transparent text-white"
                                   : "admin-input-surface text-foreground/80 hover:border-primary/30"
@@ -4236,7 +4252,7 @@ const CadastroDocumentos = () => {
                       {propTipo === "PF" && (
                         <>
                           <div className="sm:col-span-2">
-                            <label className="flex items-start gap-3 rounded-2xl border border-primary/15 bg-primary/[0.04] px-4 py-3 text-sm">
+                            <label className="flex items-start gap-3 rounded-xl border border-primary/15 bg-primary/[0.04] px-4 py-3 text-sm">
                               <input
                                 type="checkbox"
                                 checked={form.proprietario_pf.tem_cnh}
@@ -4357,7 +4373,7 @@ const CadastroDocumentos = () => {
                               key={tipo}
                               type="button"
                               onClick={() => setPropCarretaTipo(tipo)}
-                              className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition-all ${
+                              className={`rounded-xl border px-4 py-3 text-sm font-semibold transition-all ${
                                 propCarretaTipo === tipo
                                   ? "admin-primary-button border-transparent text-white"
                                   : "admin-input-surface text-foreground/80 hover:border-primary/30"
@@ -4406,7 +4422,7 @@ const CadastroDocumentos = () => {
                       {propCarretaTipo === "PF" && (
                         <>
                           <div className="sm:col-span-2">
-                            <label className="flex items-start gap-3 rounded-2xl border border-primary/15 bg-primary/[0.04] px-4 py-3 text-sm">
+                            <label className="flex items-start gap-3 rounded-xl border border-primary/15 bg-primary/[0.04] px-4 py-3 text-sm">
                               <input
                                 type="checkbox"
                                 checked={form.proprietario_pf_carreta.tem_cnh}
@@ -4498,13 +4514,13 @@ const CadastroDocumentos = () => {
               </Tabs>
 
               {/* Navegação inferior */}
-              <div className="mt-8 rounded-[24px] border border-border/60 bg-gradient-to-br from-primary/[0.03] via-card to-card p-4 shadow-[0_2px_12px_-8px_rgba(15,23,42,0.08)] sm:p-5">
+              <div className="mt-8 rounded-xl border border-border/60 bg-gradient-to-br from-primary/[0.03] via-card to-card p-4 shadow-[0_2px_12px_-8px_rgba(15,23,42,0.08)] sm:p-5">
                 <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <button
                     type="button"
                     onClick={goPrev}
                     disabled={isFirst}
-                    className="admin-input-surface inline-flex items-center justify-center gap-2 rounded-2xl border px-5 py-3 text-sm font-semibold text-foreground/80 transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
+                    className="admin-input-surface inline-flex items-center justify-center gap-2 rounded-xl border px-5 py-3 text-sm font-semibold text-foreground/80 transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
                   >
                     <ChevronLeft className="h-4 w-4" />
                     Anterior
@@ -4527,7 +4543,7 @@ const CadastroDocumentos = () => {
                         ? "Complete os campos obrigatorios desta aba para avancar"
                         : undefined
                     }
-                    className="admin-primary-button inline-flex items-center justify-center gap-2 rounded-2xl px-6 py-3 text-sm font-semibold text-white shadow-[0_8px_24px_-12px_rgba(2,36,131,0.45)] transition-all disabled:cursor-not-allowed disabled:opacity-60 disabled:shadow-none sm:w-auto"
+                    className="admin-primary-button inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold text-white shadow-[0_8px_24px_-12px_rgba(2,36,131,0.45)] transition-all disabled:cursor-not-allowed disabled:opacity-60 disabled:shadow-none sm:w-auto"
                   >
                     {loading ? (
                       <Loader2 className="h-4 w-4 animate-spin" />

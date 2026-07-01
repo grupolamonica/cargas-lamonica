@@ -34,6 +34,13 @@ backend.env
 backend/.env
 frontend/.env
 
+# PII — driver documents / OCR dumps (NEVER commit personal data)
+cnh-*.json
+**/anexos_tmp/
+
+# Claude Code internal worktrees (not part of the repo)
+.claude/worktrees/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

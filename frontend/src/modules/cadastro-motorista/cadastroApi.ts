@@ -15,7 +15,14 @@ const BASE = "/ocr-api";
 
 type Campo = { valor?: string };
 type Section = { campos?: Record<string, Campo> };
-type OcrEnvelope = { code: number; code_message?: string; data?: Section[] };
+type OcrEnvelope = {
+  code: number;
+  code_message?: string;
+  data?: Section[];
+  // Quando o backend faz auto-rename da pasta de anexos (apos extrair o
+  // nome do motorista da CNH), retorna o novo id que o front deve adotar.
+  id_cadastro_pasta?: string;
+};
 type ConsultaEnvelope = {
   code: number;
   code_message?: string;
@@ -272,12 +279,30 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 
 // ───────────────────── OCR ─────────────────────
 
-async function ocr(path: string, imagem: string): Promise<Section[]> {
-  const json = await postJson<OcrEnvelope>(path, { imagem });
+async function ocr(path: string, imagem: string, idCadastro?: string): Promise<Section[]> {
+  const json = await postJson<OcrEnvelope>(path, {
+    imagem,
+    ...(idCadastro ? { id_cadastro: idCadastro } : {}),
+  });
   if (json.code !== 200) {
     throw new Error(json.code_message ?? `Erro ${json.code} ao processar documento.`);
   }
   return json.data ?? [];
+}
+
+async function ocrEnvelope(
+  path: string,
+  imagem: string,
+  idCadastro?: string,
+): Promise<OcrEnvelope> {
+  const json = await postJson<OcrEnvelope>(path, {
+    imagem,
+    ...(idCadastro ? { id_cadastro: idCadastro } : {}),
+  });
+  if (json.code !== 200) {
+    throw new Error(json.code_message ?? `Erro ${json.code} ao processar documento.`);
+  }
+  return json;
 }
 
 // ───────────────────── CNH ─────────────────────
@@ -329,9 +354,13 @@ function splitLocal(texto: string): { cidade: string; uf: string } {
   return { cidade: texto.trim(), uf: "" };
 }
 
-export async function ocrCnh(file: File): Promise<CnhExtracted> {
+export async function ocrCnh(
+  file: File,
+  idCadastro?: string,
+): Promise<CnhExtracted & { idCadastroPasta?: string }> {
   const imagem = await fileToBase64(file);
-  const data = await ocr("/api/ocr/cnh", imagem);
+  const env = await ocrEnvelope("/api/ocr/cnh", imagem, idCadastro);
+  const data = env.data ?? [];
   const v = (...k: string[]) => ocrValor(data, ...k);
 
   const filiacao = splitFiliacao(v("filiacao"));
@@ -367,6 +396,7 @@ export async function ocrCnh(file: File): Promise<CnhExtracted> {
       validade,
       primeira_emissao: primeira,
     },
+    idCadastroPasta: env.id_cadastro_pasta,
   };
 }
 
@@ -405,9 +435,12 @@ function splitMarcaModelo(texto: string): { marca: string; modelo: string } {
   return { marca: texto.trim(), modelo: "" };
 }
 
-export async function ocrCrlv(file: File): Promise<CrlvExtracted> {
+export async function ocrCrlv(
+  file: File,
+  idCadastro?: string,
+): Promise<CrlvExtracted> {
   const imagem = await fileToBase64(file);
-  const data = await ocr("/api/ocr/crlv", imagem);
+  const data = await ocr("/api/ocr/crlv", imagem, idCadastro);
 
   // Debug: imprime a resposta crua da API para inspecao quando algum campo nao
   // bater com a chave esperada (Infosimples ocasionalmente muda layout).
@@ -560,11 +593,13 @@ export type Concessionaria = (typeof CONCESSIONARIAS)[number];
 export async function ocrComprovante(
   file: File,
   concessionaria: Concessionaria = "neoenergia",
+  idCadastro?: string,
 ): Promise<ComprovanteExtracted> {
   const imagem = await fileToBase64(file);
   const json = await postJson<OcrEnvelope>("/api/ocr/comprovante-residencia", {
     imagem,
     concessionaria,
+    ...(idCadastro ? { id_cadastro: idCadastro } : {}),
   });
   if (json.code !== 200) {
     throw new Error(json.code_message ?? `Erro ${json.code} ao processar comprovante.`);

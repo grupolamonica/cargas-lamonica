@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Activity,
   AlertTriangle,
   CheckCircle2,
   ClipboardList,
@@ -63,20 +64,21 @@ function KpiCard({
   };
 
   return (
-    <Card className="admin-soft-panel overflow-hidden shadow-[0_22px_52px_-38px_rgba(15,23,42,0.22)]">
-      <CardContent className="p-5">
+    <div className="group relative overflow-hidden rounded-xl border border-border/60 bg-card shadow-[0_18px_44px_-32px_rgba(15,23,42,0.22)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_22px_52px_-30px_rgba(15,23,42,0.28)]">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
+      <div className="p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">{label}</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">{label}</p>
             <p className="text-3xl font-black tracking-tight text-foreground">{value}</p>
           </div>
-          <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${toneClasses[tone]}`}>
+          <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${toneClasses[tone]}`}>
             <Icon className="h-5 w-5" />
           </div>
         </div>
         <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{note}</p>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
@@ -92,9 +94,9 @@ function SignalCard({
   icon: typeof Layers3;
 }) {
   return (
-    <div className="admin-card-surface-strong rounded-[24px] border px-4 py-4 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.18)]">
+    <div className="admin-card-surface-strong rounded-xl border px-4 py-4 shadow-[0_14px_32px_-28px_rgba(15,23,42,0.18)] transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/30">
       <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
           <Icon className="h-4 w-4" />
         </div>
         <div>
@@ -110,19 +112,19 @@ function SignalCard({
 function OverviewLoadingState() {
   return (
     <main className="space-y-6 p-6 lg:p-8">
-      <Skeleton className="h-[180px] rounded-[32px]" />
+      <Skeleton className="h-[180px] rounded-xl" />
       <div className="grid gap-4 xl:grid-cols-4">
         {Array.from({ length: 4 }, (_, index) => (
-          <Skeleton key={`overview-kpi-${index}`} className="h-[168px] rounded-[28px]" />
+          <Skeleton key={`overview-kpi-${index}`} className="h-[168px] rounded-xl" />
         ))}
       </div>
       <div className="grid gap-4 xl:grid-cols-4">
         {Array.from({ length: 4 }, (_, index) => (
-          <Skeleton key={`overview-signal-${index}`} className="h-[138px] rounded-[24px]" />
+          <Skeleton key={`overview-signal-${index}`} className="h-[138px] rounded-xl" />
         ))}
       </div>
-      <Skeleton className="h-[340px] rounded-[28px]" />
-      <Skeleton className="h-[340px] rounded-[28px]" />
+      <Skeleton className="h-[340px] rounded-xl" />
+      <Skeleton className="h-[340px] rounded-xl" />
     </main>
   );
 }
@@ -226,7 +228,7 @@ const Overview = () => {
         <OverviewLoadingState />
       ) : overviewQuery.error || !snapshot ? (
         <main className="space-y-6 p-6 lg:p-8">
-          <section className="admin-panel flex min-h-[320px] flex-col items-center justify-center gap-4 p-10 text-center">
+          <section className="flex min-h-[320px] flex-col items-center justify-center gap-4 rounded-xl border border-border/60 bg-card p-10 text-center shadow-[0_18px_44px_-32px_rgba(15,23,42,0.2)]">
             <ShieldCheck className="h-14 w-14 text-amber-600/70" />
             <div className="space-y-2">
               <p className="text-lg font-bold text-foreground">Nao foi possivel montar o dashboard real</p>
@@ -241,11 +243,23 @@ const Overview = () => {
       ) : (
         <main className="space-y-6 p-6 lg:p-8">
           {/* Hero Banner */}
-          <section className="relative overflow-hidden rounded-[32px] border border-white/80 bg-[linear-gradient(135deg,hsl(223_56%_12%),hsl(223_55%_22%))] px-6 py-6 text-white shadow-[0_30px_70px_-34px_rgba(15,23,42,0.5)] lg:px-8">
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(225_100%_65%/0.2),transparent_34%),radial-gradient(circle_at_bottom_left,hsl(198_100%_57%/0.16),transparent_28%)]" />
+          <section className="relative overflow-hidden rounded-xl border border-white/10 bg-[linear-gradient(135deg,hsl(223_56%_10%),hsl(223_55%_20%))] px-6 py-7 text-white shadow-[0_30px_70px_-34px_rgba(15,23,42,0.55)] lg:px-8">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(225_100%_65%/0.22),transparent_36%),radial-gradient(circle_at_bottom_left,hsl(198_100%_57%/0.18),transparent_30%)]" />
+            <div className="pointer-events-none absolute right-12 top-6 h-44 w-44 rounded-full bg-primary/24 blur-3xl" />
+            <div className="pointer-events-none absolute bottom-4 left-6 h-32 w-32 rounded-full bg-accent/18 blur-3xl" />
+            <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent" />
+
             <div className="relative flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
               <div className="max-w-4xl space-y-4">
-                <Badge className="w-fit border-white/12 bg-white/12 text-white">Dados reais do Supabase</Badge>
+                <div className="inline-flex items-center gap-2 rounded-xl border border-white/[0.22] bg-white/[0.14] px-3 py-1.5 shadow-[0_12px_24px_-18px_rgba(3,14,42,0.7)] backdrop-blur-md">
+                  <div className="relative flex items-center justify-center">
+                    <Activity className="h-3.5 w-3.5 text-accent" />
+                    <div className="absolute inset-0 animate-ping">
+                      <Activity className="h-3.5 w-3.5 text-accent/50" />
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-white">Ao vivo &middot; Supabase</span>
+                </div>
                 <div className="space-y-3">
                   <h2 className="text-3xl font-black tracking-tight sm:text-4xl">
                     Painel operacional com leitura real de cargas, fila e disputas.
@@ -258,21 +272,21 @@ const Overview = () => {
               </div>
 
               <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-[24px] border border-white/12 bg-white/10 px-4 py-4 backdrop-blur">
+                <div className="rounded-xl border border-white/[0.16] bg-white/[0.1] px-4 py-4 backdrop-blur-xl">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/60">Cargas ativas</p>
                   <p className="mt-2 text-2xl font-black tracking-tight text-white">
                     {formatNumber(snapshot.hero.activeLoads)}
                   </p>
                   <p className="mt-1 text-sm text-white/72">Abertas para motoristas agora</p>
                 </div>
-                <div className="rounded-[24px] border border-white/12 bg-white/10 px-4 py-4 backdrop-blur">
+                <div className="rounded-xl border border-white/[0.16] bg-white/[0.1] px-4 py-4 backdrop-blur-xl">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/60">Saidas proximas 24h</p>
                   <p className="mt-2 text-2xl font-black tracking-tight text-white">
                     {formatNumber(snapshot.hero.departuresNext24h)}
                   </p>
                   <p className="mt-1 text-sm text-white/72">saidas com janela curta</p>
                 </div>
-                <div className="rounded-[24px] border border-white/12 bg-white/10 px-4 py-4 backdrop-blur">
+                <div className="rounded-xl border border-white/[0.16] bg-white/[0.1] px-4 py-4 backdrop-blur-xl">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/60">Ultimo movimento</p>
                   <p className="mt-2 text-2xl font-black tracking-tight text-white">
                     {snapshot.lastUpdatedAt ? format(new Date(snapshot.lastUpdatedAt), "HH:mm") : "--:--"}
@@ -357,10 +371,10 @@ const Overview = () => {
             const rate = total > 0 ? Math.round((snapshot.hero.reservedCount / total) * 100) : 0;
             const hasReserved = snapshot.hero.reservedCount > 0;
             return (
-              <section className="admin-card-surface-strong rounded-[24px] border px-5 py-4 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.18)]">
+              <section className="admin-card-surface-strong rounded-xl border px-5 py-4 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.18)]">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/12 text-emerald-700 dark:text-emerald-300">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/12 text-emerald-700 dark:text-emerald-300">
                       <Truck className="h-4 w-4" />
                     </div>
                     <div>
@@ -374,9 +388,9 @@ const Overview = () => {
                   </div>
                   {hasReserved && (
                     <div className="ml-13 sm:ml-0 flex items-center gap-2">
-                      <div className="h-2 w-32 overflow-hidden rounded-full bg-muted/40">
+                      <div className="h-2 w-32 overflow-hidden rounded-sm bg-muted/40">
                         <div
-                          className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                          className="h-full rounded-sm bg-emerald-500 transition-all duration-500"
                           style={{ width: `${rate}%` }}
                         />
                       </div>
@@ -391,7 +405,7 @@ const Overview = () => {
           <DriverFlowInsights />
 
           {/* Loads Needing Attention */}
-          <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
+          <Card className="overflow-hidden rounded-xl border border-border/60 bg-card shadow-[0_18px_44px_-32px_rgba(15,23,42,0.2)]">
             <CardHeader className="space-y-3">
               <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
                 Atencao necessaria
@@ -409,10 +423,10 @@ const Overview = () => {
                   snapshot.attentionLoads.map((load) => (
                     <div
                       key={load.id}
-                      className="admin-card-surface-strong flex flex-col gap-3 rounded-[24px] border px-4 py-4 shadow-[0_18px_38px_-32px_rgba(15,23,42,0.18)] sm:flex-row sm:items-center sm:justify-between"
+                      className="admin-card-surface-strong flex flex-col gap-3 rounded-xl border px-4 py-4 shadow-[0_14px_30px_-26px_rgba(15,23,42,0.18)] transition-all duration-200 hover:border-amber-300/60 sm:flex-row sm:items-center sm:justify-between"
                     >
                       <div className="flex items-start gap-3">
-                        <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/12 text-amber-700">
+                        <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/12 text-amber-700">
                           <AlertTriangle className="h-4 w-4" />
                         </div>
                         <div>
@@ -437,7 +451,7 @@ const Overview = () => {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
+                  <div className="rounded-xl border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
                     Nenhuma carga precisa de atencao neste momento.
                   </div>
                 )}
@@ -446,7 +460,7 @@ const Overview = () => {
           </Card>
 
           {/* Recent Activity (kept as-is) */}
-          <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
+          <Card className="overflow-hidden rounded-xl border border-border/60 bg-card shadow-[0_18px_44px_-32px_rgba(15,23,42,0.2)]">
             <CardHeader className="space-y-3">
               <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
                 Pulso operacional
@@ -464,11 +478,11 @@ const Overview = () => {
                   snapshot.recentActivity.map((activity) => (
                     <div
                       key={activity.id}
-                      className="admin-card-surface-strong flex flex-col gap-3 rounded-[24px] border px-4 py-4 shadow-[0_18px_38px_-32px_rgba(15,23,42,0.18)] sm:flex-row sm:items-center sm:justify-between"
+                      className="admin-card-surface-strong flex flex-col gap-3 rounded-xl border px-4 py-4 shadow-[0_14px_30px_-26px_rgba(15,23,42,0.18)] transition-all duration-200 hover:border-primary/30 sm:flex-row sm:items-center sm:justify-between"
                     >
                       <div className="flex items-start gap-3">
                         <div
-                          className={`mt-0.5 flex h-10 w-10 items-center justify-center rounded-2xl ${
+                          className={`mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl ${
                             activity.type === "lead"
                               ? "bg-accent/12 text-accent"
                               : activity.type === "claim"
@@ -495,7 +509,7 @@ const Overview = () => {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
+                  <div className="rounded-xl border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
                     Nenhuma atividade recente encontrada nas tabelas monitoradas.
                   </div>
                 )}

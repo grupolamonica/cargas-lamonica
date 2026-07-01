@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { consultaCnpj, ocrCrlv } from "@/lib/cadastroApi";
+import { consultaCnpj, ocrCrlv } from "./cadastroApi";
 
 function stubFileReader(base64 = "ZmFrZQ==") {
   class MockFileReader {
