@@ -68,4 +68,54 @@ describe("advanceRecurringCargas (integração pg-mem)", () => {
     expect((await advanceRecurringCargas({ now: NOW })).advanced).toBe(1);
     expect((await advanceRecurringCargas({ now: NOW })).advanced).toBe(0);
   });
+
+  // ── Auto-cura: cadeias recorrentes órfãs (clone-on-reserve falho/interrompido) ──
+
+  it("revive cadeia órfã: recorrente reservada, vencida e sem sucessora OPEN → cria próxima OPEN", async () => {
+    // Espelha o caso de prod: cauda RESERVED, is_recurring=false, mas o intervalo
+    // ficou setado — nem o clone nem o avanço a resgatam.
+    const orphan = await seedCargo({ data: "2026-06-15", horario: "09:00:00", status: "RESERVED", is_recurring: false, recurrence_interval_days: 1 });
+
+    const result = await advanceRecurringCargas({ now: NOW });
+    expect(result.revived).toBe(1);
+
+    // A carga órfã original NÃO é modificada (continua RESERVED).
+    const orig = await query(`SELECT status FROM public.cargas WHERE id = $1`, [orphan.id]);
+    expect(orig.rows[0].status).toBe("RESERVED");
+
+    // Nasce UMA sucessora OPEN recorrente, na próxima ocorrência visível, ligada à cadeia.
+    const succ = await query(
+      `SELECT data, is_recurring, recurrence_interval_days, recurrence_parent_id FROM public.cargas WHERE status = 'OPEN' AND is_recurring = true`,
+    );
+    expect(succ.rows.length).toBe(1);
+    expect(isoDateOf(succ.rows[0].data)).toBe("2026-06-18"); // 15→16→17(09<12 invisível)→18
+    expect(Number(succ.rows[0].recurrence_interval_days)).toBe(1);
+    expect(succ.rows[0].recurrence_parent_id).toBe(orphan.id);
+  });
+
+  it("auto-cura é idempotente: 2ª execução não duplica a sucessora", async () => {
+    await seedCargo({ data: "2026-06-15", horario: "09:00:00", status: "RESERVED", is_recurring: false, recurrence_interval_days: 1 });
+    expect((await advanceRecurringCargas({ now: NOW })).revived).toBe(1);
+    expect((await advanceRecurringCargas({ now: NOW })).revived).toBe(0);
+    const { rows } = await query(`SELECT count(*)::int AS n FROM public.cargas WHERE status = 'OPEN' AND is_recurring = true`);
+    expect(rows[0].n).toBe(1);
+  });
+
+  it("NÃO revive cadeia que ainda tem carga OPEN (o avanço já cuida)", async () => {
+    const root = await seedCargo({ data: "2026-06-20", horario: "08:00:00", status: "OPEN", is_recurring: true, recurrence_interval_days: 1 });
+    const reservedTail = await seedCargo({ data: "2026-06-15", horario: "09:00:00", status: "RESERVED", is_recurring: false, recurrence_interval_days: 1 });
+    await query(`UPDATE public.cargas SET recurrence_parent_id = $1 WHERE id = $2`, [root.id, reservedTail.id]);
+    expect((await advanceRecurringCargas({ now: NOW })).revived).toBe(0);
+  });
+
+  it("NÃO revive cadeia cuja cauda expirou/cancelou (pode ter sido encerrada de propósito)", async () => {
+    await seedCargo({ data: "2026-06-15", horario: "09:00:00", status: "EXPIRED", is_recurring: false, recurrence_interval_days: 1 });
+    await seedCargo({ data: "2026-06-15", horario: "09:00:00", status: "CANCELLED", is_recurring: false, recurrence_interval_days: 1 });
+    expect((await advanceRecurringCargas({ now: NOW })).revived).toBe(0);
+  });
+
+  it("NÃO revive cadeia cuja cauda ainda está no futuro (a próxima não venceu)", async () => {
+    await seedCargo({ data: "2026-06-25", horario: "08:00:00", status: "RESERVED", is_recurring: false, recurrence_interval_days: 1 });
+    expect((await advanceRecurringCargas({ now: NOW })).revived).toBe(0);
+  });
 });
