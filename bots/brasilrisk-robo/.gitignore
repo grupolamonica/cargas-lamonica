@@ -1,0 +1,24 @@
+# === Segredos / sessão — NUNCA versionar ===
+# cookie.txt tem a sessão viva do BRK (cookiename/cf_clearance); useragent casa com o cf_clearance.
+cookie.txt
+useragent.txt
+backend/cookie.txt
+backend/useragent.txt
+.env
+*.env.local
+
+# === Perfil dedicado do Chrome (Puppeteer) — pesado + dados de sessão ===
+.chrome-brk/
+pw_profile/
+
+# === Node / Python / build ===
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# === Logs / temporários ===
+logs/
+*.log
+*.tmp
