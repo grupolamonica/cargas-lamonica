@@ -1,6 +1,43 @@
 # Cookie automático do BRK
 
-## ✅ RECOMENDADO: perfil dedicado próprio (mesma lógica do SPX)
+## ✅ PRODUÇÃO (recomendado — validado 2026-07-01): login 1x + keep-alive HTTP
+
+O navegador só entra no **login inicial**; a manutenção da sessão é **HTTP puro, sem
+navegador** (soak: 8/8 pings vivos em ~35 min). Passos na máquina que roda o `:5010`
+(SERVERBD):
+
+1. **Login inicial (1x, headed — resolve o Cloudflare + grava o `cokiename`):**
+   ```powershell
+   cd "...\bots\brasilrisk-robo"
+   npm install                          # 1x: instala puppeteer/dotenv locais
+   node refresh_cookies_brk_pw.js login
+   ```
+   A janela fecha sozinha ao confirmar a sessão (grava `backend/cookie.txt` + `useragent.txt`).
+
+2. **Keep-alive automático (tarefa agendada, HTTP, 24/7 sem navegador):**
+   ```powershell
+   .\scripts\instalar_keepalive_brk.ps1                 # a cada 10 min (S4U)
+   .\scripts\instalar_keepalive_brk.ps1 -IntervalMinutes 8
+   ```
+   A tarefa **"BRK - Keep-Alive Cookie"** roda `keepalive_brk.js`: um GET autenticado em
+   `/Motorista/Listar` reseta o timeout de ociosidade do ASP.NET. Exit 0 = viva · 5 = expirada.
+
+> **Por que só isso basta:** a sessão do BRK **não rotaciona cookie** — o `cokiename`
+> (ticket de auth, ~2400 chars) é estático. Basta "tocar" a sessão dentro da janela de
+> ociosidade (~20 min); sem tráfego ela morre (era a causa do "cookie não funciona"). O
+> `cf_clearance` sobrevive porque não re-desafiamos o Cloudflare por HTTP.
+
+> ⚠️ Refaça o **login** (passo 1) quando a sessão morrer de vez (reboot longo sem
+> keep-alive, logout no BRK, ou expiração do `cf_clearance`). O keep-alive sinaliza
+> isso (exit 5 / log de "SESSÃO EXPIRADA").
+
+> 🐛 Captura correta do cookie: o refresher exige `cokiename`/`ASPXAUTH`/`CodUsuario`
+> (não o `FotoUsuarioLogado`, que aparece cedo demais) + confirmação funcional antes de
+> exportar — senão exportava um cookie que não autentica por HTTP.
+
+---
+
+## Alternativa: refresh headed via perfil dedicado (mesma lógica do SPX)
 
 Em vez de depender de um Chrome aberto **manualmente** (`:9222` + CDP, abaixo), este
 modo lança um **navegador próprio com perfil PERSISTENTE DEDICADO** em
