@@ -82,6 +82,10 @@ const schemaSql = `
     sheet_synced_at timestamptz,
     viagem_id uuid,
     ordem_viagem integer,
+    reserved_driver_id uuid,
+    reserved_claim_id uuid,
+    reserved_at timestamptz,
+    reserved_until timestamptz,
     is_recurring boolean NOT NULL DEFAULT false,
     recurrence_interval_days integer,
     recurrence_parent_id uuid,
@@ -121,8 +125,36 @@ const schemaSql = `
     driver_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     status text NOT NULL,
     queue_position integer,
+    rejected_reason text,
     claimed_at timestamptz NOT NULL DEFAULT now(),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.load_claim_events (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    load_id uuid,
+    claim_id uuid,
+    driver_id uuid,
+    event_type text NOT NULL,
+    event_payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+    actor_type text,
+    actor_id text,
     created_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.cargas_casadas (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    status text NOT NULL DEFAULT 'rascunho',
+    valor_total numeric,
+    reserved_driver_id uuid,
+    reserved_claim_id uuid,
+    booked_driver_id uuid,
+    version integer NOT NULL DEFAULT 1,
+    published_at timestamptz,
+    created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
   );
 
   CREATE TABLE public.route_metrics_cache (
@@ -399,10 +431,12 @@ export async function seedCargo(overrides = {}) {
         created_by,
         created_at,
         is_recurring,
-        recurrence_interval_days
+        recurrence_interval_days,
+        viagem_id,
+        ordem_viagem
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
       )
     `,
     [
@@ -428,6 +462,31 @@ export async function seedCargo(overrides = {}) {
       overrides.created_at ?? new Date().toISOString(),
       overrides.is_recurring ?? false,
       overrides.recurrence_interval_days ?? null,
+      overrides.viagem_id ?? null,
+      overrides.ordem_viagem ?? null,
+    ],
+  );
+
+  return { id };
+}
+
+export async function seedPacote(overrides = {}) {
+  const id = overrides.id ?? crypto.randomUUID();
+
+  await query(
+    `
+      INSERT INTO public.cargas_casadas (
+        id, status, valor_total, version, published_at, created_by
+      )
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `,
+    [
+      id,
+      overrides.status ?? "rascunho",
+      overrides.valor_total ?? null,
+      overrides.version ?? 1,
+      overrides.published_at ?? null,
+      overrides.created_by ?? null,
     ],
   );
 
