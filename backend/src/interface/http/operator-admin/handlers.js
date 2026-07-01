@@ -74,6 +74,8 @@ import { reassignMonitorAllocations } from "../../../application/operator-admin/
 import { assignReservaToCarga } from "../../../application/operator-admin/use-cases/assign-reserva-to-carga.js";
 import { setMonitorAllocationPin } from "../../../application/operator-admin/use-cases/set-monitor-allocation-pin.js";
 import { listSystemCargasForMonitor } from "../../../application/operator-admin/use-cases/list-system-cargas-monitor.js";
+import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-admin/use-cases/planilha-availability.js";
+import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 import { attachRouteCodes } from "../../../application/operator-admin/use-cases/route-codes.js";
 import { attachRouteRegistration } from "../../../application/operator-admin/use-cases/attach-route-registration.js";
 import { updateMonitorCargo } from "../../../application/operator-admin/use-cases/update-monitor-cargo.js";
@@ -723,14 +725,17 @@ function compareMonitorRows(a, b) {
 // Monta a visão UNIFICADA do Monitor: linhas da planilha ∪ cargas do sistema
 // (intercaladas por data), com reservas no fim. Cada linha ganha rowKey/source.
 // Summary recalculado sobre as linhas operacionais quando há cargas do sistema.
-function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary }) {
+function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh = {}, now = null }) {
   // A planilha inteira é de um cliente (ex.: Shopee) — anexa o nome a cada linha
   // da planilha. Cargas do sistema já trazem o próprio cliente (cliente_id→nome).
   const sheetClient = getSheetClientName();
-  const sheetRows = baseRows.map((r) => ({
-    ...(r.rowKey ? r : { ...r, rowKey: `sheet:${r.lh}`, source: "planilha" }),
-    cliente: r.cliente ?? sheetClient,
-  }));
+  const sheetRows = baseRows.map((r) => {
+    const withMeta = r.rowKey ? r : { ...r, rowKey: `sheet:${r.lh}`, source: "planilha" };
+    const withClient = { ...withMeta, cliente: withMeta.cliente ?? sheetClient };
+    // "Disponível" só para quem está REALMENTE aberto pro motorista (mesma regra
+    // do /motorista). Fechadas passam a "Expirada"/"Fechada" em vez de "Disponível".
+    return applyPlanilhaAvailabilityStatus(withClient, { openLhSet, allocByLh, now });
+  });
   const operational = [...sheetRows, ...systemRows].sort(compareMonitorRows);
   const reservas = reservaRows.map((r) => (r.rowKey ? r : { ...r, rowKey: `reserva:${r.lh}`, source: "reserva" }));
   const items = reservas.length ? [...operational, ...reservas] : operational;
@@ -782,6 +787,39 @@ export async function resolveSheetMonitorResponse(request) {
         correlationId,
         message: allocErr instanceof Error ? allocErr.message : String(allocErr),
       });
+    }
+
+    // Conjunto de LHs da planilha ABERTAS pro motorista — MESMA regra do /motorista
+    // (buildDriverLoadFilters): status OPEN, pública, futura, sem motorista efetivo.
+    // Usado p/ o Monitor só marcar "Disponível" quem realmente aparece pro motorista;
+    // as demais linhas "vazias" viram "Expirada"/"Fechada". Relógio de São Paulo
+    // (cargas.data/horario são horário do Brasil). Falha aqui NÃO é fatal: openLhSet
+    // fica null e a regra não é aplicada (Monitor mantém o comportamento anterior).
+    const { dateIso: monitorTodayIso, timeIso: monitorNowTimeIso } = getSaoPauloWallClock();
+    const now = { todayIso: monitorTodayIso, nowTimeIso: monitorNowTimeIso };
+    let openLhSet = null;
+    try {
+      const openRows = await withPgClient((client) =>
+        client
+          .query(
+            `SELECT sheet_lh FROM public.cargas
+             WHERE status = 'OPEN'
+               AND COALESCE(is_template, false) = false
+               AND sheet_lh IS NOT NULL
+               AND COALESCE(alloc_motorista, sheet_motorista, '') = ''
+               AND (data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))
+               AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'`,
+            [monitorTodayIso, monitorTodayIso, monitorNowTimeIso],
+          )
+          .then((res) => res.rows),
+      );
+      openLhSet = new Set(openRows.map((r) => r.sheet_lh).filter(Boolean));
+    } catch (openErr) {
+      logStructuredEvent("warn", "sheet-monitor.open-lhs-read-failed", {
+        correlationId,
+        message: openErr instanceof Error ? openErr.message : String(openErr),
+      });
+      // openLhSet permanece null → regra não aplicada (comportamento anterior).
     }
 
     // Motoristas em RESERVA (standby por rota) — linhas que NÃO vêm da planilha
@@ -888,7 +926,7 @@ export async function resolveSheetMonitorResponse(request) {
 
           // Return the freshly-parsed rows immediately — no extra DB read needed.
           // Inclui o enriquecimento JÁ salvo (senão o refresh "apaga" os selos).
-          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary });
+          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now });
           await attachRouteCodes(supabaseClient, unified.items, correlationId);
           await attachRouteRegistration(supabaseClient, unified.items, correlationId);
           const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
@@ -958,6 +996,9 @@ export async function resolveSheetMonitorResponse(request) {
         systemRows,
         reservaRows,
         baseSummary: snapshot.summary_json ?? emptySummary,
+        openLhSet,
+        allocByLh,
+        now,
       });
       await attachRouteCodes(supabaseClient, unified.items, correlationId);
       await attachRouteRegistration(supabaseClient, unified.items, correlationId);
