@@ -81,11 +81,43 @@ const schemaSql = `
     sheet_cavalo text,
     sheet_carreta text,
     sheet_status text,
+    alloc_motorista text,
+    alloc_cavalo text,
+    alloc_carreta text,
+    alloc_status text,
+    alloc_tipo text,
+    alloc_source text,
+    alloc_updated_at timestamptz,
+    alloc_updated_by uuid,
+    alloc_pinned boolean NOT NULL DEFAULT false,
+    alloc_pinned_at timestamptz,
+    alloc_pinned_by uuid,
     sheet_synced_at timestamptz,
     viagem_id uuid,
     ordem_viagem integer,
+    is_recurring boolean NOT NULL DEFAULT false,
+    recurrence_interval_days integer,
+    recurrence_parent_id uuid,
+    lh_manual text,
+    version integer NOT NULL DEFAULT 0,
     created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.monitor_reservas (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    motorista text NOT NULL DEFAULT '',
+    cavalo text NOT NULL DEFAULT '',
+    carreta text NOT NULL DEFAULT '',
+    origem text NOT NULL DEFAULT '',
+    destino text NOT NULL DEFAULT '',
+    route_key text NOT NULL DEFAULT '',
+    origin_lh text,
+    status text NOT NULL DEFAULT 'RESERVA',
+    active boolean NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    created_by uuid,
     updated_at timestamptz NOT NULL DEFAULT now()
   );
 
@@ -397,10 +429,12 @@ export async function seedCargo(overrides = {}) {
         sheet_data_carregamento,
         sheet_data_descarga,
         created_by,
-        created_at
+        created_at,
+        is_recurring,
+        recurrence_interval_days
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
       )
     `,
     [
@@ -424,6 +458,8 @@ export async function seedCargo(overrides = {}) {
       overrides.sheet_data_descarga ?? "2026-04-09 12:00",
       overrides.created_by ?? null,
       overrides.created_at ?? new Date().toISOString(),
+      overrides.is_recurring ?? false,
+      overrides.recurrence_interval_days ?? null,
     ],
   );
 

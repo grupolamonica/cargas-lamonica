@@ -26,6 +26,8 @@ interface CargoData {
   cliente_id?: string;
   status: string;
   is_template: boolean;
+  is_recurring?: boolean;
+  recurrence_interval_days?: number | null;
   sheet_data_carregamento?: string;
   sheet_data_descarga?: string;
 }
@@ -107,6 +109,8 @@ const CargoModal = ({
     cliente_id: "",
     status: DRAFT_STATUS,
     is_template: false,
+    is_recurring: false,
+    recurrence_interval_days: 1,
   });
 
   useEffect(() => {
@@ -133,6 +137,8 @@ const CargoModal = ({
       cliente_id: "",
       status: DRAFT_STATUS,
       is_template: false,
+      is_recurring: false,
+      recurrence_interval_days: 1,
       sheet_data_carregamento: "",
       sheet_data_descarga: "",
     });
@@ -479,6 +485,56 @@ const CargoModal = ({
                 ? "Essa carga não vai aparecer no portal geral do motorista."
                 : "Essa carga vai aparecer normalmente na listagem do motorista."}
             </p>
+          </div>
+
+          <div className="admin-card-surface rounded-2xl border px-4 py-4 shadow-[0_14px_28px_-24px_hsl(223_56%_12%/0.18)]">
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                checked={form.is_recurring ?? false}
+                onChange={(event) =>
+                  setForm((currentForm) => ({
+                    ...currentForm,
+                    is_recurring: event.target.checked,
+                    recurrence_interval_days: event.target.checked
+                      ? currentForm.recurrence_interval_days && currentForm.recurrence_interval_days > 0
+                        ? currentForm.recurrence_interval_days
+                        : 1
+                      : currentForm.recurrence_interval_days,
+                  }))
+                }
+                className="mt-0.5 h-4 w-4 cursor-pointer rounded border-border accent-primary"
+              />
+              <span>
+                <span className="block text-sm font-semibold text-foreground">Carga recorrente</span>
+                <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
+                  A carga se renova sozinha para a próxima data no mesmo horário e, quando reservada, gera automaticamente uma cópia que continua na fila.
+                </span>
+              </span>
+            </label>
+
+            {form.is_recurring ? (
+              <div className="mt-3 flex items-center gap-2 pl-7">
+                <span className="text-xs font-medium text-muted-foreground">Repete a cada</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={form.recurrence_interval_days ?? 1}
+                  onChange={(event) => {
+                    const parsed = Number.parseInt(event.target.value, 10);
+                    setForm((currentForm) => ({
+                      ...currentForm,
+                      recurrence_interval_days: Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 365) : 1,
+                    }));
+                  }}
+                  className={`${inputClass} w-20`}
+                />
+                <span className="text-xs font-medium text-muted-foreground">
+                  {(form.recurrence_interval_days ?? 1) === 1 ? "dia (diária)" : "dias"}
+                </span>
+              </div>
+            ) : null}
           </div>
 
           <div className="grid grid-cols-2 gap-4">

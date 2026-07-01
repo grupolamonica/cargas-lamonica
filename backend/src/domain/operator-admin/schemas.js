@@ -114,6 +114,10 @@ const cargoMutationBaseShape = {
   driver_visibility: z.enum(DRIVER_VISIBILITY_OPTIONS).default("PUBLIC"),
   cliente_id: optionalUuid,
   is_template: z.boolean(),
+  // Recorrência: carga que se renova sozinha (auto-avanço da data) e clona ao
+  // ser reservada. recurrence_interval_days NULL/ausente => diário (tratado como 1).
+  is_recurring: z.boolean().optional().default(false),
+  recurrence_interval_days: z.number().int().min(1).max(365).nullable().optional(),
   distancia_km: optionalNumeric,
   duracao_horas: optionalNumeric,
   sheet_data_carregamento: optionalTrimmedString,

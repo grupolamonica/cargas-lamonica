@@ -56,7 +56,7 @@ export default defineConfig(({ mode }) => {
     port: 3000,
     allowedHosts: true,
     proxy: {
-      "/api": "http://localhost:3001",
+      "/api": "http://localhost:3007",
       "/ocr-api": {
         target: "http://localhost:8765",
         rewrite: (path) => path.replace(/^\/ocr-api/, ""),
@@ -65,7 +65,7 @@ export default defineConfig(({ mode }) => {
   },
   preview: {
     proxy: {
-      "/api": "http://localhost:3001",
+      "/api": "http://localhost:3007",
       "/ocr-api": {
         target: "http://localhost:8765",
         rewrite: (path) => path.replace(/^\/ocr-api/, ""),

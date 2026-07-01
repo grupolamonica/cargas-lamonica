@@ -55,6 +55,13 @@ import {
   resolveSheetMonitorEnrichResponse,
   resolveSheetMonitorResponse,
   resolveSheetMonitorRowDetailResponse,
+  resolveUpdateMonitorAllocationResponse,
+  resolveReassignMonitorAllocationsResponse,
+  resolveAssignReservaResponse,
+  resolveSetMonitorAllocationPinResponse,
+  resolveUpdateMonitorCargoResponse,
+  resolvePreviewAspxAllocationResponse,
+  resolveAssignAspxAllocationsResponse,
   resolveToggleOperatorCargoStatusResponse,
   resolveUpdateOperatorCargoResponse,
   resolveUpdateOperatorClienteResponse,
@@ -119,6 +126,7 @@ import { draftFileUpload } from "./upload-middleware.js";
 
 import { resolveRouteInfoResponse } from "./route-info.handler.js";
 import { resolveSheetSyncResponse } from "./sheet-sync.handler.js";
+import { resolveAdvanceRecurringCargasResponse } from "./recurring-cargo.handler.js";
 
 // Adapter: mescla req.params em req.query para handlers que usam getQueryParam(req, name).
 // getQueryParam lê req.query[name]; params de URL chegam em req.params.
@@ -151,6 +159,9 @@ export function registerRoutes(app) {
 
   // Sheet sync
   router.get("/api/sheet-sync", wrap(resolveSheetSyncResponse));
+
+  // Cargas recorrentes — avanço da data (fallback p/ cron externo; CRON_SECRET)
+  router.post("/api/cargas/advance-recurring", wrap(resolveAdvanceRecurringCargasResponse));
 
   // Route info (cache headers em 200)
   router.get("/api/route-info", async (req, res) => {
@@ -324,6 +335,13 @@ export function registerRoutes(app) {
   router.get("/api/operator/sheet-monitor", wrap(resolveSheetMonitorResponse));
   router.get("/api/operator/sheet-monitor/row", wrap(resolveSheetMonitorRowDetailResponse));
   router.post("/api/operator/sheet-monitor/enrich", wrap(resolveSheetMonitorEnrichResponse));
+  router.patch("/api/operator/sheet-monitor", wrap(resolveUpdateMonitorAllocationResponse));
+  router.post("/api/operator/sheet-monitor/reassign", wrap(resolveReassignMonitorAllocationsResponse));
+  router.post("/api/operator/sheet-monitor/assign-reserva", wrap(resolveAssignReservaResponse));
+  router.post("/api/operator/sheet-monitor/pin", wrap(resolveSetMonitorAllocationPinResponse));
+  router.patch("/api/operator/sheet-monitor/cargo", wrap(resolveUpdateMonitorCargoResponse));
+  router.post("/api/operator/sheet-monitor/aspx-preview", wrap(resolvePreviewAspxAllocationResponse));
+  router.post("/api/operator/sheet-monitor/aspx-assign", wrap(resolveAssignAspxAllocationsResponse));
 
   // PII Redaction
   router.post("/api/operator/pii-redaction", wrap(resolveRedactPublicLeadPiiResponse));

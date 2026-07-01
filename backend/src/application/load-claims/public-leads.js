@@ -22,6 +22,7 @@ import {
 import { createCorrelationId } from "./helpers.js";
 import { logLoadClaimEvent } from "./logging.js";
 import { LOAD_STATUS, PUBLIC_LEAD_EVENT_TYPE, PUBLIC_LEAD_STATUS } from "../../domain/load-claims/constants.js";
+import { addDaysIso, computeNextRecurrenceDate, toIsoDate } from "../../domain/recurrence.js";
 import { lookupAspxDriverByCpf } from "../../infrastructure/aspx/aspx-directory.js";
 import { loadDriverVinculoMap, normalizeDriverNameKey } from "../google-sheets/driver-vinculos.js";
 const DEFAULT_PUBLIC_LEAD_PRE_REGISTRATION_MAX_ATTEMPTS = 6;
@@ -1805,10 +1806,10 @@ async function listOperatorPublicLoadLeadsUncached({ correlationId }) {
               cargas.sheet_lh AS load_sheet_lh,
               cargas.sheet_data_carregamento AS load_sheet_data_carregamento,
               cargas.sheet_data_descarga AS load_sheet_data_descarga,
-              cargas.sheet_motorista AS load_sheet_motorista,
-              cargas.sheet_cavalo AS load_sheet_cavalo,
-              cargas.sheet_carreta AS load_sheet_carreta,
-              cargas.sheet_status AS load_sheet_status,
+              COALESCE(cargas.alloc_motorista, cargas.sheet_motorista) AS load_sheet_motorista,
+              COALESCE(cargas.alloc_cavalo, cargas.sheet_cavalo) AS load_sheet_cavalo,
+              COALESCE(cargas.alloc_carreta, cargas.sheet_carreta) AS load_sheet_carreta,
+              COALESCE(cargas.alloc_status, cargas.sheet_status) AS load_sheet_status,
               cargas.cliente_id AS load_cliente_id,
               cargas.viagem_id AS load_viagem_id,
               cargas.ordem_viagem AS load_ordem_viagem,
@@ -1896,9 +1897,9 @@ async function listOperatorPublicLoadLeadsUncached({ correlationId }) {
             cargas.sheet_lh AS load_sheet_lh,
             cargas.sheet_data_carregamento AS load_sheet_data_carregamento,
             cargas.sheet_data_descarga AS load_sheet_data_descarga,
-            cargas.sheet_motorista AS load_sheet_motorista,
-            cargas.sheet_cavalo AS load_sheet_cavalo,
-            cargas.sheet_carreta AS load_sheet_carreta,
+            COALESCE(cargas.alloc_motorista, cargas.sheet_motorista) AS load_sheet_motorista,
+            COALESCE(cargas.alloc_cavalo, cargas.sheet_cavalo) AS load_sheet_cavalo,
+            COALESCE(cargas.alloc_carreta, cargas.sheet_carreta) AS load_sheet_carreta,
             cargas.cliente_id AS load_cliente_id,
             cargas.viagem_id AS load_viagem_id,
             cargas.ordem_viagem AS load_ordem_viagem,
@@ -1962,10 +1963,10 @@ async function listOperatorPublicLoadLeadsUncached({ correlationId }) {
             c.sheet_lh AS load_sheet_lh,
             c.sheet_data_carregamento AS load_sheet_data_carregamento,
             c.sheet_data_descarga AS load_sheet_data_descarga,
-            c.sheet_motorista AS load_sheet_motorista,
-            c.sheet_cavalo AS load_sheet_cavalo,
-            c.sheet_carreta AS load_sheet_carreta,
-            c.sheet_status AS load_sheet_status,
+            COALESCE(c.alloc_motorista, c.sheet_motorista) AS load_sheet_motorista,
+            COALESCE(c.alloc_cavalo, c.sheet_cavalo) AS load_sheet_cavalo,
+            COALESCE(c.alloc_carreta, c.sheet_carreta) AS load_sheet_carreta,
+            COALESCE(c.alloc_status, c.sheet_status) AS load_sheet_status,
             c.cliente_id AS load_cliente_id,
             c.viagem_id AS load_viagem_id,
             c.ordem_viagem AS load_ordem_viagem,
@@ -2281,6 +2282,117 @@ export async function approvePublicLoadLead({ loadId, leadId, operatorId, correl
     );
     const reservedLoad = reservedLoadRows[0] ?? null;
 
+    // Clone-on-reserve: se a carga reservada for recorrente, gera a próxima
+    // ocorrência (cópia OPEN, fila vazia) e desmarca a recorrência da reservada
+    // — que agora é uma carga concreta. Mantém a invariante "1 carga recorrente
+    // aberta por cadeia". É best-effort: isolado num SAVEPOINT para que QUALQUER
+    // falha (inclusive colunas de recorrência ausentes em schema legado) reverta
+    // só o clone, nunca a reserva.
+    let recurrenceChildId = null;
+    if (reservedLoad) {
+      try {
+        // runWithTransactionSavepoint isola o clone num SAVEPOINT no Postgres
+        // real (qualquer falha reverte só o clone, nunca a reserva) e degrada
+        // para execução direta no motor de teste in-memory (sem SAVEPOINT).
+        recurrenceChildId = await runWithTransactionSavepoint(client, async () => {
+          // Lê os campos da carga reservada; a próxima data é calculada em JS
+          // (parent.data + intervalo) — sem to_char/cast/aritmética no SQL,
+          // para máxima portabilidade.
+          const { rows: srcRows } = await client.query(
+            `
+              SELECT
+                data, horario, origem, destino, distancia_km, duracao_horas,
+                perfil, valor, bonus, bonus_exigencias, driver_visibility,
+                cliente_id, created_by, sheet_data_carregamento, sheet_data_descarga,
+                is_recurring,
+                COALESCE(recurrence_interval_days, 1) AS interval_days,
+                COALESCE(recurrence_parent_id, id) AS parent_id
+              FROM public.cargas
+              WHERE id = $1
+            `,
+            [loadId],
+          );
+          const src = srcRows[0] ?? null;
+          if (!src || src.is_recurring !== true) {
+            return null;
+          }
+
+          const intervalDays = Number(src.interval_days) > 0 ? Number(src.interval_days) : 1;
+          // Próxima ocorrência: avança 1 intervalo a partir da mãe e então
+          // garante visibilidade pelo MESMO critério do job de auto-avanço
+          // (computeNextRecurrenceDate). Assim a cópia nunca nasce no passado/
+          // invisível, mesmo se a data da mãe estiver defasada na reserva.
+          const startIso = addDaysIso(toIsoDate(src.data), intervalDays);
+          const horario = String(src.horario || "00:00:00").slice(0, 8);
+          const nextDataIso = computeNextRecurrenceDate(startIso, horario, intervalDays, new Date());
+
+          const { rows: childRows } = await client.query(
+            `
+              INSERT INTO public.cargas (
+                data, horario, origem, destino, distancia_km, duracao_horas,
+                perfil, valor, bonus, bonus_exigencias, driver_visibility,
+                cliente_id, status, is_template, created_by,
+                sheet_data_carregamento, sheet_data_descarga,
+                is_recurring, recurrence_interval_days, recurrence_parent_id
+              )
+              VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10, $11,
+                $12, 'OPEN', false, $13,
+                $14, $15,
+                true, $16, $17
+              )
+              RETURNING id
+            `,
+            [
+              nextDataIso, src.horario, src.origem, src.destino, src.distancia_km, src.duracao_horas,
+              src.perfil, src.valor, src.bonus, src.bonus_exigencias, src.driver_visibility,
+              src.cliente_id, src.created_by,
+              src.sheet_data_carregamento, src.sheet_data_descarga,
+              intervalDays, src.parent_id,
+            ],
+          );
+
+          if (childRows.length === 0) {
+            return null;
+          }
+
+          await client.query(
+            `UPDATE public.cargas SET is_recurring = false, updated_at = now() WHERE id = $1`,
+            [loadId],
+          );
+          return childRows[0].id;
+        });
+
+        if (recurrenceChildId) {
+          logLoadClaimEvent("info", "load-public-leads.approve.recurrence-cloned", {
+            correlation_id: resolvedCorrelationId,
+            load_id: loadId,
+            cloned_load_id: recurrenceChildId,
+            operator_id: operatorId,
+          });
+        }
+      } catch (recurrenceError) {
+        // Distingue falha benigna (colunas de recorrência ausentes em schema
+        // legado — degrada para "sem clone") de falha genuína (a cadeia morre
+        // silenciosamente: a mãe fica RESERVED ainda is_recurring=true e o job
+        // de avanço não a alcança). Falha genuína sobe para "error" para virar
+        // alerta/observável; a reserva, já isolada por SAVEPOINT, não é afetada.
+        const detail = `${recurrenceError?.message || ""} ${recurrenceError?.detail || ""}`.toLowerCase();
+        const benignMissingColumn =
+          detail.includes("is_recurring") ||
+          detail.includes("recurrence_interval_days") ||
+          detail.includes("recurrence_parent_id");
+        logLoadClaimEvent(benignMissingColumn ? "warn" : "error", "load-public-leads.approve.recurrence-clone-failed", {
+          correlation_id: resolvedCorrelationId,
+          load_id: loadId,
+          operator_id: operatorId,
+          benign_missing_column: benignMissingColumn,
+          error: recurrenceError?.message,
+        });
+      }
+    }
+
     logLoadClaimEvent("info", "load-public-leads.approve.reserved", {
       correlation_id: resolvedCorrelationId,
       load_id: loadId,
@@ -2288,6 +2400,7 @@ export async function approvePublicLoadLead({ loadId, leadId, operatorId, correl
       operator_id: operatorId,
       previous_load_status: loadRow.status,
       next_load_status: reservedLoad?.status || null,
+      recurrence_child_id: recurrenceChildId,
     });
 
     return {

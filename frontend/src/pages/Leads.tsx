@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User, UserPlus } from "lucide-react";
+import { AlertTriangle, Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Download, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User, UserPlus } from "lucide-react";
 import { differenceInDays } from "date-fns";
 import { toast } from "sonner";
 
@@ -138,6 +138,29 @@ function buildDriverSubLabel(lead: OperatorLeadGroup["leads"][number]) {
   }
   // Sem nome: ja exibimos o phone como label principal; sublabel sinaliza falta de cadastro.
   return cpfMask ? `CPF ${cpfMask} · sem cadastro` : "sem cadastro";
+}
+
+/**
+ * Escapa um valor para célula CSV. Usa `;` como separador (padrão do Excel
+ * pt-BR) — envolve em aspas quando contém `;`, aspas ou quebra de linha.
+ */
+function csvCell(value: unknown): string {
+  const s = value == null ? "" : String(value);
+  return /[";\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadCsv(filename: string, headers: string[], rows: string[][]) {
+  const lines = [headers, ...rows].map((cols) => cols.map(csvCell).join(";"));
+  // BOM (U+FEFF) para o Excel reconhecer UTF-8 e não corromper acentos.
+  const blob = new Blob([`\uFEFF${lines.join("\r\n")}`], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
@@ -678,6 +701,60 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     });
   };
 
+  // Exporta o histórico filtrado (todas as páginas, respeitando filtros ativos)
+  // para CSV — uma linha por candidatura. Usado no "Histórico fila".
+  const handleExport = () => {
+    const headers = [
+      "Carga", "LH", "Cliente", "Origem", "Destino", "Status carga",
+      "Coleta", "Entrega", "Perfil",
+      "Motorista", "CPF", "Telefone", "Cavalo", "Carreta", "Tipo veículo",
+      "Status lead", "Validação",
+    ];
+    const rows: string[][] = [];
+    for (const group of filteredByCliente) {
+      const sheetAllocation = group.load.sheetLh ? sheetAllocationByLh.get(group.load.sheetLh) : undefined;
+      const effectiveStatus = sheetAllocation?.status || group.load.sheetStatus || group.load.status;
+      const statusLabel =
+        STATUS_LABELS[effectiveStatus] ?? STATUS_LABELS[(effectiveStatus || "").toUpperCase()] ?? effectiveStatus ?? "";
+      const coleta =
+        group.load.sheetDataCarregamento ||
+        formatShortDateTime(buildDisplayDateTime(group.load.data, group.load.horario), "");
+      const entrega = group.load.sheetDataDescarga || "";
+      for (const lead of group.leads) {
+        rows.push([
+          group.load.id,
+          group.load.sheetLh ?? "",
+          group.load.clienteNome ?? "",
+          group.load.origem,
+          group.load.destino,
+          statusLabel,
+          coleta,
+          entrega,
+          group.load.perfil,
+          lead.driverName ?? sheetAllocation?.driverName ?? "",
+          lead.cpf ?? "",
+          formatPhoneDisplay(lead.phone),
+          lead.horsePlate ?? "",
+          buildTrailerPlateLabel(lead),
+          lead.vehicleType ?? "",
+          STATUS_LABELS[lead.status] ?? lead.status ?? "",
+          lead.validation?.overallStatus ?? "",
+        ]);
+      }
+    }
+
+    if (rows.length === 0) {
+      toast.info("Nada para exportar com os filtros atuais.");
+      return;
+    }
+
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+    downloadCsv(`historico-fila-${stamp}.csv`, headers, rows);
+    toast.success(`${rows.length} registro${rows.length === 1 ? "" : "s"} exportado${rows.length === 1 ? "" : "s"}.`);
+  };
+
   return (
     <div>
       <DashboardHeader title={historicoMode ? "Hist\u00f3rico fila" : "Fila"} />
@@ -827,7 +904,18 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
           </div>
 
           {filteredGroups.length > 0 ? (
-            <div className="mt-4 flex justify-end">
+            <div className="mt-4 flex flex-wrap justify-end gap-3">
+              {historicoMode ? (
+                <button
+                  type="button"
+                  onClick={handleExport}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-emerald-400/50 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-700 transition-colors duration-200 hover:bg-emerald-500/20 dark:bg-emerald-500/15 dark:text-emerald-200"
+                  title="Exporta o histórico filtrado para CSV (abre no Excel)"
+                >
+                  <Download className="h-4 w-4" />
+                  Exportar CSV
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={handleToggleAllLoads}

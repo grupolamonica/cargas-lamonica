@@ -326,6 +326,47 @@ describe("operator-admin service", () => {
     ]);
   });
 
+  it("oculta carga alocada SÓ pelo Monitor (alloc_motorista) mesmo sem sheet_motorista", async () => {
+    const cliente = await seedCliente({ nome: "Cliente Alloc Monitor" });
+    // Carga limpa — deve aparecer.
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Salvador / BA",
+      destino: "Simoes Filho / BA",
+      perfil: "CARRETA",
+      status: "OPEN",
+      is_template: false,
+      data: "2099-05-08",
+      driver_visibility: "PUBLIC",
+    });
+    // Alocada pelo operador no Monitor (alloc_motorista), com sheet_motorista vazio:
+    // a alocação efetiva COALESCE(alloc_motorista, sheet_motorista) deve ESCONDER.
+    const allocByMonitor = await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Feira de Santana / BA",
+      destino: "Simoes Filho / BA",
+      perfil: "CARRETA",
+      status: "OPEN",
+      is_template: false,
+      data: "2099-05-09",
+      driver_visibility: "PUBLIC",
+    });
+    await query(`UPDATE public.cargas SET alloc_motorista = $2, alloc_source = 'operator', alloc_updated_at = now() WHERE id = $1`, [
+      allocByMonitor.id,
+      "MARIA SOUZA",
+    ]);
+
+    const response = await service.fetchDriverLoadsReadModel({
+      query: { page: "1", pageSize: "10" },
+      correlationId: "corr-alloc-monitor",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const origens = response.payload.items.map((item) => item.origem);
+    expect(origens).toContain("Salvador / BA");
+    expect(origens).not.toContain("Feira de Santana / BA");
+  });
+
   it("permite ajustar a visibilidade de uma carga reservada sem invalidar o status operacional", async () => {
     const operator = await seedUser({ email: "operador-update-reserved@teste.local" });
     const cliente = await seedCliente({ nome: "Cliente Reserved" });

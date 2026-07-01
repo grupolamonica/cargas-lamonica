@@ -892,7 +892,9 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
     // `sheet_status` e mantido apenas no audit log (para forensics), nao no
     // gate. Statuses como 'AGUARDANDO CARREGAMENTO' indicam pipeline aberto
     // na planilha, nao alocacao.
-    const sheetMotoristaLocked = String(loadRow.sheet_motorista ?? "").trim() !== "";
+    // Alocação efetiva: override do operador no Monitor (alloc_motorista) tem
+    // precedência sobre a planilha (sheet_motorista).
+    const sheetMotoristaLocked = String(loadRow.alloc_motorista ?? loadRow.sheet_motorista ?? "").trim() !== "";
     const sheetStatusLocked = String(loadRow.sheet_status ?? "").trim() !== "";
     const sheetLocked = sheetMotoristaLocked;
 

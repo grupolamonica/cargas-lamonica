@@ -281,6 +281,37 @@ async function bootstrap() {
     console.info("[sheet-sync-periodic] desabilitado (SHEET_SYNC_INLINE=false) — esperando cron externo");
   }
 
+  // 4b. Auto-avanço de cargas recorrentes — move a data para a próxima
+  //     ocorrência quando o horário passa, mantendo a carga sempre na fila sem
+  //     o operador recriar. No-op quando não há cargas recorrentes abertas.
+  //     RECURRING_CARGO_ADVANCE_INLINE=false desliga o job inline (deixa para o
+  //     endpoint POST /api/cargas/advance-recurring via cron externo).
+  if (process.env.RECURRING_CARGO_ADVANCE_INLINE !== "false") {
+    let advancingRecurring = false;
+    const recurIntervalMin = Number(process.env.RECURRING_CARGO_ADVANCE_INTERVAL_MIN || 5);
+    const recurIntervalMs = Math.max(1, recurIntervalMin) * 60 * 1000;
+
+    setInterval(async () => {
+      if (advancingRecurring) return;
+      advancingRecurring = true;
+      try {
+        const { advanceRecurringCargas } = await import(
+          "./application/operator-admin/use-cases/advance-recurring-cargas.js"
+        );
+        const { advanced } = await advanceRecurringCargas();
+        if (advanced > 0) {
+          console.info(`[recurring-cargo-advance] ${advanced} carga(s) recorrente(s) avançada(s)`);
+        }
+      } catch (err) {
+        console.error("[recurring-cargo-advance] erro:", err?.message);
+      } finally {
+        advancingRecurring = false;
+      }
+    }, recurIntervalMs);
+  } else {
+    console.info("[recurring-cargo-advance] desabilitado (RECURRING_CARGO_ADVANCE_INLINE=false) — esperando cron externo");
+  }
+
   // 5. Iniciar HTTP server
   const server = app.listen(PORT, () => {
     console.log(`[lamonica-backend] Servidor ouvindo em http://localhost:${PORT}`);

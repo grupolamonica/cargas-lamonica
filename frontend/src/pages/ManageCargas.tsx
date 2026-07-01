@@ -59,6 +59,8 @@ interface CargoFormData {
   cliente_id?: string;
   status: string;
   is_template: boolean;
+  is_recurring?: boolean;
+  recurrence_interval_days?: number | null;
   sheet_data_carregamento?: string;
   sheet_data_descarga?: string;
 }
@@ -505,6 +507,12 @@ const ManageCargas = () => {
             ? editingCargo.status
             : autoAssignedCargo.status,
         is_template: autoAssignedCargo.is_template,
+        is_recurring: autoAssignedCargo.is_recurring ?? false,
+        recurrence_interval_days: autoAssignedCargo.is_recurring
+          ? autoAssignedCargo.recurrence_interval_days && autoAssignedCargo.recurrence_interval_days > 0
+            ? autoAssignedCargo.recurrence_interval_days
+            : 1
+          : null,
         sheet_data_carregamento: autoAssignedCargo.sheet_data_carregamento?.trim() || null,
         sheet_data_descarga: autoAssignedCargo.sheet_data_descarga?.trim() || null,
       };
@@ -1042,6 +1050,14 @@ const ManageCargas = () => {
                             }`}>
                               {cargo.driver_visibility === "PREMIUM" ? "Premium" : "Pública"}
                             </span>
+                            {cargo.is_recurring ? (
+                              <span
+                                className="inline-flex w-fit items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700"
+                                title={`Carga recorrente — repete a cada ${cargo.recurrence_interval_days ?? 1} dia(s) e gera uma cópia ao ser reservada`}
+                              >
+                                ↻ Recorrente
+                              </span>
+                            ) : null}
                           </div>
                         </td>
 
@@ -1240,6 +1256,8 @@ const ManageCargas = () => {
                     : editingCargo.cliente_id || "",
                 status: editingCargo.status,
                 is_template: editingCargo.is_template,
+                is_recurring: editingCargo.is_recurring ?? false,
+                recurrence_interval_days: editingCargo.recurrence_interval_days ?? 1,
                 sheet_data_carregamento: toIsoDatetimeLocal(editingCargo.sheet_data_carregamento),
                 sheet_data_descarga: toIsoDatetimeLocal(editingCargo.sheet_data_descarga),
               }

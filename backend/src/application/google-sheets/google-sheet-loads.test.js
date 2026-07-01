@@ -177,6 +177,9 @@ const SAMPLE_CSV_WITH_ONE_INVALID_ROW = `${SAMPLE_CSV}\n${[
   "11/04/2026",
   "11/04/2026",
 ].join(",")}`;
+// SAMPLE_CSV usa datas de abril/2026 (sempre PASSADO p/ os testes). Variante com
+// datas em 2099 → carga sempre FUTURA, p/ testar a reabertura EXPIRED→OPEN.
+const SAMPLE_CSV_FUTURE = SAMPLE_CSV.replace(/2026/g, "2099");
 const SHEET_CLIENT_ID = "client-shopee";
 
 function createSupabaseMock({
@@ -708,6 +711,95 @@ describe("google sheet loads sync", () => {
     expect(upsertCall[2][0]).toMatchObject({
       sheet_lh: "LT0Q4302267L1",
       status: "RESERVED",
+    });
+  });
+
+  it("reverts EXPIRED loads to OPEN when the sheet re-lists them as available AND future", async () => {
+    const existingId = createSheetLoadId("LT0Q4302267L1");
+    const supabaseClient = createSupabaseMock({
+      existingSheetRows: [
+        {
+          id: existingId,
+          sheet_lh: "LT0Q4302267L1",
+          status: "EXPIRED",
+          valor: 5000,
+          perfil: "CARRETA",
+          bonus: null,
+          distancia_km: null,
+          duracao_horas: null,
+          cliente_id: SHEET_CLIENT_ID,
+          is_template: false,
+          created_by: null,
+        },
+      ],
+    });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV_FUTURE)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV_FUTURE),
+    });
+
+    const result = await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    expect(result.revertedToOpenCount).toBe(1);
+
+    const upsertCall = supabaseClient.calls.find((call) => call[0] === "upsert");
+    expect(upsertCall).toBeTruthy();
+    expect(upsertCall[2][0]).toMatchObject({
+      sheet_lh: "LT0Q4302267L1",
+      status: "OPEN",
+    });
+  });
+
+  it("keeps EXPIRED for a genuinely PAST available load (does not resurrect)", async () => {
+    const existingId = createSheetLoadId("LT0Q4302267L1");
+    const supabaseClient = createSupabaseMock({
+      existingSheetRows: [
+        {
+          id: existingId,
+          sheet_lh: "LT0Q4302267L1",
+          status: "EXPIRED",
+          valor: 5000,
+          perfil: "CARRETA",
+          bonus: null,
+          distancia_km: null,
+          duracao_horas: null,
+          cliente_id: SHEET_CLIENT_ID,
+          is_template: false,
+          created_by: null,
+        },
+      ],
+    });
+    // SAMPLE_CSV = abril/2026 → carga PASSADA → continua EXPIRED (cron a re-expira).
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+
+    const result = await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    expect(result.revertedToOpenCount).toBe(0);
+
+    const upsertCall = supabaseClient.calls.find((call) => call[0] === "upsert");
+    expect(upsertCall).toBeTruthy();
+    expect(upsertCall[2][0]).toMatchObject({
+      sheet_lh: "LT0Q4302267L1",
+      status: "EXPIRED",
     });
   });
 

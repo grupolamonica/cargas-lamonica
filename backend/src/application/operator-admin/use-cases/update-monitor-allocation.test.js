@@ -1,0 +1,180 @@
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  closeTestDatabase,
+  query,
+  resetTestDatabase,
+  seedCargo,
+  seedUser,
+  withPgTransaction,
+} from "../test-harness.js";
+import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
+
+vi.mock("../../../infrastructure/pg/postgres.js", () => ({ withPgTransaction }));
+
+const { updateMonitorAllocation } = await import("./update-monitor-allocation.js");
+
+const LH = "LT-MONITOR-TEST-1";
+
+async function seedSheetCargo() {
+  // Carga oriunda da planilha: id determinístico = createSheetLoadId(lh).
+  const id = createSheetLoadId(LH);
+  await seedCargo({ id, sheet_lh: LH, status: "OPEN" });
+  // seedCargo não insere sheet_motorista/sheet_status — setamos direto.
+  await query(`UPDATE public.cargas SET sheet_motorista = $2, sheet_status = $3 WHERE id = $1`, [
+    id,
+    "MOTORISTA DA PLANILHA",
+    "AGUARDANDO CARREGAMENTO",
+  ]);
+  return id;
+}
+
+async function getAlloc(id) {
+  const { rows } = await query(
+    `SELECT alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_source, alloc_updated_at,
+            sheet_motorista, sheet_status
+     FROM public.cargas WHERE id = $1`,
+    [id],
+  );
+  return rows[0];
+}
+
+describe("updateMonitorAllocation", () => {
+  beforeEach(async () => {
+    await resetTestDatabase();
+    vi.clearAllMocks();
+  });
+
+  afterAll(async () => {
+    await closeTestDatabase();
+  });
+
+  it("grava a alocação do operador em alloc_* sem tocar nos campos sheet_*", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor@teste.local" });
+
+    const res = await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { motorista: "JOAO AGREGADO", cavalo: "ABC1D23", carreta: "DEF4G56", status: "DESCARREGADO" },
+      requestIp: "203.0.113.10",
+      correlationId: "corr-monitor-1",
+    });
+
+    expect(res.statusCode).toBe(200);
+    const row = await getAlloc(id);
+    // alloc_* recebe a decisão do operador
+    expect(row.alloc_motorista).toBe("JOAO AGREGADO");
+    expect(row.alloc_cavalo).toBe("ABC1D23");
+    expect(row.alloc_carreta).toBe("DEF4G56");
+    expect(row.alloc_status).toBe("DESCARREGADO");
+    expect(row.alloc_source).toBe("operator");
+    expect(row.alloc_updated_at).toBeTruthy();
+    // sheet_* (espelho da planilha) permanece intocado
+    expect(row.sheet_motorista).toBe("MOTORISTA DA PLANILHA");
+    expect(row.sheet_status).toBe("AGUARDANDO CARREGAMENTO");
+  });
+
+  it("normaliza string vazia para null (limpa o override e volta a refletir a planilha)", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-clear@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { motorista: "", cavalo: "  ", carreta: null, status: "" },
+      correlationId: "corr-monitor-clear",
+    });
+
+    const row = await getAlloc(id);
+    expect(row.alloc_motorista).toBeNull();
+    expect(row.alloc_cavalo).toBeNull();
+    expect(row.alloc_carreta).toBeNull();
+    expect(row.alloc_status).toBeNull();
+    // sheet_* segue intocado
+    expect(row.sheet_motorista).toBe("MOTORISTA DA PLANILHA");
+  });
+
+  it("carga FIXA: preserva motorista/veículo e deixa passar só o status", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-pin@teste.local" });
+    // Aloca e fixa: alloc_motorista/cavalo definidos + alloc_pinned=true.
+    await query(
+      `UPDATE public.cargas SET alloc_motorista = 'FIXO JOSE', alloc_cavalo = 'PIN1A11', alloc_pinned = true WHERE id = $1`,
+      [id],
+    );
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      // tenta trocar o motorista/veículo (deve ser IGNORADO) e mudar o status (deve passar)
+      payload: { motorista: "OUTRO MOTORISTA", cavalo: "XXX9X99", carreta: "YYY8Y88", status: "DESCARREGADO" },
+      correlationId: "corr-monitor-pin",
+    });
+
+    const row = await getAlloc(id);
+    expect(row.alloc_motorista).toBe("FIXO JOSE");   // preservado
+    expect(row.alloc_cavalo).toBe("PIN1A11");        // preservado
+    expect(row.alloc_status).toBe("DESCARREGADO");   // status passou
+  });
+
+  it("setar status CANCELADO dispara a cascata da rota (motorista desce + gera reserva)", async () => {
+    // Fila DESC: CASC-B(10h, topo) · CASC-A(08h, base). Cancela a do TOPO → desce.
+    const idA = createSheetLoadId("CASC-A");
+    const idB = createSheetLoadId("CASC-B");
+    await seedCargo({ id: idA, sheet_lh: "CASC-A", status: "OPEN", origem: "Salvador / BA", destino: "Feira / BA", horario: "08:00:00" });
+    await seedCargo({ id: idB, sheet_lh: "CASC-B", status: "OPEN", origem: "Salvador / BA", destino: "Feira / BA", horario: "10:00:00" });
+    await query(`UPDATE public.cargas SET sheet_motorista = 'MOT A' WHERE id = $1`, [idA]);
+    await query(`UPDATE public.cargas SET sheet_motorista = 'MOT B' WHERE id = $1`, [idB]);
+    const operator = await seedUser({ email: "op-monitor-cascade@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: "CASC-B",
+      operatorId: operator.id,
+      payload: { status: "CANCELADO" },
+      correlationId: "corr-monitor-cancel",
+    });
+
+    // CASC-B (topo, cancelada): status CANCELADO + motorista esvaziado pela cascata.
+    const b = await query(`SELECT alloc_motorista, alloc_status FROM public.cargas WHERE id = $1`, [idB]);
+    expect(b.rows[0].alloc_status).toBe("CANCELADO");
+    expect(b.rows[0].alloc_motorista).toBe("");
+    // CASC-A (abaixo) recebeu MOT B (desceu); MOT A (que estava nela) sobrou → reserva.
+    const a = await query(`SELECT alloc_motorista FROM public.cargas WHERE id = $1`, [idA]);
+    expect(a.rows[0].alloc_motorista).toBe("MOT B");
+    const r = await query(`SELECT motorista FROM public.monitor_reservas WHERE active = true`);
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0].motorista).toBe("MOT A");
+  });
+
+  it("alocar um motorista que está em reserva baixa a reserva (não fica em dois lugares)", async () => {
+    await seedSheetCargo();
+    await query(
+      `INSERT INTO public.monitor_reservas (motorista, route_key, origin_lh) VALUES ($1, $2, $3)`,
+      ["RESERVADO X", "ROTA-QQ", "OLD-CANCEL"],
+    );
+    const operator = await seedUser({ email: "op-monitor-evict@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { motorista: "RESERVADO X", cavalo: "AAA1A11", carreta: "" },
+      correlationId: "corr-monitor-evict",
+    });
+
+    const r = await query(`SELECT active FROM public.monitor_reservas WHERE motorista = 'RESERVADO X'`);
+    expect(r.rows[0].active).toBe(false);
+  });
+
+  it("lança NotFoundError quando o LH não tem carga correspondente", async () => {
+    const operator = await seedUser({ email: "op-monitor-404@teste.local" });
+    await expect(
+      updateMonitorAllocation({
+        lh: "LH-INEXISTENTE",
+        operatorId: operator.id,
+        payload: { motorista: "X" },
+        correlationId: "corr-monitor-404",
+      }),
+    ).rejects.toThrow();
+  });
+});

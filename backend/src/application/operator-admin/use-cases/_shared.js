@@ -91,6 +91,11 @@ export function isMissingEixosColumnError(error) {
   return combinedMessage.includes("eixos");
 }
 
+export function isMissingRecurrenceColumnError(error) {
+  const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
+  return combinedMessage.includes("is_recurring") || combinedMessage.includes("recurrence_interval_days");
+}
+
 // Phase 10 (cargas-casadas): se a tabela cargas_casadas / coluna viagem_id ainda nao
 // foi aplicada na DB (rollout incremental), a query principal de driver-loads
 // faz fallback para a versao sem JOIN de pacote — comportamento pre-Phase 10.
@@ -677,8 +682,16 @@ export async function writeCargo(
   const nextDriverVisibility = payload.driver_visibility || "PUBLIC";
   const resolvedValor = payload.valor !== undefined ? payload.valor : (existingCargo?.valor ?? null);
   const resolvedBonus = payload.bonus !== undefined ? payload.bonus : (existingCargo?.bonus ?? null);
+  const resolvedIsRecurring = payload.is_recurring === true;
+  // Intervalo só faz sentido quando recorrente; NULL/inválido => diário (1).
+  const resolvedRecurrenceInterval = resolvedIsRecurring
+    ? (Number.isInteger(payload.recurrence_interval_days) && payload.recurrence_interval_days > 0
+        ? payload.recurrence_interval_days
+        : 1)
+    : null;
   const warnings = [];
   let schemaFallbackUsed = false;
+  let createdId = cargoId; // no INSERT vira o id recém-gerado (RETURNING id)
 
   if (cargoId) {
     try {
@@ -691,7 +704,7 @@ export async function writeCargo(
             valor = $9, bonus = $10, bonus_exigencias = $11,
             driver_visibility = $12, cliente_id = $13, status = $14,
             is_template = $15, sheet_data_carregamento = $16, sheet_data_descarga = $17,
-            eixos = $18
+            eixos = $18, is_recurring = $19, recurrence_interval_days = $20
           WHERE id = $1
         `,
         [
@@ -700,7 +713,7 @@ export async function writeCargo(
           resolvedValor, resolvedBonus, payload.bonus_exigencias, nextDriverVisibility,
           clienteId, nextStatus, payload.is_template,
           payload.sheet_data_carregamento ?? null, payload.sheet_data_descarga ?? null,
-          payload.eixos ?? null,
+          payload.eixos ?? null, resolvedIsRecurring, resolvedRecurrenceInterval,
         ],
       );
     } catch (error) {
@@ -709,7 +722,8 @@ export async function writeCargo(
         !isMissingBonusRequirementsColumnError(error) &&
         !isMissingDriverVisibilityColumnError(error) &&
         !isMissingSheetScheduleColumnsError(error) &&
-        !isMissingEixosColumnError(error)
+        !isMissingEixosColumnError(error) &&
+        !isMissingRecurrenceColumnError(error)
       ) {
         throw error;
       }
@@ -731,15 +745,17 @@ export async function writeCargo(
     }
   } else {
     try {
-      await client.query(
+      const ins = await client.query(
         `
           INSERT INTO public.cargas (
             data, horario, origem, destino, distancia_km, duracao_horas,
             perfil, valor, bonus, bonus_exigencias, driver_visibility,
             cliente_id, status, is_template, created_by,
-            sheet_data_carregamento, sheet_data_descarga, eixos
+            sheet_data_carregamento, sheet_data_descarga, eixos,
+            is_recurring, recurrence_interval_days
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+          RETURNING id
         `,
         [
           payload.data, payload.horario, payload.origem, payload.destino,
@@ -747,26 +763,29 @@ export async function writeCargo(
           resolvedValor, resolvedBonus, payload.bonus_exigencias, nextDriverVisibility,
           clienteId, nextStatus, payload.is_template, operatorId,
           payload.sheet_data_carregamento ?? null, payload.sheet_data_descarga ?? null,
-          payload.eixos ?? null,
+          payload.eixos ?? null, resolvedIsRecurring, resolvedRecurrenceInterval,
         ],
       );
+      createdId = ins.rows[0]?.id ?? null;
     } catch (error) {
       if (
         !isMissingRouteColumnError(error) &&
         !isMissingBonusRequirementsColumnError(error) &&
         !isMissingDriverVisibilityColumnError(error) &&
         !isMissingSheetScheduleColumnsError(error) &&
-        !isMissingEixosColumnError(error)
+        !isMissingEixosColumnError(error) &&
+        !isMissingRecurrenceColumnError(error)
       ) {
         throw error;
       }
-      await client.query(
+      const insFallback = await client.query(
         `
           INSERT INTO public.cargas (
             data, horario, origem, destino, perfil, valor, bonus,
             cliente_id, status, is_template, created_by
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          RETURNING id
         `,
         [
           payload.data, payload.horario, payload.origem, payload.destino,
@@ -774,6 +793,7 @@ export async function writeCargo(
           nextStatus, payload.is_template, operatorId,
         ],
       );
+      createdId = insFallback.rows[0]?.id ?? null;
       schemaFallbackUsed = true;
       warnings.push("Optional cargo fields are not available in the current database schema.");
     }
@@ -788,7 +808,7 @@ export async function writeCargo(
     actorUserId: operatorId,
     actorRole: "operator",
     resourceType: "cargo",
-    resourceId: cargoId || null,
+    resourceId: createdId || null,
     action: cargoId ? "update" : "create",
     outcome: "success",
     requestIp,
@@ -798,13 +818,15 @@ export async function writeCargo(
       destino: payload.destino,
       status: nextStatus,
       isTemplate: payload.is_template,
+      isRecurring: resolvedIsRecurring,
+      recurrenceIntervalDays: resolvedRecurrenceInterval,
       degradedRouteMetrics: resolvedMetrics.degraded,
       schemaFallbackUsed,
       sheetClientLocked: shouldLockSheetClient,
     },
   });
 
-  return { warnings };
+  return { warnings, cargoId: createdId };
 }
 
 export function buildDriverLoadFilters(query, {
@@ -827,7 +849,9 @@ export function buildDriverLoadFilters(query, {
     // legítimas dos motoristas. Para estados terminais (DESCARREGADO, CTE
     // ENVIADO, CANCELADO, etc.), o `cargas.status` já transita para BOOKED
     // /EXPIRED via sync, então o filtro principal `cargas.status='OPEN'` cobre.
-    "COALESCE(cargas.sheet_motorista, '') = ''",
+    // Alocação efetiva = override do operador (alloc_motorista, editado no Monitor)
+    // tem precedência sobre o que veio da planilha (sheet_motorista).
+    "COALESCE(cargas.alloc_motorista, cargas.sheet_motorista, '') = ''",
   ];
   const values = [];
   let index = 1;

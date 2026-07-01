@@ -24,6 +24,10 @@ export interface OperatorCargoPayload {
   cliente_id: string | null;
   status: OperatorCargoStatus;
   is_template: boolean;
+  /** Carga recorrente: renova-se sozinha e clona ao ser reservada. */
+  is_recurring: boolean;
+  /** Intervalo entre ocorrências em dias (1 = diária). null quando não recorrente. */
+  recurrence_interval_days: number | null;
   distancia_km: number | null;
   duracao_horas: number | null;
   sheet_data_carregamento: string | null;
