@@ -11,6 +11,7 @@ import {
   lookupCachedAngelliraPlate,
 } from "../operator-admin/service.js";
 import { syncDriverBrkValidation } from "../operator-admin/use-cases/brk-cache.js";
+import { syncDriverSpxValidation } from "../operator-admin/use-cases/spx-vigency-cache.js";
 
 const VALIDATION_SCHEMA_VERSION = 1;
 const SUPPORT_MESSAGE_MAX_REASONS = 3;
@@ -638,6 +639,23 @@ export async function validatePublicLeadPreRegistration({
       correlationId,
     }).catch((syncError) => {
       logStructuredEvent("warn", "driver-validation.brk-sync.failed", {
+        correlationId: correlationId || null,
+        message: syncError instanceof Error ? syncError.message : String(syncError),
+      });
+    });
+  }
+
+  // Fire-and-forget: persistir a SITUACAO do motorista no SPX (Shopee Express) no
+  // perfil. ATRAS DE FEATURE-FLAG (SPX_VIGENCY_SYNC_ENABLED=1) — desligado por padrao
+  // = no-op seguro em producao. Lookup read-only (sem efeito colateral no SPX);
+  // passa o telefone quando disponivel para reduzir resultados inconclusivos.
+  if (process.env.SPX_VIGENCY_SYNC_ENABLED === "1" && payload.cpf) {
+    syncDriverSpxValidation({
+      cpf: payload.cpf,
+      contactNumber: payload.contact_number || payload.contactNumber || "",
+      correlationId,
+    }).catch((syncError) => {
+      logStructuredEvent("warn", "driver-validation.spx-vigency-sync.failed", {
         correlationId: correlationId || null,
         message: syncError instanceof Error ? syncError.message : String(syncError),
       });

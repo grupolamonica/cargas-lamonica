@@ -301,6 +301,65 @@ function renderBrkVigencyBadge(driver: OperatorDriverListItem) {
   return null;
 }
 
+// Espelha os badges de vigencia para a SITUACAO do motorista no SPX (Shopee
+// Express). O SPX nao tem data de validade — o sinal e situacional (ativo/inativo/
+// outra agencia/pendente/bloqueado/nao cadastrado), obtido por lookup read-only.
+// Renderizacao defensiva: se driver.spxVigency for null (feature-flag desligada ->
+// campos vem null), nenhum badge aparece.
+function renderSpxVigencyBadge(driver: OperatorDriverListItem) {
+  const vigency = driver.spxVigency;
+
+  if (!vigency || !vigency.status) {
+    return null;
+  }
+
+  const { status, statusText } = vigency;
+
+  if (status === "ativo") {
+    return (
+      <div className="admin-tint-success inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        SPX: ✓ {statusText || "Ativo na agência"}
+      </div>
+    );
+  }
+
+  if (status === "bloqueado") {
+    return (
+      <div className="admin-tint-danger inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <XCircle className="h-3.5 w-3.5" />
+        SPX: {statusText || "Bloqueado"}
+      </div>
+    );
+  }
+
+  if (status === "inativo" || status === "pendente") {
+    return (
+      <div className="admin-tint-warning inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        SPX: {statusText || (status === "inativo" ? "Inativo — reativar" : "Solicitação em andamento")}
+      </div>
+    );
+  }
+
+  if (status === "cadastrado") {
+    return (
+      <div className="admin-tint-success inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <BadgeCheck className="h-3.5 w-3.5" />
+        SPX: {statusText || "Cadastrado"}
+      </div>
+    );
+  }
+
+  // outra_agencia / nao_cadastrado / demais: neutro com o texto.
+  return (
+    <div className="admin-tint-neutral inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+      <CalendarClock className="h-3.5 w-3.5" />
+      SPX: {statusText || status}
+    </div>
+  );
+}
+
 async function updateDriverProfile(driverId: string, payload: Record<string, unknown>) {
   const accessToken = await getOperatorAccessToken();
   const response = await fetch(`/api/operator/motoristas/${driverId}`, {
@@ -1763,6 +1822,9 @@ const Motoristas = () => {
 
                   {/* ── ALWAYS VISIBLE: BRK (Brasil Risk) vigency badge ── */}
                   {renderBrkVigencyBadge(driver)}
+
+                  {/* ── ALWAYS VISIBLE: SPX (Shopee Express) situação badge ── */}
+                  {renderSpxVigencyBadge(driver)}
 
                   {/* ── Sinais do perfil (sempre visíveis) ── */}
                   {(driver.registrationStatus === "REGISTERED" || driver.externalValidation) ? (
