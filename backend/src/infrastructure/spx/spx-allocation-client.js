@@ -6,8 +6,8 @@
 // - O envio REAL só acontece com SPX_ALLOC_WRITE_ENABLED=true (kill switch). Caso
 //   contrário a alocação roda em dry_run (o sidecar monta o body e devolve, sem
 //   tocar o ASPX).
-// - Se o sidecar estiver fora do ar, lança SpxSidecarUnavailable — o preview cai
-//   em modo SIMULAÇÃO (mostra a tela sem o estado real do ASPX).
+// - Se o sidecar estiver fora do ar, lança SpxSidecarUnavailable — preview e
+//   assign propagam o erro (HTTP 503, nada é enviado ao ASPX). Sem simulação.
 
 const DEFAULT_SIDECAR_URL = "http://localhost:8766";
 
@@ -71,7 +71,8 @@ export async function fetchAssignableDrivers(opts = {}) {
  * índice e caem em "unknown" no preview (honesto: não confirmado).
  *
  * Tolerante a falha por aba: se UMA aba falhar, segue com as outras. Se TODAS
- * falharem, propaga (SpxSidecarUnavailable cai em simulação no preview).
+ * falharem, propaga o erro; o use-case captura e marca warning "index_unavailable"
+ * (os não-atribuíveis caem em "unknown" — degradação granular, não simulação).
  *
  * @returns {Promise<{ byNumber: Map<string,{status:number,statusName:string,driver:string}>, truncated:boolean, partial:boolean }>}
  */
@@ -120,7 +121,7 @@ export async function fetchTripIndex({ daysBack = 45 } = {}, opts = {}) {
     }
   }
 
-  if (okCount === 0 && lastErr) throw lastErr; // nenhuma aba respondeu → deixa o preview simular
+  if (okCount === 0 && lastErr) throw lastErr; // nenhuma aba respondeu → use-case marca index_unavailable
   return { byNumber, truncated, partial: okCount < tabs.length };
 }
 

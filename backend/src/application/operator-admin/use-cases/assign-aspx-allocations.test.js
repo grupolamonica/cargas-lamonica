@@ -14,16 +14,16 @@ const { SpxSidecarUnavailable } = await import("../../../infrastructure/spx/spx-
 const { recordSecurityAuditEvent } = await import("../../../infrastructure/security-audit.js");
 
 const CARGAS = [
-  { sheet_lh: "LH1", motorista: "João Silva", cavalo: "ABC1234", carreta: "XYZ9876" },
-  { sheet_lh: "LH2", motorista: "Maria Souza", cavalo: "DEF5678", carreta: "" },
+  { sheet_lh: "LT1", motorista: "João Silva", cavalo: "ABC1234", carreta: "XYZ9876" },
+  { sheet_lh: "LT2", motorista: "Maria Souza", cavalo: "DEF5678", carreta: "" },
 ];
 
 function baseDeps(assignSpy) {
   return {
     listByLhs: async () => CARGAS,
     fetchTrips: async () => [
-      { trip_id: 11, trip_number: "LH1" },
-      { trip_id: 12, trip_number: "LH2" },
+      { trip_id: 11, trip_number: "LT1" },
+      { trip_id: 12, trip_number: "LT2" },
     ],
     fetchDrivers: async () => [
       { driver_id: 91, name: "JOAO SILVA" },
@@ -47,13 +47,13 @@ describe("assignAspxAllocations", () => {
   it("reassign: LH fora da fila mas no índice → usa trip_id do índice (trocar motorista)", async () => {
     const spy = vi.fn().mockResolvedValue({ dry_run: true });
     const res = await assignAspxAllocations({
-      lhs: ["LH1"],
+      lhs: ["LT1"],
       operatorId: "op",
       deps: {
         ...baseDeps(spy),
-        fetchTrips: async () => [], // LH1 NÃO está atribuível (já tem motorista no ASPX)
+        fetchTrips: async () => [], // LT1 NÃO está atribuível (já tem motorista no ASPX)
         fetchIndex: async () => ({
-          byNumber: new Map([["LH1", { tripId: 777, status: 5, statusName: "Assigned", driver: "OUTRO" }]]),
+          byNumber: new Map([["LT1", { tripId: 777, status: 5, statusName: "Assigned", driver: "OUTRO" }]]),
           truncated: false,
           partial: false,
         }),
@@ -67,7 +67,7 @@ describe("assignAspxAllocations", () => {
   it("kill switch off → força dry_run (não envia ao ASPX)", async () => {
     const spy = vi.fn().mockResolvedValue({ dry_run: true });
     const res = await assignAspxAllocations({
-      lhs: ["LH1", "LH2"],
+      lhs: ["LT1", "LT2"],
       operatorId: "op",
       correlationId: "c1",
       deps: baseDeps(spy),
@@ -79,7 +79,7 @@ describe("assignAspxAllocations", () => {
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ dryRun: true }));
     expect(res.payload.summary.dryRun).toBe(2);
     expect(res.payload.summary.assigned).toBe(0);
-    // veículo: LH2 só tem cavalo (carreta vazia não vai)
+    // veículo: LT2 só tem cavalo (carreta vazia não vai)
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ tripId: 12, driverIds: [92], vehiclePlates: ["DEF5678"] }));
     expect(recordSecurityAuditEvent).toHaveBeenCalledTimes(1);
   });
@@ -88,7 +88,7 @@ describe("assignAspxAllocations", () => {
     process.env.SPX_ALLOC_WRITE_ENABLED = "true";
     const spy = vi.fn().mockResolvedValue({ ok: true });
     const res = await assignAspxAllocations({
-      lhs: ["LH1"],
+      lhs: ["LT1"],
       operatorId: "op",
       deps: baseDeps(spy),
     });
@@ -98,35 +98,57 @@ describe("assignAspxAllocations", () => {
     expect(res.payload.summary.assigned).toBe(1);
   });
 
-  it("sidecar fora do ar → resultado simulado, nada enviado", async () => {
+  it("sidecar fora do ar → propaga erro (nada enviado, sem simular)", async () => {
     const spy = vi.fn();
-    const res = await assignAspxAllocations({
-      lhs: ["LH1", "LH2"],
-      operatorId: "op",
-      deps: {
-        ...baseDeps(spy),
-        fetchTrips: async () => { throw new SpxSidecarUnavailable("down"); },
-      },
-    });
-    expect(res.payload.simulated).toBe(true);
+    await expect(
+      assignAspxAllocations({
+        lhs: ["LT1", "LT2"],
+        operatorId: "op",
+        deps: {
+          ...baseDeps(spy),
+          fetchTrips: async () => { throw new SpxSidecarUnavailable("down"); },
+        },
+      }),
+    ).rejects.toThrow(SpxSidecarUnavailable);
     expect(spy).not.toHaveBeenCalled();
-    expect(res.payload.summary.simulated).toBe(2);
   });
 
   it("motorista não encontrado no ASPX → pending; sem trip → skipped", async () => {
     const spy = vi.fn().mockResolvedValue({});
     const res = await assignAspxAllocations({
-      lhs: ["LH1", "LH2"],
+      lhs: ["LT1", "LT2"],
       operatorId: "op",
       deps: {
         ...baseDeps(spy),
-        fetchTrips: async () => [{ trip_id: 11, trip_number: "LH1" }], // LH2 sem trip
+        fetchTrips: async () => [{ trip_id: 11, trip_number: "LT1" }], // LT2 sem trip
         fetchDrivers: async () => [], // ninguém casa
       },
     });
     const byLh = Object.fromEntries(res.payload.results.map((r) => [r.lh, r.state]));
-    expect(byLh.LH1).toBe("pending"); // tem trip, sem driver
-    expect(byLh.LH2).toBe("skipped"); // sem trip
+    expect(byLh.LT1).toBe("pending"); // tem trip, sem driver
+    expect(byLh.LT2).toBe("skipped"); // sem trip
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("LH que não começa com 'LT' → skipped, nunca chega ao sidecar", async () => {
+    process.env.SPX_ALLOC_WRITE_ENABLED = "true";
+    const spy = vi.fn().mockResolvedValue({ ok: true });
+    const res = await assignAspxAllocations({
+      lhs: ["MANUAL-001", "LT1"],
+      operatorId: "op",
+      deps: {
+        ...baseDeps(spy),
+        listByLhs: async () => [
+          { sheet_lh: "MANUAL-001", motorista: "João Silva", cavalo: "ABC1234", carreta: "" },
+          { sheet_lh: "LT1", motorista: "João Silva", cavalo: "ABC1234", carreta: "XYZ9876" },
+        ],
+      },
+    });
+    const byLh = Object.fromEntries(res.payload.results.map((r) => [r.lh, r.state]));
+    expect(byLh["MANUAL-001"]).toBe("skipped"); // não começa com LT → bloqueado
+    expect(byLh.LT1).toBe("assigned"); // LT segue o fluxo normal (write on)
+    // Só o LT foi enviado ao sidecar — a carga manual nunca.
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ tripId: 11 }));
   });
 });

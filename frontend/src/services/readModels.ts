@@ -837,7 +837,7 @@ export async function createMonitorCargo(input: {
 
 /** Estado de uma carga na pré-visualização de atribuição no ASPX.
  *  Preview: assign · pending · assigned · in_progress · done · cancelled · not_ready · unknown.
- *  Resultado do envio: dry_run · simulated · skipped · error. */
+ *  Resultado do envio: dry_run · skipped · error. */
 export type AspxAllocationState =
   | "assign"
   | "pending"
@@ -847,7 +847,6 @@ export type AspxAllocationState =
   | "cancelled"
   | "not_ready"
   | "unknown"
-  | "simulated"
   | "dry_run"
   | "skipped"
   | "error";
@@ -860,7 +859,6 @@ export interface AspxAllocationItem {
   cavalo: string;
   carreta: string;
   pinned: boolean;
-  simulated: boolean;
   tripId: number | null;
   driverId: number | null;
   state: AspxAllocationState;
@@ -883,7 +881,6 @@ export type AspxAllocationWarning = "assignable_empty" | "index_unavailable" | "
 export interface AspxAllocationPreview {
   ok: boolean;
   configured: boolean;
-  simulated: boolean;
   writeEnabled: boolean;
   summary: {
     willAssign: number;
@@ -898,14 +895,14 @@ export interface AspxAllocationPreview {
   };
   warnings: AspxAllocationWarning[];
   items: AspxAllocationItem[];
-  meta: { correlationId: string; simulationReason?: string | null };
+  meta: { correlationId: string };
 }
 
 /**
  * Pré-visualização (dry-run) da atribuição no ASPX: lista as cargas alocadas no
- * sistema e diz, para cada uma, se vai atribuir / já está atribuída / está
- * pendente. Nada é enviado ao ASPX — só leitura. Cai em modo simulação se o
- * sidecar SPX estiver fora do ar.
+ * sistema (só line-hauls com código "LT") e diz, para cada uma, se vai atribuir /
+ * já está atribuída / está pendente. Nada é enviado ao ASPX — só leitura. Se o
+ * sidecar SPX estiver fora do ar, a chamada falha (sem estados simulados).
  */
 export async function previewAspxAllocation(): Promise<AspxAllocationPreview> {
   const accessToken = await getOperatorAccessToken();
@@ -920,16 +917,16 @@ export interface AspxAssignResult {
   ok: boolean;
   writeEnabled: boolean;
   dryRun: boolean;
-  simulated: boolean;
-  summary: { assigned: number; dryRun: number; simulated: number; pending: number; skipped: number; error: number };
+  summary: { assigned: number; dryRun: number; pending: number; skipped: number; error: number };
   results: Array<{ lh: string; state: AspxAllocationState; reason?: string; tripId?: number; driverId?: number }>;
   meta: { correlationId: string };
 }
 
 /**
- * Confirma a atribuição no ASPX das cargas (LHs) selecionadas. O envio real só
- * ocorre com o kill switch ligado no backend (SPX_ALLOC_WRITE_ENABLED); caso
- * contrário roda em dry_run. `dryRun: true` força simulação independentemente.
+ * Confirma a atribuição no ASPX das cargas (LHs) selecionadas — só as com código
+ * "LT" são enviadas; as demais são ignoradas (skipped). O envio real só ocorre
+ * com o kill switch ligado no backend (SPX_ALLOC_WRITE_ENABLED); caso contrário
+ * roda em dry_run. Se o sidecar SPX estiver fora do ar, a chamada falha.
  */
 export async function assignAspxAllocations(input: { lhs: string[]; dryRun?: boolean }): Promise<AspxAssignResult> {
   const accessToken = await getOperatorAccessToken();

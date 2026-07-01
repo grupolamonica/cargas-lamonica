@@ -158,24 +158,21 @@ describe("previewAspxAllocation — só mostra o que muda/diverge", () => {
         fetchIndex: async () => { throw new Error("snapshot 502"); },
       },
     });
-    expect(res.payload.simulated).toBe(false);
     expect(res.payload.items).toHaveLength(1); // LH1 assign; LH3 unknown oculto
     expect(res.payload.items[0].state).toBe("assign");
     expect(res.payload.warnings).toContain("index_unavailable");
   });
 
-  it("modo simulação: 'assign' aparece, simulated true", async () => {
-    const res = await previewAspxAllocation({
-      deps: {
-        listCandidates: async () => CANDIDATES,
-        fetchTrips: async () => { throw new SpxSidecarUnavailable("down"); },
-        fetchDrivers: async () => [],
-        fetchIndex: emptyIndex,
-      },
-    });
-    expect(res.payload.simulated).toBe(true);
-    const byLh = Object.fromEntries(res.payload.items.map((i) => [i.lh, i]));
-    expect(byLh.LH1?.state).toBe("assign"); // status vazio → assign (aparece)
-    expect(byLh.LH3).toBeUndefined(); // CARREGADO → assigned simulado → oculto
+  it("sidecar fora do ar → propaga erro (sem modo simulação)", async () => {
+    await expect(
+      previewAspxAllocation({
+        deps: {
+          listCandidates: async () => CANDIDATES,
+          fetchTrips: async () => { throw new SpxSidecarUnavailable("down"); },
+          fetchDrivers: async () => [],
+          fetchIndex: emptyIndex,
+        },
+      }),
+    ).rejects.toThrow(SpxSidecarUnavailable);
   });
 });

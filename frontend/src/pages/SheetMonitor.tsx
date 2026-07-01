@@ -597,8 +597,7 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
     mutationFn: assignAspxAllocations,
     onSuccess: (r) => {
       setResult(r);
-      if (r.simulated) toast.info("Simulação: nada enviado ao ASPX (sidecar SPX fora do ar).");
-      else if (r.dryRun) toast.info(`Dry-run: ${r.summary.dryRun} carga(s) montada(s), nada enviado ao ASPX.`);
+      if (r.dryRun) toast.info(`Dry-run: ${r.summary.dryRun} carga(s) montada(s), nada enviado ao ASPX.`);
       else toast.success(`${r.summary.assigned} carga(s) atribuída(s) no ASPX.`);
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Falha ao atribuir no ASPX."),
@@ -624,7 +623,7 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
     return m;
   }, [result]);
 
-  const realMode = Boolean(data?.writeEnabled && !data?.simulated);
+  const realMode = Boolean(data?.writeEnabled);
   const confirmLabel = realMode
     ? `Aplicar ${selected.size} no ASPX`
     : `Simular ${selected.size} (dry-run)`;
@@ -647,20 +646,18 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
           </DialogDescription>
         </DialogHeader>
 
-        {/* Banner de modo (simulação / envio desligado) */}
-        {data && (data.simulated || !data.writeEnabled) && (
+        {/* Banner de modo (envio desligado / kill switch) */}
+        {data && !data.writeEnabled && (
           <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-5 py-2.5 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
-              {data.simulated
-                ? "Modo simulação — o sidecar SPX está fora do ar. Os estados abaixo são inferidos do status; nada será enviado ao ASPX."
-                : "Envio ao ASPX desligado (kill switch). A confirmação roda em dry-run — monta o pedido sem enviar."}
+              Envio ao ASPX desligado (kill switch). A confirmação roda em dry-run — monta o pedido sem enviar.
             </span>
           </div>
         )}
 
         {/* Aviso de dados incompletos (station/cap/aba) */}
-        {data && !data.simulated && data.warnings.length > 0 && (
+        {data && data.warnings.length > 0 && (
           <div className="flex items-start gap-2 border-b border-red-200 bg-red-50 px-5 py-2.5 text-xs text-red-800 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
@@ -781,7 +778,7 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
                         )}
                         {sentState && (
                           <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 font-semibold text-primary">
-                            {sentState === "assigned" ? "enviado" : sentState === "dry_run" ? "dry-run" : sentState === "simulated" ? "simulado" : sentState}
+                            {sentState === "assigned" ? "enviado" : sentState === "dry_run" ? "dry-run" : sentState}
                           </span>
                         )}
                         {it.reason && <span className="ml-1 block text-[0.66rem] text-muted-foreground/70">{it.reason}</span>}

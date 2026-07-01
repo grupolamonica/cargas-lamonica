@@ -13,6 +13,12 @@ function normName(v) {
   return (v ?? "").toString().normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
 }
 
+// Só line-hauls reais do SPX (código LT…) são atribuíveis no ASPX. Cargas sem
+// código LT (manuais / sem viagem correspondente no portal) nunca são enviadas.
+function isAspxLinehaul(lh) {
+  return String(lh ?? "").trim().toUpperCase().startsWith("LT");
+}
+
 async function defaultListByLhs(lhs) {
   return withPgClient(async (client) => {
     const { rows } = await client.query(
@@ -34,7 +40,8 @@ async function defaultListByLhs(lhs) {
  *
  * Segurança: o envio REAL só ocorre com SPX_ALLOC_WRITE_ENABLED=true. Caso
  * contrário (ou dryRun=true) roda em dry_run — o sidecar monta o body e não toca
- * o ASPX. Se o sidecar estiver fora → resultado "simulado" (nada enviado).
+ * o ASPX. Se o sidecar SPX estiver fora do ar, a leitura falha e o erro propaga
+ * (nada é enviado). Só cargas com código LH iniciado em "LT" são atribuíveis.
  *
  * @param {{ lhs: string[], operatorId: string, dryRun?: boolean, requestIp?: string, correlationId?: string, deps?: object }} args
  */
@@ -55,26 +62,35 @@ export async function assignAspxAllocations({ lhs, operatorId, dryRun = false, r
   const cargas = await listByLhs(lhs);
   const byLh = new Map(cargas.map((c) => [c.sheet_lh, c]));
 
+  // Leitura obrigatória do sidecar SPX. Se estiver fora do ar, audita a tentativa
+  // (endpoint cargos:write) e propaga o erro — sem modo simulação, nada enviado.
   let trips = null;
   let drivers = null;
-  let simulated = false;
   try {
     [trips, drivers] = await Promise.all([getTrips(), getDrivers()]);
-  } catch {
-    // Falha de LEITURA do sidecar (fora do ar / sem login / 5xx) → simula, não
-    // envia nada. O envio real só acontece na chamada assignTrip mais abaixo.
-    simulated = true;
+  } catch (err) {
+    await recordSecurityAuditEvent({
+      eventType: "operator.cargo.aspx_assign",
+      actorUserId: operatorId,
+      actorRole: "operator",
+      resourceType: "cargo",
+      resourceId: null,
+      action: "update",
+      outcome: "failure",
+      requestIp,
+      correlationId,
+      metadata: { count: lhs.length, writeEnabled, reason: err instanceof Error ? err.message : String(err) },
+    });
+    throw err;
   }
 
   // Índice de status real (best-effort) — dá o trip_id de viagens NÃO-atribuíveis
   // (já com motorista), p/ TROCAR o motorista (reassign) das divergentes.
   let index = null;
-  if (!simulated) {
-    try {
-      index = await getIndex();
-    } catch {
-      /* sem índice → reassign indisponível; assign normal segue */
-    }
+  try {
+    index = await getIndex();
+  } catch {
+    /* sem índice → reassign indisponível; assign normal segue */
   }
 
   const tripByLh = new Map((trips || []).map((t) => [String(t.trip_number ?? "").trim(), t]));
@@ -83,13 +99,15 @@ export async function assignAspxAllocations({ lhs, operatorId, dryRun = false, r
 
   const results = [];
   for (const lh of lhs) {
+    // Gate ASPX: só line-hauls reais do SPX (código LT…) podem ser atribuídos.
+    // Carga sem código LT (manual / sem viagem no portal) nunca é enviada.
+    if (!isAspxLinehaul(lh)) {
+      results.push({ lh, state: "skipped", reason: "não é linehaul SPX (código não começa com LT) — não atribuível no ASPX" });
+      continue;
+    }
     const c = byLh.get(lh);
     if (!c || !c.motorista) {
       results.push({ lh, state: "pending", reason: "carga sem motorista no sistema" });
-      continue;
-    }
-    if (simulated) {
-      results.push({ lh, state: "simulated", reason: "sidecar SPX indisponível — nada enviado" });
       continue;
     }
     const assignableTrip = tripByLh.get(String(lh).trim());
@@ -113,7 +131,6 @@ export async function assignAspxAllocations({ lhs, operatorId, dryRun = false, r
   const summary = {
     assigned: results.filter((r) => r.state === "assigned").length,
     dryRun: results.filter((r) => r.state === "dry_run").length,
-    simulated: results.filter((r) => r.state === "simulated").length,
     pending: results.filter((r) => r.state === "pending").length,
     skipped: results.filter((r) => r.state === "skipped").length,
     error: results.filter((r) => r.state === "error").length,
@@ -129,11 +146,11 @@ export async function assignAspxAllocations({ lhs, operatorId, dryRun = false, r
     outcome: "success",
     requestIp,
     correlationId,
-    metadata: { count: lhs.length, writeEnabled, dryRun: effectiveDryRun, simulated, summary },
+    metadata: { count: lhs.length, writeEnabled, dryRun: effectiveDryRun, summary },
   });
 
   return {
     statusCode: 200,
-    payload: { ok: true, writeEnabled, dryRun: effectiveDryRun, simulated, summary, results, meta: { correlationId } },
+    payload: { ok: true, writeEnabled, dryRun: effectiveDryRun, summary, results, meta: { correlationId } },
   };
 }

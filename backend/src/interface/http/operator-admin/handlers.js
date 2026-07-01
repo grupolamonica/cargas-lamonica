@@ -140,6 +140,19 @@ function toErrorResponse(error, correlationId) {
   if (error instanceof LoadClaimServiceError) {
     return buildServiceErrorResponse(error, correlationId, { includeDetails: true });
   }
+  // Sidecar SPX fora do ar (leitura de trips/drivers falhou): 503 com causa clara,
+  // em vez de 500 opaco. A mensagem técnica (com a URL) já foi para o log acima.
+  if (error?.name === "SpxSidecarUnavailable") {
+    return buildServiceErrorResponse(
+      {
+        name: "SpxSidecarUnavailable",
+        statusCode: 503,
+        code: "SPX_SIDECAR_UNAVAILABLE",
+        message: "Sidecar SPX fora do ar — nada foi enviado ao ASPX. Tente novamente em instantes.",
+      },
+      correlationId,
+    );
+  }
   return buildInternalErrorResponse(
     correlationId,
     "Unexpected error while processing the operator request.",

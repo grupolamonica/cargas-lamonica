@@ -61,6 +61,7 @@ async function defaultListCandidates() {
               alloc_pinned
        FROM public.cargas
        WHERE sheet_lh IS NOT NULL
+         AND upper(sheet_lh) LIKE 'LT%'
          AND alloc_updated_at IS NOT NULL
          AND COALESCE(alloc_motorista, sheet_motorista, '') <> ''
          AND lower(COALESCE(alloc_status, sheet_status, '')) NOT LIKE '%cancel%'
@@ -111,7 +112,8 @@ function isDivergent(state, systemMotorista, aspxDriver) {
  * (mostra quem). "unknown" = não foi possível confirmar (ex.: concluída na aba que
  * a SPX não expõe) — honesto, não afirma "já atribuída".
  *
- * Se o sidecar estiver fora do ar → modo SIMULAÇÃO (estados inferidos do status local).
+ * Só cargas com código LH iniciado em "LT" (line-haul real do SPX) entram na lista.
+ * Se o sidecar SPX estiver fora do ar, a leitura falha e o erro propaga (sem simular).
  * Nada é enviado ao ASPX aqui — é só leitura/montagem.
  *
  * @param {{ correlationId?: string, deps?: object }} args
@@ -127,28 +129,19 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
   let trips = null;
   let drivers = null;
   let index = null;
-  let simulated = false;
-  let simulationReason = null;
   let indexFailed = false;
 
-  // Listas atribuíveis + motoristas: base do assign/pending. Se ISSO falhar, não
-  // dá pra mostrar nada confiável → simula a tela inteira.
-  try {
-    [trips, drivers] = await Promise.all([getTrips(), getDrivers()]);
-  } catch (err) {
-    simulated = true;
-    simulationReason = err instanceof Error ? err.message : String(err);
-  }
+  // Listas atribuíveis + motoristas: base do assign/pending. Leitura obrigatória
+  // do sidecar SPX — se estiver fora do ar, o erro propaga (sem modo simulação).
+  [trips, drivers] = await Promise.all([getTrips(), getDrivers()]);
 
   // Índice de status real: BEST-EFFORT (degradação granular). Se só ele falhar,
   // mantém assign/pending das listas acima; os não-atribuíveis caem em "unknown"
-  // (honesto) em vez de derrubar tudo pra simulação.
-  if (!simulated) {
-    try {
-      index = await getIndex();
-    } catch {
-      indexFailed = true;
-    }
+  // (honesto).
+  try {
+    index = await getIndex();
+  } catch {
+    indexFailed = true;
   }
 
   const tripByLh = new Map((trips || []).map((t) => [String(t.trip_number ?? "").trim(), t]));
@@ -170,22 +163,6 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
       descargaLabel: descargaLabel(c.sheet_data_descarga),
     };
 
-    if (simulated) {
-      const operational = (c.status || "").trim() !== "";
-      return {
-        ...base,
-        simulated: true,
-        tripId: null,
-        driverId: null,
-        state: operational ? "assigned" : "assign",
-        realStatus: null,
-        assignedDriver: "",
-        divergent: false,
-        reassignable: false,
-        reason: operational ? "status operacional (simulado)" : null,
-      };
-    }
-
     const lh = String(c.sheet_lh).trim();
     const trip = tripByLh.get(lh);
     const real = statusByLh.get(lh) || null;
@@ -194,9 +171,9 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
     if (trip) {
       const driverId = driverByName.get(normName(c.motorista)) ?? null;
       if (!driverId) {
-        return { ...base, simulated: false, tripId: trip.trip_id, driverId: null, state: "pending", realStatus: real?.statusName ?? null, assignedDriver: "", divergent: false, reassignable: false, reason: "motorista não encontrado no ASPX" };
+        return { ...base, tripId: trip.trip_id, driverId: null, state: "pending", realStatus: real?.statusName ?? null, assignedDriver: "", divergent: false, reassignable: false, reason: "motorista não encontrado no ASPX" };
       }
-      return { ...base, simulated: false, tripId: trip.trip_id, driverId, state: "assign", realStatus: real?.statusName ?? null, assignedDriver: "", divergent: false, reassignable: false, reason: null };
+      return { ...base, tripId: trip.trip_id, driverId, state: "assign", realStatus: real?.statusName ?? null, assignedDriver: "", divergent: false, reassignable: false, reason: null };
     }
 
     // 2) Não atribuível → classifica pelo ESTADO REAL (check positivo).
@@ -219,11 +196,11 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
       const reason = divergent
         ? `divergente — sistema: ${c.motorista} · ASPX: ${real.driver}${reassignable ? "" : " (motorista do sistema não está disponível no ASPX p/ trocar)"}`
         : (reasonByState[state] ?? null);
-      return { ...base, simulated: false, tripId, driverId, state, realStatus: real.statusName, assignedDriver: real.driver || "", divergent, reassignable, reason };
+      return { ...base, tripId, driverId, state, realStatus: real.statusName, assignedDriver: real.driver || "", divergent, reassignable, reason };
     }
 
     // 3) Não está em nenhuma lista → não confirmado (NÃO afirma "já atribuída").
-    return { ...base, simulated: false, tripId: null, driverId: null, state: "unknown", realStatus: null, assignedDriver: "", divergent: false, reassignable: false, reason: "não encontrada no ASPX (status não confirmado)" };
+    return { ...base, tripId: null, driverId: null, state: "unknown", realStatus: null, assignedDriver: "", divergent: false, reassignable: false, reason: "não encontrada no ASPX (status não confirmado)" };
   });
 
   // Mostra SÓ o que vai ser alterado ou está diferente no ASPX:
@@ -249,7 +226,7 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
 
   // Guardas: avisos quando os dados de leitura podem estar incompletos/errados.
   const warnings = [];
-  if (!simulated && (trips || []).length === 0 && candidates.length > 0) warnings.push("assignable_empty");
+  if ((trips || []).length === 0 && candidates.length > 0) warnings.push("assignable_empty");
   if (indexFailed) warnings.push("index_unavailable");
   if (index?.truncated) warnings.push("index_truncated");
   if (index?.partial) warnings.push("index_partial");
@@ -258,13 +235,12 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
     statusCode: 200,
     payload: {
       ok: true,
-      configured: Boolean((process.env.SPX_SIDECAR_URL || "").trim()) || !simulated,
-      simulated,
+      configured: Boolean((process.env.SPX_SIDECAR_URL || "").trim()),
       writeEnabled: isAspxWriteEnabled(),
       summary,
       warnings,
       items,
-      meta: { correlationId, simulationReason },
+      meta: { correlationId },
     },
   };
 }
