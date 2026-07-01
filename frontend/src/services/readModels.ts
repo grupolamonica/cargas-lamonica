@@ -333,6 +333,12 @@ export interface OperatorDriverListItem {
     conjuntoApto: boolean | null;
     checkedAt: string | null;
   } | null;
+  spxVigency: {
+    status: string | null;
+    statusText: string | null;
+    encontrado: boolean | null;
+    checkedAt: string | null;
+  } | null;
   angelliraDetails: {
     name: string | null;
     cpf: string | null;
