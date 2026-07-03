@@ -3,7 +3,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { LOAD_STATUS, PUBLIC_LEAD_STATUS } from "../../domain/load-claims/constants.js";
 import { normalizeDriverNameKey } from "../google-sheets/driver-vinculos.js";
 import { getSaoPauloWallClock } from "../../domain/sao-paulo-time.js";
-import { normalizeDriverNameKey } from "../google-sheets/driver-vinculos.js";
 
 vi.mock("../../infrastructure/pg/postgres.js", async () => {
   const harness = await import("./test-harness.js");
