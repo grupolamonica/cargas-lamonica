@@ -38,6 +38,7 @@ import {
 
 import {
   resolveCreateOperatorCargoResponse,
+  resolveImportOperatorCargasResponse,
   resolveAttachClienteRotaResponse,
   resolveCreateOperatorClienteResponse,
   resolveCreateOperatorRouteResponse,
@@ -60,6 +61,13 @@ import {
   resolveSheetMonitorEnrichResponse,
   resolveSheetMonitorResponse,
   resolveSheetMonitorRowDetailResponse,
+  resolveUpdateMonitorAllocationResponse,
+  resolveReassignMonitorAllocationsResponse,
+  resolveAssignReservaResponse,
+  resolveSetMonitorAllocationPinResponse,
+  resolveUpdateMonitorCargoResponse,
+  resolvePreviewAspxAllocationResponse,
+  resolveAssignAspxAllocationsResponse,
   resolveToggleOperatorCargoStatusResponse,
   resolveUpdateOperatorCargoResponse,
   resolveUpdateOperatorClienteResponse,
@@ -82,6 +90,8 @@ import {
   resolveOperatorListExternalJobsResponse,
   resolveOperatorSpxPrecheckResponse,
   resolveOperatorSpxCadastrarResponse,
+  resolveOperatorTorreDriverInfoResponse,
+  resolveOperatorDriverTorreInfoResponse,
   resolveOperatorUnificadaGerarPdfResponse,
   resolveOperatorGetCadastroResponse,
   resolveOperatorPatchCadastroDadosResponse,
@@ -329,6 +339,10 @@ export function registerRoutes(app) {
   router.post("/api/operator/cadastros/:id/spx/precheck", wrap(resolveOperatorSpxPrecheckResponse));
   router.post("/api/operator/cadastros/:id/spx/cadastrar", wrap(resolveOperatorSpxCadastrarResponse));
 
+  // Torre de Controle — dossiê/ranking do motorista por CPF (read-only)
+  router.get("/api/operator/cadastros/:id/torre", wrap(resolveOperatorTorreDriverInfoResponse));
+  router.get("/api/operator/drivers/:cpf/torre", wrap(resolveOperatorDriverTorreInfoResponse));
+
   // Unificada — dossiê de gerenciamento de risco (Fase 1 SPX)
   router.post("/api/operator/cadastros/:id/unificada/gerar-pdf", wrap(resolveOperatorUnificadaGerarPdfResponse));
 
@@ -348,6 +362,13 @@ export function registerRoutes(app) {
   router.get("/api/operator/sheet-monitor", wrap(resolveSheetMonitorResponse));
   router.get("/api/operator/sheet-monitor/row", wrap(resolveSheetMonitorRowDetailResponse));
   router.post("/api/operator/sheet-monitor/enrich", wrap(resolveSheetMonitorEnrichResponse));
+  router.patch("/api/operator/sheet-monitor", wrap(resolveUpdateMonitorAllocationResponse));
+  router.post("/api/operator/sheet-monitor/reassign", wrap(resolveReassignMonitorAllocationsResponse));
+  router.post("/api/operator/sheet-monitor/assign-reserva", wrap(resolveAssignReservaResponse));
+  router.post("/api/operator/sheet-monitor/pin", wrap(resolveSetMonitorAllocationPinResponse));
+  router.patch("/api/operator/sheet-monitor/cargo", wrap(resolveUpdateMonitorCargoResponse));
+  router.post("/api/operator/sheet-monitor/aspx-preview", wrap(resolvePreviewAspxAllocationResponse));
+  router.post("/api/operator/sheet-monitor/aspx-assign", wrap(resolveAssignAspxAllocationsResponse));
 
   // PII Redaction
   router.post("/api/operator/pii-redaction", wrap(resolveRedactPublicLeadPiiResponse));
@@ -356,6 +377,8 @@ export function registerRoutes(app) {
   // /api/operator/cargas/sync-sheet deve ser registrada antes de /api/operator/cargas/:cargoId
   // para que Express não interprete "sync-sheet" como valor de :cargoId.
   router.post("/api/operator/cargas/sync-sheet", wrap(resolveOperatorSheetSyncResponse));
+  // /import deve ser registrada antes de /:cargoId para Express não tratar "import" como id.
+  router.post("/api/operator/cargas/import", wrap(resolveImportOperatorCargasResponse));
   router.get("/api/operator/cargas", wrap(resolveOperatorCargoListReadModelResponse));
   router.post("/api/operator/cargas", wrap(resolveCreateOperatorCargoResponse));
   router.patch("/api/operator/cargas/:cargoId", wrap(resolveUpdateOperatorCargoResponse));

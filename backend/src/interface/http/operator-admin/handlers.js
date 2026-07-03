@@ -6,6 +6,8 @@ import { ZodError } from "zod";
 
 import { insertSecurityAuditEvent, recordSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
+import { selectAllPaginated } from "../../../infrastructure/supabase/paginate.js";
+import { readEnrichedMapsCached } from "../../../application/operator-admin/sheet-monitor-enriched-cache.js";
 import {
   getAuthorizationHeader,
   getCorrelationId,
@@ -16,6 +18,7 @@ import {
 } from "../http-utils.js";
 import {
   cargoCreateMutationSchema,
+  cargoImportMutationSchema,
   cargoUpdateMutationSchema,
   clienteMutationSchema,
   driverProfileUpdateMutationSchema,
@@ -34,10 +37,11 @@ import {
 } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
-import { dashboardQuerySchema } from "../schemas/operator-schemas.js";
+import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
+  importOperatorCargas,
   createOperatorCliente,
   createOperatorRoute,
   deleteOperatorCargo,
@@ -65,6 +69,19 @@ import { fetchOperatorAuditLogsReadModel } from "../../../application/operator-a
 import { fetchPendingDriverRegistrations } from "../../../application/operator-admin/use-cases/pending-driver-registrations-read-model.js";
 import { listDraftRegistrations } from "../../../application/operator-admin/use-cases/list-draft-registrations.js";
 import { submitDraftAsOperator } from "../../../application/operator-admin/use-cases/submit-draft-as-operator.js";
+import { updateMonitorAllocation } from "../../../application/operator-admin/use-cases/update-monitor-allocation.js";
+import { reassignMonitorAllocations } from "../../../application/operator-admin/use-cases/reassign-monitor-allocations.js";
+import { assignReservaToCarga } from "../../../application/operator-admin/use-cases/assign-reserva-to-carga.js";
+import { setMonitorAllocationPin } from "../../../application/operator-admin/use-cases/set-monitor-allocation-pin.js";
+import { listSystemCargasForMonitor } from "../../../application/operator-admin/use-cases/list-system-cargas-monitor.js";
+import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-admin/use-cases/planilha-availability.js";
+import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
+import { attachRouteCodes } from "../../../application/operator-admin/use-cases/route-codes.js";
+import { attachRouteRegistration } from "../../../application/operator-admin/use-cases/attach-route-registration.js";
+import { updateMonitorCargo } from "../../../application/operator-admin/use-cases/update-monitor-cargo.js";
+import { buildSheetSummary, getSheetClientName } from "../../../application/google-sheets/google-sheet-loads.js";
+import { previewAspxAllocation } from "../../../application/operator-admin/use-cases/preview-aspx-allocation.js";
+import { assignAspxAllocations } from "../../../application/operator-admin/use-cases/assign-aspx-allocations.js";
 import { DOC_TIPOS, listAvailableMigratedDocs, readLocalProdDocAsDataUri } from "../../../application/operator-admin/use-cases/migrated-docs/prod-docs-share.js";
 import { candidaturaSubmitSchema } from "../schemas/candidatura-schemas.js";
 import { DRAFT_FILE_BUCKET } from "../../../application/candidatura/use-cases/upload-draft-file.js";
@@ -123,6 +140,19 @@ function toErrorResponse(error, correlationId) {
   }
   if (error instanceof LoadClaimServiceError) {
     return buildServiceErrorResponse(error, correlationId, { includeDetails: true });
+  }
+  // Sidecar SPX fora do ar (leitura de trips/drivers falhou): 503 com causa clara,
+  // em vez de 500 opaco. A mensagem técnica (com a URL) já foi para o log acima.
+  if (error?.name === "SpxSidecarUnavailable") {
+    return buildServiceErrorResponse(
+      {
+        name: "SpxSidecarUnavailable",
+        statusCode: 503,
+        code: "SPX_SIDECAR_UNAVAILABLE",
+        message: "Sidecar SPX fora do ar — nada foi enviado ao ASPX. Tente novamente em instantes.",
+      },
+      correlationId,
+    );
   }
   return buildInternalErrorResponse(
     correlationId,
@@ -223,12 +253,44 @@ export async function resolveCreateOperatorCargoResponse(request) {
       delete payload.bonus;
     }
 
-    return createOperatorCargo({
+    const result = await createOperatorCargo({
       operatorId,
       payload,
       requestIp,
       correlationId,
     });
+
+    // Carga nasce CONSULTADA: enriquece (Angellira/ASPX) em background, sem
+    // bloquear a resposta. Mesmo sem motorista grava a linha esqueleto → o selo
+    // nunca fica "não consultado". Best-effort.
+    const newCargoId = result?.payload?.id;
+    if (newCargoId) {
+      const { enrichSystemCargoById } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+      void enrichSystemCargoById(createSupabaseAdminClient(), newCargoId, { correlationId }).catch(() => {});
+    }
+    return result;
+    },
+  );
+}
+
+export async function resolveImportOperatorCargasResponse(request) {
+  return withOperatorSession(
+    request,
+    "import-cargas",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem importar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { csv, dryRun } = cargoImportMutationSchema.parse(await parseJsonBody(request));
+
+      return importOperatorCargas({
+        operatorId,
+        csv,
+        dryRun,
+        requestIp,
+        correlationId,
+      });
     },
   );
 }
@@ -659,32 +721,52 @@ export async function resolveOperatorDriverFlowMetricsResponse(request) {
   });
 }
 
-async function readSheetMonitorEnrichedByLh(supabaseClient, correlationId) {
-  const enrichedByLh = {};
-  try {
-    // PostgREST caps responses at 1000 rows server-side (.limit is clamped), so
-    // a single select would silently drop every enriched row past the first 1000
-    // — leaving thousands of rows showing "Consulta Angellira/ASPX pendente" in
-    // the Monitor even with good data. Paginate by range to fetch the full set.
-    const PAGE_SIZE = 1000;
-    for (let from = 0; ; from += PAGE_SIZE) {
-      const { data: enrichedRows, error } = await supabaseClient
-        .from("sheet_monitor_enriched")
-        .select("*")
-        .order("lh", { ascending: true })
-        .range(from, from + PAGE_SIZE - 1);
-      if (error) throw error;
-      if (!enrichedRows || enrichedRows.length === 0) break;
-      for (const r of enrichedRows) enrichedByLh[r.lh] = r;
-      if (enrichedRows.length < PAGE_SIZE) break;
-    }
-  } catch (enrichErr) {
-    logStructuredEvent("warn", "sheet-monitor.enrich-read-failed", {
-      correlationId,
-      message: enrichErr instanceof Error ? enrichErr.message : String(enrichErr),
-    });
-  }
-  return enrichedByLh;
+// Ordena linhas do Monitor por data+horário DESC (mesma regra do sync —
+// parseAllGoogleSheetRows). Linhas sem data vão para o fim.
+function compareMonitorRows(a, b) {
+  const hasA = Boolean(a.data);
+  const hasB = Boolean(b.data);
+  if (!hasA && !hasB) return 0;
+  if (!hasA) return 1;
+  if (!hasB) return -1;
+  if (a.data !== b.data) return a.data < b.data ? 1 : -1;
+  const ha = a.horario || "";
+  const hb = b.horario || "";
+  if (ha === hb) return 0;
+  return ha < hb ? 1 : -1;
+}
+
+// Monta a visão UNIFICADA do Monitor: linhas da planilha ∪ cargas do sistema
+// (intercaladas por data), com reservas no fim. Cada linha ganha rowKey/source.
+// Summary recalculado sobre as linhas operacionais quando há cargas do sistema.
+function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh = {}, now = null }) {
+  // A planilha inteira é de um cliente (ex.: Shopee) — anexa o nome a cada linha
+  // da planilha. Cargas do sistema já trazem o próprio cliente (cliente_id→nome).
+  const sheetClient = getSheetClientName();
+  const sheetRows = baseRows.map((r) => {
+    const withMeta = r.rowKey ? r : { ...r, rowKey: `sheet:${r.lh}`, source: "planilha" };
+    const withClient = { ...withMeta, cliente: withMeta.cliente ?? sheetClient };
+    // "Disponível" só para quem está REALMENTE aberto pro motorista (mesma regra
+    // do /motorista). Fechadas passam a "Expirada"/"Fechada" em vez de "Disponível".
+    return applyPlanilhaAvailabilityStatus(withClient, { openLhSet, allocByLh, now });
+  });
+  const operational = [...sheetRows, ...systemRows].sort(compareMonitorRows);
+  const reservas = reservaRows.map((r) => (r.rowKey ? r : { ...r, rowKey: `reserva:${r.lh}`, source: "reserva" }));
+  const items = reservas.length ? [...operational, ...reservas] : operational;
+  const summary = systemRows.length ? buildSheetSummary(operational) : baseSummary;
+  return { items, summary };
+}
+
+// Lê os mapas de enriquecimento (planilha por lh, sistema por cargo_id). Usado
+// no read E no refresh — o refresh NÃO pode devolver vazio, senão o frontend
+// sobrescreve e "perde" todas as consultas (selos viram "não consultado").
+// Selos do Monitor — servidos por cache (TTL curto + single-flight + bust no
+// enrich). A leitura por baixo é paginada em PARALELO (count + Promise.all; a
+// tabela passa de 5k linhas e o modo sequencial levava ~2.6s). ATÔMICO: em falha
+// de página LANÇA (não devolve mapa parcial) — resposta 200 sempre com selos
+// completos; blip transitório vira erro (cliente mantém o último estado bom).
+async function readEnrichedMaps(supabaseClient, correlationId) {
+  return readEnrichedMapsCached(supabaseClient, correlationId);
 }
 
 export async function resolveSheetMonitorResponse(request) {
@@ -692,6 +774,123 @@ export async function resolveSheetMonitorResponse(request) {
     const supabaseClient = createSupabaseAdminClient();
     const refresh = getQueryParam(request, "refresh") === "true";
     const emptySummary = { total: 0, available: 0, assigned: 0, withStatus: 0, statuses: {}, tipos: {} };
+
+    // Overlay da ALOCAÇÃO editada no Monitor (cargas.alloc_*), por LH — a decisão
+    // do operador que sobrepõe o que veio da planilha (Fase 0). O frontend aplica
+    // efetivo = alloc_* ?? valor da planilha. Não-fatal se a coluna ainda não existe.
+    let allocByLh = {};
+    try {
+      // Overlay de alocações (decisões persistentes do operador) — pode passar de
+      // 1000; paginar (best-effort) p/ não perder alocações além da linha 1000.
+      const allocRows = await selectAllPaginated(
+        (from, to) =>
+          supabaseClient
+            .from("cargas")
+            .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_pinned, alloc_updated_at")
+            .not("sheet_lh", "is", null)
+            .not("alloc_updated_at", "is", null)
+            .order("sheet_lh", { ascending: true })
+            .range(from, to),
+        { label: "cargas_alloc", correlationId, partialOnError: true },
+      );
+      for (const r of allocRows) {
+        if (r.sheet_lh) allocByLh[r.sheet_lh] = r;
+      }
+    } catch (allocErr) {
+      logStructuredEvent("warn", "sheet-monitor.alloc-read-failed", {
+        correlationId,
+        message: allocErr instanceof Error ? allocErr.message : String(allocErr),
+      });
+    }
+
+    // Conjunto de LHs da planilha ABERTAS pro motorista — MESMA regra do /motorista
+    // (buildDriverLoadFilters): status OPEN, pública, futura, sem motorista efetivo.
+    // Usado p/ o Monitor só marcar "Disponível" quem realmente aparece pro motorista;
+    // as demais linhas "vazias" viram "Expirada"/"Fechada". Relógio de São Paulo
+    // (cargas.data/horario são horário do Brasil). Falha aqui NÃO é fatal: openLhSet
+    // fica null e a regra não é aplicada (Monitor mantém o comportamento anterior).
+    const { dateIso: monitorTodayIso, timeIso: monitorNowTimeIso } = getSaoPauloWallClock();
+    const now = { todayIso: monitorTodayIso, nowTimeIso: monitorNowTimeIso };
+    let openLhSet = null;
+    try {
+      const openRows = await withPgClient((client) =>
+        client
+          .query(
+            `SELECT sheet_lh FROM public.cargas
+             WHERE status = 'OPEN'
+               AND COALESCE(is_template, false) = false
+               AND sheet_lh IS NOT NULL
+               AND COALESCE(alloc_motorista, sheet_motorista, '') = ''
+               AND (data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))
+               AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'`,
+            [monitorTodayIso, monitorTodayIso, monitorNowTimeIso],
+          )
+          .then((res) => res.rows),
+      );
+      openLhSet = new Set(openRows.map((r) => r.sheet_lh).filter(Boolean));
+    } catch (openErr) {
+      logStructuredEvent("warn", "sheet-monitor.open-lhs-read-failed", {
+        correlationId,
+        message: openErr instanceof Error ? openErr.message : String(openErr),
+      });
+      // openLhSet permanece null → regra não aplicada (comportamento anterior).
+    }
+
+    // Motoristas em RESERVA (standby por rota) — linhas que NÃO vêm da planilha
+    // (geradas pela cascata de cancelamento). Injetadas como linhas RESERVA no
+    // Monitor. Não-fatal se a tabela ainda não existe.
+    let reservaRows = [];
+    try {
+      const { data: reservas } = await supabaseClient
+        .from("monitor_reservas")
+        .select("id, motorista, cavalo, carreta, origem, destino, created_at")
+        .eq("active", true)
+        .limit(5000);
+      if (reservas) {
+        reservaRows = reservas.map((r) => ({
+          lh: `reserva:${r.id}`,
+          tipo: "RESERVA",
+          status: "RESERVA",
+          motoristas: r.motorista || "",
+          origem: r.origem || "",
+          destino: r.destino || "",
+          data: null,
+          horario: null,
+          carregamentoLabel: null,
+          descargaLabel: null,
+          valor: undefined,
+          cavalo: r.cavalo || "",
+          carreta: r.carreta || "",
+          checklistCavalo: "",
+          checklistCarreta: "",
+          isAvailable: false,
+          hasDriver: Boolean(r.motorista),
+          reserva: true,
+          reservaId: r.id,
+          // Quando o motorista entrou em standby (created_at da reserva) — usado
+          // pra exibir "standby desde …" e ordenar a fila de standby (mais antigo 1º).
+          standbyAt: r.created_at,
+        }));
+      }
+    } catch (reservaErr) {
+      logStructuredEvent("warn", "sheet-monitor.reservas-read-failed", {
+        correlationId,
+        message: reservaErr instanceof Error ? reservaErr.message : String(reservaErr),
+      });
+    }
+
+    // Cargas criadas no SISTEMA (sheet_lh nulo) — entram na visão unificada do
+    // Monitor (planilha ∪ sistema). Não-fatal: se falhar, o Monitor ainda serve
+    // as linhas da planilha.
+    let systemRows = [];
+    try {
+      systemRows = await listSystemCargasForMonitor(supabaseClient);
+    } catch (systemErr) {
+      logStructuredEvent("warn", "sheet-monitor.system-cargas-read-failed", {
+        correlationId,
+        message: systemErr instanceof Error ? systemErr.message : String(systemErr),
+      });
+    }
 
     // ----------------------------------------------------------------
     // REFRESH path: operator explicitly asked for a fresh sync.
@@ -730,17 +929,29 @@ export async function resolveSheetMonitorResponse(request) {
             });
           }
 
-          // Return the freshly-parsed rows immediately. Still attach the enriched
-          // map from the DB — otherwise setQueryData() on the client would replace
-          // the cached payload with one that has no enrichedByLh, blanking every
-          // row to "Consulta Angellira/ASPX pendente" until the next read.
-          const enrichedByLh = await readSheetMonitorEnrichedByLh(supabaseClient, correlationId);
+          // Linhas NOVAS da planilha (sem enriquecimento ainda) são consultadas
+          // UMA vez, em background (fire-and-forget, não bloqueia a resposta).
+          // NÃO re-consulta o que já existe — "Atualizar planilha" segue só
+          // atualizando a planilha; a verificação acontece 1x por linha.
+          if (persisted) {
+            const { enrichAllPendingMonitorRows } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+            void enrichAllPendingMonitorRows(createSupabaseAdminClient(), correlationId, { onlyMissing: true }).catch(() => {});
+          }
+
+          // Return the freshly-parsed rows immediately — no extra DB read needed.
+          // Inclui o enriquecimento JÁ salvo (senão o refresh "apaga" os selos).
+          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now });
+          await attachRouteCodes(supabaseClient, unified.items, correlationId);
+          await attachRouteRegistration(supabaseClient, unified.items, correlationId);
+          const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
           return {
             statusCode: 200,
             payload: {
-              items: rows,
-              summary,
+              items: unified.items,
+              summary: unified.summary,
               enrichedByLh,
+              enrichedByCargoId,
+              allocByLh,
               meta: {
                 correlationId,
                 sheetConfigured: true,
@@ -790,15 +1001,29 @@ export async function resolveSheetMonitorResponse(request) {
     }
 
     if (snapshot) {
-      // Read enriched data — non-fatal if missing
-      const enrichedByLh = await readSheetMonitorEnrichedByLh(supabaseClient, correlationId);
+      // Enriquecimento salvo: planilha por lh, sistema por cargo_id.
+      const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
 
+      const baseRows = snapshot.rows_json ?? [];
+      const unified = buildUnifiedMonitor({
+        baseRows,
+        systemRows,
+        reservaRows,
+        baseSummary: snapshot.summary_json ?? emptySummary,
+        openLhSet,
+        allocByLh,
+        now,
+      });
+      await attachRouteCodes(supabaseClient, unified.items, correlationId);
+      await attachRouteRegistration(supabaseClient, unified.items, correlationId);
       return {
         statusCode: 200,
         payload: {
-          items: snapshot.rows_json ?? [],
-          summary: snapshot.summary_json ?? emptySummary,
+          items: unified.items,
+          summary: unified.summary,
           enrichedByLh,
+          enrichedByCargoId,
+          allocByLh,
           meta: {
             correlationId,
             sheetConfigured: true,
@@ -808,22 +1033,161 @@ export async function resolveSheetMonitorResponse(request) {
       };
     }
 
-    // No snapshot yet (first use or migration pending).
-    // Return empty state — not an error. Frontend shows "Clique em Atualizar planilha".
+    // No snapshot yet (first use or migration pending). Mesmo sem planilha, as
+    // cargas do sistema (+ reservas) devem aparecer no Monitor.
     const { getSheetExportUrl: getUrl } = await import("../../../application/google-sheets/google-sheet-loads.js");
+    const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary });
+    await attachRouteCodes(supabaseClient, unified.items, correlationId);
+    await attachRouteRegistration(supabaseClient, unified.items, correlationId);
+    const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
     return {
       statusCode: 200,
       payload: {
-        items: [],
-        summary: emptySummary,
+        items: unified.items,
+        summary: systemRows.length ? unified.summary : emptySummary,
+        enrichedByLh,
+        enrichedByCargoId,
+        allocByLh,
         meta: {
           correlationId,
           sheetConfigured: Boolean(getUrl()),
-          noSnapshot: true,
+          // noSnapshot só quando NÃO há NADA a mostrar (nem planilha nem sistema) —
+          // senão o frontend esconderia as cargas do sistema atrás do empty state.
+          noSnapshot: systemRows.length === 0,
         },
       },
     };
   });
+}
+
+export async function resolveUpdateMonitorAllocationResponse(request) {
+  return withOperatorSession(
+    request,
+    "update-monitor-allocation",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { lh, ...allocation } = sheetMonitorAllocationBodySchema.parse(await parseJsonBody(request));
+      const result = await updateMonitorAllocation({ lh, operatorId, payload: allocation, requestIp, correlationId });
+      // Re-enriquece a linha editada + o fan-out da cascata de cancelamento com o
+      // motorista/placa EFETIVO, p/ o selo não ficar "não consultado". Fire-and-
+      // forget (não bloqueia o save; o front faz refetch atrasado). Nunca lança.
+      const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+      void enrichSheetRowsByLh(createSupabaseAdminClient(), [lh, ...(result.movedLhs ?? [])], { correlationId }).catch(() => {});
+      return { statusCode: result.statusCode, payload: result.payload };
+    },
+  );
+}
+
+export async function resolveReassignMonitorAllocationsResponse(request) {
+  return withOperatorSession(
+    request,
+    "reassign-monitor-allocations",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { moves } = sheetMonitorReassignBodySchema.parse(await parseJsonBody(request));
+      const result = await reassignMonitorAllocations({ moves, operatorId, requestIp, correlationId });
+      // Re-enriquece TODAS as cargas movidas com o motorista/placa EFETIVO, p/ a
+      // fila reordenada não ficar "não consultado". Fire-and-forget (não bloqueia
+      // o reorder; o front faz refetch atrasado). Nunca lança.
+      const admin = createSupabaseAdminClient();
+      const { enrichSheetRowsByLh, enrichSystemCargoById } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+      const lhs = moves.map((m) => m.lh).filter(Boolean);
+      const cargoIds = moves.map((m) => m.cargoId).filter(Boolean);
+      if (lhs.length) void enrichSheetRowsByLh(admin, lhs, { correlationId }).catch(() => {});
+      for (const cargoId of cargoIds) void enrichSystemCargoById(admin, cargoId, { correlationId }).catch(() => {});
+      return result;
+    },
+  );
+}
+
+export async function resolveAssignReservaResponse(request) {
+  return withOperatorSession(
+    request,
+    "assign-reserva-to-carga",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { reservaId, targetLh } = sheetMonitorAssignReservaBodySchema.parse(await parseJsonBody(request));
+      const result = await assignReservaToCarga({ reservaId, targetLh, operatorId, requestIp, correlationId });
+      // Re-enriquece a carga de destino (motorista/placa mudaram) p/ o selo
+      // Angellira/ASPX refletir o standby puxado. Fire-and-forget, nunca lança.
+      const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+      void enrichSheetRowsByLh(createSupabaseAdminClient(), [targetLh], { correlationId }).catch(() => {});
+      return result;
+    },
+  );
+}
+
+export async function resolveUpdateMonitorCargoResponse(request) {
+  return withOperatorSession(
+    request,
+    "update-monitor-cargo",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { cargoId, ...fields } = sheetMonitorCargoUpdateBodySchema.parse(await parseJsonBody(request));
+      const result = await updateMonitorCargo({ cargoId, operatorId, payload: fields, requestIp, correlationId });
+      // Re-enriquece a carga em background (motorista/placa podem ter mudado) p/
+      // o selo Angellira/ASPX refletir o novo motorista. Best-effort, com cache.
+      const { enrichSystemCargoById } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+      void enrichSystemCargoById(createSupabaseAdminClient(), cargoId, { correlationId }).catch(() => {});
+      return result;
+    },
+  );
+}
+
+export async function resolveSetMonitorAllocationPinResponse(request) {
+  return withOperatorSession(
+    request,
+    "set-monitor-allocation-pin",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { lh, pinned } = sheetMonitorPinBodySchema.parse(await parseJsonBody(request));
+      return setMonitorAllocationPin({ lh, pinned, operatorId, requestIp, correlationId });
+    },
+  );
+}
+
+export async function resolvePreviewAspxAllocationResponse(request) {
+  return withOperatorSession(
+    request,
+    "preview-aspx-allocation",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem atribuir no ASPX.",
+    },
+    async ({ correlationId }) => {
+      return previewAspxAllocation({ correlationId });
+    },
+  );
+}
+
+export async function resolveAssignAspxAllocationsResponse(request) {
+  return withOperatorSession(
+    request,
+    "assign-aspx-allocations",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem atribuir no ASPX.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { lhs, dryRun } = sheetMonitorAspxAssignBodySchema.parse(await parseJsonBody(request));
+      return assignAspxAllocations({ lhs, dryRun, operatorId, requestIp, correlationId });
+    },
+  );
 }
 
 export async function resolveSheetMonitorRowDetailResponse(request) {
@@ -1763,6 +2127,64 @@ export async function resolveOperatorGetCadastroResponse(request) {
       }
       return { statusCode: 200, payload: { cadastro: rows[0], meta: { correlationId } } };
     });
+  });
+}
+
+/**
+ * GET /api/operator/cadastros/:id/torre
+ * Dossiê da Torre de Controle (ranking + sinais operacionais) do motorista do
+ * cadastro, por CPF. Read-only — exibido no painel de revisão de cadastro.
+ */
+export async function resolveOperatorTorreDriverInfoResponse(request) {
+  return withOperatorSession(request, "cadastro-torre-info", async ({ correlationId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso intermediário necessário.");
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+
+    return withPgClient(async (client) => {
+      const cadastro = await loadCadastroAprovado(client, id);
+      if (!cadastro) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+
+      const cpf = String(cadastro.dados?.motorista?.cpf || "").replace(/\D/g, "");
+      if (cpf.length !== 11) {
+        return {
+          statusCode: 422,
+          payload: { error: "UnprocessableEntity", message: "Cadastro sem CPF de motorista válido.", meta: { correlationId } },
+        };
+      }
+
+      const { fetchTorreDriverInfo } = await import(
+        "../../../application/operator-admin/use-cases/torre-driver-info.js"
+      );
+      return fetchTorreDriverInfo({ cpf, correlationId });
+    });
+  });
+}
+
+/**
+ * GET /api/operator/drivers/:cpf/torre
+ * Dossiê da Torre por CPF direto — usado onde o operador tem o CPF mas não um
+ * cadastro pendente (ex.: fila de candidatos / DriverDetailModal).
+ */
+export async function resolveOperatorDriverTorreInfoResponse(request) {
+  return withOperatorSession(request, "driver-torre-info", async ({ correlationId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso intermediário necessário.");
+    const cpf = String(getQueryParam(request, "cpf") || "").replace(/\D/g, "");
+    if (cpf.length !== 11) {
+      return {
+        statusCode: 400,
+        payload: { error: "BadRequest", message: "CPF inválido (esperado 11 dígitos).", meta: { correlationId } },
+      };
+    }
+
+    const { fetchTorreDriverInfo } = await import(
+      "../../../application/operator-admin/use-cases/torre-driver-info.js"
+    );
+    return fetchTorreDriverInfo({ cpf, correlationId });
   });
 }
 

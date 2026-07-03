@@ -148,10 +148,12 @@ describe("operator-admin read models", () => {
 
     expect(response.statusCode).toBe(200);
 
-    const route = response.payload.items.find((item) => item.route_key === "campo grande|simoes filho");
+    // route_key agora inclui perfil + eixos (uma rota por veículo). Base sintética
+    // (sem registro persistido) usa perfil vazio e eixos 0.
+    const route = response.payload.items.find((item) => item.route_key === "campo grande|simoes filho||0");
 
     expect(route).toMatchObject({
-      route_key: "campo grande|simoes filho",
+      route_key: "campo grande|simoes filho||0",
       origem: "CAMPO GRANDE",
       destino: "SIMOES FILHO",
       distancia_km: 1607,
@@ -186,10 +188,13 @@ describe("operator-admin read models", () => {
 
     expect(response.statusCode).toBe(200);
 
-    const route = response.payload.items.find((item) => item.route_key === "campo grande|simoes filho");
+    // route_key inclui perfil (CARRETA) + eixos (0) da rota persistida.
+    const route = response.payload.items.find(
+      (item) => item.route_key === "campo grande|simoes filho|CARRETA|0",
+    );
 
     expect(route).toMatchObject({
-      route_key: "campo grande|simoes filho",
+      route_key: "campo grande|simoes filho|CARRETA|0",
       distancia_km: 1607,
       duracao_horas: 57,
       tempo_estimado_horas: 57,

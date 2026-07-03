@@ -16,6 +16,7 @@ export interface OperatorCargoPayload {
   origem: string;
   destino: string;
   perfil: string;
+  eixos?: number | null;
   valor: number | null;
   bonus: number | null;
   bonus_exigencias: string | null;
@@ -69,6 +70,7 @@ export interface OperatorRoutePayload {
   duracao_horas: number | null;
   tempo_estimado_horas: number | null;
   perfil_padrao: string | null;
+  eixos?: number;
   valor_padrao: number | null;
   bonus_padrao: number | null;
   bonus_exigencias: string | null;
@@ -132,6 +134,61 @@ export async function syncOperatorCargasSheet() {
   }>(`/api/operator/cargas/sync-sheet`, {
     method: "POST",
     accessToken,
+  });
+}
+
+export interface ImportCargoRowPreview {
+  cod_carga: string | null;
+  tipo: string | null;
+  veiculo: string;
+  data: string;
+  horario: string;
+  data_descarga: string | null;
+  origem: string;
+  destino: string;
+  cliente_nome: string | null;
+  status: string;
+  // false = trajeto (origem→destino) sem rota cadastrada no catálogo.
+  route_registered?: boolean;
+}
+
+export type ImportCargoAction = "insert" | "update" | "skip" | "invalid";
+
+export interface ImportCargoRowResult {
+  line: number;
+  ok: boolean;
+  errors: string[];
+  preview: ImportCargoRowPreview;
+  action: ImportCargoAction;
+  reason: string | null;
+}
+
+export interface ImportCargasResponse {
+  ok: boolean;
+  dryRun: boolean;
+  headerError?: string;
+  summary: {
+    total: number;
+    invalid: number;
+    skipped: number;
+    inserted: number;
+    updated: number;
+    importable: number;
+  };
+  rows: ImportCargoRowResult[];
+  meta: { correlationId: string };
+}
+
+/**
+ * Importa cargas a partir de um CSV. Com `dryRun: true` apenas valida e devolve
+ * o preview por linha (sem gravar); com `dryRun: false` grava as linhas válidas.
+ */
+export async function importOperatorCargas(csv: string, dryRun: boolean) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<ImportCargasResponse>("/api/operator/cargas/import", {
+    method: "POST",
+    accessToken,
+    body: { csv, dryRun },
   });
 }
 

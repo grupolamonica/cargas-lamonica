@@ -65,7 +65,7 @@ async function main() {
       AND (data < $1
         OR (data = $2 AND horario IS NOT NULL AND horario < $3))
       AND COALESCE(is_template, false) = false
-      AND COALESCE(sheet_motorista, '') = ''
+      AND COALESCE(alloc_motorista, sheet_motorista, '') = ''
     ORDER BY data, horario
     ${limit ? `LIMIT ${limit}` : ""}
   `;

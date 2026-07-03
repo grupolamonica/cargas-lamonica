@@ -3,6 +3,7 @@
  * Preserves existing import paths without changes.
  */
 export { createOperatorCargo } from "./use-cases/create-cargo.js";
+export { importOperatorCargas } from "./use-cases/import-cargas.js";
 export { updateOperatorCargo } from "./use-cases/update-cargo.js";
 export { duplicateOperatorCargo } from "./use-cases/duplicate-cargo.js";
 export { toggleOperatorCargoStatus } from "./use-cases/toggle-cargo-status.js";

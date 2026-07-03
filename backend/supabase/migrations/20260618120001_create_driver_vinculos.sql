@@ -8,7 +8,9 @@
 -- gerado por normalizeDriverNameKey (lowercase, sem acentos, espaços colapsados)
 -- tanto na escrita (sync) quanto na leitura (read model da fila).
 
-CREATE TABLE public.driver_vinculos (
+-- Idempotente: em prod esta tabela já existe (aplicada ad-hoc sob outro timestamp);
+-- re-rodar não pode falhar.
+CREATE TABLE IF NOT EXISTS public.driver_vinculos (
   nome_normalizado TEXT PRIMARY KEY,        -- chave de junção (sem acento, lower, trim)
   nome_original    TEXT NOT NULL,           -- nome como veio da planilha (exibição/debug)
   vinculo          TEXT NOT NULL,           -- AGREGADO DEDICADO | PME | FROTA | PX | ...
@@ -22,6 +24,7 @@ ALTER TABLE public.driver_vinculos ENABLE ROW LEVEL SECURITY;
 -- Mesmo padrão de aspx_drivers: apenas service-role (backend / sync job) lê/escreve.
 -- O read model da fila lê via conexão direta do backend (owner — bypassa RLS),
 -- exatamente como já faz com aspx_drivers.
+DROP POLICY IF EXISTS "service role manages driver_vinculos" ON public.driver_vinculos;
 CREATE POLICY "service role manages driver_vinculos"
 ON public.driver_vinculos
 AS PERMISSIVE

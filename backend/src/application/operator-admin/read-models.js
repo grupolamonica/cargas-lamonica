@@ -161,7 +161,8 @@ function isMissingRouteColumnError(error) {
     combinedMessage.includes("bonus_exigencias") ||
     combinedMessage.includes("driver_visibility") ||
     combinedMessage.includes("sheet_data_carregamento") ||
-    combinedMessage.includes("sheet_data_descarga")
+    combinedMessage.includes("sheet_data_descarga") ||
+    combinedMessage.includes("eixos")
   );
 }
 
@@ -196,78 +197,94 @@ function isMissingRouteCatalogColumnsError(error) {
     msg.includes("valor_padrao") ||
     msg.includes("bonus_padrao") ||
     msg.includes("ativa") ||
-    msg.includes("observacoes")
+    msg.includes("observacoes") ||
+    msg.includes("eixos")
   );
 }
 
+// Identidade do catálogo: inclui perfil + eixos para que cada rota-veículo
+// do mesmo trecho seja única e selecionável (uma rota por veículo).
+function buildRouteIdentityKey(route) {
+  const originKey = route.origin_key || normalizeRouteLocation(route.origem);
+  const destinationKey = route.destination_key || normalizeRouteLocation(route.destino);
+  const perfil = route.perfil_padrao || "";
+  const eixos = route.eixos ?? 0;
+  return `${originKey}|${destinationKey}|${perfil}|${eixos}`;
+}
+
 function mergeBaseRoutesWithCatalog(routes) {
-  const persistedRouteMap = new Map(
-    routes.map((route) => [`${normalizeRouteLocation(route.origem)}|${normalizeRouteLocation(route.destino)}`, route]),
-  );
-
-  const mergedBaseRoutes = baseRouteValues.map((baseRoute) => {
-    const routeKey = `${normalizeRouteLocation(baseRoute.origin)}|${normalizeRouteLocation(baseRoute.destination)}`;
-    const persistedRoute = persistedRouteMap.get(routeKey);
-
-    if (persistedRoute) {
-      persistedRouteMap.delete(routeKey);
-
-      return {
-        ...persistedRoute,
-        route_key: `${persistedRoute.origin_key || normalizeRouteLocation(persistedRoute.origem)}|${
-          persistedRoute.destination_key || normalizeRouteLocation(persistedRoute.destino)
-        }`,
-        base_route_label: baseRoute.route,
-        distancia_km: parseNullableNumber(persistedRoute.distancia_km) ?? baseRoute.distanceKm ?? null,
-        duracao_horas: parseNullableNumber(persistedRoute.duracao_horas),
-        tempo_estimado_horas:
-          parseNullableNumber(persistedRoute.tempo_estimado_horas) ?? parseNullableNumber(persistedRoute.duracao_horas),
-        valor_padrao: parseNullableNumber(persistedRoute.valor_padrao) ?? baseRoute.value,
-        bonus_padrao: parseNullableNumber(persistedRoute.bonus_padrao),
-        persisted: true,
-        source: "base+db",
-      };
+  // Uma rota por veículo: o mesmo trecho (origem|destino) pode ter N linhas
+  // (uma por perfil/eixos). Indexamos por LOCALIZAÇÃO numa lista para anexar o
+  // rótulo "base da planilha" a todas as variantes do trecho, sem colapsá-las.
+  const persistedByLocation = new Map();
+  routes.forEach((route) => {
+    const locationKey = `${normalizeRouteLocation(route.origem)}|${normalizeRouteLocation(route.destino)}`;
+    if (!persistedByLocation.has(locationKey)) {
+      persistedByLocation.set(locationKey, []);
     }
-
-    return {
-      id: `base:${routeKey}`,
-      route_key: routeKey,
-      origin_key: normalizeRouteLocation(baseRoute.origin),
-      destination_key: normalizeRouteLocation(baseRoute.destination),
-      origem: baseRoute.origin,
-      destino: baseRoute.destination,
-      distancia_km: baseRoute.distanceKm ?? null,
-      duracao_horas: null,
-      tempo_estimado_horas: null,
-      perfil_padrao: null,
-      valor_padrao: baseRoute.value,
-      bonus_padrao: null,
-      ativa: true,
-      observacoes: null,
-      created_at: null,
-      updated_at: null,
-      rota_id: null,
-      cliente_id: null,
-      base_route_label: baseRoute.route,
-      persisted: false,
-      source: "base",
-    };
+    persistedByLocation.get(locationKey).push(route);
   });
 
-  const extraPersistedRoutes = Array.from(persistedRouteMap.values()).map((route) => ({
+  const mapPersistedRoute = (route, baseRoute) => ({
     ...route,
-    route_key: `${route.origin_key || normalizeRouteLocation(route.origem)}|${
-      route.destination_key || normalizeRouteLocation(route.destino)
-    }`,
-    distancia_km: parseNullableNumber(route.distancia_km),
+    route_key: buildRouteIdentityKey(route),
+    eixos: route.eixos ?? 0,
+    distancia_km: parseNullableNumber(route.distancia_km) ?? baseRoute?.distanceKm ?? null,
     duracao_horas: parseNullableNumber(route.duracao_horas),
-    tempo_estimado_horas: parseNullableNumber(route.tempo_estimado_horas) ?? parseNullableNumber(route.duracao_horas),
-    valor_padrao: parseNullableNumber(route.valor_padrao),
+    tempo_estimado_horas:
+      parseNullableNumber(route.tempo_estimado_horas) ?? parseNullableNumber(route.duracao_horas),
+    valor_padrao: parseNullableNumber(route.valor_padrao) ?? baseRoute?.value ?? null,
     bonus_padrao: parseNullableNumber(route.bonus_padrao),
-    base_route_label: null,
+    base_route_label: baseRoute?.route ?? null,
     persisted: true,
-    source: "db",
-  }));
+    source: baseRoute ? "base+db" : "db",
+  });
+
+  const usedLocations = new Set();
+
+  const mergedBaseRoutes = baseRouteValues.flatMap((baseRoute) => {
+    const locationKey = `${normalizeRouteLocation(baseRoute.origin)}|${normalizeRouteLocation(baseRoute.destination)}`;
+    const persistedRoutes = persistedByLocation.get(locationKey);
+
+    if (persistedRoutes && persistedRoutes.length > 0) {
+      usedLocations.add(locationKey);
+      return persistedRoutes.map((route) => mapPersistedRoute(route, baseRoute));
+    }
+
+    return [
+      {
+        id: `base:${locationKey}`,
+        route_key: `${normalizeRouteLocation(baseRoute.origin)}|${normalizeRouteLocation(baseRoute.destination)}||0`,
+        origin_key: normalizeRouteLocation(baseRoute.origin),
+        destination_key: normalizeRouteLocation(baseRoute.destination),
+        origem: baseRoute.origin,
+        destino: baseRoute.destination,
+        distancia_km: baseRoute.distanceKm ?? null,
+        duracao_horas: null,
+        tempo_estimado_horas: null,
+        perfil_padrao: null,
+        eixos: 0,
+        valor_padrao: baseRoute.value,
+        bonus_padrao: null,
+        ativa: true,
+        observacoes: null,
+        created_at: null,
+        updated_at: null,
+        rota_id: null,
+        cliente_id: null,
+        base_route_label: baseRoute.route,
+        persisted: false,
+        source: "base",
+      },
+    ];
+  });
+
+  const extraPersistedRoutes = routes
+    .filter(
+      (route) =>
+        !usedLocations.has(`${normalizeRouteLocation(route.origem)}|${normalizeRouteLocation(route.destino)}`),
+    )
+    .map((route) => mapPersistedRoute(route, null));
 
   return [...mergedBaseRoutes, ...extraPersistedRoutes];
 }
@@ -291,6 +308,7 @@ async function fetchPersistedRoutes(client) {
         rmc.perfil_padrao,
         rmc.valor_padrao,
         rmc.bonus_padrao,
+        rmc.eixos,
         rmc.ativa,
         rmc.observacoes,
         rmc.created_at,
@@ -338,6 +356,7 @@ async function fetchPersistedRoutes(client) {
             perfil_padrao,
             valor_padrao,
             bonus_padrao,
+            eixos,
             ativa,
             observacoes,
             created_at,
@@ -367,6 +386,7 @@ async function fetchPersistedRoutes(client) {
         NULL::text AS perfil_padrao,
         NULL::numeric AS valor_padrao,
         NULL::numeric AS bonus_padrao,
+        NULL::smallint AS eixos,
         true AS ativa,
         NULL::text AS observacoes,
         created_at,
@@ -421,6 +441,7 @@ async function fetchRouteCatalogMetricsByCargoId(client, cargoRows) {
           duracao_horas,
           tempo_estimado_horas,
           perfil_padrao,
+          eixos,
           valor_padrao
         FROM public.route_metrics_cache
         WHERE origin_key = ANY($1::text[])
@@ -429,7 +450,9 @@ async function fetchRouteCatalogMetricsByCargoId(client, cargoRows) {
       [Array.from(originKeys), Array.from(destinationKeys)],
     );
 
-    const routeMetricsByKey = new Map();
+    // Uma rota por veículo: agrupa por trecho; no match preferimos a linha cujo
+    // perfil+eixos casam com a carga (fallback: perfil só, depois 1ª linha).
+    const routeMetricsByLocation = new Map();
 
     rows.forEach((row) => {
       const distanceKm = parseNullableNumber(row.distancia_km);
@@ -442,24 +465,40 @@ async function fetchRouteCatalogMetricsByCargoId(client, cargoRows) {
         return;
       }
 
-      routeMetricsByKey.set(`${row.origin_key}|${row.destination_key}`, {
-        distancia_km: distanceKm,
-        duracao_horas: durationHours,
-        tempo_estimado_horas: estimatedHours,
+      const locationKey = `${row.origin_key}|${row.destination_key}`;
+      if (!routeMetricsByLocation.has(locationKey)) {
+        routeMetricsByLocation.set(locationKey, []);
+      }
+      routeMetricsByLocation.get(locationKey).push({
         perfil_padrao: profile,
-        valor_padrao: value,
+        eixos: Number(row.eixos ?? 0),
+        metrics: {
+          distancia_km: distanceKm,
+          duracao_horas: durationHours,
+          tempo_estimado_horas: estimatedHours,
+          perfil_padrao: profile,
+          valor_padrao: value,
+        },
       });
     });
 
-    return new Map(
-      cargoRows.map((row) => {
-        const matchedRouteKey = createRouteLookupKeys(row.origem, row.destino).find((routeKey) =>
-          routeMetricsByKey.has(routeKey),
-        );
+    const pickRouteMetrics = (row) => {
+      const locationKey = createRouteLookupKeys(row.origem, row.destino).find((routeKey) =>
+        routeMetricsByLocation.has(routeKey),
+      );
+      if (!locationKey) return null;
+      const candidates = routeMetricsByLocation.get(locationKey);
+      const cargoProfile = String(row.perfil ?? "").trim().toUpperCase();
+      const cargoEixos = Number(row.eixos ?? 0);
+      const sameProfile = cargoProfile
+        ? candidates.filter((c) => String(c.perfil_padrao ?? "").toUpperCase() === cargoProfile)
+        : [];
+      const matched =
+        sameProfile.find((c) => c.eixos === cargoEixos) || sameProfile[0] || candidates[0];
+      return matched ? matched.metrics : null;
+    };
 
-        return [row.id, matchedRouteKey ? routeMetricsByKey.get(matchedRouteKey) : null];
-      }),
-    );
+    return new Map(cargoRows.map((row) => [row.id, pickRouteMetrics(row)]));
   } catch (error) {
     if (isMissingRouteCatalogTableError(error) || isMissingRouteCatalogColumnsError(error)) {
       return new Map();
@@ -527,7 +566,7 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
           // \u2014 bloqueava pipeline statuses como 'AGUARDANDO CARREGAMENTO' que
           // significam carga aberta na planilha).
           clauses.push("cargas.status IN ('DRAFT', 'OPEN')");
-          clauses.push("COALESCE(cargas.sheet_motorista, '') = ''");
+          clauses.push("COALESCE(cargas.alloc_motorista, cargas.sheet_motorista, '') = ''");
         } else {
           values.push(status);
           clauses.push(`cargas.status = $${index}`);
@@ -608,6 +647,7 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
             ${nextSupportsOptionalColumns ? "cargas.distancia_km" : "NULL::numeric AS distancia_km"},
             ${nextSupportsOptionalColumns ? "cargas.duracao_horas" : "NULL::numeric AS duracao_horas"},
             cargas.perfil,
+            ${nextSupportsOptionalColumns ? "cargas.eixos" : "NULL::smallint AS eixos"},
             cargas.valor,
             cargas.bonus,
             ${nextSupportsOptionalColumns ? "cargas.bonus_exigencias" : "NULL::text AS bonus_exigencias"},
@@ -700,6 +740,7 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
           distancia_km: parseNullableNumber(row.distancia_km),
           duracao_horas: parseNullableNumber(row.duracao_horas),
           perfil: row.perfil,
+          eixos: parseNullableNumber(row.eixos),
           valor: parseNullableNumber(row.valor),
           bonus: parseNullableNumber(row.bonus),
           bonus_exigencias: row.bonus_exigencias,

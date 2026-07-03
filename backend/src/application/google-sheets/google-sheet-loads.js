@@ -317,6 +317,10 @@ async function fetchExistingSheetLoads(supabaseClient) {
       .from(SHEET_LOADS_TABLE)
       .select("id, sheet_lh, valor, bonus, cliente_id, perfil, distancia_km, duracao_horas, status, is_template, created_by")
       .not("sheet_lh", "is", null)
+      // Só cargas que vieram do sync da planilha (sheet_synced_at preenchido).
+      // Cargas importadas manualmente têm sheet_lh mas sheet_synced_at NULL —
+      // não pertencem à planilha Shopee e NÃO devem ser expiradas pelo sync.
+      .not("sheet_synced_at", "is", null)
       .order("sheet_lh", { ascending: true })
       .range(offset, offset + EXISTING_SHEET_LOADS_PAGE_SIZE - 1);
 
@@ -1034,6 +1038,13 @@ function buildSheetLoadPayload({
   };
 }
 
+// Nome do cliente padrão da planilha (ex.: Shopee). Usado pelo Monitor unificado
+// para rotular as linhas que vêm da planilha (que é toda de um único cliente).
+// [reconstruído após clobber acidental de alteração não-commitada — revisar]
+export function getSheetClientName() {
+  return DEFAULT_SHEET_CLIENT_NAME;
+}
+
 export function buildSheetSummary(allRows) {
   const summary = {
     total: allRows.length,
@@ -1142,6 +1153,8 @@ export async function syncGoogleSheetLoads({
     onInvalidRow: (row) => invalidRows.push(row),
   });
   const syncedAt = new Date().toISOString();
+  // "Agora" no relógio de São Paulo (carga.data/horario são horário do Brasil) — usado
+  // p/ reabrir (EXPIRED→OPEN) só as cargas que voltaram a ser futuras na planilha.
   const nowSp = getSaoPauloWallClock();
 
   if (invalidRows.length > 0) {
@@ -1181,6 +1194,7 @@ export async function syncGoogleSheetLoads({
       syncedAt,
       nowSp,
     });
+    // Contadores separados (observabilidade): BOOKED→OPEN vs EXPIRED→OPEN.
     if (existingLoad?.status === "BOOKED" && payload.status === DEFAULT_PUBLISHED_STATUS) {
       revertedToOpenCount += 1;
     }
@@ -1372,12 +1386,30 @@ export async function syncGoogleSheetLoads({
     );
   }
 
+  // Cancelamento vindo da planilha: linhas que ficaram CANCELADO no sync e ainda
+  // têm motorista → cascata da rota (Interpretação A), idempotente. Non-fatal: o
+  // sync já concluiu. Import dinâmico evita ciclo (cancel-load-cascade → este módulo).
+  let cancelCascadeSwept = 0;
+  try {
+    const { sweepCancelledCascades } = await import("../operator-admin/sweep-cancelled-cascades.js");
+    const swept = await sweepCancelledCascades({});
+    cancelCascadeSwept = swept.cascaded;
+    if (swept.cascaded > 0) {
+      console.info(`[google-sheet-loads] ${swept.cascaded} cancelamento(s) da planilha cascateado(s) na fila`, { ...swept });
+    }
+  } catch (sweepError) {
+    console.error("[google-sheet-loads] sweep de cancelamento falhou após sync", {
+      message: sweepError instanceof Error ? sweepError.message : String(sweepError),
+    });
+  }
+
   return {
     availableLoadsCount: sheetLoadPayloads.length,
     unlinkedLoadsCount: staleInSheet.length + staleTrulyGone.length,
     revertedToOpenCount,
     revivedExpiredCount,
     skippedInvalidLoadsCount: invalidRows.length,
+    cancelCascadeSwept,
     sheetUrl,
   };
 }

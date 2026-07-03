@@ -6,7 +6,7 @@ export async function createOperatorCargo({ operatorId, payload, requestIp, corr
     const result = await writeCargo(client, { operatorId, payload, requestIp, correlationId });
     return {
       statusCode: 201,
-      payload: { ok: true, warnings: result.warnings, meta: { correlationId } },
+      payload: { ok: true, id: result.cargoId, cargo: { id: result.cargoId }, warnings: result.warnings, meta: { correlationId } },
     };
   });
 }

@@ -105,3 +105,94 @@ backend/examples/cadastrar_motorista.py
 
 - `BRSYSTEM_BASE_URL` (default `https://br2.brasilrisk.com.br`)
 - `BRSYSTEM_USER`, `BRSYSTEM_PASS` (usados pelo exemplo)
+
+---
+
+## Servidor REST (Node) — consulta de aptidão via API ⭐ (consumo pela VPS)
+
+O `server.js` expõe a consulta READ-ONLY de aptidão como HTTP, para o backend do
+cargas-lamonica consumir. O pipeline do badge BRK (PR #67) **já fala esse contrato**
+via `backend/src/infrastructure/brk/brk-client.js`. Contrato completo em
+[`API_REST.md`](./API_REST.md).
+
+```
+GET /api/brk/consultar?cpf=<11díg>&placa=<cavalo>&placa=<carreta>
+    Header: X-API-Key: <BRK_API_KEY>
+    -> { ok, conjunto_apto, status, color, label, componentes, consultado_em }
+GET /health  -> { ok, session }   (sem auth; usado pelo healthcheck do container)
+```
+
+Rodar local:
+```bash
+npm ci
+export BRK_API_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+npm start      # sobe em :8767 (BRK_SIDECAR_PORT)
+```
+
+**Env do servidor:** `BRK_API_KEY` (obrigatória), `BRK_SIDECAR_PORT` (8767),
+`BRK_SIDECAR_HOST` (0.0.0.0), `BRK_BASE_URL`, `BRK_TIMEOUT_MS` (20000),
+`BRK_CACHE_TTL_MS` (300000). A sessão vem de `BRSYSTEM_COOKIE`/`BRSYSTEM_UA` ou de
+`backend/cookie.txt` + `backend/useragent.txt`.
+
+### Sessão (cf_clearance) — o ponto crítico do Cloudflare
+
+O BRK fica atrás do **Cloudflare (managed challenge)**: qualquer cliente
+não-navegador (curl/Node/requests) toma **403 "Just a moment"**. O replay HTTP da
+consulta só passa **enquanto houver um `cf_clearance` válido**, que:
+
+- **nasce de um login HEADED** (um humano resolve o Turnstile 1×):
+  `node refresh_cookies_brk_pw.js login` → grava `backend/cookie.txt` + `useragent.txt`;
+- tem **TTL ~dias** e é **amarrado ao User-Agent** do navegador que o gerou;
+- **NÃO é renovado** pelo keepalive (que só mantém a sessão ASP.NET viva, ~20 min):
+  `node keepalive_brk.js` a cada ~10 min (cron/tarefa/loop).
+- Quando o `cf_clearance` vence → a consulta volta `status:"erro"` → refaça o `login`.
+  O `brk-client.js` trata isso como **UNAVAILABLE e preserva o último valor bom** —
+  o badge não quebra.
+
+### Onde hospedar — duas opções
+
+1. **Máquina do cadastro (mais simples):** já tem o Chrome dedicado e um humano
+   pode rodar o `login` quando o cf_clearance vencer. O backend na VPS aponta
+   `BRK_BASE_URL` para essa máquina (atrás de HTTPS/túnel + allowlist de IP).
+2. **Na VPS (container `brk-bot`):** usa o `Dockerfile` daqui (Chromium + Xvfb). O
+   bootstrap roda via `docker exec brk-bot xvfb-run -a node refresh_cookies_brk_pw.js login`.
+   ⚠️ O Turnstile *interativo* pode exigir VNC no Xvfb; o *managed challenge* costuma
+   passar sozinho num Chromium real sob Xvfb — **validar no deploy**.
+
+### Wiring no backend (passo de DEPLOY — propositalmente NÃO aplicado neste PR)
+
+Para não alterar infra em produção sem validação, o `docker-compose.yml` e o
+`backend.env` **não** são tocados aqui. No deploy, adicionar ao `docker-compose.yml`
+(espelha o `spx-bot`):
+
+```yaml
+brk-bot:
+  build: { context: ./bots/brasilrisk-robo, dockerfile: Dockerfile }
+  image: lamonica-brk-bot:latest
+  restart: unless-stopped
+  networks: [lamonica-net]
+  env_file: [backend.env]
+  environment:
+    BRK_SIDECAR_HOST: "0.0.0.0"
+    BRK_SIDECAR_PORT: "8767"
+  volumes:
+    - brk_session:/app/backend        # cookie.txt/useragent.txt persistem entre deploys
+    - brk_pw_profile:/app/pw_profile  # perfil do Chromium (dispositivo confiável)
+  mem_limit: 768m
+  expose: ["8767"]
+# em volumes:  brk_session: {}   brk_pw_profile: {}
+```
+
+E no `backend.env` da VPS (secret nunca no repo):
+```
+BRK_BASE_URL=http://brk-bot:8767
+BRK_API_KEY=<gere forte; a MESMA no brk-bot e no backend>
+BRK_SYNC_ENABLED=1      # liga a persistência do badge (default-off)
+```
+Rollback: `BRK_SYNC_ENABLED=0` desliga sem remover nada.
+
+### Alternativa: allowlist de IP (deixa 100% Node, sem navegador)
+
+Pedir ao Brasil Risk (suporte/gerente de conta) o **allowlist do IP** do host no
+Cloudflare/WAF (ou um endpoint/credencial de API oficial). Com o IP liberado,
+dispensa Chromium/Xvfb — o `server.js` roda Node puro.

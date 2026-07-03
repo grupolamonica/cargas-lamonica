@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import Motoristas from "@/pages/Motoristas";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const { mockUseQuery, mockUseMutation, mockUseQueryClient } = vi.hoisted(() => ({
   mockUseQuery: vi.fn(),
@@ -250,7 +251,11 @@ describe("Motoristas", () => {
   });
 
   it("mostra o nome do motorista cadastrado e o fallback seguro do pre-cadastro publico", () => {
-    render(<Motoristas />);
+    render(
+      <TooltipProvider>
+        <Motoristas />
+      </TooltipProvider>,
+    );
 
     expect(screen.getAllByText("Motoristas")[0]).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Maria Santos" })).toBeInTheDocument();
@@ -260,7 +265,11 @@ describe("Motoristas", () => {
   });
 
   it("renderiza candidaturas dentro das secoes colapsaveis ao expandir", () => {
-    render(<Motoristas />);
+    render(
+      <TooltipProvider>
+        <Motoristas />
+      </TooltipProvider>,
+    );
 
     // Candidaturas estao colapsadas por default — expandir secao
     const candidaturaTriggers = screen.getAllByText(/Candidaturas \(\d+\)/);
@@ -274,14 +283,22 @@ describe("Motoristas", () => {
   });
 
   it("exibe botao de edicao apenas para motoristas cadastrados", () => {
-    render(<Motoristas />);
+    render(
+      <TooltipProvider>
+        <Motoristas />
+      </TooltipProvider>,
+    );
 
     const editButtons = screen.getAllByTitle("Editar perfil do motorista");
     expect(editButtons).toHaveLength(1);
   });
 
   it("abre o modal de edicao ao clicar no botao de editar", () => {
-    render(<Motoristas />);
+    render(
+      <TooltipProvider>
+        <Motoristas />
+      </TooltipProvider>,
+    );
 
     const editButton = screen.getByTitle("Editar perfil do motorista");
     fireEvent.click(editButton);
@@ -292,7 +309,11 @@ describe("Motoristas", () => {
   });
 
   it("chama mutate com os dados corretos ao salvar edicao", () => {
-    render(<Motoristas />);
+    render(
+      <TooltipProvider>
+        <Motoristas />
+      </TooltipProvider>,
+    );
 
     const editButton = screen.getByTitle("Editar perfil do motorista");
     fireEvent.click(editButton);
@@ -315,7 +336,11 @@ describe("Motoristas", () => {
   });
 
   it("fecha o modal ao clicar em cancelar", () => {
-    render(<Motoristas />);
+    render(
+      <TooltipProvider>
+        <Motoristas />
+      </TooltipProvider>,
+    );
 
     const editButton = screen.getByTitle("Editar perfil do motorista");
     fireEvent.click(editButton);
@@ -361,7 +386,11 @@ describe("Motoristas", () => {
       isFetching: false,
     });
 
-    render(<Motoristas />);
+    render(
+      <TooltipProvider>
+        <Motoristas />
+      </TooltipProvider>,
+    );
 
     expect(screen.queryByTitle("Editar perfil do motorista")).not.toBeInTheDocument();
   });

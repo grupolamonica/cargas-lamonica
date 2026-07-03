@@ -38,18 +38,22 @@ describe("CargoModal", () => {
       />,
     );
 
+    // O primeiro combobox no DOM é o <select> "Rota padrão" (origem/destino agora
+    // são CitySelector). Selecionar a rota herda perfil/valor/bônus do catálogo.
     fireEvent.change(screen.getAllByRole("combobox")[0], {
       target: { value: route.route_key },
     });
 
-    expect(screen.getByDisplayValue("SAO PAULO")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("SIMOES FILHO")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Carreta")).toBeInTheDocument();
     expect(screen.getByDisplayValue("14000")).toBeInTheDocument();
     expect(screen.getByDisplayValue("500")).toBeInTheDocument();
+    expect(screen.getByText("Rota atribuída")).toBeInTheDocument();
   });
 
-  it("atribui automaticamente a rota quando origem e destino coincidem", () => {
+  it("atribui automaticamente a rota pelo trecho + veiculo (origem/destino/perfil)", () => {
+    // Origem/destino são preenchidos via CitySelector (não mais <input> de texto),
+    // então exercitamos o auto-match por initialData: ao abrir com o trecho + perfil
+    // que casam com a rota, o valor/bônus daquele veículo é preenchido.
     render(
       <CargoModal
         open
@@ -57,17 +61,25 @@ describe("CargoModal", () => {
         onSave={vi.fn()}
         clientes={[{ id: "cliente-1", nome: "Cliente Teste" }]}
         routes={[route]}
+        initialData={{
+          data: "2026-04-07",
+          horario: "08:00",
+          route_key: "",
+          origem: "São Paulo / SP",
+          destino: "Simões Filho / BA",
+          perfil: "CARRETA",
+          eixos: 0,
+          valor: "",
+          bonus: "",
+          bonus_exigencias: "",
+          driver_visibility: "PUBLIC",
+          cliente_id: "cliente-1",
+          status: "OPEN",
+          is_template: false,
+        }}
       />,
     );
 
-    fireEvent.change(screen.getByPlaceholderText("Ex: São Paulo/SP"), {
-      target: { value: "São Paulo / SP" },
-    });
-    fireEvent.change(screen.getByPlaceholderText("Ex: Salvador/BA"), {
-      target: { value: "Simões Filho / BA" },
-    });
-
-    expect(screen.getByDisplayValue("Carreta")).toBeInTheDocument();
     expect(screen.getByDisplayValue("14000")).toBeInTheDocument();
     expect(screen.getByDisplayValue("500")).toBeInTheDocument();
     expect(screen.getByText("Rota atribuída")).toBeInTheDocument();

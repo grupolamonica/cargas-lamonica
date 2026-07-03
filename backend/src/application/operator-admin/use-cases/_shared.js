@@ -42,7 +42,11 @@ export function normalizeClientName(value) {
 
 export function isMissingRouteColumnError(error) {
   const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
-  return combinedMessage.includes("distancia_km") || combinedMessage.includes("duracao_horas");
+  return (
+    combinedMessage.includes("distancia_km") ||
+    combinedMessage.includes("duracao_horas") ||
+    combinedMessage.includes("eixos")
+  );
 }
 
 export function isMissingRouteCatalogTableError(error) {
@@ -80,6 +84,11 @@ export function isMissingBonusRequirementsColumnError(error) {
 export function isMissingDriverVisibilityColumnError(error) {
   const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
   return combinedMessage.includes("driver_visibility");
+}
+
+export function isMissingEixosColumnError(error) {
+  const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
+  return combinedMessage.includes("eixos");
 }
 
 export function isMissingRecurrenceColumnError(error) {
@@ -142,7 +151,11 @@ export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
       [Array.from(originKeys), Array.from(destinationKeys)],
     );
 
-    const routeMetricsByKey = new Map();
+    // Uma rota por veículo: várias linhas podem compartilhar o mesmo trecho
+    // (origem|destino) divergindo só no perfil/eixos. Agrupamos por trecho e,
+    // no match, preferimos a linha cujo perfil casa com o da carga (fallback:
+    // primeira linha do trecho). Preserva o comportamento legado com 1 só linha.
+    const routeMetricsByLocation = new Map();
 
     rows.forEach((row) => {
       const distanceKm = parseNullableNumber(row.distancia_km);
@@ -167,24 +180,37 @@ export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
         return;
       }
 
-      routeMetricsByKey.set(`${row.origin_key}|${row.destination_key}`, {
-        distancia_km: distanceKm,
-        tempo_estimado_horas: routeEstimatedHours,
-        duracao_horas: durationHours,
+      const locationKey = `${row.origin_key}|${row.destination_key}`;
+      if (!routeMetricsByLocation.has(locationKey)) {
+        routeMetricsByLocation.set(locationKey, []);
+      }
+      routeMetricsByLocation.get(locationKey).push({
         perfil_padrao: profile,
-        valor_padrao: value,
-        bonus_padrao: bonus,
+        metrics: {
+          distancia_km: distanceKm,
+          tempo_estimado_horas: routeEstimatedHours,
+          duracao_horas: durationHours,
+          perfil_padrao: profile,
+          valor_padrao: value,
+          bonus_padrao: bonus,
+        },
       });
     });
 
-    return new Map(
-      loadRows.map((row) => {
-        const matchedRouteKey = createRouteLookupKeys(row.origem, row.destino).find((routeKey) =>
-          routeMetricsByKey.has(routeKey),
-        );
-        return [row.id, matchedRouteKey ? routeMetricsByKey.get(matchedRouteKey) : null];
-      }),
-    );
+    const pickRouteMetrics = (row) => {
+      const locationKey = createRouteLookupKeys(row.origem, row.destino).find((routeKey) =>
+        routeMetricsByLocation.has(routeKey),
+      );
+      if (!locationKey) return null;
+      const candidates = routeMetricsByLocation.get(locationKey);
+      const cargoProfile = String(row.perfil ?? "").trim().toUpperCase();
+      const matched =
+        (cargoProfile && candidates.find((c) => String(c.perfil_padrao ?? "").toUpperCase() === cargoProfile)) ||
+        candidates[0];
+      return matched ? matched.metrics : null;
+    };
+
+    return new Map(loadRows.map((row) => [row.id, pickRouteMetrics(row)]));
   } catch (error) {
     if (isMissingRouteCatalogTableError(error) || isMissingRouteCatalogColumnsError(error)) {
       return new Map();
@@ -349,6 +375,7 @@ export function mapDriverLoadReadModelItem(row) {
     duracao_horas: parseNullableNumber(row.duracao_horas),
     tempo_estimado_horas: parseNullableNumber(row.tempo_estimado_horas),
     perfil: row.perfil,
+    eixos: parseNullableNumber(row.eixos),
     valor: parseNullableNumber(row.valor),
     bonus: parseNullableNumber(row.bonus),
     clienteId: row.clienteId ?? null,
@@ -445,6 +472,7 @@ export async function queryDriverLoadCandidateRows(
             ${withRouteColumns ? "cargas.distancia_km" : "NULL::numeric AS distancia_km"},
             ${withRouteColumns ? "cargas.duracao_horas" : "NULL::numeric AS duracao_horas"},
             cargas.perfil,
+            ${withRouteColumns ? "cargas.eixos" : "NULL::smallint AS eixos"},
             cargas.valor,
             cargas.bonus,
             cargas.cliente_id AS "clienteId",
@@ -615,7 +643,10 @@ export function assertCargoOwnership(cargo, operatorId, options = {}) {
   }
 }
 
-export async function writeCargo(client, { cargoId, operatorId, payload, requestIp, correlationId }) {
+export async function writeCargo(
+  client,
+  { cargoId, operatorId, payload, requestIp, correlationId, skipRouteMetrics = false },
+) {
   const existingCargo = cargoId ? await findCargoById(client, cargoId, { lock: true }) : null;
 
   if (cargoId && !existingCargo) {
@@ -626,10 +657,18 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
     throw new ForbiddenError("Somente cargas em rascunho ou abertas podem ter o status alterado manualmente.");
   }
 
-  const resolvedMetrics = await resolveRouteMetricsIfNeeded(payload.origem, payload.destino, {
-    distancia_km: payload.distancia_km,
-    duracao_horas: payload.duracao_horas,
-  });
+  // Em importações em lote evitamos chamadas externas (Geoapify) por linha
+  // dentro da transação: usamos só as métricas informadas (ou null).
+  const resolvedMetrics = skipRouteMetrics
+    ? {
+        distancia_km: typeof payload.distancia_km === "number" ? payload.distancia_km : null,
+        duracao_horas: typeof payload.duracao_horas === "number" ? payload.duracao_horas : null,
+        degraded: false,
+      }
+    : await resolveRouteMetricsIfNeeded(payload.origem, payload.destino, {
+        distancia_km: payload.distancia_km,
+        duracao_horas: payload.duracao_horas,
+      });
 
   const shouldLockSheetClient = Boolean(existingCargo?.sheet_lh);
   const sheetClientId = shouldLockSheetClient ? await findSheetClientId(client) : null;
@@ -652,6 +691,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
     : null;
   const warnings = [];
   let schemaFallbackUsed = false;
+  let createdId = cargoId; // no INSERT vira o id recém-gerado (RETURNING id)
 
   if (cargoId) {
     try {
@@ -664,7 +704,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
             valor = $9, bonus = $10, bonus_exigencias = $11,
             driver_visibility = $12, cliente_id = $13, status = $14,
             is_template = $15, sheet_data_carregamento = $16, sheet_data_descarga = $17,
-            is_recurring = $18, recurrence_interval_days = $19
+            eixos = $18, is_recurring = $19, recurrence_interval_days = $20
           WHERE id = $1
         `,
         [
@@ -673,7 +713,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
           resolvedValor, resolvedBonus, payload.bonus_exigencias, nextDriverVisibility,
           clienteId, nextStatus, payload.is_template,
           payload.sheet_data_carregamento ?? null, payload.sheet_data_descarga ?? null,
-          resolvedIsRecurring, resolvedRecurrenceInterval,
+          payload.eixos ?? null, resolvedIsRecurring, resolvedRecurrenceInterval,
         ],
       );
     } catch (error) {
@@ -682,6 +722,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
         !isMissingBonusRequirementsColumnError(error) &&
         !isMissingDriverVisibilityColumnError(error) &&
         !isMissingSheetScheduleColumnsError(error) &&
+        !isMissingEixosColumnError(error) &&
         !isMissingRecurrenceColumnError(error)
       ) {
         throw error;
@@ -704,16 +745,17 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
     }
   } else {
     try {
-      await client.query(
+      const ins = await client.query(
         `
           INSERT INTO public.cargas (
             data, horario, origem, destino, distancia_km, duracao_horas,
             perfil, valor, bonus, bonus_exigencias, driver_visibility,
             cliente_id, status, is_template, created_by,
-            sheet_data_carregamento, sheet_data_descarga,
+            sheet_data_carregamento, sheet_data_descarga, eixos,
             is_recurring, recurrence_interval_days
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+          RETURNING id
         `,
         [
           payload.data, payload.horario, payload.origem, payload.destino,
@@ -721,26 +763,29 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
           resolvedValor, resolvedBonus, payload.bonus_exigencias, nextDriverVisibility,
           clienteId, nextStatus, payload.is_template, operatorId,
           payload.sheet_data_carregamento ?? null, payload.sheet_data_descarga ?? null,
-          resolvedIsRecurring, resolvedRecurrenceInterval,
+          payload.eixos ?? null, resolvedIsRecurring, resolvedRecurrenceInterval,
         ],
       );
+      createdId = ins.rows[0]?.id ?? null;
     } catch (error) {
       if (
         !isMissingRouteColumnError(error) &&
         !isMissingBonusRequirementsColumnError(error) &&
         !isMissingDriverVisibilityColumnError(error) &&
         !isMissingSheetScheduleColumnsError(error) &&
+        !isMissingEixosColumnError(error) &&
         !isMissingRecurrenceColumnError(error)
       ) {
         throw error;
       }
-      await client.query(
+      const insFallback = await client.query(
         `
           INSERT INTO public.cargas (
             data, horario, origem, destino, perfil, valor, bonus,
             cliente_id, status, is_template, created_by
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          RETURNING id
         `,
         [
           payload.data, payload.horario, payload.origem, payload.destino,
@@ -748,6 +793,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
           nextStatus, payload.is_template, operatorId,
         ],
       );
+      createdId = insFallback.rows[0]?.id ?? null;
       schemaFallbackUsed = true;
       warnings.push("Optional cargo fields are not available in the current database schema.");
     }
@@ -762,7 +808,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
     actorUserId: operatorId,
     actorRole: "operator",
     resourceType: "cargo",
-    resourceId: cargoId || null,
+    resourceId: createdId || null,
     action: cargoId ? "update" : "create",
     outcome: "success",
     requestIp,
@@ -780,7 +826,7 @@ export async function writeCargo(client, { cargoId, operatorId, payload, request
     },
   });
 
-  return { warnings };
+  return { warnings, cargoId: createdId };
 }
 
 export function buildDriverLoadFilters(query, {
@@ -803,7 +849,9 @@ export function buildDriverLoadFilters(query, {
     // legítimas dos motoristas. Para estados terminais (DESCARREGADO, CTE
     // ENVIADO, CANCELADO, etc.), o `cargas.status` já transita para BOOKED
     // /EXPIRED via sync, então o filtro principal `cargas.status='OPEN'` cobre.
-    "COALESCE(cargas.sheet_motorista, '') = ''",
+    // Alocação efetiva = override do operador (alloc_motorista, editado no Monitor)
+    // tem precedência sobre o que veio da planilha (sheet_motorista).
+    "COALESCE(cargas.alloc_motorista, cargas.sheet_motorista, '') = ''",
   ];
   const values = [];
   let index = 1;

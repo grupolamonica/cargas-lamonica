@@ -76,6 +76,7 @@ interface CargoDetailsRow {
   distancia_km: number | null;
   duracao_horas: number | null;
   perfil: string;
+  eixos: number | null;
   valor: number | null;
   bonus: number | null;
   bonus_exigencias: string | null;
@@ -91,7 +92,7 @@ interface CargoDetailsRow {
 }
 
 const CARGO_DETAILS_SELECT =
-  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, bonus_exigencias, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, viagem_id, ordem_viagem, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
+  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, eixos, valor, bonus, bonus_exigencias, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, viagem_id, ordem_viagem, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
 const LEGACY_CARGO_DETAILS_SELECT =
   "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
 
@@ -882,7 +883,7 @@ const DriverCargoDetails = () => {
               <DetailMetric icon={Clock3} label="Carregamento" value={loadingLabel} />
               <DetailMetric icon={Clock3} label="Descarga" value={unloadingLabel} />
               <DetailMetric icon={Package} label="Tempo estimado" value={estimatedTime} />
-              <DetailMetric icon={Truck} label="Tipo de veículo" value={cargo.perfil || "A confirmar"} />
+              <DetailMetric icon={Truck} label="Tipo de veículo" value={cargo.perfil ? (cargo.eixos ? `${cargo.perfil} · ${cargo.eixos} eixos` : cargo.perfil) : "A confirmar"} />
               <DetailMetric icon={MapPinned} label="Percurso recomendado" value={formatRouteMetric(cargo.distancia_km, "km")} />
             </CardContent>
           </Card>
