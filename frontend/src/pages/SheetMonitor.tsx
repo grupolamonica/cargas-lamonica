@@ -2577,9 +2577,29 @@ export default function SheetMonitor() {
       });
     }
 
-    // Ordem da fila: grupo de status (Disponível → Reservado → outros → standby)
-    // e, dentro de cada grupo, por data + horário DESC (mais recente no topo,
-    // igual ao snapshot). Status/motorista são os EFETIVOS (já com overlay alloc).
+    // "Agora" no relógio de São Paulo (data/horário das cargas são BR wall-clock).
+    const spParts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(new Date());
+    const spGet = (t: string) => spParts.find((p) => p.type === t)?.value ?? "";
+    const spToday = `${spGet("year")}-${spGet("month")}-${spGet("day")}`;
+    const spNowTime = `${spGet("hour")}:${spGet("minute")}`;
+    // Carga PASSADA (já rodou): data < hoje, ou hoje com horário já vencido. Standby
+    // (reserva sem data) NÃO é passada. Passadas afundam pro fim — não sobem pro topo
+    // mesmo marcadas "Reservado" (ex.: cargas do sistema BOOKED/RESERVED já vencidas).
+    const isPast = (r: SheetMonitorRowType) => {
+      if (r.reserva || !r.data) return false;
+      const d = String(r.data).slice(0, 10);
+      if (d < spToday) return true;
+      if (d > spToday) return false;
+      const t = (r.horario || "").slice(0, 5);
+      return t !== "" && t < spNowTime;
+    };
+
+    // Ordem da fila: PRIMEIRO ativas (atuais/futuras) × passadas (afundam pro fim);
+    // depois grupo de status (Disponível → Reservado → outros → standby); e, dentro
+    // de cada grupo, por data+horário DESC. Status/motorista são os EFETIVOS (overlay alloc).
     const statusGroup = (r: SheetMonitorRowType) => {
       if (r.reserva) return 3; // standby (reserva sem carga) sempre por último
       const s = (r.status || "").trim().toLowerCase();
@@ -2590,6 +2610,10 @@ export default function SheetMonitor() {
     };
     const dtKey = (r: SheetMonitorRowType) => (r.data ? `${r.data} ${r.horario || ""}` : "");
     return [...result].sort((a, b) => {
+      // Passadas sempre depois das ativas, independente do grupo de status.
+      const pa = isPast(a) ? 1 : 0;
+      const pb = isPast(b) ? 1 : 0;
+      if (pa !== pb) return pa - pb;
       const g = statusGroup(a) - statusGroup(b);
       if (g !== 0) return g;
       // Standby (reserva): mais ANTIGO primeiro (FIFO — quem está esperando há mais tempo).
