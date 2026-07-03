@@ -70,6 +70,11 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3001"
+    # Permite o container alcançar serviços publicados no HOST do VPS — usado quando
+    # BRK_BASE_URL aponta para um túnel reverso SSH do SERVERBD (que publica o :5010
+    # do BRK no host, ex.: http://host.docker.internal:5011). Benigno se não usado.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Node ~80-200MB típico + pool pg conexões; sheet sync ETL pode subir.
     # 768m com reserve 256m dá folga sem permitir leak indefinido.
     mem_limit: 768m
