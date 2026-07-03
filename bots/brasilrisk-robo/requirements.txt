@@ -1,0 +1,2 @@
+requests>=2.31
+browser_cookie3>=0.19
