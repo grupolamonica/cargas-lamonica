@@ -23,6 +23,11 @@ subir o código antes das migrations = **500 em massa** (Monitor/dashboard/enric
 
 ## 2. Migrations em PROD (`lbpzkdec`) — ANTES do código
 
+> **✅ APLICADO em 2026-07-03** — as 9 migrations abaixo já foram rodadas em prod
+> (`lbpzkdec`) e verificadas (`monitor_reservas`, `monitor_route_codes`, `cargas.alloc_*`,
+> `alloc_pinned`, `lh_manual`, `cargas.eixos`, `route_metrics_cache.eixos`, `cargo_id` = todos OK).
+> Idempotentes — re-rodar é seguro, mas não é necessário. Só refazer em caso de restore.
+
 Prod tem só `driver_vinculos` (aplicada ad-hoc sob `20260618171424`). **Faltam 7 objetos.**
 Todas as migrations abaixo são **idempotentes / no-op-safe** — seguras para rodar mesmo
 que parte já exista. Aplicar **nesta ordem**:
@@ -72,7 +77,8 @@ SELECT
   EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='cargas' AND column_name='alloc_pinned') AS alloc_pinned,
   EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='cargas' AND column_name='lh_manual') AS lh_manual,
   EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='cargas' AND column_name='eixos') AS cargas_eixos,
-  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='routes' AND column_name='eixos') AS routes_eixos,
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='route_metrics_cache' AND column_name='eixos') AS rmc_eixos,
+  to_regclass('public.monitor_route_codes') IS NOT NULL AS monitor_route_codes,
   EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='sheet_monitor_enriched' AND column_name='cargo_id') AS cargo_id;
 ```
 
