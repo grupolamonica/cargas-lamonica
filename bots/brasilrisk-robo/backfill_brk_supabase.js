@@ -20,6 +20,29 @@
 //   node backfill_brk_supabase.js --apply --limit 5
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+
+// Carrega o .env do sistema hospedeiro (SUPABASE_*, BRK_API_KEY) SEM depender de
+// dotenv/node_modules — parser mínimo. No SERVERBD o .env fica na pasta PAI do bot
+// (Sistema_cadastro/.env). Vars já no ambiente têm prioridade (não sobrescreve).
+function carregarEnv(p) {
+  try {
+    for (const linha of fs.readFileSync(p, 'utf8').split(/\r?\n/)) {
+      const s = linha.trim();
+      if (!s || s.startsWith('#')) continue;
+      const eq = s.indexOf('=');
+      if (eq < 0) continue;
+      const k = s.slice(0, eq).trim();
+      let v = s.slice(eq + 1).trim();
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+      if (k && !(k in process.env)) process.env[k] = v;
+    }
+  } catch { /* sem .env: segue com o process.env atual */ }
+}
+carregarEnv(path.join(__dirname, '..', '.env'));   // Sistema_cadastro/.env (SERVERBD)
+carregarEnv(path.join(__dirname, '.env'));          // .env local do bot (se houver)
+
 const APPLY = process.argv.includes('--apply');
 const _limArg = process.argv.indexOf('--limit');
 const LIMIT = _limArg >= 0 ? Number(process.argv[_limArg + 1]) || 0 : 0;
