@@ -177,9 +177,6 @@ const SAMPLE_CSV_WITH_ONE_INVALID_ROW = `${SAMPLE_CSV}\n${[
   "11/04/2026",
   "11/04/2026",
 ].join(",")}`;
-// SAMPLE_CSV usa datas de abril/2026 (sempre PASSADO p/ os testes). Variante com
-// datas em 2099 → carga sempre FUTURA, p/ testar a reabertura EXPIRED→OPEN.
-const SAMPLE_CSV_FUTURE = SAMPLE_CSV.replace(/2026/g, "2099");
 const SHEET_CLIENT_ID = "client-shopee";
 
 function createSupabaseMock({
@@ -714,7 +711,11 @@ describe("google sheet loads sync", () => {
     });
   });
 
-  it("reverts EXPIRED loads to OPEN when the sheet re-lists them as available AND future", async () => {
+  it("reopens an EXPIRED load to OPEN when the sheet lists it as available and its date is in the future", async () => {
+    // Carga foi expirada (cron, ou correção de uma alocação errada na planilha
+    // depois da data vencer) e ficou presa em EXPIRED. A planilha volta a
+    // listá-la disponível com data FUTURA → o sync deve reabrir para OPEN.
+    const futureCsv = SAMPLE_CSV.replace("03/04/2026 22:30:00", "31/12/2099 22:30:00");
     const existingId = createSheetLoadId("LT0Q4302267L1");
     const supabaseClient = createSupabaseMock({
       existingSheetRows: [
@@ -722,6 +723,8 @@ describe("google sheet loads sync", () => {
           id: existingId,
           sheet_lh: "LT0Q4302267L1",
           status: "EXPIRED",
+          // cron-expire NÃO limpa sheet_synced_at — carga continua "do sync".
+          sheet_synced_at: "2026-06-01T00:00:00.000Z",
           valor: 5000,
           perfil: "CARRETA",
           bonus: null,
@@ -737,8 +740,8 @@ describe("google sheet loads sync", () => {
       ok: true,
       status: 200,
       statusText: "OK",
-      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV_FUTURE)),
-      text: vi.fn().mockResolvedValue(SAMPLE_CSV_FUTURE),
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(futureCsv)),
+      text: vi.fn().mockResolvedValue(futureCsv),
     });
 
     const result = await syncGoogleSheetLoads({
@@ -748,17 +751,18 @@ describe("google sheet loads sync", () => {
       sheetClientId: SHEET_CLIENT_ID,
     });
 
-    expect(result.revertedToOpenCount).toBe(1);
+    expect(result.revivedExpiredCount).toBe(1);
 
     const upsertCall = supabaseClient.calls.find((call) => call[0] === "upsert");
     expect(upsertCall).toBeTruthy();
-    expect(upsertCall[2][0]).toMatchObject({
-      sheet_lh: "LT0Q4302267L1",
-      status: "OPEN",
-    });
+    const revived = upsertCall[2].find((row) => row.sheet_lh === "LT0Q4302267L1");
+    expect(revived).toMatchObject({ sheet_lh: "LT0Q4302267L1", status: "OPEN" });
   });
 
-  it("keeps EXPIRED for a genuinely PAST available load (does not resurrect)", async () => {
+  it("keeps an EXPIRED load expired when the available sheet row is still in the past (no flapping)", async () => {
+    // Mesma carga EXPIRED, mas a data da planilha continua no passado: reabrir
+    // só para o cron reexpirar provocaria flapping (eventos realtime/egress).
+    // SAMPLE_CSV usa datas de abr/2026 (passado) → deve permanecer EXPIRED.
     const existingId = createSheetLoadId("LT0Q4302267L1");
     const supabaseClient = createSupabaseMock({
       existingSheetRows: [
@@ -766,6 +770,7 @@ describe("google sheet loads sync", () => {
           id: existingId,
           sheet_lh: "LT0Q4302267L1",
           status: "EXPIRED",
+          sheet_synced_at: "2026-06-01T00:00:00.000Z",
           valor: 5000,
           perfil: "CARRETA",
           bonus: null,
@@ -777,7 +782,6 @@ describe("google sheet loads sync", () => {
         },
       ],
     });
-    // SAMPLE_CSV = abril/2026 → carga PASSADA → continua EXPIRED (cron a re-expira).
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -793,14 +797,152 @@ describe("google sheet loads sync", () => {
       sheetClientId: SHEET_CLIENT_ID,
     });
 
-    expect(result.revertedToOpenCount).toBe(0);
+    expect(result.revivedExpiredCount).toBe(0);
 
     const upsertCall = supabaseClient.calls.find((call) => call[0] === "upsert");
     expect(upsertCall).toBeTruthy();
-    expect(upsertCall[2][0]).toMatchObject({
-      sheet_lh: "LT0Q4302267L1",
-      status: "EXPIRED",
+    const stale = upsertCall[2].find((row) => row.sheet_lh === "LT0Q4302267L1");
+    expect(stale).toMatchObject({ sheet_lh: "LT0Q4302267L1", status: "EXPIRED" });
+  });
+
+  it("does NOT flip a RESERVED load to BOOKED when its sheet row becomes closed (driver assigned)", async () => {
+    // Cenário do bug: carga reservada no portal; alguém preenche o motorista na
+    // linha da planilha. O sync NÃO pode tocar a carga (senão vira BOOKED e o
+    // cancelar-reserva deixa de reabrir → carga presa). LH "LT0Q4402267J1" tem
+    // motorista "Antonio" no SAMPLE_CSV (linha fechada, presente na planilha).
+    const reservedId = createSheetLoadId("LT0Q4402267J1");
+    const supabaseClient = createSupabaseMock({
+      existingSheetRows: [
+        {
+          id: reservedId,
+          sheet_lh: "LT0Q4402267J1",
+          status: "RESERVED",
+          sheet_synced_at: "2026-06-27T00:00:00.000Z",
+          valor: 5000,
+          perfil: "CARRETA",
+          bonus: null,
+          distancia_km: null,
+          duracao_horas: null,
+          cliente_id: SHEET_CLIENT_ID,
+          is_template: false,
+          created_by: null,
+        },
+      ],
     });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+
+    await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    // Nenhuma query de UPDATE (staleInSheet/trulyGone) pode referenciar a carga reservada.
+    const touchedReserved = pgQueryCalls.some((c) => JSON.stringify(c.params ?? []).includes(reservedId));
+    expect(touchedReserved).toBe(false);
+  });
+
+  it("still flips an OPEN load to BOOKED when its sheet row is closed (OPEN regression)", async () => {
+    const openId = createSheetLoadId("LT0Q4402267J1");
+    const supabaseClient = createSupabaseMock({
+      existingSheetRows: [
+        {
+          id: openId,
+          sheet_lh: "LT0Q4402267J1",
+          status: "OPEN",
+          sheet_synced_at: "2026-06-27T00:00:00.000Z",
+          valor: 5000,
+          perfil: "CARRETA",
+          bonus: null,
+          distancia_km: null,
+          duracao_horas: null,
+          cliente_id: SHEET_CLIENT_ID,
+          is_template: false,
+          created_by: null,
+        },
+      ],
+    });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+
+    await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    const staleInSheetCall = pgQueryCalls.find((c) => c.sql.includes("UPDATE public.cargas c"));
+    expect(staleInSheetCall).toBeTruthy();
+    // SQL só transita OPEN→BOOKED (RESERVED nunca).
+    expect(staleInSheetCall.sql).toContain("WHEN c.status = 'OPEN' THEN 'BOOKED'");
+    expect(staleInSheetCall.sql).not.toContain("IN ('OPEN', 'RESERVED')");
+    // O id da carga OPEN é alvo do UPDATE (params[1] = array de ids).
+    expect(staleInSheetCall.params[1]).toContain(openId);
+  });
+
+  it("excludes RESERVED from the truly-gone batch but still expires OPEN when the row is removed", async () => {
+    const reservedGoneId = createSheetLoadId("LT-GONE-RSVD");
+    const openGoneId = createSheetLoadId("LT-GONE-OPEN");
+    const supabaseClient = createSupabaseMock({
+      existingSheetRows: [
+        {
+          id: reservedGoneId,
+          sheet_lh: "LT-GONE-RSVD",
+          status: "RESERVED",
+          sheet_synced_at: "2026-06-27T00:00:00.000Z",
+          perfil: "CARRETA",
+          cliente_id: SHEET_CLIENT_ID,
+          is_template: false,
+          created_by: null,
+        },
+        {
+          id: openGoneId,
+          sheet_lh: "LT-GONE-OPEN",
+          status: "OPEN",
+          sheet_synced_at: "2026-06-27T00:00:00.000Z",
+          perfil: "CARRETA",
+          cliente_id: SHEET_CLIENT_ID,
+          is_template: false,
+          created_by: null,
+        },
+      ],
+    });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+
+    await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    const trulyGoneCall = pgQueryCalls.find(
+      (c) => c.sql.includes("UPDATE public.cargas") && c.sql.includes("WHEN status = 'OPEN' THEN 'EXPIRED'"),
+    );
+    expect(trulyGoneCall).toBeTruthy();
+    expect(trulyGoneCall.params[0]).toContain(openGoneId);
+    expect(trulyGoneCall.params[0]).not.toContain(reservedGoneId);
+    // E o SQL não tem mais a transição RESERVED→BOOKED.
+    expect(trulyGoneCall.sql).not.toContain("'RESERVED'");
   });
 
   it("preserves operator-edited valor on existing loads even when sheet exports a different amount", async () => {

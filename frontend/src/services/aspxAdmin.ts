@@ -38,3 +38,24 @@ export async function triggerAspxSync(): Promise<AspxSyncTriggerResult> {
     accessToken,
   });
 }
+
+export interface AspxSessionRefreshResult {
+  ok: boolean;
+  /** true = sessão viva e renovada; false = morta (precisa de novo login no SPX). */
+  alive: boolean;
+  detail: string | null;
+  meta: { correlationId: string | null };
+}
+
+/**
+ * Renova a sessão SPX na hora (botão "Renovar agora", 1 clique, sem digitar).
+ * O backend pede ao spx-bot pra recarregar cookies + ping + estender o prazo.
+ * Não faz login (impossível — captcha); se a sessão estiver morta, alive=false.
+ */
+export async function refreshAspxSession(): Promise<AspxSessionRefreshResult> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<AspxSessionRefreshResult>("/api/operator/aspx/refresh", {
+    method: "POST",
+    accessToken,
+  });
+}

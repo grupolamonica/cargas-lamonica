@@ -141,6 +141,25 @@ function buildDriverSubLabel(lead: OperatorLeadGroup["leads"][number]) {
 }
 
 /**
+ * Recência de um lead para a ordenação do Histórico: maior timestamp entre
+ * aprovação, entrada na fila e pré-cadastro. Usado para listar o "Histórico
+ * fila" do mais recente para o mais antigo (a Fila ativa segue FIFO no backend).
+ */
+function leadActivityMs(lead: {
+  approvedAt?: string | null;
+  queuedAt?: string | null;
+  preRegisteredAt?: string | null;
+}): number {
+  let max = 0;
+  for (const value of [lead.approvedAt, lead.queuedAt, lead.preRegisteredAt]) {
+    if (!value) continue;
+    const ms = new Date(value).getTime();
+    if (Number.isFinite(ms) && ms > max) max = ms;
+  }
+  return max;
+}
+
+/**
  * Escapa um valor para célula CSV. Usa `;` como separador (padrão do Excel
  * pt-BR) — envolve em aspas quando contém `;`, aspas ou quebra de linha.
  */
@@ -474,8 +493,19 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
       }
     });
 
+    // Histórico fila: lista do mais recente para o mais antigo. A Fila ativa
+    // mantém a ordem FIFO (queued_at ASC vinda do backend); aqui ordenamos por
+    // recência do lead (último evento) apenas no modo histórico.
+    if (historicoMode) {
+      const recencyOf = (item: RenderItem) =>
+        item.kind === "pacote"
+          ? item.items.reduce((max, { lead }) => Math.max(max, leadActivityMs(lead)), 0)
+          : item.group.leads.reduce((max, lead) => Math.max(max, leadActivityMs(lead)), 0);
+      items.sort((a, b) => recencyOf(b) - recencyOf(a));
+    }
+
     return items;
-  }, [filteredByCliente]);
+  }, [filteredByCliente, historicoMode]);
 
   const PAGE_SIZE = 10;
   const totalPages = Math.ceil(renderItems.length / PAGE_SIZE);

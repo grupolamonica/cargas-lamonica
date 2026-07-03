@@ -69,6 +69,7 @@ const ANGELLIRA_ERROR_LABELS: Record<string, { label: string; hint: string }> = 
 };
 
 const SPX_ERROR_LABELS: Record<string, { label: string; hint: string }> = {
+  SPX_VEICULO_MUITO_ANTIGO:  { label: "Veículo acima de 20 anos",          hint: "A Shopee/SPX só aceita veículos com até 20 anos de fabricação. O cadastro fica em rascunho mas não é submetido — é necessário um veículo dentro do limite de idade." },
   SPX_UNKNOWN_ERROR:         { label: "Falha ao importar para o SPX",      hint: "Ocorreu um erro ao processar o motorista no SPX/Shopee. Verifique o detalhe abaixo." },
   SPX_DRIVER_BLOQUEADO:      { label: "Motorista bloqueado no SPX",        hint: "O motorista está bloqueado no portal Shopee Express. Contate o SPX para desbloquear." },
   SPX_BOT_INDISPONIVEL:      { label: "Bot SPX offline",                   hint: "O container spx-bot não está acessível ou as credenciais expiraram. Renove os cookies no Supabase." },
@@ -119,14 +120,24 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
     return "PENDING" as const;
   }, [angelliraJobs]);
 
-  const spxStatus = useMemo(() => {
-    if (!spxJobs.length) return "NONE" as const;
-    const j = spxJobs[spxJobs.length - 1];
-    if (j.status === "IN_PROGRESS") return "IN_PROGRESS" as const;
-    if (j.status === "ERROR") return "ERROR" as const;
-    if (j.status === "OK") return "OK" as const;
-    return "PENDING" as const;
+  // FIX 2026-06-25: usar SÓ o job do MOTORISTA SPX (step "spx_motorista"). O passo da
+  // unificada (step "unificada_pdf") TAMBÉM tem target "spx" e, sendo o ÚLTIMO da lista
+  // quando o dossiê dá OK mas o cadastro do motorista FALHA (ex.: retcode 271606027 —
+  // veículo > 20 anos, caso FLAVIO), tanto o status/badge quanto o card "Motorista SPX"
+  // pegavam o dossiê OK e pintavam "Cadastrado com sucesso", MASCARANDO a falha real.
+  const spxMotoristaJob = useMemo(() => {
+    const m = spxJobs.filter((j) => j.step === "spx_motorista");
+    return m.length ? m[m.length - 1] : null;
   }, [spxJobs]);
+
+  const spxStatus = useMemo(() => {
+    if (!spxMotoristaJob) return "NONE" as const;
+    const s = spxMotoristaJob.status;
+    if (s === "IN_PROGRESS") return "IN_PROGRESS" as const;
+    if (s === "ERROR") return "ERROR" as const;
+    if (s === "OK") return "OK" as const;
+    return "PENDING" as const;
+  }, [spxMotoristaJob]);
 
   // Detecta se SPX tem motorista em outra agência (IS_MATCHED_OUTRA) para mudar label do botão
   const spxMatchedOutra = spxVerifyResult?.text.includes("outra agência");
@@ -356,10 +367,11 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
           <VerifyResultBanner type={spxVerifyResult.type} text={spxVerifyResult.text} />
         ) : null}
 
-        {/* Job SPX mais recente */}
-        {spxJobs.length ? (
+        {/* Job do MOTORISTA SPX (NÃO o unificada_pdf, que tb tem target "spx" e
+            mascarava a falha como "Cadastrado com sucesso"). */}
+        {spxMotoristaJob ? (
           <div className="mt-2 grid gap-1.5">
-            <SpxJobRow job={spxJobs[spxJobs.length - 1]} />
+            <SpxJobRow job={spxMotoristaJob} />
           </div>
         ) : null}
       </div>

@@ -634,4 +634,78 @@ describe("Leads", () => {
 
     expect(screen.queryByRole("button", { name: "Reservar para este motorista" })).not.toBeInTheDocument();
   });
+
+  it("no Historico fila, lista as cargas do mais recente para o mais antigo", () => {
+    // Backend entrega a fila em ordem FIFO (queued_at ASC) — a mais antiga
+    // primeiro. No Historico fila a ordem deve ser invertida por recencia.
+    const makeLead = (id: string, ts: string) => ({
+      id,
+      status: "APPROVED",
+      cpf: "12345678901",
+      phone: "71999999999",
+      horsePlate: "ABC1D23",
+      trailerPlate: "DEF4G56",
+      trailerPlate2: "",
+      vehicleType: "CARRETA",
+      preRegisteredAt: ts,
+      queuedAt: ts,
+      whatsappClickedAt: null,
+      approvedAt: ts,
+      approvedBy: "operator-1",
+      queuePosition: null,
+      validation: null,
+      whatsappUrl: "https://wa.me/5571999999999",
+    });
+
+    mockUseQuery.mockReturnValue({
+      data: {
+        groups: [
+          {
+            // Mais ANTIGA (chega primeiro na ordem FIFO do backend).
+            load: {
+              id: "load-antiga",
+              status: "COMPLETED",
+              origem: "Antiga / AA",
+              destino: "Velha / VV",
+              perfil: "CARRETA",
+              data: "2026-04-01",
+              horario: "08:00:00",
+              reservedPublicLeadId: "lead-antiga",
+            },
+            queueCount: 0,
+            totalLeads: 1,
+            leads: [makeLead("lead-antiga", "2026-04-01T10:00:00.000Z")],
+          },
+          {
+            // Mais RECENTE (chega depois na ordem FIFO do backend).
+            load: {
+              id: "load-recente",
+              status: "CANCELLED",
+              origem: "Recente / RR",
+              destino: "Nova / NN",
+              perfil: "CARRETA",
+              data: "2026-04-20",
+              horario: "08:00:00",
+              reservedPublicLeadId: "lead-recente",
+            },
+            queueCount: 0,
+            totalLeads: 1,
+            leads: [makeLead("lead-recente", "2026-04-20T10:00:00.000Z")],
+          },
+        ],
+      },
+      isLoading: false,
+      isFetching: false,
+    });
+
+    render(<Leads historicoMode />);
+
+    const recente = screen.getByText("Recente / RR -> Nova / NN");
+    const antiga = screen.getByText("Antiga / AA -> Velha / VV");
+
+    // A mais recente deve aparecer ANTES da mais antiga no DOM.
+    expect(
+      recente.compareDocumentPosition(antiga) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
 });

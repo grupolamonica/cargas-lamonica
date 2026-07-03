@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any
 
 from . import constants as K
-from . import drivers, lookups, uploads
+from . import cnh_split, drivers, lookups, uploads
 from .client import APIErro, SPXClient
 from .logger import log_alerta, log_erro, log_info
 
@@ -80,6 +80,26 @@ def _esta_vazio(valor: Any) -> bool:
     return False
 
 
+def _epoch_seconds(dt: datetime) -> int:
+    """int(dt.timestamp()) que NAO quebra em datas pre-1970 no Windows.
+
+    FIX 2026-06-25 (caso FLAVIO DONIZETTE PINHEIRO, nasc. 10/10/1958): no
+    Windows, datetime.timestamp() de um datetime NAIVE anterior a 1970 lanca
+    OSError(22, 'Invalid argument') — o mktime do C runtime nao aceita epoch
+    negativo. Isso derrubava o cadastro SPX INTEIRO de motoristas mais velhos
+    (birth_day pre-1970), com 'OSError: [Errno 22] Invalid argument' -> HTTP 500.
+    Fallback p/ calculo UTC manual (epoch negativo via aritmetica de timedelta) —
+    suficiente p/ campos de DATA (birth_day/license_expire), onde o offset de
+    fuso nao muda o dia que o SPX armazena. Pos-1970 segue identico (.timestamp()).
+    """
+    try:
+        return int(dt.timestamp())
+    except (OSError, OverflowError, ValueError):
+        from datetime import timezone
+        aware = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return int((aware - datetime(1970, 1, 1, tzinfo=timezone.utc)).total_seconds())
+
+
 def _to_unix_seconds(d: str | int | datetime | None) -> int:
     """Aceita 'YYYY-MM-DD', 'DD/MM/YYYY', datetime, unix int."""
     if d is None or d == "":
@@ -87,11 +107,11 @@ def _to_unix_seconds(d: str | int | datetime | None) -> int:
     if isinstance(d, int):
         return d
     if isinstance(d, datetime):
-        return int(d.timestamp())
+        return _epoch_seconds(d)
     s = str(d).strip()
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y"):
         try:
-            return int(datetime.strptime(s, fmt).timestamp())
+            return _epoch_seconds(datetime.strptime(s, fmt))
         except ValueError:
             continue
     # ja eh epoch como string?
@@ -1096,7 +1116,29 @@ def importar_motorista_matched(
             "erro": f"CPF do driver_info ({driver_info.get('cpf')}) nao bate com cpf passado ({cpf_clean})",
         }
 
-    function_type_list = function_type_list or [K.FunctionType.LINEHAUL]
+    # ── Guard: o perfil da outra agencia foi realmente recuperado? ─────
+    # Quando o SPX da match em outra agencia mas NAO devolve o perfil (driver_info
+    # chega so com cpf, sem nome/CNH), importar mandaria tudo vazio e o submit
+    # estoura 271690000 ("dados invalidos"). Falha cedo, com mensagem clara.
+    _di_name = str(driver_info.get("driver_name") or "").strip()
+    _di_cnh = drivers._digits(str(driver_info.get("license_number") or ""))
+    if not _di_name or not _di_cnh:
+        faltando = [n for n, ok in (("nome", _di_name), ("CNH", _di_cnh)) if not ok]
+        return {
+            "ok": False,
+            "etapa": "importar_matched",
+            "erro": (
+                "Perfil do motorista da outra agencia nao foi recuperado "
+                f"({' e '.join(faltando)} vazio) — nao da pra importar automaticamente. "
+                "Verifique o cadastro no SPX/Shopee ou solicite a transferencia manual."
+            ),
+            "avisos": avisos,
+        }
+
+    # DELIVERY=1: é o que os motoristas reais/aprovados da LAMONICA usam. LINE_HAUL=3
+    # é rejeitado pelo SPX no validate ("Station not exist"). O Node manda [1]; este
+    # fallback só vale se vier vazio.
+    function_type_list = function_type_list or [K.FunctionType.DELIVERY]
 
     # ── 1. Resolve IDs (igual cadastrar_motorista_normal) ─────────────
     # City: prioriza driver_info (locked); senao tenta resolver pelo nome;
@@ -1155,17 +1197,37 @@ def importar_motorista_matched(
             # Auto-fill do CRLV se nao passou explicitamente
             if not renavam: renavam = str((r or {}).get("renavam") or "")
             if not license_plate: license_plate = str((r or {}).get("license_plate") or "")
-            if not vehicle_manufacturer: vehicle_manufacturer = str((r or {}).get("vehicle_manufacturer") or "")
+            # vehicle_manufacturer: SEMPRE usa o valor do OCR quando ele extrai algo.
+            # A Shopee valida (271690000) contra o texto exato do CRLV — "SCANIA" nao
+            # basta se o doc diz "SCANIA/P 340 A4X2". So mantem o nosso se o OCR vier vazio.
+            _ocr_manuf = str((r or {}).get("vehicle_manufacturer") or "").strip()
+            if _ocr_manuf:
+                if vehicle_manufacturer and vehicle_manufacturer.strip().upper() != _ocr_manuf.upper():
+                    avisos.append(f"vehicle_manufacturer: usando OCR '{_ocr_manuf}' em vez de '{vehicle_manufacturer}'")
+                vehicle_manufacturer = _ocr_manuf
             if not vehicle_manufacturing_year: vehicle_manufacturing_year = str((r or {}).get("vehicle_manufacturing_year") or "")
             if not vehicle_owner_name: vehicle_owner_name = str((r or {}).get("vehicle_owner_name") or "")
+            # Cross-check vehicle_type vs OCR: a Shopee rejeita (271626003) quando o
+            # vehicle_type enviado nao bate 1:1 com o que o OCR extraiu do CRLV.
+            # Usa o do OCR quando divergir (igual ao cadastrar_motorista_normal).
+            ocr_vt = (r or {}).get("vehicle_type")
+            if ocr_vt and int(ocr_vt) > 0 and vehicle_type_id and int(ocr_vt) != int(vehicle_type_id):
+                avisos.append(
+                    f"vehicle_type: usando ID do OCR ({ocr_vt}) em vez do lookup "
+                    f"({vehicle_type_id}) p/ bater com o CRLV"
+                )
+                vehicle_type_id = int(ocr_vt)
     except APIErro as exc:
         return {"ok": False, "etapa": "upload", "erro": str(exc), "retcode": exc.retcode, "avisos": avisos}
 
     # Vehicle fields: prioriza overrides explicitos, depois driver_info
     license_plate = license_plate or str(driver_info.get("license_plate") or "")
-    # SPX as vezes manda placas separadas por virgula (cavalo,carreta) — pega so a primeira
-    if "," in license_plate:
-        license_plate = license_plate.split(",")[0].strip()
+    # Multi-placa (cavalo,carreta): preserva AMBAS as placas e conta
+    # plate_number_quantity, igual ao cadastrar_motorista_normal. NUNCA descartar a
+    # carreta (perderia o 2o veiculo do bitrem -> divergencia no validate/submit).
+    _placas_m = list(dict.fromkeys(p.strip() for p in str(license_plate or "").split(",") if p.strip()))
+    license_plate = ",".join(_placas_m)
+    plate_qty_m = len(_placas_m) if _placas_m else 1
     renavam = renavam or str(driver_info.get("renavam") or "")
     vehicle_manufacturer = vehicle_manufacturer or str(driver_info.get("vehicle_manufacturer") or "")
     vehicle_manufacturing_year = vehicle_manufacturing_year or str(driver_info.get("vehicle_manufacturing_year") or "")
@@ -1200,6 +1262,7 @@ def importar_motorista_matched(
         # Veiculo: nossos overrides ou do perfil
         vehicle_type=vehicle_type_id,
         license_plate=license_plate,
+        plate_number_quantity=plate_qty_m,
         vehicle_manufacturer=vehicle_manufacturer,
         vehicle_manufacturing_year=vehicle_manufacturing_year,
         vehicle_owner_name=vehicle_owner_name,
@@ -1242,14 +1305,48 @@ def importar_motorista_matched(
             "avisos": avisos,
         }
 
-    # ── 4. Draft opcional ────────────────────────────────────────────
+    # ── 4. Draft — é o que TRAZ o motorista pra NOSSA agência (vira rascunho) ──
+    # Captura o id do rascunho e VINCULA validate/submit a ele (sem o id o validate
+    # roda solto e dá 271626003). Se já existe rascunho (271605026), o motorista já
+    # está na nossa agência — recupera o id pela listagem.
     request_id = None
     if do_draft_save:
         try:
             draft = drivers.save_draft(client, payload)
             request_id = (draft or {}).get("id")
         except APIErro as exc:
-            avisos.append(f"draft/save: {exc}")
+            if exc.retcode == K.DRAFT_EXISTS:
+                avisos.append("rascunho ja existia na nossa agencia — reaproveitando")
+            else:
+                avisos.append(f"draft/save: {exc}")
+        if not request_id:
+            try:
+                rl = drivers.list_requests(client, page=1, count=5, filters={"cpf": cpf_clean})
+                items = (rl or {}).get("list") or (rl or {}).get("items") or []
+                if items:
+                    request_id = items[0].get("id") or items[0].get("request_id")
+            except APIErro:
+                pass
+        if request_id:
+            payload["id"] = int(request_id)
+
+    def _trazido_como_rascunho(etapa: str, exc) -> dict:
+        """Sucesso PARCIAL: o motorista FOI trazido pra nossa agência (virou rascunho),
+        mas o envio automático parou em `etapa`. O operador completa/submete no portal
+        SPX. Espelha o que a produção faz com importação de outra agência."""
+        return {
+            "ok": True,
+            "etapa": "rascunho_criado",
+            "request_id": request_id,
+            "driver_id": None,
+            "msg": (f"Motorista trazido pra NOSSA agencia como RASCUNHO (request {request_id}). "
+                    f"O envio automatico parou em {etapa} (retcode {getattr(exc, 'retcode', '?')}); "
+                    f"finalize/submeta pelo portal SPX."),
+            "retcode": getattr(exc, "retcode", None),
+            "erro_envio": str(exc),
+            "origem_campos": origem_campos,
+            "avisos": avisos,
+        }
 
     # ── 5. validate_detail ───────────────────────────────────────────
     try:
@@ -1273,6 +1370,13 @@ def importar_motorista_matched(
                 c: {"ocr": crlv_ocr_raw.get(c), "enviado": payload.get(c)}
                 for c in campos
             }
+        # Se o rascunho FOI criado (motorista já trazido pra nossa agência), não é
+        # erro duro — reporta como rascunho a completar (igual à produção).
+        if request_id:
+            r = _trazido_como_rascunho("validate_detail", exc)
+            r["dica"] = dica
+            r["crlv_vs_payload"] = crlv_vs_payload
+            return r
         return {"ok": False, "etapa": "validate_detail", "erro": str(exc), "retcode": exc.retcode,
                 "payload": payload, "avisos": avisos, "dica": dica,
                 "spx_error_data": getattr(exc, "data", None),
@@ -1282,12 +1386,16 @@ def importar_motorista_matched(
     try:
         drivers.submit_check(client, payload)
     except APIErro as exc:
+        if request_id:
+            return _trazido_como_rascunho("submit_check", exc)
         return {"ok": False, "etapa": "submit_check", "erro": str(exc), "retcode": exc.retcode, "payload": payload, "avisos": avisos}
 
     # ── 7. submit ────────────────────────────────────────────────────
     try:
         result = drivers.submit(client, payload)
     except APIErro as exc:
+        if request_id:
+            return _trazido_como_rascunho("submit", exc)
         return {"ok": False, "etapa": "submit", "erro": str(exc), "retcode": exc.retcode, "avisos": avisos}
 
     return {
@@ -1559,12 +1667,44 @@ def cadastrar_motorista_normal(
     delivery_id = _resolve_station(delivery_station_name, "delivery")
     return_id = _resolve_station(return_station_name, "return")
 
+    # Guard: LINE_HAUL exige linehaul_station resolvida. Falha cedo (antes dos
+    # uploads) com erro claro, em vez de gastar 5 uploads e tomar "Station not
+    # exist" so no submit.
+    if K.FunctionType.LINE_HAUL in (function_type_list or []) and not linehaul_id:
+        return {
+            "ok": False, "etapa": "lookup_station",
+            "erro": f"linehaul_station nao resolvida: {linehaul_station_name!r} (LINE_HAUL exige station)",
+            "avisos": avisos,
+        }
+
     # ── 3. Uploads ────────────────────────────────────────────────────
     driver_photo_url = ""
     license_img_front = ""
     license_img_back = ""
     vehicle_document_url = ""
     risk_doc_url = ""
+
+    # CNH em PDF → o SPX exige IMAGEM frente/verso. Faz o split (cnh_split) antes
+    # do upload. Best-effort: se falhar (ou faltar lib no container), usa o arquivo
+    # como veio e segue (o upload pode rejeitar o PDF, mas nao derruba o disparo).
+    if cnh_frente_path and str(cnh_frente_path).lower().endswith(".pdf"):
+        _orig_cnh_pdf = cnh_frente_path
+        f_path, v_path = cnh_split.split_cnh_to_files(cnh_frente_path)
+        if f_path:
+            cnh_frente_path = f_path
+            # Usa o verso do split quando: nao temos verso proprio; OU o verso aponta
+            # pro MESMO PDF da frente (CNH-e migrada num PDF unico, frente+verso na
+            # mesma pagina); OU o verso ainda e um PDF (precisa virar imagem). Sem
+            # isso, subiriamos o PDF cru como license_img_back e o SPX rejeita.
+            if v_path and (
+                not cnh_verso_path
+                or cnh_verso_path == _orig_cnh_pdf
+                or str(cnh_verso_path).lower().endswith(".pdf")
+            ):
+                cnh_verso_path = v_path
+            log_info("[flow] CNH PDF separada em frente/verso (cnh_split)")
+        else:
+            avisos.append("split da CNH (PDF) falhou — enviando o arquivo como veio (pode ser rejeitado pelo SPX)")
 
     try:
         if selfie_path:
@@ -1585,15 +1725,38 @@ def cadastrar_motorista_normal(
             # Preenche o que vier do OCR se nao foi informado
             if not renavam: renavam = str((r or {}).get("renavam") or "")
             if not license_plate: license_plate = str((r or {}).get("license_plate") or "")
-            if not vehicle_manufacturer: vehicle_manufacturer = str((r or {}).get("vehicle_manufacturer") or "")
+            # vehicle_manufacturer: SEMPRE usa o valor do OCR quando ele extrai algo.
+            # A Shopee valida (271690000) contra o texto exato do CRLV — "SCANIA" nao
+            # basta se o doc diz "SCANIA/P 340 A4X2". So mantem o nosso se o OCR vier vazio.
+            _ocr_manuf = str((r or {}).get("vehicle_manufacturer") or "").strip()
+            if _ocr_manuf:
+                if vehicle_manufacturer and vehicle_manufacturer.strip().upper() != _ocr_manuf.upper():
+                    avisos.append(f"vehicle_manufacturer: usando OCR '{_ocr_manuf}' em vez de '{vehicle_manufacturer}'")
+                vehicle_manufacturer = _ocr_manuf
             if not vehicle_manufacturing_year: vehicle_manufacturing_year = str((r or {}).get("vehicle_manufacturing_year") or "")
             if not vehicle_owner_name: vehicle_owner_name = str((r or {}).get("vehicle_owner_name") or "")
+            # Cross-check vehicle_type vs OCR: a Shopee rejeita (271626003) quando o
+            # vehicle_type enviado nao bate 1:1 com o que o OCR extraiu do CRLV.
+            # Usa o do OCR quando divergir (regra da producao 2026-05-28).
+            ocr_vt = (r or {}).get("vehicle_type")
+            if ocr_vt and int(ocr_vt) > 0 and vehicle_type_id and int(ocr_vt) != int(vehicle_type_id):
+                avisos.append(
+                    f"vehicle_type: usando ID do OCR ({ocr_vt}) em vez do lookup "
+                    f"({vehicle_type_id}) p/ bater com o CRLV"
+                )
+                vehicle_type_id = int(ocr_vt)
         if risk_doc_path:
             r = uploads.upload_risk_doc(client, risk_doc_path)
             risk_doc_url = (r or {}).get("url") or ""
     except APIErro as exc:
         log_erro(f"[flow] upload falhou: {exc}")
         return {"ok": False, "etapa": "upload", "erro": str(exc), "retcode": exc.retcode, "avisos": avisos}
+
+    # Multi-placa (cavalo,carreta): conta as placas e passa plate_number_quantity.
+    # Sem isso, build_payload usa 1 e a placa da carreta e descartada -> divergencia
+    # no validate_detail/submit. A 'CAV,CAR' vem do payload-mapper quando ha carreta.
+    _placas = [p for p in str(license_plate or "").split(",") if p.strip()]
+    plate_qty = len(_placas) if _placas else 1
 
     # ── 4. Build payload ──────────────────────────────────────────────
     payload = drivers.build_payload_normal_driver(
@@ -1621,6 +1784,7 @@ def cadastrar_motorista_normal(
         cnh_remarks=cnh_remarks,
         vehicle_type=int(vehicle_type_id),
         license_plate=license_plate,
+        plate_number_quantity=plate_qty,
         vehicle_manufacturer=vehicle_manufacturer,
         vehicle_manufacturing_year=vehicle_manufacturing_year,
         vehicle_owner_name=vehicle_owner_name,
@@ -1637,11 +1801,25 @@ def cadastrar_motorista_normal(
         return {"ok": True, "etapa": "dry_run", "payload": payload, "avisos": avisos}
 
     # ── 5. Draft opcional ────────────────────────────────────────────
+    # IMPORTANTE: depois de salvar o rascunho, VINCULAR o validate/submit a ele
+    # (payload["id"]). Sem o id, o validate_detail roda "solto" e o SPX vê a placa
+    # que o proprio rascunho ja segura como "em uso por outro motorista" -> 271626003.
+    # A resposta do draft/save nem sempre traz o id; nesse caso buscamos via list.
     request_id = None
     if do_draft_save:
         try:
             draft = drivers.save_draft(client, payload)
             request_id = (draft or {}).get("id")
+            if not request_id:
+                try:
+                    rl = drivers.list_requests(client, page=1, count=5, filters={"cpf": payload.get("cpf")})
+                    items = (rl or {}).get("list") or (rl or {}).get("items") or []
+                    if items:
+                        request_id = items[0].get("id") or items[0].get("request_id")
+                except APIErro:
+                    pass
+            if request_id:
+                payload["id"] = int(request_id)  # vincula validate/submit ao rascunho
             log_info(f"[flow] draft salvo id={request_id}")
         except APIErro as exc:
             avisos.append(f"draft/save falhou: {exc}")

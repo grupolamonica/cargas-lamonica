@@ -81,6 +81,7 @@ import { getOperatorAccessToken } from "@/services/apiClient";
 import {
   aprovarCadastro,
   fetchCadastrosPendentes,
+  fetchMigratedDocsManifest,
   fetchOperatorDrivers,
   rejeitarCadastro,
   type OperatorDriverApplicationItem,
@@ -229,6 +230,136 @@ function renderAngelliraVigencyBadge(driver: OperatorDriverListItem) {
   }
 
   return null;
+}
+
+// Espelha renderAngelliraVigencyBadge para o BRK (Brasil Risk). Mesma logica de
+// cor por alertLevel. Renderizacao defensiva: se driver.brkVigency for null
+// (feature-flag desligada -> campos vem null), nenhum badge aparece.
+function renderBrkVigencyBadge(driver: OperatorDriverListItem) {
+  const vigency = driver.brkVigency;
+
+  if (!vigency) {
+    return null;
+  }
+
+  const { alertLevel, daysUntilExpiry, validUntil, statusText } = vigency;
+
+  if (alertLevel === "EXPIRED") {
+    return (
+      <div className="admin-tint-danger inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <XCircle className="h-3.5 w-3.5" />
+        BRK: Vigência vencida{validUntil ? ` (${parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""})` : ""}
+      </div>
+    );
+  }
+
+  if (alertLevel === "EXPIRING_SOON") {
+    return (
+      <div className="admin-tint-warning inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold animate-pulse">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        BRK: Vence em {daysUntilExpiry} dia{daysUntilExpiry !== 1 ? "s" : ""}
+        {validUntil ? ` (${parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""})` : ""}
+      </div>
+    );
+  }
+
+  if (alertLevel === "OK" && validUntil) {
+    return (
+      <div className="admin-tint-success inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        BRK: ✓ Apto · vence {parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""}
+      </div>
+    );
+  }
+
+  if (vigency.status === "vigente" || vigency.conjuntoApto === true) {
+    return (
+      <div className="admin-tint-success inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <BadgeCheck className="h-3.5 w-3.5" />
+        BRK: ✓ Apto{statusText ? ` · ${statusText}` : ""}
+      </div>
+    );
+  }
+
+  if (vigency.status === "nao_cadastrado") {
+    return (
+      <div className="admin-tint-neutral inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <CalendarClock className="h-3.5 w-3.5" />
+        BRK: Não cadastrado
+      </div>
+    );
+  }
+
+  // Demais status com sinal (nao_conforme/parcial/expirado sem data): mostra o texto.
+  if (vigency.status) {
+    return (
+      <div className="admin-tint-neutral inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <CalendarClock className="h-3.5 w-3.5" />
+        BRK: {statusText || vigency.status}
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// Espelha os badges de vigencia para a SITUACAO do motorista no SPX (Shopee
+// Express). O SPX nao tem data de validade — o sinal e situacional (ativo/inativo/
+// outra agencia/pendente/bloqueado/nao cadastrado), obtido por lookup read-only.
+// Renderizacao defensiva: se driver.spxVigency for null (feature-flag desligada ->
+// campos vem null), nenhum badge aparece.
+function renderSpxVigencyBadge(driver: OperatorDriverListItem) {
+  const vigency = driver.spxVigency;
+
+  if (!vigency || !vigency.status) {
+    return null;
+  }
+
+  const { status, statusText } = vigency;
+
+  if (status === "ativo") {
+    return (
+      <div className="admin-tint-success inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        SPX: ✓ {statusText || "Ativo na agência"}
+      </div>
+    );
+  }
+
+  if (status === "bloqueado") {
+    return (
+      <div className="admin-tint-danger inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <XCircle className="h-3.5 w-3.5" />
+        SPX: {statusText || "Bloqueado"}
+      </div>
+    );
+  }
+
+  if (status === "inativo" || status === "pendente") {
+    return (
+      <div className="admin-tint-warning inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        SPX: {statusText || (status === "inativo" ? "Inativo — reativar" : "Solicitação em andamento")}
+      </div>
+    );
+  }
+
+  if (status === "cadastrado") {
+    return (
+      <div className="admin-tint-success inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+        <BadgeCheck className="h-3.5 w-3.5" />
+        SPX: {statusText || "Cadastrado"}
+      </div>
+    );
+  }
+
+  // outra_agencia / nao_cadastrado / demais: neutro com o texto.
+  return (
+    <div className="admin-tint-neutral inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+      <CalendarClock className="h-3.5 w-3.5" />
+      SPX: {statusText || status}
+    </div>
+  );
 }
 
 async function updateDriverProfile(driverId: string, payload: Record<string, unknown>) {
@@ -642,6 +773,8 @@ const Motoristas = () => {
 
   // ─── Pendentes ───────────────────────────────────────────────────────────────
   const [pendentesStatusFilter, setPendentesStatusFilter] = useState("pendente");
+  const [pendentesSearch, setPendentesSearch] = useState("");
+  const deferredPendentesSearch = useDeferredValue(pendentesSearch.trim());
   const [pendentesPage, setPendentesPage] = useState(1);
   const [selectedPendente, setSelectedPendente] = useState<PendingDriverRegistrationItem | null>(null);
   const [rejectObs, setRejectObs] = useState("");
@@ -672,7 +805,8 @@ const Motoristas = () => {
   // Confirmação de exclusão
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   // Preview de arquivo enviado pelo motorista (CNH/CRLV/comprovante/etc.)
-  const [filePreview, setFilePreview] = useState<{ cadastroId: string; path: string; label: string } | null>(null);
+  // path → doc no bucket (wizard/migrado-migrado); tipo → doc do share (migrado, base64).
+  const [filePreview, setFilePreview] = useState<{ cadastroId: string; path?: string; tipo?: string; label: string } | null>(null);
 
   // Modal de PROGRESSO ao vivo do disparo externo (Angellira + SPX) — DC-111 / DC-118.
   // Snapshot dos dados no momento do disparo (selectedPendente pode mudar/limpar).
@@ -684,11 +818,24 @@ const Motoristas = () => {
     hasCarreta: boolean;
   } | null>(null);
 
+  // Documentos de cadastro MIGRADO (docs só no share local). Para wizard/migrado-no-bucket
+  // volta vazio (os *_url já alimentam a galeria padrão via collectCadastroDocuments).
+  const migradoMotoristaId =
+    (selectedPendente?.dados as { _origem?: { motorista_id?: unknown } } | undefined)?._origem?.motorista_id ?? null;
+  const { data: migratedDocsData } = useQuery({
+    queryKey: ["operator", "docs-migrados", selectedPendente?.id],
+    queryFn: () => fetchMigratedDocsManifest(selectedPendente!.id),
+    enabled: !!selectedPendente?.id && !!migradoMotoristaId,
+    staleTime: 5 * 60 * 1000,
+  });
+  const migratedDocs = migratedDocsData?.docs ?? [];
+
   const { data: pendentesData, isLoading: pendentesLoading, isFetching: pendentesFetching, error: pendentesError } = useQuery({
-    queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, pendentesPage],
+    queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, deferredPendentesSearch, pendentesPage],
     queryFn: () =>
       fetchCadastrosPendentes({
         status: pendentesStatusFilter || undefined,
+        search: deferredPendentesSearch || undefined,
         page: pendentesPage,
         pageSize: 20,
       }),
@@ -1004,17 +1151,28 @@ const Motoristas = () => {
                   <h2 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">Revisão de candidatos</h2>
                   <p className="mt-1 text-sm text-muted-foreground">Cadastros enviados pelo formulário público /cadastro aguardando revisão.</p>
                 </div>
-                <select
-                  value={pendentesStatusFilter}
-                  onChange={(e) => { setPendentesStatusFilter(e.target.value); setPendentesPage(1); }}
-                  className="h-10 rounded-xl border border-border/80 bg-white/92 px-3 text-sm text-foreground outline-none"
-                >
-                  <option value="">Todos</option>
-                  <option value="pendente">Pendentes</option>
-                  <option value="em_revisao">Em revisão</option>
-                  <option value="aprovado">Aprovados</option>
-                  <option value="rejeitado">Rejeitados</option>
-                </select>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={pendentesSearch}
+                      onChange={(e) => { setPendentesSearch(e.target.value); setPendentesPage(1); }}
+                      placeholder="Buscar por nome, CPF ou placa..."
+                      className="h-10 w-72 rounded-xl border-border/80 bg-white/92 pl-9 pr-3"
+                    />
+                  </div>
+                  <select
+                    value={pendentesStatusFilter}
+                    onChange={(e) => { setPendentesStatusFilter(e.target.value); setPendentesPage(1); }}
+                    className="h-10 rounded-xl border border-border/80 bg-white/92 px-3 text-sm text-foreground outline-none"
+                  >
+                    <option value="">Todos</option>
+                    <option value="pendente">Pendentes</option>
+                    <option value="em_revisao">Em revisão</option>
+                    <option value="aprovado">Aprovados</option>
+                    <option value="rejeitado">Rejeitados</option>
+                  </select>
+                </div>
               </div>
             </section>
 
@@ -1150,6 +1308,31 @@ const Motoristas = () => {
                         </div>
                       );
                     })()}
+
+                    {/* Documentos de cadastro MIGRADO (lidos do share da produção e
+                        servidos como base64 — não passam pelo Supabase). */}
+                    {migratedDocs.length > 0 && (
+                      <div className="mt-4 rounded-xl border border-amber-300/50 bg-amber-50/50 p-3 dark:border-amber-400/20 dark:bg-amber-900/10">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          Documentos (cadastro migrado) ({migratedDocs.length})
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {migratedDocs.map((doc) => (
+                            <button
+                              key={doc.tipo}
+                              type="button"
+                              onClick={() =>
+                                setFilePreview({ cadastroId: selectedPendente.id, tipo: doc.tipo, label: doc.label })
+                              }
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/50 bg-amber-100/50 px-2.5 py-1.5 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                            >
+                              <span aria-hidden>👁</span>
+                              {doc.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {selectedPendente.dados && (
                       <div className="mt-4 space-y-3 max-h-[420px] overflow-y-auto pr-1">
@@ -1642,6 +1825,12 @@ const Motoristas = () => {
                   {/* ── ALWAYS VISIBLE: Angellira vigency badge ── */}
                   {renderAngelliraVigencyBadge(driver)}
 
+                  {/* ── ALWAYS VISIBLE: BRK (Brasil Risk) vigency badge ── */}
+                  {renderBrkVigencyBadge(driver)}
+
+                  {/* ── ALWAYS VISIBLE: SPX (Shopee Express) situação badge ── */}
+                  {renderSpxVigencyBadge(driver)}
+
                   {/* ── Sinais do perfil (sempre visíveis) ── */}
                   {(driver.registrationStatus === "REGISTERED" || driver.externalValidation) ? (
                     <div className="mt-2 flex flex-wrap gap-2">
@@ -1659,6 +1848,7 @@ const Motoristas = () => {
                         <>
                           <ExternalValidationPill label="Angellira" found={driver.externalValidation.hasAngelira} />
                           <ExternalValidationPill label="ASPX" found={driver.externalValidation.hasAspx} />
+                          <ExternalValidationPill label="BRK" found={driver.externalValidation.hasBrk} />
                         </>
                       ) : null}
                     </div>

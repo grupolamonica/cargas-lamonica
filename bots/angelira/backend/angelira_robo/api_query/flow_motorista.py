@@ -229,8 +229,10 @@ def _construir_payload_driver(
         "cpf": _cpf_clean,
         "name": limpar_texto(motorista.get("nome") or ""),
         "birth": _br_para_iso(motorista.get("data_nascimento") or ""),
-        "father": limpar_texto(motorista.get("nome_pai") or "") or None,
-        "mother": limpar_texto(motorista.get("nome_mae") or "") or None,
+        # CNH sem filiacao (pai/mae ausente) -> "SEM FILIACAO": o AngelLira EXIGE
+        # father/mother nao-vazios, senao o preflight bloqueia (incomplete: father/mother).
+        "father": limpar_texto(motorista.get("nome_pai") or "") or "SEM FILIACAO",
+        "mother": limpar_texto(motorista.get("nome_mae") or "") or "SEM FILIACAO",
         "naturalness": limpar_texto(motorista.get("naturalidade") or "") or None,
         "rg": _rg_value,
         "rgOrgan": limpar_texto(motorista.get("rg_orgao") or "") or None,
@@ -597,12 +599,58 @@ def cadastrar_motorista(
     except Exception:
         has_address = False
 
-    # 6.5) Sem fallback Selenium — decisao arquitetural 2026-05-20: a API publica
-    # nao aceita setar address (W1 / 12+ probes / caso JULIVALDO). O fallback
-    # Selenium do portal web era fragil (XPaths quebram, save nao persistia,
-    # 3+ min por tentativa) e gerava drivers parciais. Removido. Quando o backend
-    # nao auto-resolve endereco, caimos direto em pending_manual com link pro
-    # portal + redispatch.
+    # 6.5) Grava endereco via PATCH MULTIPART (portado da producao 2026-06-15).
+    # A API publica NAO persiste endereco via JSON (422 "Cid_Codigo undefined"/
+    # descarte silencioso), mas ACEITA via multipart/form-data com campos FLAT
+    # (address/cityId/stateId/cep/neighborhoodName/number) — o backend AUTO-CRIA
+    # neighborhood.id+place.id. Validado em producao (drivers 471164 SIMAO,
+    # 15322931 GIOVANE) e no Lamonica no driver 15349451 (FERNANDO -> SETE LAGOAS).
+    if not has_address:
+        try:
+            _city_src = (geo_result or {}).get("city") or {}
+            _state_src = (geo_result or {}).get("state") or {}
+            _city_id = _city_src.get("id")
+            _state_id = _state_src.get("id")
+            _logradouro = limpar_texto(endereco.get("logradouro") or "") or (atual2.get("address") or "")
+            _bairro = limpar_texto(endereco.get("bairro") or "")
+            _drt = atual2.get("driverRelationshipType") or {}
+            _type_real = _drt.get("typeId") or type_id
+            if _city_id and _state_id and _logradouro:
+                drivers.patch_endereco_multipart(
+                    client, driver_id, atual2,
+                    address=_logradouro,
+                    city_id=_city_id, state_id=_state_id,
+                    cep=endereco.get("cep") or "",
+                    neighborhood_name=_bairro,
+                    number=endereco.get("numero") or atual2.get("number") or 0,
+                    type_id=_type_real,
+                    owner=bool(atual2.get("owner")),
+                    prime=prime,
+                )
+                # Re-checa: backend deve ter criado city/neighborhood/place ids
+                atual2 = drivers.find_by_id(client, driver_id) or {}
+                _city = atual2.get("city") or {}
+                _neigh = atual2.get("neighborhood") or {}
+                _place = atual2.get("place") or {}
+                has_address = bool(
+                    atual2.get("address") and _city.get("id")
+                    and _neigh.get("id") and _place.get("id")
+                )
+                log_info(
+                    f"[flow_motorista_api] PATCH multipart endereco -> has_address={has_address} "
+                    f"(city.id={_city.get('id')} neighborhood.id={_neigh.get('id')} place.id={_place.get('id')})"
+                )
+            else:
+                log_alerta(
+                    f"[flow_motorista_api] sem dados minimos p/ multipart de endereco "
+                    f"(cityId={_city_id} stateId={_state_id} logradouro={bool(_logradouro)}) — cai em pending_manual"
+                )
+        except Exception as exc:
+            log_alerta(f"[flow_motorista_api] PATCH multipart de endereco falhou (cai em pending_manual): {exc}")
+
+    # 6.6) Fallback: se MESMO apos o multipart o endereco nao ficou completo
+    # (CEP fora de cobertura, bairro vazio, etc.), aceita cadastro parcial +
+    # pede conclusao manual no portal + redispatch (so a consulta roda depois).
     if not has_address:
         # MUDANCA DE LOGICA: nao tratamos mais como ERRO. Driver foi criado
         # com sucesso na Angellira; falta apenas o endereco pra rodar consulta

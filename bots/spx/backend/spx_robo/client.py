@@ -244,6 +244,28 @@ class SPXClient:
             pass
         self._session.close()
 
+    def bump_supabase_session_ttl(self) -> bool:
+        """Estende cookies_expires_at no Supabase apos um ping bem-sucedido.
+
+        O keep-alive confirma que a sessao esta VIVA. Regravamos os cookies
+        atuais com TTL rolante MESMO que o valor nao tenha rotacionado — assim o
+        status nao expira enquanto a sessao funciona, independente de o servidor
+        SPX rotacionar (ou nao) o cookie nesse endpoint. So tem efeito em modo
+        Supabase; nunca levanta.
+        """
+        if not self._use_supabase:
+            return False
+        try:
+            snapshot = dict((c.name, c.value or "") for c in self._session.cookies)
+            ok = supabase_auth.salvar_cookies_supabase(snapshot)
+            if ok:
+                self._last_cookie_snapshot = snapshot
+                self._last_cookie_save_ts = time.time()
+            return ok
+        except Exception as exc:  # noqa: BLE001
+            log_alerta(f"[client] bump TTL falhou (continuando): {exc}")
+            return False
+
     # ── Persistencia de cookies (PERSIST. 2026-05-26) ──────────────────────
 
     def _persistir_cookies_se_mudaram(self, *, force: bool = False) -> None:
@@ -255,11 +277,10 @@ class SPXClient:
         Estrategia:
         - Debounce: nao escreve mais que 1x a cada 30s (evita I/O excessivo)
         - Skip-if-unchanged: compara dict {name: value} pra detectar rotacao
+        - Modo Supabase: regrava cookies_json em aspx_credentials (keep-alive da
+          sessao, sem Playwright). Modo arquivo: regrava o JSON local.
         - Defensivo: nunca propaga excecao — falha silenciosa logada
         """
-        # Modo Supabase: não persiste em arquivo local — aspx-renewal cuida.
-        if self._use_supabase:
-            return
         try:
             now = time.time()
             if not force and (now - self._last_cookie_save_ts) < 30:
@@ -268,10 +289,19 @@ class SPXClient:
             if snapshot == self._last_cookie_snapshot:
                 self._last_cookie_save_ts = now
                 return
-            escreveu = auth.save_cookies_from_jar(self._session.cookies, self._cookie_file_path)
+
+            if self._use_supabase:
+                # Rotacao do servidor SPX mantem a sessao viva: regravamos o
+                # cookie atual no Supabase pra que reinicios/deploys e o sync
+                # ASPX leiam sempre a sessao mais recente.
+                escreveu = supabase_auth.salvar_cookies_supabase(snapshot)
+                origem = "Supabase"
+            else:
+                escreveu = auth.save_cookies_from_jar(self._session.cookies, self._cookie_file_path)
+                origem = "arquivo"
             if escreveu:
                 mudou = [n for n in snapshot if self._last_cookie_snapshot.get(n) != snapshot.get(n)]
-                log_info(f"[client] cookies persistidos — mudaram: {sorted(mudou)[:5]}{'...' if len(mudou) > 5 else ''}")
+                log_info(f"[client] cookies persistidos ({origem}) — mudaram: {sorted(mudou)[:5]}{'...' if len(mudou) > 5 else ''}")
             self._last_cookie_snapshot = snapshot
             self._last_cookie_save_ts = now
         except Exception as exc:

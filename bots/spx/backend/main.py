@@ -13,9 +13,12 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
+import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +37,7 @@ load_dotenv(ROOT.parent / ".env", override=True)
 load_dotenv(ROOT.parent / "config" / ".env", override=True)
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import uvicorn
 
 from spx_robo import constants as K
@@ -44,8 +47,79 @@ from spx_robo import trips as trips_mod
 from spx_robo.client import APIErro, SPXClient, SessaoExpirada
 from spx_robo.logger import log_alerta, log_erro, log_info
 
+import anexo_storage  # ponte de anexos cross-container (sandbox local)
 
-app = FastAPI(title="SPX Robo (sidecar)", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Faxina de anexos antigos do sandbox no startup (TTL 24h).
+    try:
+        removidas = anexo_storage.limpar_antigos()
+        if removidas:
+            log_info(f"[spx] anexos antigos removidos no startup: {removidas} pastas")
+    except Exception as exc:
+        log_alerta(f"[spx] falha ao limpar anexos antigos no startup: {exc}")
+    # Keep-alive da sessao SPX — renova o cookie por rotacao (ver _keepalive_loop).
+    _start_keepalive()
+    yield
+
+
+app = FastAPI(title="SPX Robo (sidecar)", version="0.1.0", lifespan=lifespan)
+
+
+# ── Anexos: ponte cross-container ─────────────────────────────────────
+# O Node baixa o doc (bucket Supabase / share da producao), manda em base64, e
+# gravamos num sandbox local; flow_motorista lê o path e sobe pro SPX (uploads.py).
+# Mesmo mecanismo do angelira-bot.
+
+_MAX_IMG_B64 = 18_000_000  # ~13MB binário em base64
+
+
+class AnexoSalvarRequest(BaseModel):
+    tipo: str
+    imagem: str
+    id_cadastro: str
+
+    @field_validator("imagem")
+    @classmethod
+    def _validar_tamanho(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Arquivo vazio.")
+        if len(v) > _MAX_IMG_B64:
+            raise ValueError(f"Arquivo excede {_MAX_IMG_B64 // 1000}KB (base64).")
+        return v
+
+
+@app.post("/spx/anexo/salvar")
+async def spx_anexo_salvar(req: AnexoSalvarRequest):
+    """Recebe um doc em base64 e grava no sandbox local; devolve o anexo_path."""
+    try:
+        salvo = await asyncio.to_thread(
+            anexo_storage.salvar, req.tipo, req.imagem, req.id_cadastro
+        )
+        return {
+            "ok": True,
+            "anexo_path": salvo.path,
+            "tipo": salvo.tipo,
+            "id_cadastro": salvo.id_cadastro,
+            "bytes": salvo.bytes,
+        }
+    except anexo_storage.AnexoError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log_erro(f"[spx] /spx/anexo/salvar falhou: {e!r}")
+        raise HTTPException(status_code=500, detail="Erro ao salvar anexo.")
+
+
+@app.post("/spx/anexo/limpar")
+async def spx_anexo_limpar(id_cadastro: str):
+    """Apaga os anexos de um cadastro do sandbox (best-effort)."""
+    try:
+        removidos = await asyncio.to_thread(anexo_storage.limpar_cadastro, id_cadastro)
+        return {"ok": True, "removidos": removidos}
+    except Exception as e:
+        log_erro(f"[spx] /spx/anexo/limpar falhou: {e!r}")
+        raise HTTPException(status_code=500, detail="Erro ao limpar anexos.")
 
 
 # Singleton client — reusa cookies/sessao entre requests
@@ -67,6 +141,52 @@ def reset_client():
         except Exception:
             pass
     _CLIENT = None
+
+
+# ── Keep-alive da sessao SPX ─────────────────────────────────────────
+# O SPX nao tem login programatico; a sessao SSO so se mantem viva pela ROTACAO
+# de cookies que o servidor devolve a cada chamada valida. Como o portal pode
+# ficar ocioso (noite/fim de semana), um ping periodico forca essa rotacao e o
+# SPXClient regrava o cookie no Supabase — mantendo a sessao viva sem Playwright.
+# Quando a sessao morre de vez (evento de seguranca), o ping da 401 -> cookies
+# marcados expirados -> operador renova pelo botao "Atualizar cookies" do painel.
+_KEEPALIVE_INTERVAL_SEC = int(os.getenv("SPX_KEEPALIVE_INTERVAL_SEC") or 1800)  # 30min
+_keepalive_thread: threading.Thread | None = None
+
+
+def _keepalive_loop() -> None:
+    # Atraso inicial pra nao competir com o boot do uvicorn.
+    time.sleep(min(120, _KEEPALIVE_INTERVAL_SEC))
+    while True:
+        try:
+            client = get_client()
+            if client.ping():
+                # Sessao confirmada viva: estende o prazo no Supabase mesmo que o
+                # cookie nao tenha rotacionado — mantem o keep-alive 100% automatico.
+                client.bump_supabase_session_ttl()
+                log_info("[keepalive] ping OK — prazo da sessao SPX estendido")
+            else:
+                # ping() ja invalidou os cookies no Supabase (401/redirect).
+                log_alerta("[keepalive] ping falhou — sessao expirada. Aguardando re-login.")
+                reset_client()
+        except Exception as exc:  # noqa: BLE001 — cookies ausentes/expirados, Supabase off, etc.
+            log_alerta(f"[keepalive] indisponivel: {type(exc).__name__}: {exc}")
+            reset_client()
+        time.sleep(_KEEPALIVE_INTERVAL_SEC)
+
+
+def _start_keepalive() -> None:
+    """Inicia a thread de keep-alive. Chamado pelo lifespan no startup."""
+    global _keepalive_thread
+    if (os.getenv("SPX_KEEPALIVE_DISABLED") or "").strip().lower() in {"1", "true", "yes"}:
+        log_info("[keepalive] desabilitado via SPX_KEEPALIVE_DISABLED")
+        return
+    if _keepalive_thread is None:
+        _keepalive_thread = threading.Thread(
+            target=_keepalive_loop, daemon=True, name="spx-keepalive"
+        )
+        _keepalive_thread.start()
+        log_info(f"[keepalive] iniciado (intervalo {_KEEPALIVE_INTERVAL_SEC}s)")
 
 
 # ── Models ──────────────────────────────────────────────────────────
@@ -564,7 +684,14 @@ def lookup_driver(p: LookupDriverPayload):
         license_number = ''.join(c for c in (p.license_number or '') if c.isdigit())
         license_to_send = license_number or "11111111111"  # placeholder de 11 digitos
         driver_name_to_send = (p.driver_name or "MOTORISTA LOOKUP").strip().upper()
-        contact_to_send = ''.join(c for c in (p.contact_number or "11999999999") if c.isdigit())
+        contact_real = ''.join(c for c in (p.contact_number or '') if c.isdigit())
+        contact_to_send = contact_real or "11999999999"
+        # Os placeholders 11111111111 (CNH) e 11999999999 (telefone) JA EXISTEM
+        # registrados no SPX → disparam 271605059/271605005 FALSOS. Se usamos
+        # placeholder, esses retcodes sao inconclusivos (nao significam que ESTE
+        # motorista existe). Rastreamos pra nao classificar errado.
+        used_license_ph = not license_number
+        used_phone_ph = not contact_real
 
         # PERF (2026-05-29): is_cpf_exist virou LAZY. Antes era chamado SEMPRE
         # antes do validate/basic (+1 round-trip ~0.5-1s). Mas ele é
@@ -596,6 +723,7 @@ def lookup_driver(p: LookupDriverPayload):
                 K.DRIVER_IN_OTHER_AGENCY,      # 271605035 — explícito "outra agência"
                 K.LICENSE_ALREADY_REGISTERED,  # 271605059 — CNH registrada em algum motorista
                 K.DRIVER_REPEAT,                # 271627140 — CPF ja cadastrado
+                K.LICENSE_OR_PHONE_TAKEN,      # 271605005 — telefone/CNH pertencem a outro
             }
             PENDENTE_CODES = {
                 K.DRAFT_EXISTS,                # 271605026 — rascunho aberto
@@ -608,6 +736,20 @@ def lookup_driver(p: LookupDriverPayload):
             BLOQUEADO_CODES = {
                 K.DRIVER_BLOCKED,              # 271617003 — bloqueado
             }
+
+            # INCONCLUSIVO por placeholder: 271605059 (CNH ja registrada) e
+            # 271605005 (telefone/CNH de outro) podem ter sido disparados pelo
+            # NOSSO placeholder (11111111111 / 11999999999), nao pelo motorista
+            # real. Se foi placeholder, NAO da pra afirmar matched nem nao-cadastrado.
+            if (retcode == K.LICENSE_ALREADY_REGISTERED and used_license_ph) or (
+                retcode == K.LICENSE_OR_PHONE_TAKEN and (used_license_ph or used_phone_ph)
+            ):
+                return {
+                    "ok": True, "encontrado": False, "is_matched": False,
+                    "inconclusivo": True, "retcode": retcode, "erro_validate": erro,
+                    "motivo": "CNH/telefone reais ausentes no cadastro — lookup usou placeholder "
+                              "e colidiu; status no SPX indeterminado (complete os dados e refaca).",
+                }
 
             if retcode in CROSS_AGENCY_CODES:
                 # Tenta listar requests nossa agência mesmo assim (pode haver
@@ -623,8 +765,9 @@ def lookup_driver(p: LookupDriverPayload):
                     "driver_info": None, "retcode": retcode, "erro_validate": erro,
                     "na_minha_agencia": len(items_nossa) > 0,
                     "requests_nossa_agencia_count": len(items_nossa),
-                    "outra_agencia": retcode == K.DRIVER_IN_OTHER_AGENCY,
+                    "outra_agencia": retcode in (K.DRIVER_IN_OTHER_AGENCY, K.LICENSE_OR_PHONE_TAKEN),
                     "license_collision": retcode == K.LICENSE_ALREADY_REGISTERED,
+                    "license_or_phone_taken": retcode == K.LICENSE_OR_PHONE_TAKEN,
                 }
 
             if retcode in PENDENTE_CODES:
@@ -829,6 +972,33 @@ def session_reset():
     """Forca recarregar cookies (apos reexportar do Chrome)."""
     reset_client()
     return {"ok": True, "detail": "cookies serao recarregados na proxima chamada"}
+
+
+@app.post("/spx/session/refresh")
+def session_refresh():
+    """Renovacao imediata da sessao (botao 'Renovar agora' do painel).
+
+    Recarrega os cookies do Supabase, faz um ping (rotaciona o cookie) e estende
+    o prazo (bump_supabase_session_ttl) — tudo sem login/Playwright. NUNCA
+    levanta: reporta {ok, alive, detail}. Se a sessao estiver morta de vez,
+    alive=False (so um login humano recupera; nao da' pra automatizar o login).
+    """
+    reset_client()  # re-le cookies frescos do Supabase
+    try:
+        c = get_client()
+    except Exception as exc:  # noqa: BLE001 — cookies ausentes/expirados no Supabase
+        return {"ok": False, "alive": False, "detail": str(exc)}
+    try:
+        if c.ping():
+            c.bump_supabase_session_ttl()
+            return {"ok": True, "alive": True, "detail": "sessao renovada"}
+        return {"ok": False, "alive": False, "detail": "sessao expirada — precisa de novo login no SPX"}
+    except SessaoExpirada as exc:
+        reset_client()
+        return {"ok": False, "alive": False, "detail": f"sessao expirada: {exc}"}
+    except Exception as exc:  # noqa: BLE001
+        log_erro(f"[main] /session/refresh falhou: {exc!r}")
+        return {"ok": False, "alive": False, "detail": f"{type(exc).__name__}: {exc}"}
 
 
 def main():

@@ -1,10 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Clock, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Clock, Loader2, RefreshCw, RotateCw, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
-import { fetchAspxSyncStatus, triggerAspxSync, type AspxSyncStatus } from "@/services/aspxAdmin";
+import {
+  fetchAspxSyncStatus,
+  refreshAspxSession,
+  triggerAspxSync,
+  type AspxSyncStatus,
+} from "@/services/aspxAdmin";
 
 const STATUS_QUERY_KEY = ["operator", "aspx-sync-status"] as const;
 const POLL_AFTER_TRIGGER_MS = 5_000;
@@ -76,6 +81,24 @@ export function AspxSyncCard() {
     },
     onError: (err: Error) => {
       toast.error(err.message || "Não foi possível disparar o sync do ASPX.");
+    },
+  });
+
+  // Renovação imediata da sessão SPX (1 clique, sem digitar nada).
+  const refreshMutation = useMutation({
+    mutationFn: refreshAspxSession,
+    onSuccess: (result) => {
+      if (result.alive) {
+        toast.success("Sessão SPX renovada.");
+      } else {
+        toast.warning(
+          result.detail || "Sessão SPX expirada — a Shopee encerrou a sessão; é preciso novo login.",
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Não foi possível renovar a sessão.");
     },
   });
 
@@ -194,11 +217,8 @@ export function AspxSyncCard() {
             ) : null}
             {data?.cookies.expired ? (
               <p className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
-                Cookies expirados. Rode{" "}
-                <code className="rounded bg-white/60 px-1 py-0.5 text-[11px]">
-                  ASPX_ALLOW_PLAYWRIGHT_LOGIN=1 python scripts/aspx-sync/asp.py
-                </code>{" "}
-                em sua maquina local para renovar.
+                Sessão SPX expirada. Clique em <strong>“Renovar agora”</strong>. Se continuar
+                expirada, a Shopee encerrou a sessão e é preciso um novo login no SPX.
               </p>
             ) : null}
           </div>
@@ -221,6 +241,21 @@ export function AspxSyncCard() {
 
           <button
             type="button"
+            onClick={() => refreshMutation.mutate()}
+            disabled={refreshMutation.isPending}
+            title="Renova a sessão SPX na hora (sem digitar nada)."
+            className="inline-flex items-center gap-2 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 shadow-sm transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {refreshMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RotateCw className="h-4 w-4" />
+            )}
+            Renovar agora
+          </button>
+
+          <button
+            type="button"
             onClick={() => triggerMutation.mutate()}
             disabled={
               triggerMutation.isPending ||
@@ -229,7 +264,7 @@ export function AspxSyncCard() {
             }
             title={
               data?.cookies.expired
-                ? "Cookies expirados: renove localmente antes de sincronizar."
+                ? "Sessão expirada: clique em 'Renovar agora' antes de sincronizar."
                 : "Dispara o GitHub Action que sincroniza aspx_drivers usando os cookies cacheados."
             }
             className="inline-flex items-center gap-2 rounded-2xl border border-primary/60 bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"

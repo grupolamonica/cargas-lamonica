@@ -547,6 +547,20 @@ function StepCProprietarioCavaloImpl({
   const complementaryFulfilled =
     ownerDocType === "cpf" ? isValidOwnerPFData(pfData) : isValidOwnerPJData(pjData);
 
+  // Endereço do proprietário (CEP/número/cidade/UF; PF também exige comprovante).
+  // Declarado aqui no corpo do componente porque `continueEnabled` (abaixo) o
+  // consome — antes só existia dentro do IIFE do JSX (depois do return), o que
+  // disparava `ReferenceError: ownerEnderecoCompleted is not defined` em runtime
+  // assim que as condições anteriores ficavam verdadeiras (ex.: motorista é o
+  // proprietário e informa o titular do RNTRC). O IIFE reutiliza este valor.
+  const ownerEnderecoCompleted = Boolean(
+    ownerEndereco?.cep &&
+      ownerEndereco?.numero &&
+      ownerEndereco?.cidade &&
+      ownerEndereco?.uf &&
+      (ownerDocType === "cpf" ? ownerEndereco?.comprovanteUrl : true),
+  );
+
   const continueEnabled =
     (driverIsOwner || ownerData.nome.trim().length > 0) &&
     ownerDocValid &&
@@ -615,13 +629,8 @@ function StepCProprietarioCavaloImpl({
         // Storage; PJ usa endereço do cartão CNPJ (Infosimples) — comprovante
         // opcional. 2026-05-26.
         const hasEnderecoCard = true;
-        const ownerEnderecoCompleted = Boolean(
-          ownerEndereco?.cep &&
-            ownerEndereco?.numero &&
-            ownerEndereco?.cidade &&
-            ownerEndereco?.uf &&
-            (ownerDocType === "cpf" ? ownerEndereco?.comprovanteUrl : true),
-        );
+        // ownerEnderecoCompleted é computado no corpo do componente (ver nota em
+        // continueEnabled) e reutilizado aqui via closure.
         const baseCards = driverIsOwner ? 1 : 2; // antt + (opcional) doc
         const totalCards =
           baseCards +

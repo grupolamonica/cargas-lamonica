@@ -5,10 +5,12 @@ import { assertOperatorPermission } from "../../../application/load-claims/opera
 import {
   getAspxSyncHealth,
   getAspxSyncStatus,
+  refreshAspxSession,
   triggerAspxSync,
+  updateAspxCookies,
 } from "../../../application/aspx/aspx-admin.js";
 import { buildHttpErrorResponse } from "../error-mapping.js";
-import { getAuthorizationHeader, getHeaderValue } from "../http-utils.js";
+import { getAuthorizationHeader, getHeaderValue, parseJsonBody } from "../http-utils.js";
 
 function getCorrelationId(request) {
   return getHeaderValue(request, "X-Correlation-Id") || createCorrelationId();
@@ -77,6 +79,40 @@ export async function resolveAspxSyncTriggerResponse(request) {
       "Somente operadores com acesso intermediario ou avancado podem sincronizar o ASPx.",
     );
     return await triggerAspxSync({ correlationId });
+  } catch (error) {
+    return toErrorResponse(error, correlationId);
+  }
+}
+
+export async function resolveAspxCookiesUpdateResponse(request) {
+  const correlationId = getCorrelationId(request);
+  try {
+    const { user } = await requireOperatorSession(getAuthorizationHeader(request));
+    assertOperatorPermission(
+      user,
+      "leads:write",
+      "Somente operadores com acesso intermediario ou avancado podem atualizar os cookies do SPX.",
+    );
+    const body = await parseJsonBody(request);
+    // Aceita { cookies: <array|obj|string> } ou o próprio corpo como cookies.
+    const cookiesJson =
+      body && typeof body === "object" && "cookies" in body ? body.cookies : body;
+    return await updateAspxCookies({ cookiesJson, correlationId });
+  } catch (error) {
+    return toErrorResponse(error, correlationId);
+  }
+}
+
+export async function resolveAspxSessionRefreshResponse(request) {
+  const correlationId = getCorrelationId(request);
+  try {
+    const { user } = await requireOperatorSession(getAuthorizationHeader(request));
+    assertOperatorPermission(
+      user,
+      "leads:write",
+      "Somente operadores com acesso intermediario ou avancado podem renovar a sessao do SPX.",
+    );
+    return await refreshAspxSession({ correlationId });
   } catch (error) {
     return toErrorResponse(error, correlationId);
   }

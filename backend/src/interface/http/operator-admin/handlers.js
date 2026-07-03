@@ -82,6 +82,7 @@ import { updateMonitorCargo } from "../../../application/operator-admin/use-case
 import { buildSheetSummary, getSheetClientName } from "../../../application/google-sheets/google-sheet-loads.js";
 import { previewAspxAllocation } from "../../../application/operator-admin/use-cases/preview-aspx-allocation.js";
 import { assignAspxAllocations } from "../../../application/operator-admin/use-cases/assign-aspx-allocations.js";
+import { DOC_TIPOS, listAvailableMigratedDocs, readLocalProdDocAsDataUri } from "../../../application/operator-admin/use-cases/migrated-docs/prod-docs-share.js";
 import { candidaturaSubmitSchema } from "../schemas/candidatura-schemas.js";
 import { DRAFT_FILE_BUCKET } from "../../../application/candidatura/use-cases/upload-draft-file.js";
 import { ensureDriverLoadsSheetFresh } from "../public-loads/handlers.js";
@@ -1433,6 +1434,7 @@ export async function resolveOperatorCadastrosPendentesResponse(request) {
     const query = request.query || {};
     return fetchPendingDriverRegistrations({
       status: typeof query.status === "string" ? query.status.trim() : null,
+      search: typeof query.search === "string" ? query.search.trim() : null,
       page: query.page,
       pageSize: query.pageSize,
       correlationId,
@@ -2051,6 +2053,60 @@ export async function resolveOperatorSpxCadastrarResponse(request) {
 }
 
 /**
+ * POST /api/operator/cadastros/:id/unificada/gerar-pdf
+ * Gera (ou reusa, se < 24h) o dossiê de gerenciamento de risco unificado e
+ * persiste no Supabase Storage. Body opcional: { force: true } p/ regenerar.
+ */
+export async function resolveOperatorUnificadaGerarPdfResponse(request) {
+  return withOperatorSession(request, "unificada-gerar-pdf", async ({ correlationId, operatorId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso negado.");
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+    let body = {};
+    try { body = await parseJsonBody(request); } catch {}
+
+    return withPgClient(async (client) => {
+      const cadastro = await loadCadastroAprovado(client, id);
+      if (!cadastro) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      const { generateDossie } = await import(
+        "../../../application/operator-admin/use-cases/unificada/generate-dossie.js"
+      );
+      const result = await generateDossie({
+        client, cadastro, operatorId, correlationId,
+        force: body?.force === true,
+      });
+      if (!result.ok) {
+        return {
+          statusCode: 502,
+          payload: {
+            error: result.error?.code || "UnificadaError",
+            message: result.error?.message || "Falha ao gerar o dossiê.",
+            acao: result.error?.acao ?? null,
+            meta: { correlationId },
+          },
+        };
+      }
+      return {
+        statusCode: 200,
+        payload: {
+          ok: true,
+          reused: result.reused,
+          storage_path: result.storagePath,
+          signed_url: result.signedUrl,
+          components: result.components,
+          warnings: result.warnings,
+          meta: { correlationId },
+        },
+      };
+    });
+  });
+}
+
+/**
  * GET /api/operator/cadastros/:id
  * Retorna dados completos de um cadastro (para modal de edição).
  */
@@ -2169,6 +2225,95 @@ export async function resolveOperatorCadastroFileUrlResponse(request) {
         return { statusCode: 502, payload: { error: "StorageError", message: "Não foi possível gerar o link do arquivo.", meta: { correlationId } } };
       }
       return { statusCode: 200, payload: { signed_url: signedUrl, expires_in: 3600, meta: { correlationId } } };
+    });
+  });
+}
+
+/**
+ * GET /api/operator/cadastros/:id/docs-migrados
+ * Manifesto dos documentos de um cadastro MIGRADO (bot WhatsApp) que existem no
+ * share local — para a galeria do painel. Só lista (tipo/label/filename); o
+ * conteúdo é servido sob demanda por /doc-migrado. Não expõe o caminho do share.
+ */
+export async function resolveOperatorCadastroDocsMigradosResponse(request) {
+  return withOperatorSession(request, "cadastro-docs-migrados", async ({ correlationId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso intermediário necessário.");
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "id é obrigatório.", meta: { correlationId } } };
+    }
+    return withPgClient(async (client) => {
+      const { rows } = await client.query(
+        `SELECT dados FROM public.pending_driver_registrations WHERE id = $1`,
+        [id],
+      );
+      if (!rows.length) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      const dados = rows[0].dados ?? {};
+      // Só faz sentido para migrados (têm _origem.motorista_id e docs no share).
+      if (!dados?._origem?.motorista_id) {
+        return { statusCode: 200, payload: { docs: [], migrado: false, meta: { correlationId } } };
+      }
+      let docs = [];
+      try {
+        docs = listAvailableMigratedDocs(dados);
+      } catch (err) {
+        logStructuredEvent("warn", "operator.docs_migrados.resolve_failed", {
+          cadastroId: id, correlationId, message: err?.message || String(err),
+        });
+      }
+      return { statusCode: 200, payload: { docs, migrado: true, meta: { correlationId } } };
+    });
+  });
+}
+
+/**
+ * GET /api/operator/cadastros/:id/doc-migrado?tipo=<tipo>
+ * Serve UM documento de cadastro migrado como data-URI base64, lido do share
+ * local (sem subir pro Supabase). O motorista_id vem do `dados._origem` do
+ * cadastro (NUNCA do cliente) e o `tipo` é validado contra a allowlist DOC_TIPOS
+ * — logo não há leitura de caminho arbitrário.
+ */
+export async function resolveOperatorCadastroDocMigradoResponse(request) {
+  return withOperatorSession(request, "cadastro-doc-migrado", async ({ correlationId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso intermediário necessário.");
+    const id = getQueryParam(request, "id");
+    const tipo = getQueryParam(request, "tipo");
+    if (!id || !tipo) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "id e tipo são obrigatórios.", meta: { correlationId } } };
+    }
+    if (!Object.prototype.hasOwnProperty.call(DOC_TIPOS, tipo)) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "tipo de documento inválido.", meta: { correlationId } } };
+    }
+    return withPgClient(async (client) => {
+      const { rows } = await client.query(
+        `SELECT dados FROM public.pending_driver_registrations WHERE id = $1`,
+        [id],
+      );
+      if (!rows.length) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      const dados = rows[0].dados ?? {};
+      if (!dados?._origem?.motorista_id) {
+        return { statusCode: 400, payload: { error: "BadRequest", message: "Cadastro não é migrado (sem documentos no share).", meta: { correlationId } } };
+      }
+      let doc;
+      try {
+        doc = readLocalProdDocAsDataUri(dados, tipo);
+      } catch (err) {
+        if (err?.code === "DOC_TOO_LARGE") {
+          return { statusCode: 413, payload: { error: "PayloadTooLarge", message: err.message, meta: { correlationId } } };
+        }
+        logStructuredEvent("warn", "operator.doc_migrado.read_failed", {
+          cadastroId: id, tipo, correlationId, message: err?.message || String(err),
+        });
+        return { statusCode: 502, payload: { error: "ShareError", message: "Falha ao ler o documento do share.", meta: { correlationId } } };
+      }
+      if (!doc) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Documento não encontrado no share para este cadastro.", meta: { correlationId } } };
+      }
+      return { statusCode: 200, payload: { ...doc, tipo, meta: { correlationId } } };
     });
   });
 }

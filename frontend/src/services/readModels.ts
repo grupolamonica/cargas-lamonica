@@ -315,6 +315,7 @@ export interface OperatorDriverListItem {
     warnings: string[];
     hasAngelira: boolean;
     hasAspx: boolean;
+    hasBrk: boolean;
     checkedAt: string | null;
   } | null;
   angelliraVigency: {
@@ -323,6 +324,21 @@ export interface OperatorDriverListItem {
     validUntil: string | null;
     daysUntilExpiry: number | null;
     alertLevel: "OK" | "EXPIRING_SOON" | "EXPIRED" | null;
+    checkedAt: string | null;
+  } | null;
+  brkVigency: {
+    status: string | null;
+    statusText: string | null;
+    validUntil: string | null;
+    daysUntilExpiry: number | null;
+    alertLevel: "OK" | "EXPIRING_SOON" | "EXPIRED" | null;
+    conjuntoApto: boolean | null;
+    checkedAt: string | null;
+  } | null;
+  spxVigency: {
+    status: string | null;
+    statusText: string | null;
+    encontrado: boolean | null;
     checkedAt: string | null;
   } | null;
   angelliraDetails: {
@@ -1168,6 +1184,7 @@ export interface PendingDriverRegistrationItem {
 
 export async function fetchCadastrosPendentes(params: {
   status?: string;
+  search?: string;
   page?: number;
   pageSize?: number;
 }) {
@@ -1565,6 +1582,33 @@ export async function submitCadastroRascunho(id: string, dados: Record<string, u
 export async function fetchCadastroArquivoUrl(cadastroId: string, path: string) {
   return getOperator<{ signed_url: string; expires_in: number }>(
     `/api/operator/cadastros/${cadastroId}/arquivo?path=${encodeURIComponent(path)}`,
+  );
+}
+
+export interface MigratedDocItem {
+  tipo: string;
+  label: string;
+  filename: string;
+  content_type: string;
+}
+
+/**
+ * Lista os documentos de um cadastro MIGRADO (bot WhatsApp) que existem no share
+ * local. Para cadastro não-migrado volta { docs: [], migrado: false }.
+ */
+export async function fetchMigratedDocsManifest(cadastroId: string) {
+  return getOperator<{ docs: MigratedDocItem[]; migrado: boolean }>(
+    `/api/operator/cadastros/${cadastroId}/docs-migrados`,
+  );
+}
+
+/**
+ * Busca UM documento de cadastro migrado como data-URI base64 (lido do share, sem
+ * passar pelo Supabase). Renderizado inline no FilePreviewModal.
+ */
+export async function fetchCadastroDocMigrado(cadastroId: string, tipo: string) {
+  return getOperator<{ data_uri: string; content_type: string; filename: string; tipo: string }>(
+    `/api/operator/cadastros/${cadastroId}/doc-migrado?tipo=${encodeURIComponent(tipo)}`,
   );
 }
 

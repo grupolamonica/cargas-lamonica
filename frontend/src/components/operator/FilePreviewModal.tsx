@@ -7,12 +7,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { fetchCadastroArquivoUrl } from "@/services/readModels";
+import { fetchCadastroArquivoUrl, fetchCadastroDocMigrado } from "@/services/readModels";
 
 export interface FilePreviewTarget {
   cadastroId: string;
-  path: string;
   label: string;
+  /** Wizard/bucket: storage_path → signed URL. */
+  path?: string;
+  /** Migrado: tipo de doc → base64 do share (sem passar pelo Supabase). */
+  tipo?: string;
 }
 
 interface FilePreviewModalProps {
@@ -20,32 +23,51 @@ interface FilePreviewModalProps {
   onClose: () => void;
 }
 
-function isPdf(path: string): boolean {
-  return /\.pdf($|\?)/i.test(path);
-}
+type RenderKind = "image" | "pdf" | "other";
 
-function isImage(path: string): boolean {
-  return /\.(png|jpe?g|webp|gif|bmp|heic|heif)($|\?)/i.test(path);
+function kindFromName(name: string): RenderKind {
+  if (/\.pdf($|\?)/i.test(name)) return "pdf";
+  if (/\.(png|jpe?g|webp|gif|bmp|heic|heif)($|\?)/i.test(name)) return "image";
+  return "other";
+}
+function kindFromMime(contentType: string): RenderKind {
+  if (contentType === "application/pdf") return "pdf";
+  if (contentType.startsWith("image/")) return "image";
+  return "other";
 }
 
 /**
- * Modal de preview de um documento enviado pelo motorista. Busca uma signed URL
- * no backend (TTL 1h) e renderiza inline: imagem em <img>, PDF em <iframe>.
- * Demais tipos caem no link "abrir em nova aba".
+ * Modal de preview de um documento do cadastro. Dois modos:
+ *  - wizard/bucket (file.path): busca signed URL (TTL 1h) e renderiza a URL.
+ *  - migrado (file.tipo): busca o doc do share como data-URI base64.
+ * Imagem em <img>, PDF em <iframe>; demais tipos caem no link "abrir em nova aba".
  */
 export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
   const open = file !== null;
+  const isMigrado = !!file?.tipo;
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["operator", "cadastro-arquivo", file?.cadastroId, file?.path],
-    queryFn: () => fetchCadastroArquivoUrl(file!.cadastroId, file!.path),
+    queryKey: ["operator", "cadastro-doc", file?.cadastroId, file?.tipo ?? file?.path],
+    queryFn: () =>
+      isMigrado
+        ? fetchCadastroDocMigrado(file!.cadastroId, file!.tipo!)
+        : fetchCadastroArquivoUrl(file!.cadastroId, file!.path!),
     enabled: open,
-    staleTime: 50 * 60 * 1000, // ~50min (signed URL dura 1h)
+    staleTime: 50 * 60 * 1000, // ~50min (signed URL dura 1h; base64 é estável)
     retry: 1,
   });
 
-  const signedUrl = data?.signed_url ?? null;
-  const path = file?.path ?? "";
+  // Normaliza os dois formatos de resposta em { src, kind }.
+  let src: string | null = null;
+  let kind: RenderKind = "other";
+  if (data && "data_uri" in data) {
+    src = data.data_uri;
+    kind = kindFromMime(data.content_type || "");
+    if (kind === "other") kind = kindFromName(data.filename || "");
+  } else if (data && "signed_url" in data) {
+    src = data.signed_url;
+    kind = kindFromName(file?.path ?? "");
+  }
 
   return (
     <Dialog open={open} onOpenChange={(v) => (!v ? onClose() : undefined)}>
@@ -53,9 +75,9 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
         <DialogHeader>
           <DialogTitle className="flex items-center justify-between gap-2 pr-6">
             <span className="truncate">{file?.label ?? "Arquivo"}</span>
-            {signedUrl ? (
+            {src ? (
               <a
-                href={signedUrl}
+                href={src}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-primary hover:underline"
@@ -72,28 +94,28 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
               <Loader2 className="h-6 w-6 animate-spin" />
               <span className="text-sm">Carregando arquivo…</span>
             </div>
-          ) : isError || !signedUrl ? (
+          ) : isError || !src ? (
             <div className="flex flex-col items-center gap-2 text-destructive">
               <AlertCircle className="h-6 w-6" />
               <span className="text-sm">
                 {(error as Error)?.message || "Não foi possível carregar o arquivo."}
               </span>
             </div>
-          ) : isImage(path) ? (
+          ) : kind === "image" ? (
             <img
-              src={signedUrl}
+              src={src}
               alt={file?.label ?? "documento"}
               className="max-h-[70vh] w-auto rounded-lg object-contain"
             />
-          ) : isPdf(path) ? (
+          ) : kind === "pdf" ? (
             <iframe
               title={file?.label ?? "documento"}
-              src={signedUrl}
+              src={src}
               className="h-[70vh] w-full rounded-lg border border-border"
             />
           ) : (
             <a
-              href={signedUrl}
+              href={src}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 rounded-xl border border-primary/60 bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
