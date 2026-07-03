@@ -23,9 +23,15 @@
 const fs = require('fs');
 const path = require('path');
 const puppeteer = require('puppeteer');
-// Carrega .env do proprio bot (pra BRK_LOGIN_USER/PASSWORD do auto-login).
-// dotenv resolve do node_modules local do bot; opcional (try/catch).
-try { require('dotenv').config({ path: path.join(__dirname, '.env') }); } catch {}
+// Carrega .env pro auto-login (BRK_LOGIN_USER/PASSWORD): primeiro o do sistema
+// hospedeiro (pasta PAI — ex.: Sistema_cadastro/.env no SERVERBD), depois o do
+// proprio bot (se existir, sobrepoe). Opcional (try/catch): sem .env o refresh
+// funciona igual, so perde a auto-cura headless quando a sessao cai.
+try {
+  const dotenv = require('dotenv');
+  dotenv.config({ path: path.join(__dirname, '..', '.env') });
+  dotenv.config({ path: path.join(__dirname, '.env'), override: true });
+} catch {}
 
 const BRK_URL = (process.env.BRK_BASE_URL || 'https://br2.brasilrisk.com.br').replace(/\/+$/, '');
 const LISTAR_URL = `${BRK_URL}/Motorista/Listar`;
