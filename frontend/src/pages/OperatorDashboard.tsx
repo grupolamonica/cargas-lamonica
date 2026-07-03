@@ -215,6 +215,16 @@ const OperatorDashboard = () => {
     refetchOnReconnect: false,
   });
 
+  const {
+    data: routes = [],
+    error: routesError,
+    isFetching: routesFetching,
+  } = useQuery({
+    queryKey: ROUTES_QUERY_KEY,
+    queryFn: fetchAssignableRoutes,
+    ...ADMIN_ROUTES_QUERY_OPTIONS,
+  });
+
   // Origens/destinos de TODAS as rotas do catálogo (não só das cargas abertas)
   // — alimentam os selects do gerador de link por rota. O valor é a parte
   // canônica do base_route_label ("ORIGEM X DESTINO", ASCII maiúsculo): é
@@ -243,15 +253,6 @@ const OperatorDashboard = () => {
         .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
     return { origens: toSorted(origens), destinos: toSorted(destinos) };
   }, [routes]);
-  const {
-    data: routes = [],
-    error: routesError,
-    isFetching: routesFetching,
-  } = useQuery({
-    queryKey: ROUTES_QUERY_KEY,
-    queryFn: fetchAssignableRoutes,
-    ...ADMIN_ROUTES_QUERY_OPTIONS,
-  });
 
   const { data: clientesData } = useQuery({
     queryKey: ["operator", "clientes-selector"],
