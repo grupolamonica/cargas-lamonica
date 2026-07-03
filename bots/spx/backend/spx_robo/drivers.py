@@ -194,6 +194,42 @@ def list_drivers_in_agency(client: SPXClient, *, cpf: str | None = None, page: i
     return client.post_json("/api/driverservice/agency/br/driver/list", body=body) or {}
 
 
+def list_assignable_drivers(client: SPXClient, *, count: int = 500, max_pages: int = 10) -> list[dict]:
+    """Motoristas da agência para resolver nome->driver_id na atribuição de viagem.
+
+    Retorna [{driver_id, name}]. Fonte = /driver/list (list_drivers_in_agency),
+    que devolve o driver_id canônico consumido por trips.assign_drivers. O dropdown
+    específico do line_haul não foi capturado; a lista da agência é o equivalente
+    seguro para casar por nome — só motoristas registrados são atribuíveis mesmo.
+    Pagina até `max_pages` ou até acumular `count` motoristas.
+    """
+    out: list[dict] = []
+    seen: set[int] = set()
+    per_page = 100
+    page = 1
+    while page <= max_pages and len(out) < count:
+        try:
+            data = list_drivers_in_agency(client, page=page, count=per_page)
+        except APIErro as exc:
+            log_alerta(f"[drivers] list_assignable_drivers pagina {page} falhou: {exc}")
+            break
+        lst = (data or {}).get("list") or (data or {}).get("items") or []
+        for it in lst:
+            did = it.get("driver_id") or it.get("id")
+            nm = it.get("driver_name") or it.get("name") or it.get("full_name") or ""
+            if did is None:
+                continue
+            did = int(did)
+            if did in seen:
+                continue
+            seen.add(did)
+            out.append({"driver_id": did, "name": (nm or "").strip()})
+        if len(lst) < per_page:
+            break
+        page += 1
+    return out[:count]
+
+
 def activate_driver(client: SPXClient, driver_id: int) -> dict:
     """POST /api/driverservice/agency/br/driver/activation/update — ativa driver_profile inativo.
     action: 1=Deactivate, 2=Activate, 3=Cancel

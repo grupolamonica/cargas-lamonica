@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,7 @@ import uvicorn
 from spx_robo import constants as K
 from spx_robo import drivers as drivers_mod
 from spx_robo import flow_motorista, lookups
+from spx_robo import trips as trips_mod
 from spx_robo.client import APIErro, SPXClient, SessaoExpirada
 from spx_robo.logger import log_alerta, log_erro, log_info
 
@@ -76,6 +78,16 @@ class HealthResponse(BaseModel):
 
 class BuscaCPFRequest(BaseModel):
     cpf: str
+
+
+class AlocarRequest(BaseModel):
+    """Atribuição de motorista(s) a uma viagem de line_haul. Espelha o contrato
+    do backend Node (spx-allocation-client.js -> POST /spx/trips/alocar)."""
+    trip_id: int
+    driver_ids: list[int] = Field(default_factory=list)
+    vehicle_plates: list[str] = Field(default_factory=list)
+    station_id: int = 0
+    dry_run: bool = True
 
 
 class MotoristaPayload(BaseModel):
@@ -194,6 +206,96 @@ def lookup_attributes():
     try:
         return {"ok": True, "data": lookups.fetch_driver_attributes(get_client())}
     except (APIErro, SessaoExpirada) as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ── Line_haul: viagens atribuíveis / índice / alocação (DC-111 Sprint 2) ──
+# Consumido pelo backend Node (infrastructure/spx/spx-allocation-client.js). As
+# respostas são shapes crus ({trips}/{drivers}/snapshot) — NÃO o envelope
+# {ok, data} das rotas de cadastro/lookup — porque o client Node lê data.trips
+# / data.drivers direto.
+
+@app.get("/spx/trips/assignable")
+def trips_assignable(station_id: int = 0):
+    """Viagens ASSIGNING (status 4) sem motorista — oferta da tela de alocação.
+    Contrato: {trips: [{trip_id, trip_number, origem, destino, vehicle_type, std}]}."""
+    try:
+        data = trips_mod.list_assignable_trips(
+            get_client(), agency_current_station_id=station_id or None,
+        )
+        return {"trips": data}
+    except SessaoExpirada as exc:
+        reset_client()
+        raise HTTPException(status_code=502, detail=f"sessao expirada: {exc}")
+    except (APIErro, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.get("/spx/drivers/assignable")
+def drivers_assignable(agency_id: int = 0, count: int = 500):
+    """Motoristas da agência para o backend casar nome->driver_id.
+    Contrato: {drivers: [{driver_id, name}]}. `agency_id` aceito por compat de
+    contrato (a sessão já fixa a agência)."""
+    try:
+        data = drivers_mod.list_assignable_drivers(get_client(), count=count)
+        return {"drivers": data}
+    except SessaoExpirada as exc:
+        reset_client()
+        raise HTTPException(status_code=502, detail=f"sessao expirada: {exc}")
+    except APIErro as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.get("/spx/trips/snapshot")
+def trips_snapshot(
+    query_type: int = 2,
+    station_id: int = 0,
+    com_veiculo: int = 1,
+    max_pages: int = 20,
+    days_back: int = 0,
+):
+    """Índice de viagens (paginado) — o backend usa para localizar a viagem por
+    trip_number e checar status/motorista atual. Retorna {fetched_at, total,
+    truncated, trips}. days_back>0 aplica janela (ini=now-days_back*86400, fim=now):
+    abas Planejado(1)/Concluído(3) precisam dela; Aceito(2) ignora."""
+    try:
+        sta = None
+        if days_back > 0:
+            now = int(time.time())
+            sta = (now - int(days_back) * 86400, now)
+        return trips_mod.snapshot(
+            get_client(),
+            query_type=query_type,
+            agency_current_station_id=station_id or None,
+            max_pages=max_pages,
+            com_veiculo=bool(com_veiculo),
+            sta=sta,
+        )
+    except SessaoExpirada as exc:
+        reset_client()
+        raise HTTPException(status_code=502, detail=f"sessao expirada: {exc}")
+    except (APIErro, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.post("/spx/trips/alocar")
+def trips_alocar(req: AlocarRequest):
+    """Atribui motorista(s) + placas a uma viagem (POST trip/assign). dry_run=True
+    (default) só monta o body sem enviar; o backend Node ainda guarda o write real
+    atrás do kill-switch SPX_ALLOC_WRITE_ENABLED."""
+    try:
+        return trips_mod.assign_drivers(
+            get_client(),
+            trip_id=req.trip_id,
+            driver_ids=req.driver_ids,
+            vehicle_plates=req.vehicle_plates,
+            agency_current_station_id=req.station_id or None,
+            dry_run=req.dry_run,
+        )
+    except SessaoExpirada as exc:
+        reset_client()
+        raise HTTPException(status_code=502, detail=f"sessao expirada: {exc}")
+    except (APIErro, ValueError) as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
 
