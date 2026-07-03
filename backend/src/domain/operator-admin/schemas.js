@@ -238,6 +238,9 @@ export function parseOperatorDashboardQuery(query = {}) {
     status: typeof query.status === "string" ? query.status.trim() : "todos",
     driverVisibility: typeof query.driverVisibility === "string" ? query.driverVisibility.trim() : "todos",
     clienteId: typeof query.clienteId === "string" ? query.clienteId.trim() : "",
+    // Tela de Links: quando true, lista SOMENTE cargas efetivamente abertas ao
+    // motorista (espelha o portal) — ignora status/driverVisibility recebidos.
+    onlyOpenToDrivers: query.onlyOpenToDrivers === "true" || query.onlyOpenToDrivers === true,
   };
 }
 

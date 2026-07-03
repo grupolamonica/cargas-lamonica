@@ -577,6 +577,75 @@ describe("operator-admin service", () => {
     expect(response.payload.meta.totalCount).toBe(1);
   });
 
+  it("onlyOpenToDrivers lista só cargas abertas ao motorista (exclui fechada, premium, expirada e alocada)", async () => {
+    const cliente = await seedCliente({ nome: "Cliente Links" });
+
+    // Aberta ao motorista: OPEN + PUBLIC + futura + não alocada → aparece.
+    const visivel = await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Salvador / BA",
+      destino: "Simoes Filho / BA",
+      status: "OPEN",
+      driver_visibility: "PUBLIC",
+      data: "2099-04-08",
+    });
+    // Fechada → escondida.
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Fortaleza / CE",
+      destino: "Recife / PE",
+      status: "BOOKED",
+      driver_visibility: "PUBLIC",
+      data: "2099-04-08",
+    });
+    // OPEN mas PREMIUM (não é pública p/ motorista) → escondida.
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Goiania / GO",
+      destino: "Uberlandia / MG",
+      status: "OPEN",
+      driver_visibility: "PREMIUM",
+      data: "2099-04-08",
+    });
+    // OPEN + PUBLIC mas expirada (data no passado) → escondida.
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Manaus / AM",
+      destino: "Belem / PA",
+      status: "OPEN",
+      driver_visibility: "PUBLIC",
+      data: "2020-01-01",
+    });
+    // OPEN + PUBLIC + futura mas alocada na planilha → escondida.
+    const alocada = await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Curitiba / PR",
+      destino: "Joinville / SC",
+      status: "OPEN",
+      driver_visibility: "PUBLIC",
+      data: "2099-04-08",
+    });
+    await query("UPDATE public.cargas SET alloc_motorista = $1 WHERE id = $2", ["FULANO", alocada.id]);
+
+    const response = await service.fetchOperatorDashboardReadModel({
+      query: {
+        page: "1",
+        pageSize: "10",
+        onlyOpenToDrivers: "true",
+        // status/visibilidade recebidos devem ser ignorados quando onlyOpenToDrivers.
+        status: "BOOKED",
+        driverVisibility: "PREMIUM",
+      },
+      correlationId: "corr-only-open",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.meta.totalCount).toBe(1);
+    expect(response.payload.items).toHaveLength(1);
+    expect(response.payload.items[0].id).toBe(visivel.id);
+    expect(response.payload.items[0]).toMatchObject({ status: "OPEN", driver_visibility: "PUBLIC" });
+  });
+
   it("aplica filtros server-side no read model do motorista", async () => {
     const cliente = await seedCliente({ nome: "Cliente Portal" });
 
