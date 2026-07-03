@@ -94,6 +94,76 @@ describe("operator-admin service", () => {
     });
   });
 
+  it("permite uma rota por veiculo no mesmo trecho (perfil + eixos) e persiste eixos na carga", async () => {
+    const operator = await seedUser({ email: "operador-multiveiculo@teste.local" });
+
+    const baseRoutePayload = {
+      origem: "Sao Paulo / SP",
+      destino: "Simoes Filho / BA",
+      distancia_km: 1500,
+      duracao_horas: 24,
+      tempo_estimado_horas: 24,
+      bonus_exigencias: null,
+      ativa: true,
+      observacoes: null,
+    };
+
+    // Mesma origem/destino, dois veículos diferentes — antes a unicidade
+    // (origin_key, destination_key) travava o segundo cadastro.
+    const carretaRoute = await service.createOperatorRoute({
+      operatorId: operator.id,
+      requestIp: "203.0.113.30",
+      correlationId: "corr-rota-carreta-6",
+      payload: { ...baseRoutePayload, perfil_padrao: "CARRETA", eixos: 6, valor_padrao: 15000, bonus_padrao: 500 },
+    });
+    const bitremRoute = await service.createOperatorRoute({
+      operatorId: operator.id,
+      requestIp: "203.0.113.30",
+      correlationId: "corr-rota-bitrem",
+      payload: { ...baseRoutePayload, perfil_padrao: "BITREM", eixos: 9, valor_padrao: 18000, bonus_padrao: 800 },
+    });
+
+    expect(carretaRoute.statusCode).toBe(201);
+    expect(bitremRoute.statusCode).toBe(201);
+
+    // Banco resetado no beforeEach → só estas duas rotas existem.
+    const { rows: routeRows } = await query(
+      `SELECT perfil_padrao, eixos FROM public.route_metrics_cache ORDER BY perfil_padrao`,
+    );
+    expect(routeRows).toHaveLength(2);
+    expect(routeRows.map((r) => `${r.perfil_padrao}/${r.eixos}`)).toEqual(["BITREM/9", "CARRETA/6"]);
+
+    // Carga grava o nº de eixos escolhido.
+    const cargo = await service.createOperatorCargo({
+      operatorId: operator.id,
+      requestIp: "203.0.113.30",
+      correlationId: "corr-carga-eixos",
+      payload: {
+        data: "2099-05-10",
+        horario: "07:30:00",
+        origem: "Sao Paulo / SP",
+        destino: "Simoes Filho / BA",
+        distancia_km: 1500,
+        duracao_horas: 24,
+        perfil: "BITREM",
+        eixos: 9,
+        valor: 18000,
+        bonus: 800,
+        bonus_exigencias: null,
+        driver_visibility: "PUBLIC",
+        cliente_id: null,
+        status: "OPEN",
+        is_template: false,
+      },
+    });
+    expect(cargo.statusCode).toBe(201);
+
+    const { rows: cargoRows } = await query(`SELECT perfil, eixos FROM public.cargas`);
+    expect(cargoRows).toHaveLength(1);
+    expect(cargoRows[0].perfil).toBe("BITREM");
+    expect(Number(cargoRows[0].eixos)).toBe(9);
+  });
+
   it("mantem o salvamento de cargas funcional quando bonus_exigencias ainda nao existe no schema", async () => {
     const operator = await seedUser({ email: "operador-schema-legado@teste.local" });
     const cliente = await seedCliente({ nome: "Cliente Legacy Bonus" });
@@ -254,6 +324,47 @@ describe("operator-admin service", () => {
       "Lauro de Freitas / BA",
       "Salvador / BA",
     ]);
+  });
+
+  it("oculta carga alocada SÓ pelo Monitor (alloc_motorista) mesmo sem sheet_motorista", async () => {
+    const cliente = await seedCliente({ nome: "Cliente Alloc Monitor" });
+    // Carga limpa — deve aparecer.
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Salvador / BA",
+      destino: "Simoes Filho / BA",
+      perfil: "CARRETA",
+      status: "OPEN",
+      is_template: false,
+      data: "2099-05-08",
+      driver_visibility: "PUBLIC",
+    });
+    // Alocada pelo operador no Monitor (alloc_motorista), com sheet_motorista vazio:
+    // a alocação efetiva COALESCE(alloc_motorista, sheet_motorista) deve ESCONDER.
+    const allocByMonitor = await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Feira de Santana / BA",
+      destino: "Simoes Filho / BA",
+      perfil: "CARRETA",
+      status: "OPEN",
+      is_template: false,
+      data: "2099-05-09",
+      driver_visibility: "PUBLIC",
+    });
+    await query(`UPDATE public.cargas SET alloc_motorista = $2, alloc_source = 'operator', alloc_updated_at = now() WHERE id = $1`, [
+      allocByMonitor.id,
+      "MARIA SOUZA",
+    ]);
+
+    const response = await service.fetchDriverLoadsReadModel({
+      query: { page: "1", pageSize: "10" },
+      correlationId: "corr-alloc-monitor",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const origens = response.payload.items.map((item) => item.origem);
+    expect(origens).toContain("Salvador / BA");
+    expect(origens).not.toContain("Feira de Santana / BA");
   });
 
   it("permite ajustar a visibilidade de uma carga reservada sem invalidar o status operacional", async () => {
@@ -464,6 +575,75 @@ describe("operator-admin service", () => {
       driver_visibility: "PREMIUM",
     });
     expect(response.payload.meta.totalCount).toBe(1);
+  });
+
+  it("onlyOpenToDrivers lista só cargas abertas ao motorista (exclui fechada, premium, expirada e alocada)", async () => {
+    const cliente = await seedCliente({ nome: "Cliente Links" });
+
+    // Aberta ao motorista: OPEN + PUBLIC + futura + não alocada → aparece.
+    const visivel = await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Salvador / BA",
+      destino: "Simoes Filho / BA",
+      status: "OPEN",
+      driver_visibility: "PUBLIC",
+      data: "2099-04-08",
+    });
+    // Fechada → escondida.
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Fortaleza / CE",
+      destino: "Recife / PE",
+      status: "BOOKED",
+      driver_visibility: "PUBLIC",
+      data: "2099-04-08",
+    });
+    // OPEN mas PREMIUM (não é pública p/ motorista) → escondida.
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Goiania / GO",
+      destino: "Uberlandia / MG",
+      status: "OPEN",
+      driver_visibility: "PREMIUM",
+      data: "2099-04-08",
+    });
+    // OPEN + PUBLIC mas expirada (data no passado) → escondida.
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Manaus / AM",
+      destino: "Belem / PA",
+      status: "OPEN",
+      driver_visibility: "PUBLIC",
+      data: "2020-01-01",
+    });
+    // OPEN + PUBLIC + futura mas alocada na planilha → escondida.
+    const alocada = await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Curitiba / PR",
+      destino: "Joinville / SC",
+      status: "OPEN",
+      driver_visibility: "PUBLIC",
+      data: "2099-04-08",
+    });
+    await query("UPDATE public.cargas SET alloc_motorista = $1 WHERE id = $2", ["FULANO", alocada.id]);
+
+    const response = await service.fetchOperatorDashboardReadModel({
+      query: {
+        page: "1",
+        pageSize: "10",
+        onlyOpenToDrivers: "true",
+        // status/visibilidade recebidos devem ser ignorados quando onlyOpenToDrivers.
+        status: "BOOKED",
+        driverVisibility: "PREMIUM",
+      },
+      correlationId: "corr-only-open",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.meta.totalCount).toBe(1);
+    expect(response.payload.items).toHaveLength(1);
+    expect(response.payload.items[0].id).toBe(visivel.id);
+    expect(response.payload.items[0]).toMatchObject({ status: "OPEN", driver_visibility: "PUBLIC" });
   });
 
   it("aplica filtros server-side no read model do motorista", async () => {

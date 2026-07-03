@@ -60,6 +60,26 @@ function parsePositiveInteger(value, fallback) {
   return parsedValue;
 }
 
+// Eixos: dimensão de preço/exibição da rota e da carga. NÃO é elegibilidade —
+// o perfil (canônico) é quem casa carga × motorista. 0/null = genérico (não
+// especificado). Clamp em 11 eixos (máximo prático no transporte rodoviário).
+const MAX_EIXOS = 11;
+function parseEixos(value) {
+  const parsedValue = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    return null;
+  }
+  return Math.min(parsedValue, MAX_EIXOS);
+}
+// Rota: eixos sempre presente (0 = genérico) para compor a chave única do trecho.
+const routeEixosSchema = z
+  .union([z.number(), z.string(), z.null(), z.undefined()])
+  .transform((value) => parseEixos(value) ?? 0);
+// Carga: eixos opcional (null = genérico/herdado da rota).
+const cargoEixosSchema = z
+  .union([z.number(), z.string(), z.null(), z.undefined()])
+  .transform((value) => parseEixos(value));
+
 function normalizeCargoStatus(value) {
   const trimmed = String(value || "").trim();
   return LEGACY_STATUS_MAP.get(trimmed.toLowerCase()) || trimmed;
@@ -87,6 +107,7 @@ const cargoMutationBaseShape = {
   origem: z.string().trim().min(2).max(180),
   destino: z.string().trim().min(2).max(180),
   perfil: canonicalVehicleProfileSchema,
+  eixos: cargoEixosSchema,
   valor: optionalNumeric,
   bonus: optionalNumeric,
   bonus_exigencias: optionalTrimmedString,
@@ -107,6 +128,16 @@ export const cargoCreateMutationSchema = z
   .object({
     ...cargoMutationBaseShape,
     status: manualCargoStatusSchema,
+  })
+  .strict();
+
+// Importação de programação via CSV (texto bruto + dry-run para preview).
+// Teto de 900 KB fica abaixo do limite de 1 MB do express.json (com folga para
+// o envelope JSON). Importações maiores devem ser quebradas em arquivos.
+export const cargoImportMutationSchema = z
+  .object({
+    csv: z.string().min(1).max(900_000),
+    dryRun: z.boolean().optional().default(false),
   })
   .strict();
 
@@ -158,6 +189,7 @@ export const routeMutationSchema = z
     duracao_horas: optionalNumeric,
     tempo_estimado_horas: optionalNumeric,
     perfil_padrao: optionalCanonicalVehicleProfileSchema,
+    eixos: routeEixosSchema,
     valor_padrao: optionalNumeric,
     bonus_padrao: optionalNumeric,
     bonus_exigencias: optionalTrimmedString,
@@ -206,6 +238,9 @@ export function parseOperatorDashboardQuery(query = {}) {
     status: typeof query.status === "string" ? query.status.trim() : "todos",
     driverVisibility: typeof query.driverVisibility === "string" ? query.driverVisibility.trim() : "todos",
     clienteId: typeof query.clienteId === "string" ? query.clienteId.trim() : "",
+    // Tela de Links: quando true, lista SOMENTE cargas efetivamente abertas ao
+    // motorista (espelha o portal) — ignora status/driverVisibility recebidos.
+    onlyOpenToDrivers: query.onlyOpenToDrivers === "true" || query.onlyOpenToDrivers === true,
   };
 }
 

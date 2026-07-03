@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Loader2, X } from "lucide-react";
-import { VEHICLE_PROFILE_OPTIONS, normalizeVehicleProfile } from "@/lib/vehicleProfiles";
+import { VEHICLE_PROFILE_OPTIONS, normalizeVehicleProfile, EIXOS_OPTIONS } from "@/lib/vehicleProfiles";
+import { CitySelector } from "@/components/CitySelector";
 
 export interface RouteFormData {
   origem: string;
@@ -8,6 +9,7 @@ export interface RouteFormData {
   distancia_km: string;
   tempo_estimado_horas: string;
   perfil_padrao: string;
+  eixos: number;
   valor_padrao: string;
   bonus_padrao: string;
   bonus_exigencias: string;
@@ -35,6 +37,7 @@ const emptyForm: RouteFormData = {
   distancia_km: "",
   tempo_estimado_horas: "",
   perfil_padrao: "CARRETA",
+  eixos: 0,
   valor_padrao: "",
   bonus_padrao: "",
   bonus_exigencias: "",
@@ -126,25 +129,21 @@ const RouteModal = ({
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Origem *</label>
-              <input
-                type="text"
-                placeholder="Ex: Sao Paulo/SP"
+              <CitySelector
                 value={form.origem}
-                onChange={(event) => setForm({ ...form, origem: event.target.value })}
+                onChange={(value) => setForm((current) => ({ ...current, origem: value }))}
+                placeholder="Buscar cidade de origem"
                 required
-                className={inputClass}
               />
             </div>
 
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Destino *</label>
-              <input
-                type="text"
-                placeholder="Ex: Salvador/BA"
+              <CitySelector
                 value={form.destino}
-                onChange={(event) => setForm({ ...form, destino: event.target.value })}
+                onChange={(value) => setForm((current) => ({ ...current, destino: value }))}
+                placeholder="Buscar cidade de destino"
                 required
-                className={inputClass}
               />
             </div>
           </div>
@@ -195,9 +194,9 @@ const RouteModal = ({
             </p>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Perfil sugerido</label>
+              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Perfil do veículo *</label>
               <select
                 value={form.perfil_padrao}
                 onChange={(event) => setForm({ ...form, perfil_padrao: event.target.value })}
@@ -211,6 +210,28 @@ const RouteModal = ({
                 ))}
               </select>
             </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Eixos</label>
+              <select
+                value={form.eixos}
+                onChange={(event) => setForm({ ...form, eixos: Number(event.target.value) })}
+                disabled={!supportsCatalogFields}
+                className={`${inputClass} cursor-pointer`}
+              >
+                {EIXOS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-primary/12 bg-primary/[0.04] px-4 py-2.5 text-xs text-muted-foreground">
+            Mesma origem e destino pode ter uma rota por veículo (perfil + eixos), cada uma com seu próprio valor e bônus.
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Valor padrão (R$)</label>
               <input

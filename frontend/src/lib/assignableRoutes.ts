@@ -13,6 +13,7 @@ export interface AssignableRouteOption {
   duracao_horas: number | null;
   tempo_estimado_horas: number | null;
   perfil_padrao: string | null;
+  eixos?: number | null;
   valor_padrao: number | null;
   bonus_padrao: number | null;
   ativa: boolean;
@@ -25,6 +26,7 @@ export interface CargoRouteAssignmentDraft {
   origem: string;
   destino: string;
   perfil: string;
+  eixos?: number | null;
   valor?: string;
   bonus?: string;
 }
@@ -164,6 +166,39 @@ export function findAssignableRouteByLocations(
   );
 }
 
+// Uma rota por veículo: dado o trecho + perfil + eixos da carga, acha a rota
+// daquele veículo. Prefere perfil+eixos exatos; depois o mesmo perfil; por fim
+// uma rota genérica do trecho (perfil não definido) como fonte de preço.
+// NUNCA devolve uma rota de OUTRO perfil — não force preço de veículo errado.
+export function findAssignableRouteByVehicle(
+  routes: AssignableRouteOption[],
+  origin: string,
+  destination: string,
+  perfil: string,
+  eixos: number | null | undefined,
+) {
+  const routeLookupKeys = new Set(createRouteLookupKeys(origin, destination));
+  const locationMatches = routes.filter((route) =>
+    createRouteLookupKeys(route.origem, route.destino).some((routeKey) => routeLookupKeys.has(routeKey)),
+  );
+
+  if (locationMatches.length === 0) {
+    return null;
+  }
+
+  const normalizedPerfil = normalizeVehicleProfile(perfil || "CARRETA");
+  const targetEixos = eixos ?? 0;
+  const sameProfile = locationMatches.filter(
+    (route) => route.perfil_padrao && normalizeVehicleProfile(route.perfil_padrao) === normalizedPerfil,
+  );
+
+  if (sameProfile.length > 0) {
+    return sameProfile.find((route) => (route.eixos ?? 0) === targetEixos) || sameProfile[0];
+  }
+
+  return locationMatches.find((route) => !route.perfil_padrao) || null;
+}
+
 export function resolveAssignableRouteForCargo(
   routes: AssignableRouteOption[],
   cargo: Pick<CargoRouteAssignmentDraft, "route_key" | "origem" | "destino">,
@@ -188,11 +223,15 @@ export function applyAssignableRouteToCargoDraft<T extends CargoRouteAssignmentD
   }
 
   const nextPerfil = normalizeVehicleProfile(route.perfil_padrao || cargo.perfil || "CARRETA");
+  // Rota do catálogo é por veículo: ao selecioná-la, herda o nº de eixos dela.
+  // Rota genérica (eixos 0/nulo) preserva o que o operador já tinha.
+  const nextEixos = route.eixos ?? cargo.eixos ?? 0;
   const nextValor = route.valor_padrao !== null ? String(route.valor_padrao) : cargo.valor || "";
   const nextBonus = route.bonus_padrao !== null ? String(route.bonus_padrao) : cargo.bonus || "";
   const hasChanges =
     cargo.route_key !== route.route_key ||
     cargo.perfil !== nextPerfil ||
+    (cargo.eixos ?? 0) !== nextEixos ||
     (route.valor_padrao !== null && cargo.valor !== nextValor) ||
     (route.bonus_padrao !== null && cargo.bonus !== nextBonus);
 
@@ -204,6 +243,37 @@ export function applyAssignableRouteToCargoDraft<T extends CargoRouteAssignmentD
     ...cargo,
     route_key: route.route_key,
     perfil: nextPerfil,
+    eixos: nextEixos,
+    valor: nextValor,
+    bonus: nextBonus,
+  };
+}
+
+// Auto-match (operador digitou origem/destino e escolheu o veículo): preenche
+// só valor/bônus da rota daquele veículo, SEM sobrescrever o perfil/eixos que o
+// operador definiu.
+export function applyRouteVehiclePricingToCargoDraft<T extends CargoRouteAssignmentDraft>(
+  cargo: T,
+  route: AssignableRouteOption | null,
+) {
+  if (!route) {
+    return cargo;
+  }
+
+  const nextValor = route.valor_padrao !== null ? String(route.valor_padrao) : cargo.valor || "";
+  const nextBonus = route.bonus_padrao !== null ? String(route.bonus_padrao) : cargo.bonus || "";
+  const hasChanges =
+    cargo.route_key !== route.route_key ||
+    (route.valor_padrao !== null && cargo.valor !== nextValor) ||
+    (route.bonus_padrao !== null && cargo.bonus !== nextBonus);
+
+  if (!hasChanges) {
+    return cargo;
+  }
+
+  return {
+    ...cargo,
+    route_key: route.route_key,
     valor: nextValor,
     bonus: nextBonus,
   };

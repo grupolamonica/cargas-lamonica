@@ -1,10 +1,11 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Copy, Eye, EyeOff, Package, Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { AlertTriangle, Copy, Eye, EyeOff, Package, Pencil, Plus, RefreshCw, Search, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import AdminPagination from "@/components/AdminPagination";
 import CargoModal from "@/components/CargoModal";
+import ImportProgramacaoModal from "@/components/ImportProgramacaoModal";
 import DashboardHeader from "@/components/DashboardHeader";
 import {
   applyAssignableRouteToCargoDraft,
@@ -50,6 +51,7 @@ interface CargoFormData {
   origem: string;
   destino: string;
   perfil: string;
+  eixos?: number;
   valor?: string;
   bonus?: string;
   bonus_exigencias?: string;
@@ -201,6 +203,7 @@ const ManageCargas = () => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
   const [isSyncingSheet, setIsSyncingSheet] = useState(false);
   const [editingCargo, setEditingCargo] = useState<Cargo | null>(null);
   // Default "ativas" = DRAFT + OPEN. O operador s\u00f3 age sobre cargas no ciclo
@@ -493,6 +496,7 @@ const ManageCargas = () => {
         distancia_km: routeMetrics.distancia_km,
         duracao_horas: routeMetrics.duracao_horas,
         perfil: autoAssignedCargo.perfil,
+        eixos: autoAssignedCargo.eixos ?? null,
         valor: parseMoneyInput(autoAssignedCargo.valor),
         bonus: parseMoneyInput(autoAssignedCargo.bonus),
         bonus_exigencias: autoAssignedCargo.bonus_exigencias?.trim() || null,
@@ -821,6 +825,16 @@ const ManageCargas = () => {
               >
                 <RefreshCw className={`h-4 w-4${isSyncingSheet ? " animate-spin" : ""}`} />
                 {isSyncingSheet ? "Atualizando..." : "Atualizar cargas"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setImportModalOpen(true)}
+                className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-2xl border border-primary/20 bg-primary/8 px-4 py-3 text-sm font-semibold text-primary transition-colors hover:bg-primary/12 dark:bg-primary/15"
+                title="Importa várias cargas de uma vez a partir de um arquivo CSV"
+              >
+                <Upload className="h-4 w-4" />
+                Importar programação
               </button>
 
               <button
@@ -1203,6 +1217,12 @@ const ManageCargas = () => {
         />
       </main>
 
+      <ImportProgramacaoModal
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onImported={refreshCargoData}
+      />
+
       <CargoModal
         open={modalOpen}
         onClose={() => {
@@ -1225,6 +1245,7 @@ const ManageCargas = () => {
                 origem: editingCargo.origem,
                 destino: editingCargo.destino,
                 perfil: editingCargo.perfil,
+                eixos: editingCargo.eixos ?? 0,
                 valor: editingCargo.valor?.toString() || "",
                 bonus: editingCargo.bonus?.toString() || "",
                 bonus_exigencias: editingCargo.bonus_exigencias || "",

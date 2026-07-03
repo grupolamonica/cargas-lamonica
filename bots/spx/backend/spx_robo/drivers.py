@@ -194,6 +194,60 @@ def list_drivers_in_agency(client: SPXClient, *, cpf: str | None = None, page: i
     return client.post_json("/api/driverservice/agency/br/driver/list", body=body) or {}
 
 
+def list_assignable_drivers(client: SPXClient, *, count: int = 5000, max_pages: int = 100) -> list[dict]:
+    """Motoristas da agência para resolver nome->driver_id na atribuição de viagem.
+
+    Retorna [{driver_id, name, cpf}]. Fonte = /driver/list (list_drivers_in_agency),
+    que devolve o driver_id canônico consumido por trips.assign_drivers.
+
+    IMPORTANTE: o `driver_name` de topo vem REDIGIDO (vazio) nessa listagem; o nome
+    real está em `staff_name` (e em `staff_data.staff_name`), e o CPF em
+    `staff_data.cpf`. Casamos por `staff_name` (o backend normaliza e compara com o
+    nome do motorista da carga). O dropdown específico do line_haul não foi capturado
+    (paths candidatos deram 404); a lista da agência é o equivalente — só motoristas
+    registrados são atribuíveis mesmo.
+
+    A varredura precisa ser COMPLETA: o backend casa por nome, então um motorista
+    fora da fatia não é encontrado (a agência tem milhares de motoristas). Paginamos
+    até o `total` reportado pela API (ou a lista esgotar), com `max_pages` só como
+    trava de segurança. `count` corta o resultado final.
+    """
+    out: list[dict] = []
+    seen: set[int] = set()
+    # 500/página verificado ao vivo (2.8s/página; a API aceita e devolve os 500).
+    # Página menor multiplica round-trips e estoura o timeout do backend Node.
+    per_page = 500
+    page = 1
+    total = None
+    while page <= max_pages and len(out) < count:
+        try:
+            data = list_drivers_in_agency(client, page=page, count=per_page)
+        except APIErro as exc:
+            log_alerta(f"[drivers] list_assignable_drivers pagina {page} falhou: {exc}")
+            break
+        if total is None:
+            total = int((data or {}).get("total") or 0)
+        lst = (data or {}).get("list") or (data or {}).get("items") or []
+        for it in lst:
+            did = it.get("driver_id") or it.get("id")
+            if did is None:
+                continue
+            did = int(did)
+            if did in seen:
+                continue
+            sd = it.get("staff_data") or {}
+            nm = (it.get("staff_name") or sd.get("staff_name") or it.get("driver_name") or "").strip()
+            cpf = (sd.get("cpf") or it.get("cpf") or "").strip()
+            seen.add(did)
+            out.append({"driver_id": did, "name": nm, "cpf": cpf})
+        if len(lst) < per_page:
+            break
+        if total and len(seen) >= total:
+            break
+        page += 1
+    return out[:count]
+
+
 def activate_driver(client: SPXClient, driver_id: int) -> dict:
     """POST /api/driverservice/agency/br/driver/activation/update — ativa driver_profile inativo.
     action: 1=Deactivate, 2=Activate, 3=Cancel

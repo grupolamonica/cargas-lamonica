@@ -9,6 +9,7 @@ import {
   Link2,
   MapPinned,
   Package,
+  Route,
   Search,
   Truck,
 } from "lucide-react";
@@ -37,6 +38,7 @@ import { buildCargoPublicPath, buildCargoShareUrl } from "@/lib/cargoLinks";
 import { formatCargoStatusLabel } from "@/lib/cargoStatus";
 import { formatCurrency, buildTotalPayment } from "@/lib/currency";
 import { buildLoadingDateTime, buildOperationalDateLabel, formatEstimatedTime } from "@/lib/estimatedTime";
+import { formatCityDisplay } from "@/hooks/useDriverLoads";
 import {
   type OperatorDashboardItem,
   fetchOperatorClientes,
@@ -170,24 +172,23 @@ function PaginationControls({
 
 const OperatorDashboard = () => {
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("todos");
-  const [visibilityFilter, setVisibilityFilter] = useState("todos");
   const [clienteFilter, setClienteFilter] = useState("");
   const [page, setPage] = useState(1);
   const [detailCargo, setDetailCargo] = useState<OperatorDashboardItem | null>(null);
+  // Gerador de link por rota (origem/destino → /motorista?origem=..&destino=..).
+  const [routeOrigem, setRouteOrigem] = useState("");
+  const [routeDestino, setRouteDestino] = useState("");
+  const [routeLinkCopied, setRouteLinkCopied] = useState(false);
   // Debounce de busca para evitar disparar um refetch por keystroke. useDeferredValue
   // só adia render — não gate fetch. 300ms é o sweet spot para typing humano.
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
   const deferredSearch = useDeferredValue(debouncedSearch);
-  const deferredStatusFilter = useDeferredValue(statusFilter);
-  const deferredVisibilityFilter = useDeferredValue(visibilityFilter);
   const deferredClienteFilter = useDeferredValue(clienteFilter);
-  const hasActiveFilters =
-    deferredSearch.length > 0 || deferredStatusFilter !== "todos" || deferredVisibilityFilter !== "todos" || deferredClienteFilter.length > 0;
+  const hasActiveFilters = deferredSearch.length > 0 || deferredClienteFilter.length > 0;
 
   useEffect(() => {
     setPage(1);
-  }, [deferredSearch, deferredStatusFilter, deferredVisibilityFilter, deferredClienteFilter]);
+  }, [deferredSearch, deferredClienteFilter]);
 
   const {
     data,
@@ -195,14 +196,16 @@ const OperatorDashboard = () => {
     isFetching,
     isLoading,
   } = useQuery({
-    queryKey: ["operator", "dashboard-read-model", deferredSearch, deferredStatusFilter, deferredVisibilityFilter, deferredClienteFilter, page],
+    // onlyOpenToDrivers: a tela de Links mostra SOMENTE cargas abertas ao
+    // motorista (espelha o portal) — fechadas/reservadas/expiradas/alocadas
+    // não aparecem, evitando compartilhar link de carga indisponível.
+    queryKey: ["operator", "dashboard-read-model", "open-to-drivers", deferredSearch, deferredClienteFilter, page],
     queryFn: () =>
       fetchOperatorDashboard({
         page: String(page),
         pageSize: String(PAGE_SIZE),
         search: deferredSearch,
-        status: deferredStatusFilter,
-        driverVisibility: deferredVisibilityFilter,
+        onlyOpenToDrivers: "true",
         ...(deferredClienteFilter ? { clienteId: deferredClienteFilter } : {}),
       }),
     placeholderData: keepPreviousData,
@@ -211,6 +214,7 @@ const OperatorDashboard = () => {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
+
   const {
     data: routes = [],
     error: routesError,
@@ -220,6 +224,35 @@ const OperatorDashboard = () => {
     queryFn: fetchAssignableRoutes,
     ...ADMIN_ROUTES_QUERY_OPTIONS,
   });
+
+  // Origens/destinos de TODAS as rotas do catálogo (não só das cargas abertas)
+  // — alimentam os selects do gerador de link por rota. O valor é a parte
+  // canônica do base_route_label ("ORIGEM X DESTINO", ASCII maiúsculo): é
+  // contra ela que o filtro do portal casa por substring. Rotas sem label
+  // canônico caem no origem/destino sem o sufixo "/UF" (best-effort).
+  const { origens: routeOrigemOptions, destinos: routeDestinoOptions } = useMemo(() => {
+    const origens = new Map<string, string>();
+    const destinos = new Map<string, string>();
+    const add = (map: Map<string, string>, raw: string | null | undefined) => {
+      const value = (raw ?? "").replace(/\s*\/\s*[A-Za-z]{2}\s*$/, "").trim().toUpperCase();
+      if (value && !map.has(value)) map.set(value, formatCityDisplay(value));
+    };
+    routes.forEach((route) => {
+      if (route.base_route_label?.includes(" X ")) {
+        const [origin, destination] = route.base_route_label.split(" X ");
+        add(origens, origin);
+        add(destinos, destination);
+      } else {
+        add(origens, route.origem);
+        add(destinos, route.destino);
+      }
+    });
+    const toSorted = (map: Map<string, string>) =>
+      Array.from(map.entries())
+        .map(([value, label]) => ({ value, label }))
+        .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+    return { origens: toSorted(origens), destinos: toSorted(destinos) };
+  }, [routes]);
 
   const { data: clientesData } = useQuery({
     queryKey: ["operator", "clientes-selector"],
@@ -310,6 +343,29 @@ const OperatorDashboard = () => {
     }
   };
 
+  // Link da ROTA no portal do motorista. Aceita rota parcial (só origem ou só
+  // destino). Vazio quando nenhum dos dois foi escolhido.
+  const routeShareUrl = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    if (!routeOrigem && !routeDestino) return "";
+    const params = new URLSearchParams();
+    if (routeOrigem) params.set("origem", routeOrigem);
+    if (routeDestino) params.set("destino", routeDestino);
+    return `${window.location.origin}/motorista?${params.toString()}`;
+  }, [routeOrigem, routeDestino]);
+
+  const copyRouteLink = async () => {
+    if (!routeShareUrl) return;
+    try {
+      await navigator.clipboard.writeText(routeShareUrl);
+      setRouteLinkCopied(true);
+      setTimeout(() => setRouteLinkCopied(false), 2000);
+      toast.success("Link da rota copiado");
+    } catch {
+      toast.error("Não foi possível copiar agora");
+    }
+  };
+
   return (
     <div>
       <DashboardHeader title="Links" />
@@ -345,7 +401,7 @@ const OperatorDashboard = () => {
             </div>
           </div>
 
-          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_220px_220px_auto]">
+          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px_auto]">
             <div className="relative">
               <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -355,32 +411,6 @@ const OperatorDashboard = () => {
                 className="h-12 rounded-2xl border-border/80 bg-white/92 pl-11 pr-4"
               />
             </div>
-
-            <select
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
-              className="h-12 rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
-            >
-              <option value="todos">Todos os status</option>
-              <option value={OPEN_STATUS}>Abertas</option>
-              <option value="DRAFT">Rascunhos</option>
-              <option value="RESERVED">Reservadas</option>
-              <option value="BOOKED">Fechadas</option>
-              <option value="EXPIRED">Expiradas</option>
-              <option value="CANCELLED">Canceladas</option>
-              <option value="COMPLETED">Concluídas</option>
-              <option value="FAILED">Falhas</option>
-            </select>
-
-            <select
-              value={visibilityFilter}
-              onChange={(event) => setVisibilityFilter(event.target.value)}
-              className="h-12 rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
-            >
-              <option value="todos">Toda visibilidade</option>
-              <option value="PUBLIC">Pública</option>
-              <option value="PREMIUM">Premium</option>
-            </select>
 
             <select
               value={clienteFilter}
@@ -399,8 +429,6 @@ const OperatorDashboard = () => {
               className="h-12 rounded-2xl"
               onClick={() => {
                 setSearch("");
-                setStatusFilter("todos");
-                setVisibilityFilter("todos");
                 setClienteFilter("");
               }}
               disabled={!hasActiveFilters}
@@ -409,11 +437,82 @@ const OperatorDashboard = () => {
             </Button>
           </div>
 
+          <p className="mt-3 text-xs text-muted-foreground">
+            Mostrando apenas cargas abertas ao motorista (as fechadas, reservadas, expiradas ou já alocadas não aparecem aqui).
+          </p>
+
           {(isFetching || routesFetching) && !loading ? (
             <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-primary/12 bg-primary/8 px-3 py-1 text-xs font-semibold text-primary">
               Atualizando página do painel
             </div>
           ) : null}
+        </section>
+
+        {/* Gerador de link por ROTA — operador escolhe origem/destino e copia o
+            link do portal com o filtro de rota já aplicado. */}
+        <section className="admin-panel overflow-hidden p-5 lg:p-6">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <Route className="h-5 w-5" />
+            </span>
+            <div className="space-y-1">
+              <h3 className="text-lg font-semibold tracking-tight text-foreground">Link por rota</h3>
+              <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
+                Escolha origem e/ou destino e gere um link que abre o portal do motorista já filtrado por essa rota.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Origem</label>
+              <select
+                value={routeOrigem}
+                onChange={(event) => setRouteOrigem(event.target.value)}
+                className="h-12 w-full rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
+              >
+                <option value="">Todas as origens</option>
+                {routeOrigemOptions.map((origem) => (
+                  <option key={origem.value} value={origem.value}>{origem.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Destino</label>
+              <select
+                value={routeDestino}
+                onChange={(event) => setRouteDestino(event.target.value)}
+                className="h-12 w-full rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
+              >
+                <option value="">Todos os destinos</option>
+                {routeDestinoOptions.map((destino) => (
+                  <option key={destino.value} value={destino.value}>{destino.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {routeShareUrl ? (
+            <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-border/70 bg-muted/20 p-4 lg:flex-row lg:items-center lg:justify-between">
+              <code className="break-all text-xs text-foreground/80 lg:text-sm">{routeShareUrl}</code>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <Button type="button" variant="outline" className="rounded-full" onClick={() => void copyRouteLink()}>
+                  <Link2 className="h-4 w-4" />
+                  {routeLinkCopied ? "Copiado!" : "Copiar link"}
+                </Button>
+                <Button asChild className="rounded-full">
+                  <a href={routeShareUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink className="h-4 w-4" />
+                    Abrir
+                  </a>
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-4 rounded-2xl border border-dashed border-border/70 bg-muted/10 px-4 py-3 text-sm text-muted-foreground">
+              Selecione uma origem e/ou um destino para gerar o link da rota.
+            </p>
+          )}
         </section>
 
         {loading ? (

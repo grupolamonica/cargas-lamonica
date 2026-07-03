@@ -9,6 +9,7 @@ import {
   buildCargoTotalPayment,
   buildAssignableRouteKey,
   findAssignableRouteByLocations,
+  findAssignableRouteByVehicle,
   getAssignableRouteLabel,
   resolveCargoCompensation,
   resolveAssignableRouteForCargo,
@@ -43,6 +44,36 @@ describe("assignable routes helpers", () => {
     expect(findAssignableRouteByLocations([route], "Sao Paulo / SP", "Simoes Filho / BA")).toEqual(route);
     expect(findAssignableRouteByLocations([route], "Pedreira 01 / SP", "Simoes Filho / BA")).toEqual(route);
     expect(findAssignableRouteByLocations([route], "Campinas", "Bahia")).toBeNull();
+  });
+
+  it("matches the route for the chosen vehicle (perfil + eixos) on the same trecho", () => {
+    const carreta6: AssignableRouteOption = {
+      ...route,
+      id: "route-carreta-6",
+      route_key: "sao paulo|simoes filho|CARRETA|6",
+      eixos: 6,
+      valor_padrao: 15000,
+    };
+    const bitrem: AssignableRouteOption = {
+      ...route,
+      id: "route-bitrem",
+      route_key: "sao paulo|simoes filho|BITREM|0",
+      perfil_padrao: "BITREM",
+      eixos: 0,
+      valor_padrao: 18000,
+    };
+    const routes = [route, carreta6, bitrem];
+
+    // perfil + eixos exatos
+    expect(findAssignableRouteByVehicle(routes, "Sao Paulo", "Simoes Filho", "CARRETA", 6)?.id).toBe("route-carreta-6");
+    // mesmo perfil, eixos sem correspondência exata → 1ª rota do perfil
+    expect(findAssignableRouteByVehicle(routes, "Sao Paulo", "Simoes Filho", "CARRETA", 9)?.id).toBe("route-1");
+    // outro perfil
+    expect(findAssignableRouteByVehicle(routes, "Sao Paulo", "Simoes Filho", "BITREM", 0)?.id).toBe("route-bitrem");
+    // perfil sem rota e sem rota genérica → null (não devolve veículo errado)
+    expect(findAssignableRouteByVehicle(routes, "Sao Paulo", "Simoes Filho", "TRUCK", 0)).toBeNull();
+    // trecho inexistente → null
+    expect(findAssignableRouteByVehicle(routes, "Campinas", "Bahia", "CARRETA", 0)).toBeNull();
   });
 
   it("prefers the base route label when available", () => {

@@ -68,3 +68,18 @@ export function getVehicleProfileOption(value: string | null | undefined) {
 export function formatVehicleProfileLabel(value: string | null | undefined) {
   return getVehicleProfileOption(value).label;
 }
+
+// Uma rota por veículo: o nº de eixos diferencia o preço do mesmo trecho/perfil.
+// É uma dimensão de preço/exibição, ortogonal ao perfil (que governa elegibilidade).
+// 0 = genérico (não especificado).
+export const EIXOS_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: "Não especificar" },
+  { value: 2, label: "2 eixos" },
+  { value: 3, label: "3 eixos" },
+  { value: 4, label: "4 eixos" },
+  { value: 5, label: "5 eixos" },
+  { value: 6, label: "6 eixos" },
+  { value: 7, label: "7 eixos" },
+  { value: 8, label: "8 eixos" },
+  { value: 9, label: "9 eixos" },
+];

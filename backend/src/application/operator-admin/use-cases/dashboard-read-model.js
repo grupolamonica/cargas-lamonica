@@ -16,7 +16,14 @@ import {
 } from "./_shared.js";
 
 export async function fetchOperatorDashboardReadModel({ query, correlationId }) {
-  const { page, pageSize, offset, maxPageSize, search, status, driverVisibility, clienteId } = parseOperatorDashboardQuery(query);
+  const { page, pageSize, offset, maxPageSize, search, status, driverVisibility, clienteId, onlyOpenToDrivers } = parseOperatorDashboardQuery(query);
+
+  // Tela de Links: "aberta para o motorista" == o que o portal lista. "Agora" no
+  // fuso de Sao Paulo (container roda em UTC; data/horario sao BRT) p/ o corte de
+  // expiracao — mesmo criterio dos facets do driver read model.
+  const { dateIso: todayIso, timeIso: nowTimeIso } = onlyOpenToDrivers
+    ? getSaoPauloWallClock()
+    : { dateIso: null, timeIso: null };
 
   const buildDashboardFilterContext = ({ supportsOptionalColumns }) => {
     const values = [];
@@ -34,23 +41,46 @@ export async function fetchOperatorDashboardReadModel({ query, correlationId }) 
       index += 1;
     }
 
-    if (status && status !== "todos") {
-      if (status === "templates") {
-        clauses.push("COALESCE(cargas.is_template, false) = true");
-      } else {
-        values.push(status);
-        clauses.push(`cargas.status = $${index}`);
-        index += 1;
-      }
-    }
-
-    if (driverVisibility && driverVisibility !== "todos") {
+    if (onlyOpenToDrivers) {
+      // Espelha o portal do motorista: OPEN + nao-template + visibilidade publica
+      // + nao alocada (planilha) + nao expirada. Ignora status/driverVisibility.
+      clauses.push("cargas.status = 'OPEN'");
+      clauses.push("COALESCE(cargas.is_template, false) = false");
       if (supportsOptionalColumns) {
-        values.push(driverVisibility);
-        clauses.push(`COALESCE(cargas.driver_visibility, 'PUBLIC') = $${index}`);
-        index += 1;
-      } else if (driverVisibility === "PREMIUM") {
-        clauses.push("1 = 0");
+        clauses.push("COALESCE(cargas.driver_visibility, 'PUBLIC') = 'PUBLIC'");
+      }
+      clauses.push("COALESCE(cargas.alloc_motorista, cargas.sheet_motorista, '') = ''");
+      values.push(todayIso);
+      const todayGtIndex = index;
+      index += 1;
+      values.push(todayIso);
+      const todayEqIndex = index;
+      index += 1;
+      values.push(nowTimeIso);
+      const nowTimeIndex = index;
+      index += 1;
+      clauses.push(
+        `(cargas.data IS NULL OR cargas.data > $${todayGtIndex} OR (cargas.data = $${todayEqIndex} AND (cargas.horario IS NULL OR cargas.horario >= $${nowTimeIndex})))`,
+      );
+    } else {
+      if (status && status !== "todos") {
+        if (status === "templates") {
+          clauses.push("COALESCE(cargas.is_template, false) = true");
+        } else {
+          values.push(status);
+          clauses.push(`cargas.status = $${index}`);
+          index += 1;
+        }
+      }
+
+      if (driverVisibility && driverVisibility !== "todos") {
+        if (supportsOptionalColumns) {
+          values.push(driverVisibility);
+          clauses.push(`COALESCE(cargas.driver_visibility, 'PUBLIC') = $${index}`);
+          index += 1;
+        } else if (driverVisibility === "PREMIUM") {
+          clauses.push("1 = 0");
+        }
       }
     }
 
@@ -140,7 +170,7 @@ export async function fetchOperatorDashboardReadModel({ query, correlationId }) 
         COALESCE(SUM(CASE
           WHEN status = 'OPEN'
             AND NOT COALESCE(is_template, false)
-            AND COALESCE(sheet_motorista, '') = ''
+            AND COALESCE(alloc_motorista, sheet_motorista, '') = ''
           THEN 1 ELSE 0 END), 0)::int AS active_count,
         COALESCE(SUM(CASE WHEN status = 'DRAFT' THEN 1 ELSE 0 END), 0)::int AS draft_count,
         COALESCE(SUM(CASE WHEN COALESCE(is_template, false) THEN 1 ELSE 0 END), 0)::int AS template_count
@@ -384,7 +414,7 @@ export async function fetchDriverLoadFacets({ correlationId }) {
     // que o sync demore para refletir status='BOOKED' no DB. Filtro de
     // sheet_status removido (era over-broad — bloqueava statuses de pipeline
     // aberto como 'AGUARDANDO CARREGAMENTO').
-    const sheetUnallocatedSql = "COALESCE(sheet_motorista, '') = ''";
+    const sheetUnallocatedSql = "COALESCE(alloc_motorista, sheet_motorista, '') = ''";
     // Iter #8: filtra cargas expiradas (data + horario passados) tambem nos
     // facets — para que filtros e contadores nao mostrem cargas que nem
     // aparecem no listing. Parameterizado pq pg-mem nao suporta CURRENT_DATE.
