@@ -23,10 +23,11 @@ subir o código antes das migrations = **500 em massa** (Monitor/dashboard/enric
 
 ## 2. Migrations em PROD (`lbpzkdec`) — ANTES do código
 
-> **✅ APLICADO em 2026-07-03** — as 9 migrations abaixo já foram rodadas em prod
-> (`lbpzkdec`) e verificadas (`monitor_reservas`, `monitor_route_codes`, `cargas.alloc_*`,
-> `alloc_pinned`, `lh_manual`, `cargas.eixos`, `route_metrics_cache.eixos`, `cargo_id` = todos OK).
-> Idempotentes — re-rodar é seguro, mas não é necessário. Só refazer em caso de restore.
+> **✅ APLICADO em 2026-07-03** — as 10 migrations abaixo já foram rodadas em prod
+> (`lbpzkdec`) e verificadas. Diff staging×prod de `cargas`/`monitor_reservas`/
+> `sheet_monitor_enriched`/`route_metrics_cache` = **zero colunas faltando**. Inclui
+> `20260626120000_add_alloc_tipo_to_cargas.sql` (coluna `alloc_tipo`, que estava só no
+> staging, sem migration — teria dado 500). Idempotentes — só refazer em caso de restore.
 
 Prod tem só `driver_vinculos` (aplicada ad-hoc sob `20260618171424`). **Faltam 7 objetos.**
 Todas as migrations abaixo são **idempotentes / no-op-safe** — seguras para rodar mesmo
@@ -39,6 +40,7 @@ que parte já exista. Aplicar **nesta ordem**:
 | 3 | `20260619150000_add_alloc_pinned_to_cargas.sql` | `cargas.alloc_pinned` |
 | 4 | `20260619160000_add_monitor_reservas.sql` | tabela `monitor_reservas` |
 | 5 | `20260625120001_add_lh_manual_to_cargas.sql` | `cargas.lh_manual` |
+| 5b | `20260626120000_add_alloc_tipo_to_cargas.sql` | `cargas.alloc_tipo` (faltava migration; estava só no staging) |
 | 6 | `20260625170000_add_cargo_id_to_sheet_monitor_enriched.sql` | `sheet_monitor_enriched.cargo_id` |
 | 7 | `20260629170000_create_monitor_route_codes.sql` | tabela `monitor_route_codes` (faltava no repo; usada por attachRouteCodes + pelo mojibake) |
 | 8 | `20260629180000_fix_route_name_mojibake.sql` | correção de dados (mojibake em rotas) — **no-op em prod** (0 linhas afetadas; roda depois de criar route_codes) |
@@ -59,6 +61,7 @@ for f in 20260618120000_add_alloc_fields_to_cargas \
          20260619150000_add_alloc_pinned_to_cargas \
          20260619160000_add_monitor_reservas \
          20260625120001_add_lh_manual_to_cargas \
+         20260626120000_add_alloc_tipo_to_cargas \
          20260625170000_add_cargo_id_to_sheet_monitor_enriched \
          20260629170000_create_monitor_route_codes \
          20260629180000_fix_route_name_mojibake \
