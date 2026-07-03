@@ -35,8 +35,9 @@ que parte já exista. Aplicar **nesta ordem**:
 | 4 | `20260619160000_add_monitor_reservas.sql` | tabela `monitor_reservas` |
 | 5 | `20260625120001_add_lh_manual_to_cargas.sql` | `cargas.lh_manual` |
 | 6 | `20260625170000_add_cargo_id_to_sheet_monitor_enriched.sql` | `sheet_monitor_enriched.cargo_id` |
-| 7 | `20260629180000_fix_route_name_mojibake.sql` | correção de dados (mojibake em rotas) |
-| 8 | `20260630120000_add_eixos_to_routes_and_cargas.sql` | `routes.eixos` + `cargas.eixos` |
+| 7 | `20260629170000_create_monitor_route_codes.sql` | tabela `monitor_route_codes` (faltava no repo; usada por attachRouteCodes + pelo mojibake) |
+| 8 | `20260629180000_fix_route_name_mojibake.sql` | correção de dados (mojibake em rotas) — **no-op em prod** (0 linhas afetadas; roda depois de criar route_codes) |
+| 9 | `20260630120000_add_eixos_to_routes_and_cargas.sql` | `routes.eixos` + `cargas.eixos` |
 
 > As migrations da main (`enable_rls_backend_only_tables`, `secfix_definer_views`) **já
 > estão em prod** (sob `20260625140344`/`20260625141708`) — **não reaplicar**.
@@ -54,6 +55,7 @@ for f in 20260618120000_add_alloc_fields_to_cargas \
          20260619160000_add_monitor_reservas \
          20260625120001_add_lh_manual_to_cargas \
          20260625170000_add_cargo_id_to_sheet_monitor_enriched \
+         20260629170000_create_monitor_route_codes \
          20260629180000_fix_route_name_mojibake \
          20260630120000_add_eixos_to_routes_and_cargas; do
   echo ">>> $f"
