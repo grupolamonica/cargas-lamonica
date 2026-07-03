@@ -22,14 +22,23 @@ navegador** (soak: 8/8 pings vivos em ~35 min). Passos na máquina que roda o `:
    A tarefa **"BRK - Keep-Alive Cookie"** roda `keepalive_brk.js`: um GET autenticado em
    `/Motorista/Listar` reseta o timeout de ociosidade do ASP.NET. Exit 0 = viva · 5 = expirada.
 
-> **Por que só isso basta:** a sessão do BRK **não rotaciona cookie** — o `cokiename`
+> **Por que basta pra sessão ASP.NET:** ela **não rotaciona cookie** — o `cokiename`
 > (ticket de auth, ~2400 chars) é estático. Basta "tocar" a sessão dentro da janela de
-> ociosidade (~20 min); sem tráfego ela morre (era a causa do "cookie não funciona"). O
-> `cf_clearance` sobrevive porque não re-desafiamos o Cloudflare por HTTP.
+> ociosidade (~20 min); sem tráfego ela morre (era a causa do "cookie não funciona").
 
-> ⚠️ Refaça o **login** (passo 1) quando a sessão morrer de vez (reboot longo sem
-> keep-alive, logout no BRK, ou expiração do `cf_clearance`). O keep-alive sinaliza
-> isso (exit 5 / log de "SESSÃO EXPIRADA").
+> ⚠️ **Limite: o keep-alive HTTP NÃO renova o `cf_clearance`** (não há `Set-Cookie`). O
+> `cf_clearance` tem TTL próprio (~dias); quando vence, o keep-alive passa a tomar **403**
+> (exit 5, log "CLOUDFLARE 403") e é preciso **refazer o login** (passo 1) pra gerar um
+> `cf_clearance` fresco. Automatizar isso exige um `refresh` headed agendado (perfil
+> dedicado — ver seção abaixo). Também refaça o login em reboot longo / logout no BRK.
+
+> 🛠️ **Registro da tarefa sem admin:** o instalador usa `schtasks.exe` (o
+> `Register-ScheduledTask`/CIM exige elevação e falha com "Access is denied" em shell
+> não-admin, ex.: SERVERBD). A tarefa roda na **sessão logada** (onde o drive `H:` existe).
+
+> 🐛 Captura correta do cookie: o refresher exige `cokiename`/`ASPXAUTH`/`CodUsuario`
+> (não o `FotoUsuarioLogado`, que aparece cedo demais) + confirmação funcional antes de
+> exportar — senão exportava um cookie que não autentica por HTTP.
 
 > 🐛 Captura correta do cookie: o refresher exige `cokiename`/`ASPXAUTH`/`CodUsuario`
 > (não o `FotoUsuarioLogado`, que aparece cedo demais) + confirmação funcional antes de

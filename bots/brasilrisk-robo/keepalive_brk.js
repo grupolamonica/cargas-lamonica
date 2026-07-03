@@ -55,12 +55,24 @@ function finalizar(code) {
     // Libera a conexão sem baixar o corpo inteiro (não precisamos do HTML).
     try { await resp.body?.cancel(); } catch { /* noop */ }
 
+    // 403 = Cloudflare barrando (cf_clearance expirado/inválido). O keep-alive HTTP
+    // mantém a sessão ASP.NET, mas NÃO renova o cf_clearance (sem Set-Cookie) — ele
+    // tem TTL próprio (~dias). Quando vence, cai aqui: precisa de novo login (headed)
+    // pra gerar um cf_clearance fresco. Tratamos como "precisa relogar" (exit 5), não
+    // como erro transitório.
+    if (resp.status === 403) {
+      console.error(`[${ts()}] CLOUDFLARE 403 — cf_clearance expirado/inválido. ` +
+                    `O keep-alive HTTP não renova o cf_clearance; refaça o login: ` +
+                    `node refresh_cookies_brk_pw.js login`);
+      return finalizar(5);
+    }
+
     const loc = resp.headers.get('location') || '';
     const sessaoMorta =
       resp.status === 401 ||
       (resp.status >= 300 && resp.status < 400 && /\/account\/login|\/login/i.test(loc));
     if (sessaoMorta) {
-      console.error(`[${ts()}] SESSÃO EXPIRADA (status=${resp.status}${loc ? ' -> ' + loc : ''}). ` +
+      console.error(`[${ts()}] SESSÃO ASP.NET EXPIRADA (status=${resp.status}${loc ? ' -> ' + loc : ''}). ` +
                     `Refaça o login: node refresh_cookies_brk_pw.js login`);
       return finalizar(5);
     }
