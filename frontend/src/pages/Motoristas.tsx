@@ -42,6 +42,7 @@ import DriverDetailModal, { type DriverDetailModalData } from "@/components/Driv
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
 import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
 import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
+import TorreRankingCard from "@/components/operator/TorreRankingCard";
 import { CadastroRascunhoResgateModal } from "@/components/operator/CadastroRascunhoResgateModal";
 import { FilePreviewModal } from "@/components/operator/FilePreviewModal";
 import {
@@ -1117,6 +1118,9 @@ const Motoristas = () => {
                         <X className="h-4 w-4 text-muted-foreground" />
                       </button>
                     </div>
+
+                    {/* Ranking do motorista na Torre de Controle (por CPF) */}
+                    <TorreRankingCard cadastroId={selectedPendente.id} />
 
                     {/* Galeria de documentos enviados — destacada no topo para o
                         operador conferir tudo antes de aprovar (sem caçar na ficha). */}

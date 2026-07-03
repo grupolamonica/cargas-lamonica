@@ -1397,6 +1397,51 @@ export async function listExternalJobs(id: string) {
   );
 }
 
+export interface TorreDriverInfo {
+  cadastroTorre: boolean;
+  fonte: string | null;
+  geradoEm: string | null;
+  ranking: {
+    encontrado: boolean;
+    posicao: number | null;
+    pontuacao: number | null;
+    vinculo: string | null;
+    status: string | null;
+  };
+  identidade: {
+    nome: string | null;
+    driverKind: string | null;
+    cidade: string | null;
+    estado: string | null;
+    shopeeDriverId: string | null;
+  };
+  conformidade: {
+    operationalScore: number | null;
+    angelliraStatus: string | null;
+    angelliraValidUntil: string | null;
+    anttValid: boolean | null;
+    documentsValid: boolean | null;
+    operationalBlocked: boolean | null;
+  };
+  viagens: {
+    total: number;
+    completas: number;
+    canceladas: number;
+    emAndamento: number;
+    pctNoPrazo: number | null;
+    ultima: string | null;
+  };
+  ocorrencias: { total: number };
+  ultimaPosicao: { at?: string | null; cidade?: string | null; uf?: string | null; veiculo?: string | null } | null;
+}
+
+/** Dossiê da Torre de Controle (ranking + sinais) do motorista do cadastro. */
+export async function fetchTorreDriverInfo(id: string) {
+  return getOperator<{ ok: boolean; found: boolean; torre: TorreDriverInfo | null }>(
+    `/api/operator/cadastros/${id}/torre`,
+  );
+}
+
 // ── Preview de payloads (G3 — inspeção read-only antes do disparo) ─────────
 export type PreviewProprietario =
   | { tipo: "PF" | "PJ"; payload: Record<string, unknown>; owner_is_driver?: boolean }
