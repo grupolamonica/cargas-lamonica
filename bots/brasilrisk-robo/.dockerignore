@@ -1,0 +1,20 @@
+# Segredos/sessão — vêm de volume montado, nunca da imagem
+backend/cookie.txt
+backend/useragent.txt
+.env
+*.env.local
+
+# Perfil do Chromium — volume persistente, não vai na imagem (pesado + sessão)
+.chrome-brk/
+pw_profile/
+
+# Node / logs / temporários
+node_modules/
+logs/
+*.log
+*.tmp
+
+# Windows-only (agendador/daemon local) — não usados no container
+*.bat
+*.cmd
+scripts/*.ps1

@@ -2,11 +2,14 @@
   "name": "brasilrisk-robo",
   "version": "1.0.0",
   "private": true,
-  "description": "Robô BRK (Brasil Risk) — refresher de cookie via Puppeteer (perfil dedicado) + keep-alive da sessão. O cliente de consulta é Node puro (lib/brasilrisk_consulta.js no sistema de cadastro).",
+  "description": "Robô BRK (Brasil Risk) — servidor REST de consulta (Node puro, lib/brasilrisk_consulta.js) + refresher de cookie via Puppeteer (perfil dedicado) + keep-alive da sessão.",
+  "main": "server.js",
   "scripts": {
+    "start": "node server.js",
     "login": "node refresh_cookies_brk_pw.js login",
     "refresh": "node refresh_cookies_brk_pw.js refresh",
-    "daemon": "node refresh_cookies_brk_pw.js daemon"
+    "daemon": "node refresh_cookies_brk_pw.js daemon",
+    "keepalive": "node keepalive_brk.js"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
