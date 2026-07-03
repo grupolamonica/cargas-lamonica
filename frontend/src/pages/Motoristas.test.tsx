@@ -28,6 +28,10 @@ vi.mock("@/components/AspxSyncCard", () => ({
   AspxSyncCard: () => null,
 }));
 
+vi.mock("@/components/BrkSyncCard", () => ({
+  BrkSyncCard: () => null,
+}));
+
 vi.mock("@/services/apiClient", () => ({
   getOperatorAccessToken: vi.fn().mockResolvedValue("test-token"),
 }));

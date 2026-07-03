@@ -82,14 +82,14 @@ export function BrkSyncCard() {
     },
   });
 
-  const tone = data ? cookieTone(data.cookies) : "ok";
+  const tone = data?.cookies ? cookieTone(data.cookies) : "ok";
   const toneClasses = {
     ok: "border-emerald-200 bg-emerald-50 text-emerald-800",
     warn: "border-amber-200 bg-amber-50 text-amber-800",
     danger: "border-rose-200 bg-rose-50 text-rose-800",
   }[tone];
 
-  const Icon = data?.cookies.expired ? AlertTriangle : ShieldCheck;
+  const Icon = data?.cookies?.expired ? AlertTriangle : ShieldCheck;
 
   return (
     <section className="admin-panel overflow-hidden p-5 lg:p-6">
@@ -116,7 +116,7 @@ export function BrkSyncCard() {
               </p>
             ) : isLoading ? (
               <p className="mt-1 text-sm text-muted-foreground">Carregando status...</p>
-            ) : data ? (
+            ) : data?.cookies ? (
               <div className="mt-2 grid gap-x-6 gap-y-1 text-sm text-muted-foreground sm:grid-cols-2">
                 <div className="flex items-center gap-2">
                   <Clock className="h-3.5 w-3.5" />
@@ -158,7 +158,7 @@ export function BrkSyncCard() {
                 </div>
               </div>
             ) : null}
-            {data && (data.cookies.expired || data.cookies.count === 0) ? (
+            {data?.cookies && (data.cookies.expired || data.cookies.count === 0) ? (
               <p className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
                 Cookie do BRK {data.cookies.count === 0 ? "não configurado" : "expirado"}. Faça login no{" "}
                 <strong>br2.brasilrisk.com.br</strong>, exporte os cookies (extensão Cookie-Editor) e cole
