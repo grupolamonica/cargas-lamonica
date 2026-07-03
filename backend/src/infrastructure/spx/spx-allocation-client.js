@@ -55,9 +55,10 @@ export async function fetchAssignableTrips(opts = {}) {
   return Array.isArray(data?.trips) ? data.trips : [];
 }
 
-/** Motoristas atribuíveis. [{driver_id, name}] */
+/** Motoristas atribuíveis. [{driver_id, name, cpf}]. count alto porque o match é
+ *  por nome — a agência tem milhares de motoristas e um fora da fatia não é achado. */
 export async function fetchAssignableDrivers(opts = {}) {
-  const data = await sidecarFetch(`/spx/drivers/assignable?agency_id=${aspxAgencyId()}&count=500`, { method: "GET" }, opts);
+  const data = await sidecarFetch(`/spx/drivers/assignable?agency_id=${aspxAgencyId()}&count=5000`, { method: "GET" }, opts);
   return Array.isArray(data?.drivers) ? data.drivers : [];
 }
 
