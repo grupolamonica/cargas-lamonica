@@ -214,7 +214,9 @@ def list_assignable_drivers(client: SPXClient, *, count: int = 5000, max_pages: 
     """
     out: list[dict] = []
     seen: set[int] = set()
-    per_page = 100
+    # 500/página verificado ao vivo (2.8s/página; a API aceita e devolve os 500).
+    # Página menor multiplica round-trips e estoura o timeout do backend Node.
+    per_page = 500
     page = 1
     total = None
     while page <= max_pages and len(out) < count:
