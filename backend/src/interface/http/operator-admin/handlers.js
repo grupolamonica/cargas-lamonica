@@ -2075,6 +2075,41 @@ export async function resolveOperatorGetCadastroResponse(request) {
 }
 
 /**
+ * GET /api/operator/cadastros/:id/torre
+ * Dossiê da Torre de Controle (ranking + sinais operacionais) do motorista do
+ * cadastro, por CPF. Read-only — exibido no painel de revisão de cadastro.
+ */
+export async function resolveOperatorTorreDriverInfoResponse(request) {
+  return withOperatorSession(request, "cadastro-torre-info", async ({ correlationId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso intermediário necessário.");
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+
+    return withPgClient(async (client) => {
+      const cadastro = await loadCadastroAprovado(client, id);
+      if (!cadastro) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+
+      const cpf = String(cadastro.dados?.motorista?.cpf || "").replace(/\D/g, "");
+      if (cpf.length !== 11) {
+        return {
+          statusCode: 422,
+          payload: { error: "UnprocessableEntity", message: "Cadastro sem CPF de motorista válido.", meta: { correlationId } },
+        };
+      }
+
+      const { fetchTorreDriverInfo } = await import(
+        "../../../application/operator-admin/use-cases/torre-driver-info.js"
+      );
+      return fetchTorreDriverInfo({ cpf, correlationId });
+    });
+  });
+}
+
+/**
  * GET /api/operator/cadastros/:id/arquivo?path=<storage_path>
  * Gera uma signed URL (TTL 1h) para o operador visualizar um documento enviado
  * pelo motorista (CNH, CRLV, comprovante, etc.) no bucket privado cadastro-drafts.

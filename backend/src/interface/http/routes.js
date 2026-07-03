@@ -82,6 +82,7 @@ import {
   resolveOperatorListExternalJobsResponse,
   resolveOperatorSpxPrecheckResponse,
   resolveOperatorSpxCadastrarResponse,
+  resolveOperatorTorreDriverInfoResponse,
   resolveOperatorGetCadastroResponse,
   resolveOperatorPatchCadastroDadosResponse,
   resolveOperatorDeleteCadastroResponse,
@@ -320,6 +321,9 @@ export function registerRoutes(app) {
   // SPX automation (DC-111 / extensão SPX)
   router.post("/api/operator/cadastros/:id/spx/precheck", wrap(resolveOperatorSpxPrecheckResponse));
   router.post("/api/operator/cadastros/:id/spx/cadastrar", wrap(resolveOperatorSpxCadastrarResponse));
+
+  // Torre de Controle — dossiê/ranking do motorista por CPF (read-only)
+  router.get("/api/operator/cadastros/:id/torre", wrap(resolveOperatorTorreDriverInfoResponse));
 
   // Gerenciamento de cadastros (editar/excluir)
   router.get("/api/operator/cadastros/:id/arquivo", wrap(resolveOperatorCadastroFileUrlResponse));
