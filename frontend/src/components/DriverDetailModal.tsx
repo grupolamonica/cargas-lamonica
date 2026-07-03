@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { parseDateStringAsLocal } from "@/lib/dateDisplay";
 import { cn } from "@/lib/utils";
+import TorreRankingCard from "@/components/operator/TorreRankingCard";
 import type { PublicLeadValidationSummary, PublicLeadValidationPlate } from "@/services/loadClaims";
 
 export interface DriverDetailModalData {
@@ -131,6 +132,11 @@ export default function DriverDetailModal({ open, onOpenChange, data, hideValida
               ) : null}
             </div>
           </section>
+
+          {/* Ranking Torre de Controle — posição + métricas por CPF */}
+          {data.cpf && data.cpf.replace(/\D/g, "").length === 11 ? (
+            <TorreRankingCard cpf={data.cpf} />
+          ) : null}
 
           {/* Validation Badges */}
           {!hideValidation && data.validation ? (

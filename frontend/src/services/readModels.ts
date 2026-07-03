@@ -1442,6 +1442,14 @@ export async function fetchTorreDriverInfo(id: string) {
   );
 }
 
+/** Dossiê da Torre por CPF direto — fila de candidatos / DriverDetailModal. */
+export async function fetchTorreDriverInfoByCpf(cpf: string) {
+  const digits = cpf.replace(/\D/g, "");
+  return getOperator<{ ok: boolean; found: boolean; torre: TorreDriverInfo | null }>(
+    `/api/operator/drivers/${digits}/torre`,
+  );
+}
+
 // ── Preview de payloads (G3 — inspeção read-only antes do disparo) ─────────
 export type PreviewProprietario =
   | { tipo: "PF" | "PJ"; payload: Record<string, unknown>; owner_is_driver?: boolean }

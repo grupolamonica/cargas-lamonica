@@ -1,18 +1,29 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, MapPin, Trophy } from "lucide-react";
-import { fetchTorreDriverInfo } from "@/services/readModels";
+import { fetchTorreDriverInfo, fetchTorreDriverInfoByCpf } from "@/services/readModels";
 import { cn } from "@/lib/utils";
 
+interface TorreRankingCardProps {
+  /** Consulta pela ficha de cadastro pendente (o backend resolve o CPF). */
+  cadastroId?: string;
+  /** Consulta por CPF direto — fila de candidatos / DriverDetailModal. */
+  cpf?: string;
+}
+
 /**
- * Ranking do motorista na Torre de Controle, exibido no painel de revisão de
- * cadastro do operador (fonte: GET /api/operator/cadastros/:id/torre, que
- * consulta a Torre por CPF). Read-only — complementa os prechecks
- * Angellira/SPX com posição no ranking, vínculo e sinais operacionais.
+ * Ranking do motorista na Torre de Controle (read-only) — complementa os
+ * prechecks Angellira/SPX com posição no ranking, vínculo e sinais
+ * operacionais. Aceita cadastroId (revisão de cadastro) ou cpf direto (fila).
  */
-export default function TorreRankingCard({ cadastroId }: { cadastroId: string }) {
+export default function TorreRankingCard({ cadastroId, cpf }: TorreRankingCardProps) {
+  const cpfDigits = (cpf ?? "").replace(/\D/g, "");
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["operator", "cadastro-torre", cadastroId],
-    queryFn: () => fetchTorreDriverInfo(cadastroId),
+    queryKey: cadastroId
+      ? ["operator", "cadastro-torre", cadastroId]
+      : ["operator", "driver-torre", cpfDigits],
+    queryFn: () =>
+      cadastroId ? fetchTorreDriverInfo(cadastroId) : fetchTorreDriverInfoByCpf(cpfDigits),
+    enabled: Boolean(cadastroId || cpfDigits.length === 11),
     staleTime: 60_000,
     retry: 1,
   });
@@ -73,6 +84,7 @@ export default function TorreRankingCard({ cadastroId }: { cadastroId: string })
             )}
             <span>
               Viagens: <strong className="text-foreground">{data.torre.viagens.total}</strong>
+              {data.torre.viagens.pctNoPrazo != null && ` (${data.torre.viagens.pctNoPrazo}% no prazo)`}
             </span>
             <span className={cn(data.torre.ocorrencias.total > 0 && "text-amber-600")}>
               Ocorrências: <strong>{data.torre.ocorrencias.total}</strong>
