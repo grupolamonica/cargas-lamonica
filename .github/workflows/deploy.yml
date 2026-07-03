@@ -204,6 +204,27 @@ jobs:
               mv backend.env.tmp backend.env
             fi
 
+            # Inject BRK (Brasil Risk) config into backend.env (badge de aptidão do conjunto).
+            # Secrets: BRK_API_KEY  — mesma key configurada no bot :5010 (SERVERBD)
+            #          BRK_BASE_URL — endereço do bot ALCANÇÁVEL a partir do VPS (túnel/port-forward)
+            # Só injeta quando AMBOS existem; sem eles o backend segue em BRK_NOT_CONFIGURED (no-op seguro).
+            if [ -n "${{ secrets.BRK_API_KEY }}" ] && [ -n "${{ secrets.BRK_BASE_URL }}" ]; then
+              grep -vE "^(BRK_API_KEY|BRK_BASE_URL|BRK_SYNC_ENABLED)=" backend.env > backend.env.tmp 2>/dev/null || true
+              {
+                echo "BRK_BASE_URL=${{ secrets.BRK_BASE_URL }}"
+                echo "BRK_API_KEY=${{ secrets.BRK_API_KEY }}"
+                echo "BRK_SYNC_ENABLED=1"
+              } >> backend.env.tmp
+              mv backend.env.tmp backend.env
+            fi
+
+            # Habilita o sync situacional SPX (badge de vigência SPX) — o sidecar spx-bot roda
+            # neste próprio VPS e os cookies vivem no Supabase (aspx_credentials), então não
+            # há secret novo: é só a feature-flag. Idempotente.
+            if ! grep -q "^SPX_VIGENCY_SYNC_ENABLED=" backend.env 2>/dev/null; then
+              echo "SPX_VIGENCY_SYNC_ENABLED=1" >> backend.env
+            fi
+
             # Domain for HTTPS Traefik routers
             export DOMAIN="cargas.grupolamonica.com"
 
