@@ -83,6 +83,7 @@ import {
   resolveOperatorSpxPrecheckResponse,
   resolveOperatorSpxCadastrarResponse,
   resolveOperatorTorreDriverInfoResponse,
+  resolveOperatorDriverTorreInfoResponse,
   resolveOperatorGetCadastroResponse,
   resolveOperatorPatchCadastroDadosResponse,
   resolveOperatorDeleteCadastroResponse,
@@ -324,6 +325,7 @@ export function registerRoutes(app) {
 
   // Torre de Controle — dossiê/ranking do motorista por CPF (read-only)
   router.get("/api/operator/cadastros/:id/torre", wrap(resolveOperatorTorreDriverInfoResponse));
+  router.get("/api/operator/drivers/:cpf/torre", wrap(resolveOperatorDriverTorreInfoResponse));
 
   // Gerenciamento de cadastros (editar/excluir)
   router.get("/api/operator/cadastros/:id/arquivo", wrap(resolveOperatorCadastroFileUrlResponse));

@@ -2110,6 +2110,29 @@ export async function resolveOperatorTorreDriverInfoResponse(request) {
 }
 
 /**
+ * GET /api/operator/drivers/:cpf/torre
+ * Dossiê da Torre por CPF direto — usado onde o operador tem o CPF mas não um
+ * cadastro pendente (ex.: fila de candidatos / DriverDetailModal).
+ */
+export async function resolveOperatorDriverTorreInfoResponse(request) {
+  return withOperatorSession(request, "driver-torre-info", async ({ correlationId, user }) => {
+    assertOperatorAccessLevel(user, "intermediate", "Acesso intermediário necessário.");
+    const cpf = String(getQueryParam(request, "cpf") || "").replace(/\D/g, "");
+    if (cpf.length !== 11) {
+      return {
+        statusCode: 400,
+        payload: { error: "BadRequest", message: "CPF inválido (esperado 11 dígitos).", meta: { correlationId } },
+      };
+    }
+
+    const { fetchTorreDriverInfo } = await import(
+      "../../../application/operator-admin/use-cases/torre-driver-info.js"
+    );
+    return fetchTorreDriverInfo({ cpf, correlationId });
+  });
+}
+
+/**
  * GET /api/operator/cadastros/:id/arquivo?path=<storage_path>
  * Gera uma signed URL (TTL 1h) para o operador visualizar um documento enviado
  * pelo motorista (CNH, CRLV, comprovante, etc.) no bucket privado cadastro-drafts.
