@@ -38,9 +38,9 @@ import { buildCargoPublicPath, buildCargoShareUrl } from "@/lib/cargoLinks";
 import { formatCargoStatusLabel } from "@/lib/cargoStatus";
 import { formatCurrency, buildTotalPayment } from "@/lib/currency";
 import { buildLoadingDateTime, buildOperationalDateLabel, formatEstimatedTime } from "@/lib/estimatedTime";
+import { formatCityDisplay } from "@/hooks/useDriverLoads";
 import {
   type OperatorDashboardItem,
-  fetchDriverLoadFacets,
   fetchOperatorClientes,
   fetchOperatorDashboard,
 } from "@/services/readModels";
@@ -215,18 +215,34 @@ const OperatorDashboard = () => {
     refetchOnReconnect: false,
   });
 
-  // Facets do portal do motorista: origens/destinos das cargas ABERTAS ao
-  // motorista — alimentam os selects do gerador de link por rota, garantindo
-  // que o operador só monte links de rotas com carga disponível.
-  const { data: facets } = useQuery({
-    queryKey: ["driver", "loads-facets"],
-    queryFn: fetchDriverLoadFacets,
-    staleTime: 5 * 60_000,
-    gcTime: 10 * 60_000,
-    refetchOnWindowFocus: false,
-  });
-  const routeOrigemOptions = facets?.origemOptions ?? [];
-  const routeDestinoOptions = facets?.destinoOptions ?? [];
+  // Origens/destinos de TODAS as rotas do catálogo (não só das cargas abertas)
+  // — alimentam os selects do gerador de link por rota. O valor é a parte
+  // canônica do base_route_label ("ORIGEM X DESTINO", ASCII maiúsculo): é
+  // contra ela que o filtro do portal casa por substring. Rotas sem label
+  // canônico caem no origem/destino sem o sufixo "/UF" (best-effort).
+  const { origens: routeOrigemOptions, destinos: routeDestinoOptions } = useMemo(() => {
+    const origens = new Map<string, string>();
+    const destinos = new Map<string, string>();
+    const add = (map: Map<string, string>, raw: string | null | undefined) => {
+      const value = (raw ?? "").replace(/\s*\/\s*[A-Za-z]{2}\s*$/, "").trim().toUpperCase();
+      if (value && !map.has(value)) map.set(value, formatCityDisplay(value));
+    };
+    routes.forEach((route) => {
+      if (route.base_route_label?.includes(" X ")) {
+        const [origin, destination] = route.base_route_label.split(" X ");
+        add(origens, origin);
+        add(destinos, destination);
+      } else {
+        add(origens, route.origem);
+        add(destinos, route.destino);
+      }
+    });
+    const toSorted = (map: Map<string, string>) =>
+      Array.from(map.entries())
+        .map(([value, label]) => ({ value, label }))
+        .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+    return { origens: toSorted(origens), destinos: toSorted(destinos) };
+  }, [routes]);
   const {
     data: routes = [],
     error: routesError,
@@ -456,7 +472,7 @@ const OperatorDashboard = () => {
               >
                 <option value="">Todas as origens</option>
                 {routeOrigemOptions.map((origem) => (
-                  <option key={origem} value={origem}>{origem}</option>
+                  <option key={origem.value} value={origem.value}>{origem.label}</option>
                 ))}
               </select>
             </div>
@@ -469,7 +485,7 @@ const OperatorDashboard = () => {
               >
                 <option value="">Todos os destinos</option>
                 {routeDestinoOptions.map((destino) => (
-                  <option key={destino} value={destino}>{destino}</option>
+                  <option key={destino.value} value={destino.value}>{destino.label}</option>
                 ))}
               </select>
             </div>
