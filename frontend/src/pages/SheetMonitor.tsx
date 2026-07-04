@@ -624,9 +624,14 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
   }, [result]);
 
   const realMode = Boolean(data?.writeEnabled);
-  const confirmLabel = realMode
-    ? `Aplicar ${selected.size} no ASPX`
-    : `Simular ${selected.size} (dry-run)`;
+  // Enquanto a prévia carrega, `data` é undefined → NÃO cair em "Simular (dry-run)"
+  // (engana: parece que o envio real está off). Mostra estado de carregando; só
+  // depois de carregar o rótulo reflete o modo real (Aplicar) ou simulação.
+  const confirmLabel = previewQuery.isLoading || !data
+    ? "Carregando prévia…"
+    : realMode
+      ? `Aplicar ${selected.size} no ASPX`
+      : `Simular ${selected.size} (dry-run)`;
   const submit = () => {
     if (selected.size === 0) return;
     if (realMode) setConfirmReal(true); // envio REAL → confirma antes
