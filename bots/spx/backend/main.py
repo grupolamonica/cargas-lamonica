@@ -373,16 +373,20 @@ def trips_snapshot(
     com_veiculo: int = 1,
     max_pages: int = 20,
     days_back: int = 0,
+    days_forward: int = 0,
 ):
     """Índice de viagens (paginado) — o backend usa para localizar a viagem por
     trip_number e checar status/motorista atual. Retorna {fetched_at, total,
-    truncated, trips}. days_back>0 aplica janela (ini=now-days_back*86400, fim=now):
-    abas Planejado(1)/Concluído(3) precisam dela; Aceito(2) ignora."""
+    truncated, trips}. days_back/days_forward>0 aplicam a janela
+    (ini=now-days_back*86400, fim=now+days_forward*86400): a aba Planejado(1)
+    EXIGE a janela e contém viagens FUTURAS — sem days_forward, viagens já
+    atribuídas com STA futuro ficam invisíveis (divergência não detectável).
+    Aceito(2) ignora a janela; Concluído(3) rejeita params extras na API SPX."""
     try:
         sta = None
-        if days_back > 0:
+        if days_back > 0 or days_forward > 0:
             now = int(time.time())
-            sta = (now - int(days_back) * 86400, now)
+            sta = (now - int(days_back) * 86400, now + int(days_forward) * 86400)
         return trips_mod.snapshot(
             get_client(),
             query_type=query_type,
