@@ -82,17 +82,21 @@ export async function fetchAssignableDrivers(opts = {}) {
  *
  * @returns {Promise<{ byNumber: Map<string,{status:number,statusName:string,driver:string}>, truncated:boolean, partial:boolean }>}
  */
-export async function fetchTripIndex({ daysBack = 45 } = {}, opts = {}) {
+export async function fetchTripIndex({ daysBack = 45, daysForward = 30 } = {}, opts = {}) {
   const station = aspxStationId();
   const tabs = [
-    { qt: 1, daysBack }, // Planejado — precisa de janela de data
-    { qt: 2, daysBack: 0 }, // Aceito — ignora a janela; pega em-execução
+    // Planejado — precisa de janela de data. A janela DEVE incluir o FUTURO:
+    // viagens já atribuídas com STA futuro (o caso comum de reassign) só existem
+    // nesta aba; sem days_forward elas ficam fora do índice → "unknown" → a
+    // divergência de motorista fica invisível no preview.
+    { qt: 1, daysBack, daysForward },
+    { qt: 2, daysBack: 0, daysForward: 0 }, // Aceito — ignora a janela; pega em-execução
   ];
 
   // Abas em PARALELO (timeout menor por aba) — pior caso ~9s em vez de ~24s.
   const settled = await Promise.all(
-    tabs.map(async ({ qt, daysBack: db }) => {
-      const qs = `query_type=${qt}&station_id=${station}&com_veiculo=0&max_pages=30${db ? `&days_back=${db}` : ""}`;
+    tabs.map(async ({ qt, daysBack: db, daysForward: df }) => {
+      const qs = `query_type=${qt}&station_id=${station}&com_veiculo=0&max_pages=30${db ? `&days_back=${db}` : ""}${df ? `&days_forward=${df}` : ""}`;
       try {
         const data = await sidecarFetch(`/spx/trips/snapshot?${qs}`, { method: "GET" }, { ...opts, timeoutMs: 9000 });
         return { ok: true, data };

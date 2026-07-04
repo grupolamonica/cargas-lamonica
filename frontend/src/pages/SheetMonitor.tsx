@@ -670,6 +670,7 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
               {data.warnings.includes("index_unavailable") && "Não foi possível ler o status real das viagens (índice fora do ar) — os já atribuídos aparecem como 'não confirmada'. "}
               {data.warnings.includes("index_truncated") && "O índice de viagens foi truncado (muitas viagens) — alguns LHs podem aparecer como 'não confirmada'. "}
               {data.warnings.includes("index_partial") && "Parte das abas de viagem não respondeu — alguns LHs podem aparecer como 'não confirmada'. "}
+              {data.warnings.includes("index_gaps") && `${data.summary.unknown} carga(s) alocada(s) não foram encontradas no ASPX (fora do índice) — se uma troca de motorista não aparece aqui, confira direto no portal. `}
             </span>
           </div>
         )}

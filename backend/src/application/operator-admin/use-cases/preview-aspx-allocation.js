@@ -230,6 +230,10 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
   if (indexFailed) warnings.push("index_unavailable");
   if (index?.truncated) warnings.push("index_truncated");
   if (index?.partial) warnings.push("index_partial");
+  // Cargas alocadas que não foram achadas em NENHUMA lista do ASPX (fora do
+  // índice/abas). O modal as oculta — sem este aviso, "Tudo em dia" enganaria
+  // quando uma divergência real está apenas invisível (ex.: viagem fora da janela).
+  if (summary.unknown > 0) warnings.push("index_gaps");
 
   return {
     statusCode: 200,

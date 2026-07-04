@@ -1,19 +1,23 @@
 // Regra de quem pode ter motorista/veículo alterados no Monitor.
 //
-// Só liberam edição: Disponível e Reservado (sem status operacional efetivo) e
-// "Aguardando chegar no cliente". Os demais status ficam travados — a carga já
-// está sendo atribuída no ASPX. Para "aguardando chegar no cliente" a edição é
-// liberada, mas com um aviso (já em atribuição no ASPX).
+// Liberam edição: Disponível e Reservado (sem status operacional efetivo) e os
+// estágios PRÉ-carregamento do pipeline — "Aguardando carregamento" e
+// "Aguardando chegar no cliente" — estes com um aviso (carga já em atribuição
+// no ASPX; após editar, use "Atribuir no ASPX" para TROCAR o motorista lá).
+// De CARREGADO em diante (descarga, CTE, no show, cancelado…) fica travado:
+// a viagem já está em execução e trocar localmente só criaria divergência.
 //
 // Recebe o status EFETIVO da linha (COALESCE(alloc_status, sheet_status)).
 
-const AGUARDANDO_CLIENTE_RE = /aguardando\s+chegar/i;
+// Pré-carregamento: "aguardando chegar no cliente" + "aguardando carregamento".
+// (Não casa "aguardando descarga" — "carreg" ≠ "descarga".)
+const PRE_CARREGAMENTO_RE = /aguardando\s+(chegar|carreg)/i;
 
 export type AllocEditPolicy = { editable: boolean; aspxWarning: boolean };
 
 export function allocEditPolicy(row: { status: string }): AllocEditPolicy {
   const status = (row.status || "").trim();
   if (!status) return { editable: true, aspxWarning: false };          // disponível / reservado
-  if (AGUARDANDO_CLIENTE_RE.test(status)) return { editable: true, aspxWarning: true };
+  if (PRE_CARREGAMENTO_RE.test(status)) return { editable: true, aspxWarning: true };
   return { editable: false, aspxWarning: false };
 }

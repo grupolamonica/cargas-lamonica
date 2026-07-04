@@ -892,7 +892,7 @@ export interface AspxAllocationItem {
   reason: string | null;
 }
 
-export type AspxAllocationWarning = "assignable_empty" | "index_unavailable" | "index_truncated" | "index_partial";
+export type AspxAllocationWarning = "assignable_empty" | "index_unavailable" | "index_truncated" | "index_partial" | "index_gaps";
 
 export interface AspxAllocationPreview {
   ok: boolean;
