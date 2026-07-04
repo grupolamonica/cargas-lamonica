@@ -4,10 +4,11 @@ import { NotFoundError, ValidationError } from "../../../domain/load-claims/erro
 import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 
-// Status efetivo editável: vazio (Disponível/Reservado) ou "aguardando chegar no
-// cliente". Espelha allocEditPolicy do front — qualquer outro status (Cancelado,
-// Descarregado, etc.) trava a carga (já em atribuição no ASPX).
-const AGUARDANDO_CLIENTE_RE = /aguardando\s+chegar/i;
+// Status efetivo editável: vazio (Disponível/Reservado) ou os estágios PRÉ-
+// carregamento ("aguardando carregamento" / "aguardando chegar no cliente").
+// Espelha allocEditPolicy do front — de CARREGADO em diante (descarga, CTE,
+// cancelado, etc.) trava a carga (viagem já em execução no ASPX).
+const PRE_CARREGAMENTO_RE = /aguardando\s+(chegar|carreg)/i;
 
 /**
  * Puxa um motorista em STANDBY (monitor_reservas) para uma carga da planilha
@@ -42,7 +43,7 @@ export async function assignReservaToCarga({ reservaId, targetLh, operatorId, re
     }
     // Trava por status (defesa no servidor — o front também bloqueia via allocEditPolicy).
     const effStatus = (carga.alloc_status ?? carga.sheet_status ?? "").toString().trim();
-    if (effStatus && !AGUARDANDO_CLIENTE_RE.test(effStatus)) {
+    if (effStatus && !PRE_CARREGAMENTO_RE.test(effStatus)) {
       throw new ValidationError(`A carga de destino está travada (status "${effStatus}") e não aceita standby.`);
     }
 

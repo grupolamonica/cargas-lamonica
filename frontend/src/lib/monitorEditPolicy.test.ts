@@ -13,8 +13,12 @@ describe("allocEditPolicy", () => {
     expect(allocEditPolicy({ status: "Aguardando chegar no cliente" })).toEqual({ editable: true, aspxWarning: true });
   });
 
-  it("NÃO confunde 'aguardando carregamento' com 'aguardando chegar' → travado", () => {
-    expect(allocEditPolicy({ status: "AGUARDANDO CARREGAMENTO" })).toEqual({ editable: false, aspxWarning: false });
+  it('"aguardando carregamento" (pré-carregamento) → editável COM aviso de ASPX', () => {
+    expect(allocEditPolicy({ status: "AGUARDANDO CARREGAMENTO" })).toEqual({ editable: true, aspxWarning: true });
+    expect(allocEditPolicy({ status: "Aguardando carregamento" })).toEqual({ editable: true, aspxWarning: true });
+  });
+
+  it("NÃO confunde 'aguardando descarga' (pós-carregamento) → travado", () => {
     expect(allocEditPolicy({ status: "AGUARDANDO DESCARGA" })).toEqual({ editable: false, aspxWarning: false });
   });
 
