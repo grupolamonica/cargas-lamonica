@@ -739,7 +739,7 @@ function compareMonitorRows(a, b) {
 // Monta a visão UNIFICADA do Monitor: linhas da planilha ∪ cargas do sistema
 // (intercaladas por data), com reservas no fim. Cada linha ganha rowKey/source.
 // Summary recalculado sobre as linhas operacionais quando há cargas do sistema.
-function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh = {}, now = null }) {
+function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh = {}, now = null, reservedByLh = {} }) {
   // A planilha inteira é de um cliente (ex.: Shopee) — anexa o nome a cada linha
   // da planilha. Cargas do sistema já trazem o próprio cliente (cliente_id→nome).
   const sheetClient = getSheetClientName();
@@ -748,7 +748,7 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, o
     const withClient = { ...withMeta, cliente: withMeta.cliente ?? sheetClient };
     // "Disponível" só para quem está REALMENTE aberto pro motorista (mesma regra
     // do /motorista). Fechadas passam a "Expirada"/"Fechada" em vez de "Disponível".
-    return applyPlanilhaAvailabilityStatus(withClient, { openLhSet, allocByLh, now });
+    return applyPlanilhaAvailabilityStatus(withClient, { openLhSet, allocByLh, now, reservedByLh });
   });
   const operational = [...sheetRows, ...systemRows].sort(compareMonitorRows);
   const reservas = reservaRows.map((r) => (r.rowKey ? r : { ...r, rowKey: `reserva:${r.lh}`, source: "reserva" }));
@@ -834,6 +834,41 @@ export async function resolveSheetMonitorResponse(request) {
         message: openErr instanceof Error ? openErr.message : String(openErr),
       });
       // openLhSet permanece null → regra não aplicada (comportamento anterior).
+    }
+
+    // Cargas RESERVADAS no sistema por lead da Fila (motorista do portal), por LH —
+    // a planilha dessas linhas está vazia (sem motorista/status), mas a carga NÃO
+    // está fechada: está Reservada. O nome vem do lead aprovado (Angellira display
+    // name no summary; fallback telefone). Não-fatal: sem o mapa, essas linhas
+    // voltam a aparecer como "Fechada" (comportamento anterior).
+    let reservedByLh = {};
+    try {
+      const reservedRows = await withPgClient((client) =>
+        client
+          .query(
+            `SELECT c.sheet_lh,
+                    NULLIF(TRIM(l.validation_summary_json->'driver'->'angelira'->>'displayName'), '') AS nome,
+                    l.phone, l.horse_plate, l.trailer_plate
+             FROM public.cargas c
+             LEFT JOIN public.load_public_leads l ON l.id = c.reserved_public_lead_id
+             WHERE c.status = 'RESERVED' AND c.sheet_lh IS NOT NULL`,
+          )
+          .then((res) => res.rows),
+      );
+      for (const r of reservedRows) {
+        if (!r.sheet_lh) continue;
+        reservedByLh[r.sheet_lh] = {
+          motorista: r.nome || (r.phone ? `Reservado (fila) · ${r.phone}` : "Reservado (fila)"),
+          cavalo: r.horse_plate || "",
+          carreta: r.trailer_plate || "",
+        };
+      }
+    } catch (reservedErr) {
+      logStructuredEvent("warn", "sheet-monitor.reserved-lhs-read-failed", {
+        correlationId,
+        message: reservedErr instanceof Error ? reservedErr.message : String(reservedErr),
+      });
+      reservedByLh = {};
     }
 
     // Motoristas em RESERVA (standby por rota) — linhas que NÃO vêm da planilha
@@ -940,7 +975,7 @@ export async function resolveSheetMonitorResponse(request) {
 
           // Return the freshly-parsed rows immediately — no extra DB read needed.
           // Inclui o enriquecimento JÁ salvo (senão o refresh "apaga" os selos).
-          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now });
+          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now, reservedByLh });
           await attachRouteCodes(supabaseClient, unified.items, correlationId);
           await attachRouteRegistration(supabaseClient, unified.items, correlationId);
           const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
@@ -1013,6 +1048,7 @@ export async function resolveSheetMonitorResponse(request) {
         openLhSet,
         allocByLh,
         now,
+        reservedByLh,
       });
       await attachRouteCodes(supabaseClient, unified.items, correlationId);
       await attachRouteRegistration(supabaseClient, unified.items, correlationId);

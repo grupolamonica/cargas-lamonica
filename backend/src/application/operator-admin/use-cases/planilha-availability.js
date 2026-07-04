@@ -31,9 +31,9 @@ function effectiveDriver(row, allocByLh) {
  * pro motorista". Pura/testável. Retorna a linha (possivelmente com status novo).
  *
  * @param {object} row linha do Monitor (shape da planilha)
- * @param {{ openLhSet: Set<string>|null, allocByLh?: Record<string, any>, now?: {todayIso:string, nowTimeIso:string}|null }} ctx
+ * @param {{ openLhSet: Set<string>|null, allocByLh?: Record<string, any>, now?: {todayIso:string, nowTimeIso:string}|null, reservedByLh?: Record<string, {motorista?:string, cavalo?:string, carreta?:string}> }} ctx
  */
-export function applyPlanilhaAvailabilityStatus(row, { openLhSet, allocByLh = {}, now = null } = {}) {
+export function applyPlanilhaAvailabilityStatus(row, { openLhSet, allocByLh = {}, now = null, reservedByLh = {} } = {}) {
   // Sem o conjunto (falha ao ler as cargas abertas) → não aplica a regra, mantém
   // o comportamento atual (melhor não esconder linhas do que quebrar o Monitor).
   if (!openLhSet) return row;
@@ -41,6 +41,22 @@ export function applyPlanilhaAvailabilityStatus(row, { openLhSet, allocByLh = {}
   if ((row.status || "").trim() !== "") return row;
   // Tem motorista efetivo → o badge já mostra "Reservado" (status vazio). Não mexe.
   if (effectiveDriver(row, allocByLh) !== "") return row;
+  // Carga RESERVADA no sistema por um lead da Fila (motorista do portal reservou):
+  // a planilha está vazia, mas a carga NÃO está fechada — está Reservada. Injeta
+  // o motorista/placas da reserva (view-only) pro badge mostrar "Reservado" com o
+  // nome, em vez do rótulo enganoso "Fechada". Status fica vazio (mesma convenção
+  // de reservado-com-motorista: badge/edição/cor derivam de `motoristas`).
+  const rsv = row.lh ? reservedByLh[row.lh] : undefined;
+  if (rsv) {
+    return {
+      ...row,
+      motoristas: rsv.motorista || row.motoristas || "",
+      cavalo: row.cavalo || rsv.cavalo || "",
+      carreta: row.carreta || rsv.carreta || "",
+      hasDriver: true,
+      isAvailable: false,
+    };
+  }
   // Sem motorista + status vazio: SÓ é "Disponível" se estiver aberta pro motorista.
   if (row.lh && openLhSet.has(row.lh)) return row;
   // Fechada: rotula por data — passada = Expirada; futura/sem data = Fechada.
