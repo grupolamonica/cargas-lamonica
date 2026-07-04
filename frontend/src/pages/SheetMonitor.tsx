@@ -98,52 +98,55 @@ const SHEET_MONITOR_QUERY_OPTIONS = {
 
 // ─── Status styles ────────────────────────────────────────────────────────────
 
+// `row` = tint suave da LINHA inteira do Monitor na mesma cor do badge de status
+// (pedido do operador: identificar o status pela cor da linha). Inclui o hover
+// um pouco mais forte pra manter o feedback de clique.
 function resolveSheetStatusStyle(status: string) {
   const trimmed = (status || "").trim();
   const normalized = trimmed.toLowerCase();
 
-  const exact: Record<string, { dot: string; bg: string; label: string }> = {
-    "":            { dot: "bg-blue-500",    bg: "bg-blue-50 text-blue-800 dark:bg-blue-500/15 dark:text-blue-200",            label: "Disponivel" },
-    "Reservado":   { dot: "bg-violet-500", bg: "bg-violet-50 text-violet-800 dark:bg-violet-500/15 dark:text-violet-200",    label: "Reservado" },
-    "Em aberto":   { dot: "bg-amber-500",   bg: "bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-200",        label: "Em aberto" },
-    "Aprovado":    { dot: "bg-emerald-500", bg: "bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200", label: "Aprovado" },
-    "Em transito": { dot: "bg-indigo-500",  bg: "bg-indigo-50 text-indigo-800 dark:bg-indigo-500/15 dark:text-indigo-200",    label: "Em transito" },
-    "Entregue":    { dot: "bg-teal-500",    bg: "bg-teal-50 text-teal-800 dark:bg-teal-500/15 dark:text-teal-200",             label: "Entregue" },
-    "Cancelado":   { dot: "bg-red-400",     bg: "bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-200",                 label: "Cancelado" },
-    "Concluido":   { dot: "bg-green-600",   bg: "bg-green-50 text-green-800 dark:bg-green-500/15 dark:text-green-200",         label: "Concluido" },
-    "RESERVA":     { dot: "bg-amber-500",   bg: "bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-100",        label: "Reserva" },
+  const exact: Record<string, { dot: string; bg: string; row: string; label: string }> = {
+    "":            { dot: "bg-blue-500",    bg: "bg-blue-50 text-blue-800 dark:bg-blue-500/15 dark:text-blue-200",            row: "bg-blue-500/[0.07] hover:bg-blue-500/[0.15] dark:bg-blue-500/10 dark:hover:bg-blue-500/20",             label: "Disponivel" },
+    "Reservado":   { dot: "bg-violet-500", bg: "bg-violet-50 text-violet-800 dark:bg-violet-500/15 dark:text-violet-200",    row: "bg-violet-500/[0.07] hover:bg-violet-500/[0.15] dark:bg-violet-500/10 dark:hover:bg-violet-500/20",     label: "Reservado" },
+    "Em aberto":   { dot: "bg-amber-500",   bg: "bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-200",        row: "bg-amber-500/[0.08] hover:bg-amber-500/[0.16] dark:bg-amber-500/10 dark:hover:bg-amber-500/20",         label: "Em aberto" },
+    "Aprovado":    { dot: "bg-emerald-500", bg: "bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200", row: "bg-emerald-500/[0.08] hover:bg-emerald-500/[0.16] dark:bg-emerald-500/10 dark:hover:bg-emerald-500/20", label: "Aprovado" },
+    "Em transito": { dot: "bg-indigo-500",  bg: "bg-indigo-50 text-indigo-800 dark:bg-indigo-500/15 dark:text-indigo-200",    row: "bg-indigo-500/[0.08] hover:bg-indigo-500/[0.16] dark:bg-indigo-500/10 dark:hover:bg-indigo-500/20",     label: "Em transito" },
+    "Entregue":    { dot: "bg-teal-500",    bg: "bg-teal-50 text-teal-800 dark:bg-teal-500/15 dark:text-teal-200",             row: "bg-teal-500/[0.08] hover:bg-teal-500/[0.16] dark:bg-teal-500/10 dark:hover:bg-teal-500/20",             label: "Entregue" },
+    "Cancelado":   { dot: "bg-red-400",     bg: "bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-200",                 row: "bg-red-500/[0.08] hover:bg-red-500/[0.16] dark:bg-red-500/10 dark:hover:bg-red-500/20",                 label: "Cancelado" },
+    "Concluido":   { dot: "bg-green-600",   bg: "bg-green-50 text-green-800 dark:bg-green-500/15 dark:text-green-200",         row: "bg-green-500/[0.08] hover:bg-green-500/[0.16] dark:bg-green-500/10 dark:hover:bg-green-500/20",         label: "Concluido" },
+    "RESERVA":     { dot: "bg-amber-500",   bg: "bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-100",        row: "bg-amber-500/[0.10] hover:bg-amber-500/[0.18] dark:bg-amber-500/15 dark:hover:bg-amber-500/25",         label: "Reserva" },
   };
 
   if (exact[trimmed]) return exact[trimmed];
 
   if (!trimmed || /dispon[ií]vel/.test(normalized))
-    return { dot: "bg-blue-500",    bg: "bg-blue-50 text-blue-800 dark:bg-blue-500/20 dark:text-blue-100",      label: trimmed || "Disponivel" };
+    return { dot: "bg-blue-500",    bg: "bg-blue-50 text-blue-800 dark:bg-blue-500/20 dark:text-blue-100",      row: "bg-blue-500/[0.07] hover:bg-blue-500/[0.15] dark:bg-blue-500/10 dark:hover:bg-blue-500/20",             label: trimmed || "Disponivel" };
   if (/descarregado|entregue/.test(normalized))
-    return { dot: "bg-teal-500",    bg: "bg-teal-50 text-teal-800 dark:bg-teal-500/20 dark:text-teal-100",      label: trimmed };
+    return { dot: "bg-teal-500",    bg: "bg-teal-50 text-teal-800 dark:bg-teal-500/20 dark:text-teal-100",      row: "bg-teal-500/[0.08] hover:bg-teal-500/[0.16] dark:bg-teal-500/10 dark:hover:bg-teal-500/20",             label: trimmed };
   if (/descarregando/.test(normalized))
-    return { dot: "bg-cyan-500",    bg: "bg-cyan-50 text-cyan-800 dark:bg-cyan-500/20 dark:text-cyan-100",       label: trimmed };
+    return { dot: "bg-cyan-500",    bg: "bg-cyan-50 text-cyan-800 dark:bg-cyan-500/20 dark:text-cyan-100",       row: "bg-cyan-500/[0.08] hover:bg-cyan-500/[0.16] dark:bg-cyan-500/10 dark:hover:bg-cyan-500/20",             label: trimmed };
   if (/cancel/.test(normalized))
-    return { dot: "bg-red-400",     bg: "bg-red-50 text-red-700 dark:bg-red-500/20 dark:text-red-100",           label: trimmed };
+    return { dot: "bg-red-400",     bg: "bg-red-50 text-red-700 dark:bg-red-500/20 dark:text-red-100",           row: "bg-red-500/[0.08] hover:bg-red-500/[0.16] dark:bg-red-500/10 dark:hover:bg-red-500/20",                 label: trimmed };
   if (/no\s*show/.test(normalized))
-    return { dot: "bg-rose-500",    bg: "bg-rose-50 text-rose-800 dark:bg-rose-500/20 dark:text-rose-100",       label: trimmed };
+    return { dot: "bg-rose-500",    bg: "bg-rose-50 text-rose-800 dark:bg-rose-500/20 dark:text-rose-100",       row: "bg-rose-500/[0.08] hover:bg-rose-500/[0.16] dark:bg-rose-500/10 dark:hover:bg-rose-500/20",             label: trimmed };
   if (/cte\s+enviado/.test(normalized))
-    return { dot: "bg-sky-500",     bg: "bg-sky-50 text-sky-800 dark:bg-sky-500/20 dark:text-sky-100",           label: trimmed };
+    return { dot: "bg-sky-500",     bg: "bg-sky-50 text-sky-800 dark:bg-sky-500/20 dark:text-sky-100",           row: "bg-sky-500/[0.08] hover:bg-sky-500/[0.16] dark:bg-sky-500/10 dark:hover:bg-sky-500/20",                 label: trimmed };
   if (/cte\s+em\s+emiss/.test(normalized))
-    return { dot: "bg-violet-500",  bg: "bg-violet-50 text-violet-800 dark:bg-violet-500/20 dark:text-violet-100", label: trimmed };
+    return { dot: "bg-violet-500",  bg: "bg-violet-50 text-violet-800 dark:bg-violet-500/20 dark:text-violet-100", row: "bg-violet-500/[0.07] hover:bg-violet-500/[0.15] dark:bg-violet-500/10 dark:hover:bg-violet-500/20",     label: trimmed };
   if (/aguardando\s+chegar/.test(normalized))
-    return { dot: "bg-amber-500",   bg: "bg-amber-50 text-amber-800 dark:bg-amber-500/20 dark:text-amber-100",   label: trimmed };
+    return { dot: "bg-amber-500",   bg: "bg-amber-50 text-amber-800 dark:bg-amber-500/20 dark:text-amber-100",   row: "bg-amber-500/[0.08] hover:bg-amber-500/[0.16] dark:bg-amber-500/10 dark:hover:bg-amber-500/20",         label: trimmed };
   if (/aguardando\s+carreg/.test(normalized))
-    return { dot: "bg-orange-500",  bg: "bg-orange-50 text-orange-800 dark:bg-orange-500/20 dark:text-orange-100", label: trimmed };
+    return { dot: "bg-orange-500",  bg: "bg-orange-50 text-orange-800 dark:bg-orange-500/20 dark:text-orange-100", row: "bg-orange-500/[0.08] hover:bg-orange-500/[0.16] dark:bg-orange-500/10 dark:hover:bg-orange-500/20",     label: trimmed };
   if (/aguardando\s+descarg/.test(normalized))
-    return { dot: "bg-fuchsia-500", bg: "bg-fuchsia-50 text-fuchsia-800 dark:bg-fuchsia-500/20 dark:text-fuchsia-100", label: trimmed };
+    return { dot: "bg-fuchsia-500", bg: "bg-fuchsia-50 text-fuchsia-800 dark:bg-fuchsia-500/20 dark:text-fuchsia-100", row: "bg-fuchsia-500/[0.08] hover:bg-fuchsia-500/[0.16] dark:bg-fuchsia-500/10 dark:hover:bg-fuchsia-500/20", label: trimmed };
   if (/aguardando/.test(normalized))
-    return { dot: "bg-amber-500",   bg: "bg-amber-50 text-amber-800 dark:bg-amber-500/20 dark:text-amber-100",   label: trimmed };
+    return { dot: "bg-amber-500",   bg: "bg-amber-50 text-amber-800 dark:bg-amber-500/20 dark:text-amber-100",   row: "bg-amber-500/[0.08] hover:bg-amber-500/[0.16] dark:bg-amber-500/10 dark:hover:bg-amber-500/20",         label: trimmed };
   if (/carregando|em\s+tr[aâ]nsito/.test(normalized))
-    return { dot: "bg-indigo-500",  bg: "bg-indigo-50 text-indigo-800 dark:bg-indigo-500/20 dark:text-indigo-100", label: trimmed };
+    return { dot: "bg-indigo-500",  bg: "bg-indigo-50 text-indigo-800 dark:bg-indigo-500/20 dark:text-indigo-100", row: "bg-indigo-500/[0.08] hover:bg-indigo-500/[0.16] dark:bg-indigo-500/10 dark:hover:bg-indigo-500/20",     label: trimmed };
   if (/finaliz|conclu/.test(normalized))
-    return { dot: "bg-green-600",   bg: "bg-green-50 text-green-800 dark:bg-green-500/20 dark:text-green-100",   label: trimmed };
+    return { dot: "bg-green-600",   bg: "bg-green-50 text-green-800 dark:bg-green-500/20 dark:text-green-100",   row: "bg-green-500/[0.08] hover:bg-green-500/[0.16] dark:bg-green-500/10 dark:hover:bg-green-500/20",         label: trimmed };
 
-  return { dot: "bg-slate-400", bg: "bg-slate-100 text-slate-700 dark:bg-slate-500/25 dark:text-slate-100", label: trimmed || "—" };
+  return { dot: "bg-slate-400", bg: "bg-slate-100 text-slate-700 dark:bg-slate-500/25 dark:text-slate-100", row: "bg-slate-500/[0.06] hover:bg-slate-500/[0.12] dark:bg-slate-500/10 dark:hover:bg-slate-500/20", label: trimmed || "—" };
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -1192,7 +1195,14 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
           <Lock className="h-3.5 w-3.5" />
         </span>
       )}
-      <div className="min-w-0 flex-1">
+      {/* Clique direto no motorista/placas abre a edição INLINE (sem precisar do
+          lápis). stopPropagation: não deixa o clique subir pra linha (que abriria
+          o modal). Quando não-editável (travada/fixada), o clique sobe normal. */}
+      <div
+        className={cn("min-w-0 flex-1", canEditAlloc && "cursor-text rounded-sm px-0.5 -mx-0.5 transition-colors hover:bg-background/70 hover:ring-1 hover:ring-border")}
+        title={canEditAlloc ? "Clique para editar motorista/veículo" : undefined}
+        onClick={canEditAlloc ? (e) => { e.stopPropagation(); onStartEdit(row.lh); } : undefined}
+      >
         {row.motoristas ? (
           <div className="flex items-center gap-2">
             <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground" title={row.motoristas}>{row.motoristas}</span>
@@ -1337,9 +1347,9 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
             ? "bg-primary/10 dark:bg-primary/20"
             : row.reserva
               ? "bg-amber-50/70 dark:bg-amber-500/10"
-              : row.hasDriver
-                ? "hover:bg-emerald-50/60 dark:hover:bg-emerald-500/10"
-                : "hover:bg-primary/[0.04]",
+              // Linha inteira na cor do STATUS (mesma cor do badge) — visual rápido
+              // pro operador. Mesma expressão de status efetivo do StatusBadge.
+              : resolveSheetStatusStyle(!row.status && row.motoristas ? "Reservado" : row.status).row,
         // Soltar na BORDA = descer/subir a fila → só a borda azul.
         dropIntent === "before" && "[&>td]:border-t-[3px] [&>td]:border-blue-600",
         dropIntent === "after" && "[&>td]:border-b-[3px] [&>td]:border-blue-600",
@@ -1918,6 +1928,7 @@ function RowDetailModal({
                 <div>
                   <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Motorista</label>
                   <Input
+                    list={DRIVER_DATALIST_ID}
                     value={allocForm.motorista}
                     onChange={(e) => setAllocForm((f) => ({ ...f, motorista: e.target.value }))}
                     placeholder="Nome do motorista alocado"
@@ -1939,6 +1950,7 @@ function RowDetailModal({
                   <div>
                     <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Cavalo</label>
                     <Input
+                      list={CAVALO_DATALIST_ID}
                       value={allocForm.cavalo}
                       onChange={(e) => setAllocForm((f) => ({ ...f, cavalo: e.target.value }))}
                       placeholder="Placa cavalo"
@@ -1949,6 +1961,7 @@ function RowDetailModal({
                   <div>
                     <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Carreta</label>
                     <Input
+                      list={CARRETA_DATALIST_ID}
                       value={allocForm.carreta}
                       onChange={(e) => setAllocForm((f) => ({ ...f, carreta: e.target.value }))}
                       placeholder="Placa carreta"
@@ -2583,56 +2596,26 @@ export default function SheetMonitor() {
       });
     }
 
-    // "Agora" no relógio de São Paulo (data/horário das cargas são BR wall-clock).
-    const spParts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", hour12: false,
-    }).formatToParts(new Date());
-    const spGet = (t: string) => spParts.find((p) => p.type === t)?.value ?? "";
-    const spToday = `${spGet("year")}-${spGet("month")}-${spGet("day")}`;
-    const spNowTime = `${spGet("hour")}:${spGet("minute")}`;
-    // Carga PASSADA (já rodou): data < hoje, ou hoje com horário já vencido. Standby
-    // (reserva sem data) NÃO é passada. Passadas afundam pro fim — não sobem pro topo
-    // mesmo marcadas "Reservado" (ex.: cargas do sistema BOOKED/RESERVED já vencidas).
-    const isPast = (r: SheetMonitorRowType) => {
-      if (r.reserva || !r.data) return false;
-      const d = String(r.data).slice(0, 10);
-      if (d < spToday) return true;
-      if (d > spToday) return false;
-      const t = (r.horario || "").slice(0, 5);
-      return t !== "" && t < spNowTime;
-    };
-
-    // Ordem da fila: PRIMEIRO ativas (atuais/futuras) × passadas (afundam pro fim);
-    // depois grupo de status (Disponível → Reservado → outros → standby); e, dentro
-    // de cada grupo, por data+horário DESC. Status/motorista são os EFETIVOS (overlay alloc).
-    const statusGroup = (r: SheetMonitorRowType) => {
-      if (r.reserva) return 3; // standby (reserva sem carga) sempre por último
-      const s = (r.status || "").trim().toLowerCase();
-      if (!s) return r.motoristas ? 1 : 0; // sem status: com motorista=Reservado, sem=Disponível
-      if (/dispon/.test(s)) return 0;
-      if (/reserv/.test(s)) return 1;
-      return 2;
-    };
+    // Ordem da fila: SÓ por data+horário de carregamento DESC (mais novo primeiro).
+    // Sem agrupamento por status (Disponível/Reservado/AGUARDANDO… não muda a
+    // posição — pedido do operador). Cargas passadas ficam naturalmente abaixo
+    // (data mais antiga). Standby (reserva, sem data) sempre por último, FIFO.
     const dtKey = (r: SheetMonitorRowType) => (r.data ? `${r.data} ${r.horario || ""}` : "");
     return [...result].sort((a, b) => {
-      // Passadas sempre depois das ativas, independente do grupo de status.
-      const pa = isPast(a) ? 1 : 0;
-      const pb = isPast(b) ? 1 : 0;
-      if (pa !== pb) return pa - pb;
-      const g = statusGroup(a) - statusGroup(b);
-      if (g !== 0) return g;
-      // Standby (reserva): mais ANTIGO primeiro (FIFO — quem está esperando há mais tempo).
-      if (a.reserva && b.reserva) {
-        const sa = a.standbyAt || "";
-        const sb = b.standbyAt || "";
-        if (sa === sb) return 0;
-        return sa < sb ? -1 : 1;
+      // Standby (reserva) sempre por último; entre si, mais ANTIGO primeiro (FIFO).
+      if (a.reserva || b.reserva) {
+        if (a.reserva && b.reserva) {
+          const sa = a.standbyAt || "";
+          const sb = b.standbyAt || "";
+          if (sa === sb) return 0;
+          return sa < sb ? -1 : 1;
+        }
+        return a.reserva ? 1 : -1;
       }
       const ka = dtKey(a);
       const kb = dtKey(b);
       if (!ka && !kb) return 0;
-      if (!ka) return 1; // sem data por último dentro do grupo
+      if (!ka) return 1; // sem data por último
       if (!kb) return -1;
       if (ka === kb) return 0;
       return ka < kb ? 1 : -1; // data+horário DESC
