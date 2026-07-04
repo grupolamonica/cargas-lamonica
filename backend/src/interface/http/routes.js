@@ -11,6 +11,10 @@ import {
   resolveAspxSyncStatusResponse,
   resolveAspxSyncTriggerResponse,
 } from "./aspx-admin/handlers.js";
+import {
+  resolveBrkCookiesUpdateResponse,
+  resolveBrkSyncStatusResponse,
+} from "./brk-admin/handlers.js";
 
 import { resolveClientLogoResponse } from "./client-logo.handler.js";
 
@@ -305,6 +309,10 @@ export function registerRoutes(app) {
   router.post("/api/operator/aspx/refresh", wrap(resolveAspxSessionRefreshResponse));
   // /cookies: recuperação via API (seed sem tela), usado só quando a sessão morre de vez.
   router.post("/api/operator/aspx/cookies", wrap(resolveAspxCookiesUpdateResponse));
+
+  // BRK (Brasil Risk) — card de gestão do cookie no painel (colar + status).
+  router.get("/api/operator/brk/status", wrap(resolveBrkSyncStatusResponse));
+  router.post("/api/operator/brk/cookie", wrap(resolveBrkCookiesUpdateResponse));
 
   // Motoristas
   router.get("/api/operator/motoristas", wrap(resolveOperatorDriversListReadModelResponse));

@@ -36,6 +36,7 @@ import {
 import AdminPagination from "@/components/AdminPagination";
 import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 import { AspxSyncCard } from "@/components/AspxSyncCard";
+import { BrkSyncCard } from "@/components/BrkSyncCard";
 import DashboardHeader from "@/components/DashboardHeader";
 import { ExternalValidationPill } from "@/components/ExternalValidationPill";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
@@ -1590,6 +1591,8 @@ const Motoristas = () => {
         ) : (
           <>
         <AspxSyncCard />
+
+        <BrkSyncCard />
 
         <section className="admin-panel overflow-hidden p-5 lg:p-6">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
