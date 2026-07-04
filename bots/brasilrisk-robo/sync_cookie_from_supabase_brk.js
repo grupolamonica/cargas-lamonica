@@ -64,13 +64,43 @@ function sbHeaders() {
   return { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, Accept: 'application/json' };
 }
 
-// { nome: valor } -> header Cookie "a=1; b=2"
+// Remove tokens tipo JWT (a service_role key) de qualquer texto antes de logar.
+function scrub(s) {
+  return String(s).replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, 'eyJ***');
+}
+
+// Escrita atômica: grava no .tmp e renomeia (atômico no mesmo volume) — evita que o
+// robô leia um cookie.txt pela metade se uma consulta cair no meio da escrita.
+function escreverAtomico(dest, conteudo) {
+  const tmp = `${dest}.tmp`;
+  fs.writeFileSync(tmp, conteudo, 'utf8');
+  try {
+    fs.renameSync(tmp, dest);
+  } catch {
+    // Windows pode dar EPERM se o leitor abrir o arquivo no instante do rename;
+    // fallback: escreve direto (janela mínima) e limpa o tmp.
+    fs.writeFileSync(dest, conteudo, 'utf8');
+    try { fs.unlinkSync(tmp); } catch { /* noop */ }
+  }
+}
+
+// Um valor de cookie válido (RFC 6265) não tem CR/LF, chars de controle nem ';'.
+// Removemos CR/LF/controle (nunca 'encodamos' o valor — o cf_clearance é enviado cru)
+// e PULAMOS pares cujo valor ainda contenha ';' (corromperia o header).
+// { nome: valor } -> { header: "a=1; b=2", incluidos, pulados }
 function montarHeaderCookie(obj) {
-  if (!obj || typeof obj !== 'object') return '';
-  return Object.entries(obj)
-    .filter(([k, v]) => k && v != null && String(v) !== '')
-    .map(([k, v]) => `${k}=${v}`)
-    .join('; ');
+  if (!obj || typeof obj !== 'object') return { header: '', incluidos: 0, pulados: [] };
+  const partes = [];
+  const pulados = [];
+  for (const [rawK, rawV] of Object.entries(obj)) {
+    if (rawV == null) continue;
+    const k = String(rawK).replace(/[\r\n\x00-\x1F\x7F]/g, '').trim();
+    const v = String(rawV).replace(/[\r\n\x00-\x1F\x7F]/g, '');
+    if (!k || v === '') continue;
+    if (/[;,\s]/.test(k) || v.includes(';')) { pulados.push(k); continue; }
+    partes.push(`${k}=${v}`);
+  }
+  return { header: partes.join('; '), incluidos: partes.length, pulados };
 }
 
 (async () => {
@@ -88,7 +118,7 @@ function montarHeaderCookie(obj) {
       `?id=eq.1&select=cookies_json,user_agent,cookies_updated_at,cookies_expires_at`;
     const r = await fetch(url, { headers: sbHeaders(), signal: AbortSignal.timeout(TIMEOUT_MS) });
     if (!r.ok) {
-      console.error(`[${ts()}] Supabase GET brk_credentials -> HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
+      console.error(`[${ts()}] Supabase GET brk_credentials -> HTTP ${r.status} ${scrub((await r.text()).slice(0, 200))}`);
       return finalizar(3);
     }
     const rows = await r.json();
@@ -99,8 +129,10 @@ function montarHeaderCookie(obj) {
   }
 
   const cookiesJson = row && row.cookies_json;
-  const header = montarHeaderCookie(cookiesJson);
-  const count = cookiesJson && typeof cookiesJson === 'object' ? Object.keys(cookiesJson).length : 0;
+  const { header, incluidos: count, pulados } = montarHeaderCookie(cookiesJson);
+  if (pulados.length) {
+    console.warn(`[${ts()}] ${pulados.length} cookie(s) ignorado(s) por caractere inválido: ${pulados.join(', ')}`);
+  }
   if (!header) {
     console.log(`[${ts()}] sem cookie no Supabase (brk_credentials.cookies_json vazio) — nada a sincronizar. ` +
       `Cole o cookie no card do painel (Motoristas -> Brasil Risk -> Atualizar cookie).`);
@@ -121,8 +153,10 @@ function montarHeaderCookie(obj) {
   // "Mais novo vence": se o cookie.txt local for MAIS NOVO que o do card, não
   // sobrescreve (ex.: `login` local recém-feito). Um card recém-colado tem
   // cookies_updated_at > mtime do cookie.txt, então sempre vence aqui.
+  // Só aplica quando há timestamp válido do card — se cookies_updated_at for
+  // NULL/inválido (supaUpdatedMs=0) forçamos o sync (não travar por timestamp ausente).
   const localMs = mtimeMs(COOKIE_FILE);
-  if (cookieAtual && localMs > supaUpdatedMs) {
+  if (cookieAtual && supaUpdatedMs > 0 && localMs > supaUpdatedMs) {
     console.log(`[${ts()}] cookie.txt local é mais novo que o do card ` +
       `(local=${new Date(localMs).toISOString()} > card=${row.cookies_updated_at || '-'}) — ` +
       `mantendo o local. Se quer o do card, recole no painel.`);
@@ -131,9 +165,9 @@ function montarHeaderCookie(obj) {
 
   try {
     fs.mkdirSync(path.dirname(COOKIE_FILE), { recursive: true });
-    fs.writeFileSync(COOKIE_FILE, header + '\n', 'utf8');
-    if (ua) fs.writeFileSync(UA_FILE, ua + '\n', 'utf8');
-    const temCf = Object.keys(cookiesJson).some((n) => /cf_clearance/i.test(n));
+    escreverAtomico(COOKIE_FILE, header + '\n');
+    if (ua) escreverAtomico(UA_FILE, ua + '\n');
+    const temCf = /(?:^|;\s*)cf_clearance=/i.test(header);
     const venc = row.cookies_expires_at ? ` (card marca expira ${row.cookies_expires_at})` : '';
     console.log(`[${ts()}] cookie do card sincronizado -> ${COOKIE_FILE} ` +
       `(${count} cookies, cf_clearance=${temCf ? 'sim' : 'NAO'}, UA=${ua ? 'atualizado' : 'mantido'})${venc}. ` +
