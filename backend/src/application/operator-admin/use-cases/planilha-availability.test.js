@@ -73,4 +73,28 @@ describe("applyPlanilhaAvailabilityStatus", () => {
     expect(r.status).toBe("");
     expect(r.isAvailable).toBe(true);
   });
+
+  it("carga RESERVADA por lead da Fila → 'Reservado' com o motorista injetado (não 'Fechada')", () => {
+    const reservedByLh = { "LH-X": { motorista: "CARLOS DO PORTAL", cavalo: "AAA1B23", carreta: "CCC4D56" } };
+    const r = applyPlanilhaAvailabilityStatus(row({ lh: "LH-X", data: "2026-07-05" }), { openLhSet: open, now, reservedByLh });
+    expect(r.status).toBe(""); // badge deriva de `motoristas` → Reservado
+    expect(r.motoristas).toBe("CARLOS DO PORTAL");
+    expect(r.cavalo).toBe("AAA1B23");
+    expect(r.carreta).toBe("CCC4D56");
+    expect(r.hasDriver).toBe(true);
+    expect(r.isAvailable).toBe(false);
+  });
+
+  it("reserva da Fila NÃO sobrepõe placas já presentes na planilha", () => {
+    const reservedByLh = { "LH-X": { motorista: "CARLOS", cavalo: "DA-RESERVA", carreta: "" } };
+    const r = applyPlanilhaAvailabilityStatus(row({ lh: "LH-X", cavalo: "DA-PLANILHA", data: "2026-07-05" }), { openLhSet: open, now, reservedByLh });
+    expect(r.cavalo).toBe("DA-PLANILHA");
+  });
+
+  it("reserva da Fila em carga PASSADA também mostra Reservado (não 'Expirada')", () => {
+    const reservedByLh = { "LH-X": { motorista: "CARLOS" } };
+    const r = applyPlanilhaAvailabilityStatus(row({ lh: "LH-X", data: "2026-06-20" }), { openLhSet: open, now, reservedByLh });
+    expect(r.status).toBe("");
+    expect(r.motoristas).toBe("CARLOS");
+  });
 });
