@@ -9,7 +9,8 @@
     "login": "node refresh_cookies_brk_pw.js login",
     "refresh": "node refresh_cookies_brk_pw.js refresh",
     "daemon": "node refresh_cookies_brk_pw.js daemon",
-    "keepalive": "node keepalive_brk.js"
+    "keepalive": "node keepalive_brk.js",
+    "sync-cookie": "node sync_cookie_from_supabase_brk.js"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
