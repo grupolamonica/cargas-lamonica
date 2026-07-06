@@ -5,6 +5,7 @@ import {
   Ban,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   FileSpreadsheet,
@@ -39,6 +40,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ExternalValidationPill } from "@/components/ExternalValidationPill";
 import { cn } from "@/lib/utils";
 import { allocEditPolicy } from "@/lib/monitorEditPolicy";
@@ -188,27 +190,163 @@ function SummaryCard({ icon: Icon, label, value, color }: { icon: typeof FileSpr
   );
 }
 
-function StatusBreakdown({ statuses }: { statuses: Record<string, number> }) {
+// Breakdown de status = FILTRO clicável (substitui o antigo dropdown "Todos os
+// status"). Cada chip filtra as linhas do Monitor pelo seu status; clicar de novo
+// no chip ativo limpa. As contagens são facetas: refletem os DEMAIS filtros
+// (busca, tipo, rota, data…) mas não o próprio filtro de status, para o operador
+// enxergar quantas linhas cada status tem e trocar de um para o outro.
+function StatusBreakdown({
+  statuses,
+  selected,
+  onToggle,
+  onClear,
+}: {
+  statuses: Record<string, number>;
+  selected: string[]; // status selecionados (multi-select). Vazio = todos.
+  onToggle: (statusKey: string) => void;
+  onClear: () => void;
+}) {
   const entries = Object.entries(statuses).sort(([, a], [, b]) => b - a);
   if (entries.length === 0) return null;
+  const hasActive = selected.length > 0;
   return (
     <div className="admin-panel space-y-3 p-4 lg:p-5">
-      <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">Status na planilha</h3>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">Status na planilha</h3>
+        {hasActive && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.68rem] font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <X className="h-3 w-3" /> limpar filtro
+          </button>
+        )}
+      </div>
       <div className="flex flex-wrap gap-2">
         {entries.map(([status, count]) => {
           const cfg = resolveSheetStatusStyle(status === "Sem status" ? "" : status);
+          const isActive = selected.includes(status);
           return (
-            <span key={status} className={cn("inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold", cfg.bg)}>
+            <button
+              key={status}
+              type="button"
+              aria-pressed={isActive}
+              onClick={() => onToggle(status)}
+              title={isActive ? "Clique para remover do filtro" : `Filtrar por ${cfg.label} (soma vários)`}
+              className={cn(
+                "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold transition-all",
+                cfg.bg,
+                isActive
+                  ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
+                  : hasActive
+                    ? "opacity-45 hover:opacity-100"
+                    : "hover:opacity-80",
+              )}
+            >
               <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", cfg.dot)} />
               <span className="uppercase tracking-[0.08em]">{cfg.label}</span>
               <span className="rounded-full bg-black/10 px-1.5 py-0.5 text-[0.68rem] font-bold text-current dark:bg-white/15">{count}</span>
-            </span>
+            </button>
           );
         })}
       </div>
     </div>
   );
 }
+
+// Filtro multi-seleção (dropdown com checkboxes) — substitui os <select> únicos
+// da barra de filtros do Monitor. Vazio = "todos". Semântica OR entre os
+// selecionados. Trigger mostra "Rótulo · N" com a contagem de selecionados.
+type MultiOption = { value: string; label: string };
+function MultiSelectFilter({
+  label,
+  options,
+  selected,
+  onChange,
+  widthClass,
+}: {
+  label: string;
+  options: MultiOption[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  widthClass?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const count = selected.length;
+  const toggle = (v: string) =>
+    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title={label}
+          aria-label={label}
+          className={cn(
+            "inline-flex items-center justify-between gap-1.5 rounded-xl border bg-white/92 px-3 py-2.5 text-sm outline-none transition-colors focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40",
+            count > 0 ? "border-primary/40 text-foreground" : "border-border/80 text-muted-foreground",
+            widthClass,
+          )}
+        >
+          <span className="truncate">
+            {label}
+            {count > 0 && <span className="ml-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[0.68rem] font-bold text-primary">{count}</span>}
+          </span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-60 p-1.5">
+        <div className="max-h-64 overflow-y-auto">
+          {options.length === 0 ? (
+            <p className="px-2 py-1.5 text-xs text-muted-foreground">Nenhuma opção</p>
+          ) : (
+            options.map((o) => {
+              const active = selected.includes(o.value);
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => toggle(o.value)}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/60"
+                >
+                  <span
+                    className={cn(
+                      "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                      active ? "border-primary bg-primary text-primary-foreground" : "border-input",
+                    )}
+                  >
+                    {active && <Check className="h-3 w-3" />}
+                  </span>
+                  <span className="truncate">{o.label}</span>
+                </button>
+              );
+            })
+          )}
+        </div>
+        {count > 0 && (
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            className="mt-1 flex w-full items-center gap-1 border-t border-border/40 px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <X className="h-3 w-3" /> Limpar
+          </button>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+const ASSIGNMENT_OPTIONS: MultiOption[] = [
+  { value: "com_motorista", label: "Com motorista" },
+  { value: "sem_motorista", label: "Sem motorista" },
+  { value: "disponiveis", label: "Disponíveis p/ importação" },
+];
+const EDIT_OPTIONS: MultiOption[] = [
+  { value: "editaveis", label: "Editáveis (motorista/veículo)" },
+  { value: "bloqueadas", label: "Bloqueadas (atribuído no ASPX)" },
+];
 
 function formatCurrency(value: number | undefined) {
   if (value == null || !Number.isFinite(value)) return "—";
@@ -1225,8 +1363,8 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
           </span>
         )}
         {aspxWarning && !pinned && (
-          <span className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-medium text-amber-600 dark:text-amber-400" title="Já estão atribuindo no ASPX">
-            <AlertTriangle className="h-2.5 w-2.5" /> em atribuição no ASPX
+          <span className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-medium text-amber-600 dark:text-amber-400" title="Motorista/veículo já atribuídos no ASPX">
+            <AlertTriangle className="h-2.5 w-2.5" /> atribuído no ASPX
           </span>
         )}
       </div>
@@ -2211,11 +2349,12 @@ function StandbyPickerModal({ open, carga, standbys, onPick, onClose }: {
 export default function SheetMonitor() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("todos");
-  const [tipoFilter, setTipoFilter] = useState("todos");
-  const [assignmentFilter, setAssignmentFilter] = useState("todos");
-  const [routeFilter, setRouteFilter] = useState("todos");
-  const [editFilter, setEditFilter] = useState<"todos" | "editaveis" | "bloqueadas">("todos");
+  // Filtros multi-seleção (vazio = "todos"; semântica OR entre os selecionados).
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [tipoFilter, setTipoFilter] = useState<string[]>([]);
+  const [assignmentFilter, setAssignmentFilter] = useState<string[]>([]);
+  const [routeFilter, setRouteFilter] = useState<string[]>([]);
+  const [editFilter, setEditFilter] = useState<string[]>([]);
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
   const [page, setPage] = useState(0);
@@ -2501,12 +2640,6 @@ export default function SheetMonitor() {
     return { total: items.length, available, assigned, withStatus, statuses, tipos } satisfies SheetMonitorSummary;
   }, [items]);
 
-  const statusOptions = useMemo(() => {
-    const s = new Set<string>();
-    items.forEach((item) => s.add(item.status || "Sem status"));
-    return Array.from(s).sort();
-  }, [items]);
-
   const tipoOptions = useMemo(() => {
     const s = new Set<string>();
     items.forEach((item) => { if (item.tipo) s.add(item.tipo); });
@@ -2550,10 +2683,24 @@ export default function SheetMonitor() {
   // Se a rota selecionada deixar de existir (ex.: filtro de data a removeu),
   // volta para "todos" pra não ficar travado num filtro sem resultado.
   useEffect(() => {
-    if (routeFilter !== "todos" && !routeOptions.some((r) => r.key === routeFilter)) setRouteFilter("todos");
-  }, [routeOptions, routeFilter]);
+    setRouteFilter((prev) => {
+      if (prev.length === 0) return prev;
+      const next = prev.filter((k) => routeOptions.some((r) => r.key === k));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [routeOptions]);
 
-  const filteredRows = useMemo(() => {
+  // Opções (shape do MultiSelectFilter) para os filtros de tipo e rota.
+  const tipoSelectOptions = useMemo<MultiOption[]>(() => tipoOptions.map((t) => ({ value: t, label: t })), [tipoOptions]);
+  const routeSelectOptions = useMemo<MultiOption[]>(
+    () => routeOptions.map((r) => ({ value: r.key, label: r.codigo != null ? `R${r.codigo} — ${r.key}` : r.key })),
+    [routeOptions],
+  );
+
+  // Linhas após TODOS os filtros MENOS o de status. Base para (a) as contagens
+  // clicáveis do "Status na planilha" (facetas) e (b) o filtro de status por cima
+  // — assim os chips mostram quantas linhas cada status tem sob os demais filtros.
+  const preStatusRows = useMemo(() => {
     let result = items;
 
     if (deferredSearch.trim()) {
@@ -2564,21 +2711,29 @@ export default function SheetMonitor() {
       );
     }
 
-    if (statusFilter !== "todos")
-      result = statusFilter === "Sem status" ? result.filter((r) => r.status === "") : result.filter((r) => r.status === statusFilter);
+    if (tipoFilter.length > 0)
+      result = result.filter((r) => r.tipo != null && tipoFilter.includes(r.tipo));
 
-    if (tipoFilter !== "todos")
-      result = result.filter((r) => r.tipo === tipoFilter);
+    if (routeFilter.length > 0)
+      result = result.filter((r) => routeFilter.includes(routeKeyOf(r)));
 
-    if (routeFilter !== "todos")
-      result = result.filter((r) => routeKeyOf(r) === routeFilter);
+    // Atribuição — OR entre os selecionados (com motorista / sem motorista / disponíveis).
+    if (assignmentFilter.length > 0)
+      result = result.filter((r) =>
+        assignmentFilter.some((a) =>
+          a === "com_motorista" ? Boolean(r.motoristas)
+            : a === "sem_motorista" ? !r.motoristas
+              : a === "disponiveis" ? (!r.motoristas && !r.status)
+                : false,
+        ),
+      );
 
-    if (assignmentFilter === "com_motorista") result = result.filter((r) => Boolean(r.motoristas));
-    else if (assignmentFilter === "sem_motorista") result = result.filter((r) => !r.motoristas);
-    else if (assignmentFilter === "disponiveis") result = result.filter((r) => !r.motoristas && !r.status);
-
-    if (editFilter === "editaveis") result = result.filter((r) => allocEditPolicy(r).editable && !r.pinned);
-    else if (editFilter === "bloqueadas") result = result.filter((r) => !allocEditPolicy(r).editable || r.pinned);
+    // Edição — OR entre editáveis / bloqueadas.
+    if (editFilter.length > 0)
+      result = result.filter((r) => {
+        const canEdit = allocEditPolicy(r).editable && !r.pinned;
+        return editFilter.some((e) => (e === "editaveis" ? canEdit : e === "bloqueadas" ? !canEdit : false));
+      });
 
     if (dateFromFilter || dateToFilter) {
       const fromTs = dateFromFilter ? new Date(dateFromFilter).getTime() : null;
@@ -2596,11 +2751,49 @@ export default function SheetMonitor() {
       });
     }
 
-    // Ordem da fila: SÓ por data+horário de carregamento DESC (mais novo primeiro).
-    // Sem agrupamento por status (Disponível/Reservado/AGUARDANDO… não muda a
-    // posição — pedido do operador). Cargas passadas ficam naturalmente abaixo
-    // (data mais antiga). Standby (reserva, sem data) sempre por último, FIFO.
-    const dtKey = (r: SheetMonitorRowType) => (r.data ? `${r.data} ${r.horario || ""}` : "");
+    return result;
+  }, [items, deferredSearch, tipoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter]);
+
+  // Contagem por status para os chips clicáveis do "Status na planilha" (mesma
+  // chave do resumo: status || "Sem status"). Reserva é linha sintética — não conta.
+  const statusFacets = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const r of preStatusRows) {
+      if (r.reserva) continue;
+      const k = r.status || "Sem status";
+      m[k] = (m[k] ?? 0) + 1;
+    }
+    return m;
+  }, [preStatusRows]);
+
+  const filteredRows = useMemo(() => {
+    let result = preStatusRows;
+
+    // Multi-select de status (OR). Cada linha usa a mesma chave dos chips/facetas:
+    // status || "Sem status". Vazio = todos.
+    if (statusFilter.length > 0)
+      result = result.filter((r) => statusFilter.includes(r.status === "" ? "Sem status" : r.status));
+
+    // Ordem da fila (pedido do operador): a PRÓXIMA carga a carregar no topo.
+    //   1) atuais/futuras primeiro, em ordem CRESCENTE de data+horário (a mais
+    //      próxima de carregar no topo);
+    //   2) passadas (já carregaram) afundam pro fim, mais recente primeiro;
+    //   3) standby (reserva, sem data) sempre por último — FIFO (espera mais longa 1º).
+    // Sem agrupamento por status. data/horário das cargas são horário de parede do
+    // Brasil (BRT) — comparamos contra "agora" no fuso de São Paulo, sem conversão.
+    const spParts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    }).formatToParts(new Date());
+    const sp = (t: string) => spParts.find((p) => p.type === t)?.value ?? "00";
+    const nowKey = `${sp("year")}-${sp("month")}-${sp("day")} ${sp("hour")}:${sp("minute")}:${sp("second")}`;
+    // Normaliza o horário p/ "HH:MM:SS" (planilha manda HH:MM:SS, sistema HH:MM) —
+    // garante a comparação lexical correta por horário mesmo com formatos mistos.
+    const timeKey = (h: string | null | undefined) => {
+      const [hh = "00", mm = "00", ss = "00"] = String(h ?? "").split(":");
+      return `${hh.padStart(2, "0")}:${mm.padStart(2, "0")}:${ss.padStart(2, "0")}`;
+    };
+    const dtKey = (r: SheetMonitorRowType) => (r.data ? `${String(r.data).slice(0, 10)} ${timeKey(r.horario)}` : "");
     return [...result].sort((a, b) => {
       // Standby (reserva) sempre por último; entre si, mais ANTIGO primeiro (FIFO).
       if (a.reserva || b.reserva) {
@@ -2614,17 +2807,34 @@ export default function SheetMonitor() {
       }
       const ka = dtKey(a);
       const kb = dtKey(b);
-      if (!ka && !kb) return 0;
-      if (!ka) return 1; // sem data por último
-      if (!kb) return -1;
+      // Sem data vai para o fim (mas antes do standby).
+      if (!ka || !kb) {
+        if (!ka && !kb) return 0;
+        return ka ? -1 : 1;
+      }
+      // Passadas afundam pro fim, independentemente do horário.
+      const pastA = ka < nowKey;
+      const pastB = kb < nowKey;
+      if (pastA !== pastB) return pastA ? 1 : -1;
       if (ka === kb) return 0;
-      return ka < kb ? 1 : -1; // data+horário DESC
+      // Futuras: mais próxima primeiro (ASC). Passadas: mais recente primeiro (DESC).
+      if (pastA) return ka < kb ? 1 : -1;
+      return ka < kb ? -1 : 1;
     });
-  }, [items, deferredSearch, statusFilter, tipoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter]);
+  }, [preStatusRows, statusFilter]);
+
+  // Alterna um status no filtro multi-seleção a partir dos chips do "Status na
+  // planilha" (soma vários). Substitui o antigo dropdown "Todos os status".
+  const handleToggleStatus = useCallback(
+    (statusKey: string) =>
+      setStatusFilter((prev) => (prev.includes(statusKey) ? prev.filter((s) => s !== statusKey) : [...prev, statusKey])),
+    [],
+  );
+  const handleClearStatus = useCallback(() => setStatusFilter([]), []);
 
   const hasActiveFilters =
-    deferredSearch.trim().length > 0 || statusFilter !== "todos" || tipoFilter !== "todos" ||
-    routeFilter !== "todos" || assignmentFilter !== "todos" || editFilter !== "todos" || dateFromFilter.length > 0 || dateToFilter.length > 0;
+    deferredSearch.trim().length > 0 || statusFilter.length > 0 || tipoFilter.length > 0 ||
+    routeFilter.length > 0 || assignmentFilter.length > 0 || editFilter.length > 0 || dateFromFilter.length > 0 || dateToFilter.length > 0;
 
   useEffect(() => { setPage(0); }, [deferredSearch, statusFilter, tipoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter]);
 
@@ -2812,7 +3022,7 @@ export default function SheetMonitor() {
               <SummaryCard icon={UserCheck} label="Com motorista atribuido" value={summary.assigned} color="bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-200" />
               <SummaryCard icon={Filter} label="Com status definido" value={summary.withStatus} color="bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-200" />
             </section>
-            <StatusBreakdown statuses={summary.statuses} />
+            <StatusBreakdown statuses={statusFacets} selected={statusFilter} onToggle={handleToggleStatus} onClear={handleClearStatus} />
           </>
         )}
 
@@ -2827,42 +3037,13 @@ export default function SheetMonitor() {
                   className="w-full rounded-xl border border-border/80 bg-white/92 py-2.5 pl-10 pr-4 text-sm outline-none transition-all placeholder:text-muted-foreground focus:border-primary/30 focus:ring-4 focus:ring-primary/10" />
               </div>
 
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-                className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10">
-                <option value="todos">Todos os status</option>
-                {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
+              <MultiSelectFilter label="Tipos" options={tipoSelectOptions} selected={tipoFilter} onChange={setTipoFilter} />
 
-              <select value={tipoFilter} onChange={(e) => setTipoFilter(e.target.value)}
-                className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10">
-                <option value="todos">Todos os tipos</option>
-                {tipoOptions.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
+              <MultiSelectFilter label="Rotas" options={routeSelectOptions} selected={routeFilter} onChange={setRouteFilter} widthClass="max-w-[220px]" />
 
-              <select value={routeFilter} onChange={(e) => setRouteFilter(e.target.value)}
-                title="Filtrar por rota" aria-label="Filtrar por rota"
-                className="max-w-[220px] rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10">
-                <option value="todos">Todas as rotas</option>
-                {routeOptions.map((r) => (
-                  <option key={r.key} value={r.key}>{r.codigo != null ? `R${r.codigo} — ${r.key}` : r.key}</option>
-                ))}
-              </select>
+              <MultiSelectFilter label="Atribuição" options={ASSIGNMENT_OPTIONS} selected={assignmentFilter} onChange={setAssignmentFilter} />
 
-              <select value={assignmentFilter} onChange={(e) => setAssignmentFilter(e.target.value)}
-                className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40">
-                <option value="todos">Todos</option>
-                <option value="com_motorista">Com motorista</option>
-                <option value="sem_motorista">Sem motorista</option>
-                <option value="disponiveis">Disponiveis p/ importacao</option>
-              </select>
-
-              <select value={editFilter} onChange={(e) => setEditFilter(e.target.value as "todos" | "editaveis" | "bloqueadas")}
-                title="Filtrar por edição" aria-label="Filtrar por edição de motorista/veículo"
-                className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40">
-                <option value="todos">Edição: todas</option>
-                <option value="editaveis">Editáveis (motorista/veículo)</option>
-                <option value="bloqueadas">Bloqueadas (em atribuição no ASPX)</option>
-              </select>
+              <MultiSelectFilter label="Edição" options={EDIT_OPTIONS} selected={editFilter} onChange={setEditFilter} />
 
               <input type="datetime-local" value={dateFromFilter} onChange={(e) => setDateFromFilter(e.target.value)}
                 className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
@@ -2873,7 +3054,7 @@ export default function SheetMonitor() {
 
               {hasActiveFilters && (
                 <button type="button"
-                  onClick={() => { setSearch(""); setStatusFilter("todos"); setTipoFilter("todos"); setRouteFilter("todos"); setAssignmentFilter("todos"); setEditFilter("todos"); setDateFromFilter(""); setDateToFilter(""); }}
+                  onClick={() => { setSearch(""); setStatusFilter([]); setTipoFilter([]); setRouteFilter([]); setAssignmentFilter([]); setEditFilter([]); setDateFromFilter(""); setDateToFilter(""); }}
                   className="inline-flex items-center gap-1 rounded-xl border border-border/80 bg-white px-3 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-muted/40">
                   <X className="h-3.5 w-3.5" />Limpar
                 </button>
