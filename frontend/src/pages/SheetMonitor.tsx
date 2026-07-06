@@ -1069,6 +1069,17 @@ function splitCarregamento(dt: string): { data: string; horario: string } {
   return { data: d || "", horario: (t || "").slice(0, 5) };
 }
 
+// Filtro de data (datetime-local): ao ESCOLHER/mudar a data no calendário o
+// navegador preenche o horário ATUAL. Aqui forçamos o padrão 00:00 quando a data
+// muda (ou o campo estava vazio); se o operador editar só o horário na MESMA data,
+// o valor digitado é preservado — mantendo a opção de escolher o horário.
+function dateFilterWithMidnight(prev: string, next: string): string {
+  if (!next) return next; // limpou
+  const [nd] = next.split("T");
+  const [pd = ""] = (prev || "").split("T");
+  return nd !== pd ? `${nd}T00:00` : next;
+}
+
 function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
   row: SheetMonitorRowType | null;
   open: boolean;
@@ -3089,12 +3100,12 @@ export default function SheetMonitor() {
 
               <MultiSelectFilter label="Edição" options={EDIT_OPTIONS} selected={editFilter} onChange={setEditFilter} />
 
-              <input type="datetime-local" value={dateFromFilter} onChange={(e) => setDateFromFilter(e.target.value)}
+              <input type="datetime-local" value={dateFromFilter} onChange={(e) => setDateFromFilter((prev) => dateFilterWithMidnight(prev, e.target.value))}
                 className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
-                title="Carregamento a partir de" aria-label="Carregamento a partir de" />
-              <input type="datetime-local" value={dateToFilter} onChange={(e) => setDateToFilter(e.target.value)} min={dateFromFilter || undefined}
+                title="Carregamento a partir de (horário padrão 00:00 — edite se quiser)" aria-label="Carregamento a partir de" />
+              <input type="datetime-local" value={dateToFilter} onChange={(e) => setDateToFilter((prev) => dateFilterWithMidnight(prev, e.target.value))} min={dateFromFilter || undefined}
                 className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
-                title="Carregamento até" aria-label="Carregamento até" />
+                title="Carregamento até (horário padrão 00:00 — edite se quiser)" aria-label="Carregamento até" />
 
               {/* "Limpar" sempre presente (desabilitado sem filtro): ocupa slot fixo
                   no fim da linha de filtros, então nada reflui quando um filtro é
