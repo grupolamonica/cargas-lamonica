@@ -190,6 +190,32 @@ function SummaryCard({ icon: Icon, label, value, color }: { icon: typeof FileSpr
   );
 }
 
+// Ordem ESTÁVEL dos chips de status, independente da contagem. Sem isso os chips
+// eram ordenados por contagem e "pulavam de lugar" a cada edição de status (a
+// contagem muda → reordena → o flex-wrap rebobina → tudo abaixo se desloca). Aqui
+// a ordem segue o pipeline operacional e fica fixa; a contagem só atualiza o número
+// no lugar. Regex no status normalizado p/ ser robusto às variantes de texto.
+function statusStableRank(statusKey: string): number {
+  if (statusKey === "Sem status") return 0; // Disponível
+  const s = statusKey.toLowerCase();
+  if (/dispon/.test(s)) return 0;
+  if (/reserv/.test(s)) return 1;
+  if (/em aberto/.test(s)) return 2;
+  if (/aguardando\s+carreg/.test(s)) return 3;
+  if (/aguardando\s+chegar/.test(s)) return 4;
+  if (/aguardando/.test(s)) return 5;
+  if (/descarregando/.test(s)) return 7;
+  if (/descarregad|entregue/.test(s)) return 8;
+  if (/carregad|carregando|tr[aâ]nsito/.test(s)) return 6;
+  if (/cte\s+em\s+emiss/.test(s)) return 9;
+  if (/cte\s+enviad/.test(s)) return 10;
+  if (/no\s*show/.test(s)) return 11;
+  if (/cancel/.test(s)) return 12;
+  if (/expirad/.test(s)) return 13;
+  if (/finaliz|conclu/.test(s)) return 14;
+  return 90; // desconhecido → fim
+}
+
 // Breakdown de status = FILTRO clicável (substitui o antigo dropdown "Todos os
 // status"). Cada chip filtra as linhas do Monitor pelo seu status; clicar de novo
 // no chip ativo limpa. As contagens são facetas: refletem os DEMAIS filtros
@@ -206,7 +232,12 @@ function StatusBreakdown({
   onToggle: (statusKey: string) => void;
   onClear: () => void;
 }) {
-  const entries = Object.entries(statuses).sort(([, a], [, b]) => b - a);
+  // Ordem FIXA (pipeline), não por contagem — os chips não trocam de lugar quando
+  // o operador edita um status; só o número muda. Empate → alfabético estável.
+  const entries = Object.entries(statuses).sort((a, b) => {
+    const r = statusStableRank(a[0]) - statusStableRank(b[0]);
+    return r !== 0 ? r : a[0].localeCompare(b[0], "pt-BR");
+  });
   if (entries.length === 0) return null;
   const hasActive = selected.length > 0;
   return (
