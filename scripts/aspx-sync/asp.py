@@ -24,6 +24,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import sys
 import time
 from datetime import datetime, timezone
@@ -235,7 +236,7 @@ def _login_playwright(email: str, senha: str, device_id: str) -> dict:
     launch_args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
 
     last_err: Exception | None = None
-    for attempt in range(1, 3):
+    for attempt in range(1, 4):
         try:
             with sync_playwright() as p:
                 ctx = p.chromium.launch_persistent_context(pdir, headless=True, args=launch_args)
@@ -283,6 +284,19 @@ def _login_playwright(email: str, senha: str, device_id: str) -> dict:
         except Exception as exc:  # noqa: BLE001 — relogamos e retentamos
             last_err = exc
             print(f"[login] tentativa {attempt} falhou: {exc}", file=sys.stderr)
+            # Auto-cura do perfil: se o perfil persistente ficou preso (sem o form de
+            # login e sem autenticar), a PROXIMA tentativa comeca com perfil LIMPO.
+            # Na VPS o login limpo funciona sem captcha, entao perder o "dispositivo
+            # confiavel" e' aceitavel e evita que um perfil corrompido trave o
+            # self-heal para sempre — inclusive apos deploys, ja que o perfil vive num
+            # volume que sobrevive a recriacao do container. A tentativa 1 preserva o
+            # perfil (caminho feliz mantem o dispositivo confiavel).
+            try:
+                shutil.rmtree(pdir, ignore_errors=True)
+                os.makedirs(pdir, exist_ok=True)
+                print("[login] perfil resetado — proxima tentativa comeca limpa.", file=sys.stderr)
+            except Exception as reset_exc:  # noqa: BLE001
+                print(f"[login] falha ao resetar perfil: {reset_exc}", file=sys.stderr)
             time.sleep(3)
 
     raise SystemExit(
