@@ -1,6 +1,6 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
-import { NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
+import { ConflictError, NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
 import {
   normalizeClientName,
   isMissingRouteCatalogColumnsError,
@@ -8,6 +8,12 @@ import {
 } from "./_shared.js";
 import { createRouteLookupKeys } from "../../../domain/operator-admin/route-utils.js";
 import { normalizeVehicleProfile } from "../../../domain/vehicle-profiles.js";
+
+// Editar a rota para um trecho (origem→destino) + perfil + nº de eixos que já
+// existe em OUTRA rota viola route_metrics_cache_origin_dest_perfil_eixos_unique
+// (Postgres 23505). Devolve 409 com causa clara em vez de 500 opaco.
+const DUPLICATE_ROUTE_MESSAGE =
+  "Já existe uma rota com esse trecho (origem → destino), perfil e nº de eixos. Edite a rota existente em vez de criar uma duplicada.";
 
 export async function updateOperatorRoute({ routeId, operatorId, payload, requestIp, correlationId }) {
   return withPgTransaction(async (client) => {
@@ -54,19 +60,26 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
         ],
       );
     } catch (error) {
+      // Colisão com outra rota do mesmo trecho+perfil+eixos → 409 claro (não 500).
+      if (error?.code === "23505") throw new ConflictError(DUPLICATE_ROUTE_MESSAGE);
       if (!isMissingRouteCatalogColumnsError(error)) throw error;
 
-      await client.query(
-        `
-          UPDATE public.route_metrics_cache
-          SET
-            origin_key = $2, destination_key = $3, origem = $4, destino = $5,
-            distancia_km = $6, duracao_horas = $7, updated_at = now()
-          WHERE id = $1
-        `,
-        [routeId, originKey, destinationKey, payload.origem, payload.destino,
-          resolvedMetrics.distancia_km, resolvedMetrics.duracao_horas],
-      );
+      try {
+        await client.query(
+          `
+            UPDATE public.route_metrics_cache
+            SET
+              origin_key = $2, destination_key = $3, origem = $4, destino = $5,
+              distancia_km = $6, duracao_horas = $7, updated_at = now()
+            WHERE id = $1
+          `,
+          [routeId, originKey, destinationKey, payload.origem, payload.destino,
+            resolvedMetrics.distancia_km, resolvedMetrics.duracao_horas],
+        );
+      } catch (fallbackError) {
+        if (fallbackError?.code === "23505") throw new ConflictError(DUPLICATE_ROUTE_MESSAGE);
+        throw fallbackError;
+      }
       warnings.push("Extended route catalog columns are not available in the current database schema.");
     }
 
