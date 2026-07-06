@@ -1415,7 +1415,7 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
 
 // ─── Table row ────────────────────────────────────────────────────────────────
 
-const ROW_VIRTUALIZATION_STYLE = { contentVisibility: "auto" as const, containIntrinsicSize: "0 44px" as const };
+const ROW_VIRTUALIZATION_STYLE = { contentVisibility: "auto" as const, containIntrinsicSize: "0 40px" as const };
 
 type RowDropIntent = "swap" | "before" | "after" | null;
 
@@ -1495,10 +1495,10 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       )}
     >
       {/* Status */}
-      <td className="px-3 py-2 align-top"><StatusBadge status={!row.status && row.motoristas ? "Reservado" : row.status} /></td>
+      <td className="px-3 py-1.5 align-top"><StatusBadge status={!row.status && row.motoristas ? "Reservado" : row.status} /></td>
 
       {/* LH + Tipo */}
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-1.5 align-top">
         {row.reserva ? (
           <span className="block text-[0.62rem] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">standby</span>
         ) : (
@@ -1510,12 +1510,12 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       </td>
 
       {/* Cliente */}
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-1.5 align-top">
         <span className="block truncate text-xs font-medium text-foreground/90" title={row.cliente ?? undefined}>{row.cliente || "—"}</span>
       </td>
 
       {/* Rota (com código operator-only antes da origem) */}
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-1.5 align-top">
         <p className="truncate text-xs font-medium leading-tight text-foreground">
           {row.routeCodigo != null && (
             <span className="mr-1 font-mono text-[0.58rem] font-semibold text-muted-foreground/70" title="Código da rota">R{row.routeCodigo}</span>
@@ -1534,7 +1534,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       </td>
 
       {/* Agenda: carga + descarga (compacto: C = carregamento, D = descarga) */}
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-1.5 align-top">
         {row.carregamentoLabel ? (
           <p className="truncate text-xs leading-tight text-foreground" title={`Carregamento: ${row.carregamentoLabel}`}>
             <span className="font-semibold text-muted-foreground/50">C</span> {row.carregamentoLabel}
@@ -1558,7 +1558,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       </td>
 
       {/* Motorista + Placa — editável inline (combobox) */}
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-1.5 align-top">
         <AllocCell
           row={row}
           enriched={enriched}
