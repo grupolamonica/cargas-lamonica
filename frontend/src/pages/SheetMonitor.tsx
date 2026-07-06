@@ -258,6 +258,9 @@ function StatusBreakdown({
         {entries.map(([status, count]) => {
           const cfg = resolveSheetStatusStyle(status === "Sem status" ? "" : status);
           const isActive = selected.includes(status);
+          // Chip com contagem 0 (nenhuma linha no filtro atual) fica esmaecido, mas
+          // MANTÉM o lugar — o conjunto de chips é fixo p/ a seção não mudar de altura.
+          const dimmed = !isActive && (count === 0 || hasActive);
           return (
             <button
               key={status}
@@ -270,7 +273,7 @@ function StatusBreakdown({
                 cfg.bg,
                 isActive
                   ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
-                  : hasActive
+                  : dimmed
                     ? "opacity-45 hover:opacity-100"
                     : "hover:opacity-80",
               )}
@@ -2797,6 +2800,16 @@ export default function SheetMonitor() {
     return m;
   }, [preStatusRows]);
 
+  // Conjunto ESTÁVEL de chips = todos os status do dataset (summary.statuses, NÃO
+  // filtrado); a contagem vem das facetas (reflete os demais filtros) ou 0. Assim a
+  // seção "Status na planilha" NÃO muda de altura ao filtrar/editar — o conjunto de
+  // chips é sempre o mesmo, só os números mudam, no lugar (nada se desloca abaixo).
+  const statusChips = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const k of Object.keys(summary.statuses)) out[k] = statusFacets[k] ?? 0;
+    return out;
+  }, [summary.statuses, statusFacets]);
+
   const filteredRows = useMemo(() => {
     let result = preStatusRows;
 
@@ -3053,7 +3066,7 @@ export default function SheetMonitor() {
               <SummaryCard icon={UserCheck} label="Com motorista atribuido" value={summary.assigned} color="bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-200" />
               <SummaryCard icon={Filter} label="Com status definido" value={summary.withStatus} color="bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-200" />
             </section>
-            <StatusBreakdown statuses={statusFacets} selected={statusFilter} onToggle={handleToggleStatus} onClear={handleClearStatus} />
+            <StatusBreakdown statuses={statusChips} selected={statusFilter} onToggle={handleToggleStatus} onClear={handleClearStatus} />
           </>
         )}
 
@@ -3083,15 +3096,20 @@ export default function SheetMonitor() {
                 className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
                 title="Carregamento até" aria-label="Carregamento até" />
 
-              {hasActiveFilters && (
-                <button type="button"
-                  onClick={() => { setSearch(""); setStatusFilter([]); setTipoFilter([]); setRouteFilter([]); setAssignmentFilter([]); setEditFilter([]); setDateFromFilter(""); setDateToFilter(""); }}
-                  className="inline-flex items-center gap-1 rounded-xl border border-border/80 bg-white px-3 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground dark:bg-muted/40">
-                  <X className="h-3.5 w-3.5" />Limpar
-                </button>
-              )}
+              {/* "Limpar" sempre presente (desabilitado sem filtro): ocupa slot fixo
+                  no fim da linha de filtros, então nada reflui quando um filtro é
+                  aplicado/limpo. A busca é flex-1 e absorve a variação de largura. */}
+              <button type="button" disabled={!hasActiveFilters}
+                onClick={() => { setSearch(""); setStatusFilter([]); setTipoFilter([]); setRouteFilter([]); setAssignmentFilter([]); setEditFilter([]); setDateFromFilter(""); setDateToFilter(""); }}
+                className="inline-flex items-center gap-1 rounded-xl border border-border/80 bg-white px-3 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 dark:bg-muted/40">
+                <X className="h-3.5 w-3.5" />Limpar
+              </button>
+            </div>
 
-
+            {/* Linha de AÇÕES — separada dos filtros para os botões NÃO se moverem
+                quando um filtro é aplicado/limpo (antes era tudo um flex-wrap só, e
+                o "Limpar"/"Mostrando" empurravam os botões para outra linha). */}
+            <div className="mt-3 flex flex-wrap items-center gap-3">
               <button type="button" onClick={() => setNewCargoOpen(true)}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2.5 text-xs font-semibold text-sky-700 hover:bg-sky-500/20 dark:text-sky-300">
                 <FileSpreadsheet className="h-3.5 w-3.5" />
@@ -3127,12 +3145,12 @@ export default function SheetMonitor() {
               </p>
             )}
 
-            {hasActiveFilters && (
-              <p className="mt-3 text-xs text-muted-foreground">
-                Mostrando <span className="font-bold text-foreground">{filteredRows.length}</span> de{" "}
-                <span className="font-bold text-foreground">{items.length}</span> linhas
-              </p>
-            )}
+            {/* Sempre renderizado (mostra o total quando não há filtro) para a linha
+                não aparecer/sumir e deslocar a tabela verticalmente. */}
+            <p className="mt-3 text-xs text-muted-foreground">
+              Mostrando <span className="font-bold text-foreground">{filteredRows.length}</span> de{" "}
+              <span className="font-bold text-foreground">{items.length}</span> linhas
+            </p>
           </section>
         )}
 
