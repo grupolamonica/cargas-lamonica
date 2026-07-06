@@ -1,6 +1,7 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
+import { syncedCarregamentoLabel } from "../../../domain/cargo-schedule.js";
 
 // pg devolve DATE como Date (UTC-midnight) e TIME como string. Normaliza pro
 // formato de parede 'YYYY-MM-DD' / 'HH:MM' (UTC, evita off-by-one).
@@ -51,7 +52,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     const { rows } = await client.query(
       `SELECT id, sheet_lh, alloc_pinned,
               alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
-              origem, destino, data, horario, lh_manual, sheet_data_descarga
+              origem, destino, data, horario, lh_manual, sheet_data_carregamento, sheet_data_descarga
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
       [cargoId],
     );
@@ -83,6 +84,11 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     const lhManual = has("lh") ? normAlloc(payload.lh) : row.lh_manual;
     // Descarga (data+hora) → sheet_data_descarga (texto 'YYYY-MM-DD HH:MM').
     const descarga = has("descarga") ? normDescarga(payload.descarga) : row.sheet_data_descarga;
+    // Rótulo denormalizado de carregamento: mantém em sincronia com data+horário
+    // (só quando já preenchido — preserva NULL). Sem isso, editar a agenda no
+    // Monitor deixava o campo velho e o painel de Cargas/Overview/detalhe do
+    // motorista (que preferem esse rótulo) mostravam o horário antigo.
+    const carregamento = syncedCarregamentoLabel(row.sheet_data_carregamento, data, horario);
 
     const touchesAlloc = has("motorista") || has("cavalo") || has("carreta") || has("status") || has("tipo");
 
@@ -100,13 +106,14 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             horario = $9,
             lh_manual = $10,
             sheet_data_descarga = $13,
+            sheet_data_carregamento = $15,
             alloc_source = CASE WHEN $11 THEN 'operator' ELSE alloc_source END,
             alloc_updated_at = CASE WHEN $11 THEN now() ELSE alloc_updated_at END,
             alloc_updated_by = CASE WHEN $11 THEN $12 ELSE alloc_updated_by END,
             updated_at = now()
         WHERE id = $1
       `,
-      [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga, allocTipo],
+      [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga, allocTipo, carregamento],
     );
 
     await insertSecurityAuditEvent(client, {

@@ -15,7 +15,7 @@ const { updateMonitorCargo } = await import("./update-monitor-cargo.js");
 
 async function getCargo(id) {
   const { rows } = await query(
-    `SELECT origem, destino, data, horario, lh_manual, sheet_data_descarga,
+    `SELECT origem, destino, data, horario, lh_manual, sheet_data_carregamento, sheet_data_descarga,
             alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_source, alloc_pinned
      FROM public.cargas WHERE id = $1`,
     [id],
@@ -65,6 +65,19 @@ describe("updateMonitorCargo", () => {
     expect(row.alloc_source).toBe("operator");
     // data volta como Date (UTC) no pg-mem — confere o ano/mês/dia
     expect(new Date(row.data).toISOString().slice(0, 10)).toBe("2026-07-01");
+    // rótulo denormalizado de carregamento acompanha a nova data+horário
+    expect(row.sheet_data_carregamento).toBe("2026-07-01T09:30");
+  });
+
+  it("preserva NULL em sheet_data_carregamento (carga sem rótulo) ao editar a agenda", async () => {
+    const { id } = await seedCargo({ sheet_lh: null });
+    // seedCargo preenche o campo por padrão; força NULL p/ simular carga criada
+    // pelo Monitor (que não grava o rótulo e cai no fallback data+horário).
+    await query(`UPDATE public.cargas SET sheet_data_carregamento = NULL WHERE id = $1`, [id]);
+    const op = await seedUser({ email: "op-carreg-null@teste.local" });
+    await updateMonitorCargo({ cargoId: id, operatorId: op.id, payload: { data: "2026-07-01", horario: "09:30" } });
+    const row = await getCargo(id);
+    expect(row.sheet_data_carregamento).toBeNull();
   });
 
   it("descarga (datetime-local) é gravada em sheet_data_descarga como 'YYYY-MM-DD HH:MM'", async () => {

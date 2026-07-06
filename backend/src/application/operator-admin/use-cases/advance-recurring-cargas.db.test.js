@@ -22,7 +22,7 @@ const isoDateOf = (v) =>
     : String(v).slice(0, 10);
 
 async function getCargo(id) {
-  const { rows } = await query(`SELECT data, version FROM public.cargas WHERE id = $1`, [id]);
+  const { rows } = await query(`SELECT data, version, sheet_data_carregamento FROM public.cargas WHERE id = $1`, [id]);
   return rows[0];
 }
 
@@ -49,6 +49,8 @@ describe("advanceRecurringCargas (integração pg-mem)", () => {
     const advancedStale = await getCargo(stale.id);
     expect(isoDateOf(advancedStale.data)).toBe("2026-06-18");
     expect(advancedStale.version).toBe(1); // bump de versão
+    // rótulo de carregamento acompanha a nova data (seedCargo já preenche o campo)
+    expect(advancedStale.sheet_data_carregamento).toBe("2026-06-18T09:00");
 
     // futura visível, reservada, e não-recorrente: intactas
     expect(isoDateOf((await getCargo(future.id)).data)).toBe("2026-06-20");
@@ -85,10 +87,12 @@ describe("advanceRecurringCargas (integração pg-mem)", () => {
 
     // Nasce UMA sucessora OPEN recorrente, na próxima ocorrência visível, ligada à cadeia.
     const succ = await query(
-      `SELECT data, is_recurring, recurrence_interval_days, recurrence_parent_id FROM public.cargas WHERE status = 'OPEN' AND is_recurring = true`,
+      `SELECT data, sheet_data_carregamento, is_recurring, recurrence_interval_days, recurrence_parent_id FROM public.cargas WHERE status = 'OPEN' AND is_recurring = true`,
     );
     expect(succ.rows.length).toBe(1);
     expect(isoDateOf(succ.rows[0].data)).toBe("2026-06-18"); // 15→16→17(09<12 invisível)→18
+    // rótulo derivado da data/horário da sucessora (não copiado da cauda defasada)
+    expect(succ.rows[0].sheet_data_carregamento).toBe("2026-06-18T09:00");
     expect(Number(succ.rows[0].recurrence_interval_days)).toBe(1);
     expect(succ.rows[0].recurrence_parent_id).toBe(orphan.id);
   });
