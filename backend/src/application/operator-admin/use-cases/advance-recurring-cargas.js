@@ -1,6 +1,7 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 import { addDaysIso, computeNextRecurrenceDate, toIsoDate } from "../../../domain/recurrence.js";
+import { syncedCarregamentoLabel } from "../../../domain/cargo-schedule.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 
 // Re-export para compat com importadores existentes (e testes da função pura).
@@ -31,6 +32,7 @@ export async function advanceRecurringCargas({ now = new Date() } = {}) {
           id,
           data,
           horario,
+          sheet_data_carregamento,
           COALESCE(recurrence_interval_days, 1) AS interval_days
         FROM public.cargas
         WHERE is_recurring = true
@@ -49,13 +51,17 @@ export async function advanceRecurringCargas({ now = new Date() } = {}) {
       if (nextDate === currentDateIso) {
         continue;
       }
+      // Mantém o rótulo denormalizado de carregamento em sincronia com a nova
+      // data (só quando já preenchido — preserva NULL). Sem isso, o campo
+      // congela na data antiga e as telas que o preferem mostram a agenda velha.
+      const nextCarreg = syncedCarregamentoLabel(row.sheet_data_carregamento, nextDate, row.horario);
       await client.query(
         `
           UPDATE public.cargas
-          SET data = $2, version = version + 1, updated_at = now()
+          SET data = $2, sheet_data_carregamento = $3, version = version + 1, updated_at = now()
           WHERE id = $1 AND is_recurring = true AND status = 'OPEN'
         `,
-        [row.id, nextDate],
+        [row.id, nextDate, nextCarreg],
       );
       advanced += 1;
     }
@@ -142,6 +148,9 @@ async function reviveOrphanRecurrenceChains(client, now, todayIso, nowTime) {
     const interval = Number(tail.interval_days) > 0 ? Number(tail.interval_days) : 1;
     const startIso = addDaysIso(tailDate, interval);
     const nextDate = computeNextRecurrenceDate(startIso, tailTime, interval, now);
+    // Deriva o rótulo da nova ocorrência da data/horário dela (não copia o da
+    // cauda, que pode estar defasado); preserva NULL.
+    const nextCarreg = syncedCarregamentoLabel(tail.sheet_data_carregamento, nextDate, tail.horario);
 
     await client.query(
       `
@@ -161,7 +170,7 @@ async function reviveOrphanRecurrenceChains(client, now, todayIso, nowTime) {
       [
         nextDate, tail.horario, tail.origem, tail.destino, tail.distancia_km, tail.duracao_horas,
         tail.perfil, tail.valor, tail.bonus, tail.bonus_exigencias, tail.driver_visibility,
-        tail.cliente_id, tail.created_by, tail.sheet_data_carregamento, tail.sheet_data_descarga,
+        tail.cliente_id, tail.created_by, nextCarreg, tail.sheet_data_descarga,
         interval, tail.chain_root,
       ],
     );

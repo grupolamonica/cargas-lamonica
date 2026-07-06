@@ -23,6 +23,7 @@ import { createCorrelationId } from "./helpers.js";
 import { logLoadClaimEvent } from "./logging.js";
 import { LOAD_STATUS, PUBLIC_LEAD_EVENT_TYPE, PUBLIC_LEAD_STATUS } from "../../domain/load-claims/constants.js";
 import { addDaysIso, computeNextRecurrenceDate, toIsoDate } from "../../domain/recurrence.js";
+import { syncedCarregamentoLabel } from "../../domain/cargo-schedule.js";
 import { lookupAspxDriverByCpf } from "../../infrastructure/aspx/aspx-directory.js";
 import { loadDriverVinculoMap, normalizeDriverNameKey } from "../google-sheets/driver-vinculos.js";
 const DEFAULT_PUBLIC_LEAD_PRE_REGISTRATION_MAX_ATTEMPTS = 6;
@@ -2325,6 +2326,10 @@ export async function approvePublicLoadLead({ loadId, leadId, operatorId, correl
           const startIso = addDaysIso(toIsoDate(src.data), intervalDays);
           const horario = String(src.horario || "00:00:00").slice(0, 8);
           const nextDataIso = computeNextRecurrenceDate(startIso, horario, intervalDays, new Date());
+          // Rótulo denormalizado de carregamento da NOVA ocorrência: derivado da
+          // data/horário dela (não copia o do pai, que pode estar defasado);
+          // preserva NULL (cargas sem o campo caem no fallback data+horário).
+          const nextCarreg = syncedCarregamentoLabel(src.sheet_data_carregamento, nextDataIso, src.horario);
 
           const { rows: childRows } = await client.query(
             `
@@ -2348,7 +2353,7 @@ export async function approvePublicLoadLead({ loadId, leadId, operatorId, correl
               nextDataIso, src.horario, src.origem, src.destino, src.distancia_km, src.duracao_horas,
               src.perfil, src.valor, src.bonus, src.bonus_exigencias, src.driver_visibility,
               src.cliente_id, src.created_by,
-              src.sheet_data_carregamento, src.sheet_data_descarga,
+              nextCarreg, src.sheet_data_descarga,
               intervalDays, src.parent_id,
             ],
           );
