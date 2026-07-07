@@ -1,5 +1,6 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { createRouteLookupKeys } from "../../../domain/operator-admin/route-utils.js";
+import { resolveDriverPhones } from "./resolve-driver-phones.js";
 
 /**
  * Histórico de motoristas que já rodaram uma rota (origem → destino), para
@@ -57,10 +58,23 @@ export async function getRouteDriverHistory({ origem, destino, correlationId }) 
       ultimoHorario: row.horario ?? null,
       ultimaAgendaLabel: row.sheet_data_carregamento || null,
       runCount: 1,
+      telefone: null,
     });
   }
 
   const drivers = Array.from(byDriver.values());
+
+  // Telefone é opcional (só existe em motoristas_historico). Resolve por nome e
+  // anexa; se falhar (query/conexão), mantém telefone = null — não quebra o histórico.
+  let phones = new Map();
+  try {
+    phones = await resolveDriverPhones(drivers.map((d) => d.motorista));
+  } catch {
+    /* phone é opcional */
+  }
+  for (const d of drivers) {
+    d.telefone = phones.get(d.motorista.toLowerCase().trim()) ?? null;
+  }
 
   return {
     statusCode: 200,

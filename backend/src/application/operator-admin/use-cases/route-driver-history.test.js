@@ -93,4 +93,35 @@ describe("getRouteDriverHistory", () => {
     expect(res.statusCode).toBe(200);
     expect(res.payload.drivers).toEqual([]);
   });
+
+  it("anexa telefone de motoristas_historico por nome (case/trim-insensível); null quando sem histórico", async () => {
+    const ORIGEM = "Salvador / BA";
+    const DESTINO = "Simoes Filho / BA";
+
+    // Motorista COM telefone no histórico — nome com caixa/espaços diferentes,
+    // deve casar via lower(btrim(...)).
+    await seedHistCargo({
+      origem: ORIGEM, destino: DESTINO, data: "2026-05-10", horario: "09:00:00",
+      motorista: "  JOAO da Silva ", cavalo: "NEW1111", carreta: "NEW2222",
+    });
+    await query(
+      `INSERT INTO public.motoristas_historico (cpf, nome, telefone) VALUES ($1, $2, $3)`,
+      ["11122233344", "Joao Da Silva", "71988887777"],
+    );
+
+    // Motorista SEM linha no histórico → telefone null.
+    await seedHistCargo({
+      origem: ORIGEM, destino: DESTINO, data: "2026-03-15", horario: "07:00:00",
+      motorista: "Maria Souza", cavalo: "MAR1111",
+    });
+
+    const res = await getRouteDriverHistory({ origem: ORIGEM, destino: DESTINO, correlationId: "c3" });
+    expect(res.statusCode).toBe(200);
+
+    const joao = res.payload.drivers.find((d) => d.motorista.trim().toLowerCase() === "joao da silva");
+    expect(joao.telefone).toBe("71988887777");
+
+    const maria = res.payload.drivers.find((d) => d.motorista.trim().toLowerCase() === "maria souza");
+    expect(maria.telefone).toBeNull();
+  });
 });
