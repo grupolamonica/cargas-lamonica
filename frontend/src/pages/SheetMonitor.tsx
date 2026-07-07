@@ -150,12 +150,18 @@ function resolveSheetStatusStyle(status: string) {
   return { dot: "bg-slate-400", bg: "bg-slate-100 text-slate-700 dark:bg-slate-500/25 dark:text-slate-100", row: "bg-slate-500/[0.06] hover:bg-slate-500/[0.12] dark:bg-slate-500/10 dark:hover:bg-slate-500/20", label: trimmed || "—" };
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, dense = false }: { status: string; dense?: boolean }) {
   const cfg = resolveSheetStatusStyle(status);
   return (
-    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.66rem] font-semibold leading-tight", cfg.bg)}>
+    // dense (linha da tabela): fica em UMA linha (max-w-full + label truncado) para
+    // status longos como "AGUARDANDO CHEGAR NO CLIENTE" não engordarem a linha. O
+    // texto completo vai no tooltip. Fora da tabela (modal), mostra inteiro.
+    <span
+      title={dense ? cfg.label : undefined}
+      className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.66rem] font-semibold leading-tight", cfg.bg, dense && "max-w-full")}
+    >
       <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", cfg.dot)} />
-      {cfg.label}
+      <span className={dense ? "min-w-0 truncate" : undefined}>{cfg.label}</span>
     </span>
   );
 }
@@ -1426,18 +1432,10 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
           )}
         </div>
       </div>
+      {/* Ações à direita. O botão de standby ("+N") fica por ÚLTIMO (mais à direita)
+          para alinhar verticalmente entre as linhas — pin/lápis (hover) ficam à sua
+          esquerda e não deslocam a posição do standby. */}
       <div className="flex shrink-0 items-center gap-0.5">
-        {canEditAlloc && routeStandbyCount > 0 && onPullStandby && (
-          <button
-            type="button"
-            title={`Puxar um motorista em standby desta rota (${routeStandbyCount} disponíve${routeStandbyCount === 1 ? "l" : "is"})`}
-            aria-label="Puxar standby para esta carga"
-            onClick={(e) => { e.stopPropagation(); onPullStandby(row.lh); }}
-            className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[0.6rem] font-semibold text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700 dark:text-amber-400 dark:hover:bg-amber-500/10"
-          >
-            <UserPlus className="h-3 w-3" /> {routeStandbyCount}
-          </button>
-        )}
         {(row.motoristas || pinned) && (
           <button
             type="button"
@@ -1464,6 +1462,17 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
             className="rounded p-1 text-muted-foreground/40 opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100 group-hover/alloc:opacity-100"
           >
             <Pencil className="h-3 w-3" />
+          </button>
+        )}
+        {canEditAlloc && routeStandbyCount > 0 && onPullStandby && (
+          <button
+            type="button"
+            title={`Puxar um motorista em standby desta rota (${routeStandbyCount} disponíve${routeStandbyCount === 1 ? "l" : "is"})`}
+            aria-label="Puxar standby para esta carga"
+            onClick={(e) => { e.stopPropagation(); onPullStandby(row.lh); }}
+            className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[0.6rem] font-semibold text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700 dark:text-amber-400 dark:hover:bg-amber-500/10"
+          >
+            <UserPlus className="h-3 w-3" /> {routeStandbyCount}
           </button>
         )}
       </div>
@@ -1553,7 +1562,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       )}
     >
       {/* Status */}
-      <td className="px-3 py-1.5 align-middle"><StatusBadge status={!row.status && row.motoristas ? "Reservado" : row.status} /></td>
+      <td className="px-3 py-1.5 align-middle"><StatusBadge dense status={!row.status && row.motoristas ? "Reservado" : row.status} /></td>
 
       {/* LH + Tipo (linha única) */}
       <td className="px-3 py-1.5 align-middle">
@@ -1848,10 +1857,11 @@ function SheetMonitorTable({
             a coluna Motorista/Placa larga o bastante pro nome não cortar. */}
         <table className="w-full min-w-[1040px] table-fixed text-sm">
           <colgroup>
-            <col className="w-[13%]" />
+            {/* Status | LH | Cliente | Rota | Agenda | Motorista/Placa */}
+            <col className="w-[14%]" />
             <col className="w-[8%]" />
             <col className="w-[10%]" />
-            <col className="w-[23%]" />
+            <col className="w-[22%]" />
             <col className="w-[13%]" />
             <col className="w-[33%]" />
           </colgroup>
