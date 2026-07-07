@@ -619,6 +619,8 @@ export interface SheetMonitorRow {
   reservaId?: string | null;
   /** Quando entrou em standby (created_at da reserva, ISO) — só para reserva=true. */
   standbyAt?: string | null;
+  /** Telefone do motorista (motoristas_historico), resolvido por nome. Opcional. */
+  telefone?: string | null;
   // ── Visão unificada (planilha ∪ sistema) ──
   // Identidade estável da linha: 'sheet:<lh>' | 'cargo:<uuid>' | 'reserva:<id>'.
   rowKey?: string;
@@ -771,6 +773,75 @@ export async function assignReservaToCarga(input: { reservaId: string; targetLh:
     bumped: boolean;
     meta: { correlationId: string };
   }>("/api/operator/sheet-monitor/assign-reserva", { accessToken, method: "POST", body: input });
+}
+
+/** Um motorista que já rodou a rota (origem → destino), sugerido para reserva.
+ *  `telefone` vem de motoristas_historico (opcional, pode ser null). */
+export interface RouteDriverHistoryEntry {
+  motorista: string;
+  cavalo: string;
+  carreta: string;
+  ultimaData: string | null;
+  ultimoHorario: string | null;
+  ultimaAgendaLabel: string | null;
+  runCount: number;
+  telefone: string | null;
+}
+
+/**
+ * Histórico de motoristas que já rodaram uma rota (origem → destino) — para
+ * sugerir quem colocar numa reserva. Deduplicado por motorista (mais recente
+ * vence) com runCount e telefone (quando houver em motoristas_historico).
+ */
+export async function fetchRouteDriverHistory(params: {
+  origem: string;
+  destino: string;
+}): Promise<{ drivers: RouteDriverHistoryEntry[] }> {
+  const accessToken = await getOperatorAccessToken();
+  const qs = `origem=${encodeURIComponent(params.origem)}&destino=${encodeURIComponent(params.destino)}`;
+  const data = await requestJson<{ drivers?: RouteDriverHistoryEntry[] }>(
+    `/api/operator/sheet-monitor/route-history?${qs}`,
+    { accessToken },
+  );
+  return { drivers: data.drivers ?? [] };
+}
+
+/** Cria uma reserva (standby) de motorista para uma rota (origem → destino). */
+export async function createReserva(input: {
+  motorista: string;
+  cavalo?: string;
+  carreta?: string;
+  origem: string;
+  destino: string;
+}): Promise<{ ok: boolean; id: string }> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; id: string }>(
+    "/api/operator/sheet-monitor/reserva",
+    { accessToken, method: "POST", body: input },
+  );
+}
+
+/** Edita uma reserva ativa. Parcial: só os campos enviados são alterados. */
+export async function updateReserva(input: {
+  reservaId: string;
+  motorista?: string;
+  cavalo?: string;
+  carreta?: string;
+}): Promise<{ ok: boolean; id: string }> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; id: string }>(
+    "/api/operator/sheet-monitor/reserva",
+    { accessToken, method: "PATCH", body: input },
+  );
+}
+
+/** Remove (soft) uma reserva ativa. */
+export async function deleteReserva(input: { reservaId: string }): Promise<{ ok: boolean }> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean }>(
+    "/api/operator/sheet-monitor/reserva",
+    { accessToken, method: "DELETE", body: input },
+  );
 }
 
 /**
