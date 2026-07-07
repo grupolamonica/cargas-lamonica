@@ -1170,6 +1170,7 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
 }) {
   const queryClient = useQueryClient();
   const [form, setForm] = useState(EMPTY_CARGO_FORM);
+  const [confirmChange, setConfirmChange] = useState(false);
 
   useEffect(() => {
     if (open && row) {
@@ -1199,7 +1200,13 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
     onError: (e) => toast.error(e instanceof Error ? e.message : "Não foi possível salvar a carga."),
   });
 
-  const save = () => {
+  // Trocou motorista/veículo? (comparado ao que veio na linha) → exige o motivo.
+  const mvChanged =
+    form.motorista.trim() !== (row?.motoristas ?? "").trim() ||
+    form.cavalo.trim() !== (row?.cavalo ?? "").trim() ||
+    form.carreta.trim() !== (row?.carreta ?? "").trim();
+
+  const buildAndMutate = (descricao = "") => {
     if (!row?.cargoId) return;
     const { data, horario } = splitCarregamento(form.carregamento);
     if (form.origem.trim().length < 2 || form.destino.trim().length < 2 || !data || !horario) {
@@ -1219,10 +1226,24 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
       motorista: form.motorista.trim(),
       cavalo: form.cavalo.trim(),
       carreta: form.carreta.trim(),
+      ...(descricao ? { descricao } : {}),
     });
   };
 
+  const save = () => {
+    if (!row?.cargoId) return;
+    // Validação de rota/agenda antes de abrir o modal de motivo.
+    const { data, horario } = splitCarregamento(form.carregamento);
+    if (form.origem.trim().length < 2 || form.destino.trim().length < 2 || !data || !horario) {
+      toast.error("Rota e carregamento (origem, destino, data + hora) são obrigatórios.");
+      return;
+    }
+    if (mvChanged) setConfirmChange(true); // trocou m/v → pede o motivo (obrigatório)
+    else buildAndMutate();
+  };
+
   return (
+    <>
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
@@ -1234,6 +1255,15 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
             Carga criada no sistema (fora da planilha). Edite como uma planilha — tudo é editável.
           </DialogDescription>
         </DialogHeader>
+        {/* Motivo da última troca de motorista/veículo (descrição do operador). */}
+        {row?.descricao && (
+          <div className="rounded-lg border border-amber-300/70 bg-amber-50 px-3 py-2 dark:border-amber-500/30 dark:bg-amber-500/10">
+            <p className="text-[0.6rem] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+              Motivo da última troca de motorista/veículo
+            </p>
+            <p className="mt-0.5 whitespace-pre-wrap text-sm leading-snug text-foreground">{row.descricao}</p>
+          </div>
+        )}
         <MonitorCargoFields form={form} setForm={setForm} statusOptions={statusOptions} />
         <div className="mt-2 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded-lg border border-border/80 px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground">Cancelar</button>
@@ -1245,6 +1275,13 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
         </div>
       </DialogContent>
     </Dialog>
+
+    <ChangeReasonDialog
+      open={confirmChange}
+      onConfirm={(reason) => { setConfirmChange(false); buildAndMutate(reason); }}
+      onCancel={() => setConfirmChange(false)}
+    />
+    </>
   );
 }
 
@@ -2152,6 +2189,16 @@ function RowDetailModal({
           {/* Scrollable body */}
           <div className="min-h-0 flex-1 overflow-y-auto">
 
+            {/* Motivo da última troca de motorista/veículo (descrição do operador). */}
+            {alloc?.alloc_descricao && (
+              <div className="mx-4 mt-3 rounded-lg border border-amber-300/70 bg-amber-50 px-3 py-2 dark:border-amber-500/30 dark:bg-amber-500/10">
+                <p className="text-[0.6rem] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                  Motivo da última troca de motorista/veículo
+                </p>
+                <p className="mt-0.5 whitespace-pre-wrap text-sm leading-snug text-foreground">{alloc.alloc_descricao}</p>
+              </div>
+            )}
+
             {/* ── Alocação (editável no sistema) ── */}
             <ModalSection title="Alocação · editar no sistema">
               <div className="space-y-2">
@@ -2249,11 +2296,6 @@ function RowDetailModal({
                     ))}
                   </select>
                 </div>
-                {alloc?.alloc_descricao && (
-                  <p className="rounded-md bg-muted/40 px-2 py-1 text-[0.62rem] leading-snug text-muted-foreground">
-                    <span className="font-semibold">Último motivo da troca:</span> {alloc.alloc_descricao}
-                  </p>
-                )}
                 <div className="flex items-center justify-between gap-2 pt-1">
                   <span className="text-[0.58rem] leading-tight text-muted-foreground/60">
                     {alloc?.alloc_updated_at
