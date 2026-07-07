@@ -2851,19 +2851,14 @@ export default function SheetMonitor() {
     if (statusFilter.length > 0)
       result = result.filter((r) => statusFilter.includes(r.status === "" ? "Sem status" : r.status));
 
-    // Ordem da fila (pedido do operador): a PRÓXIMA carga a carregar no topo.
-    //   1) atuais/futuras primeiro, em ordem CRESCENTE de data+horário (a mais
-    //      próxima de carregar no topo);
-    //   2) passadas (já carregaram) afundam pro fim, mais recente primeiro;
-    //   3) standby (reserva, sem data) sempre por último — FIFO (espera mais longa 1º).
-    // Sem agrupamento por status. data/horário das cargas são horário de parede do
-    // Brasil (BRT) — comparamos contra "agora" no fuso de São Paulo, sem conversão.
-    const spParts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-    }).formatToParts(new Date());
-    const sp = (t: string) => spParts.find((p) => p.type === t)?.value ?? "00";
-    const nowKey = `${sp("year")}-${sp("month")}-${sp("day")} ${sp("hour")}:${sp("minute")}:${sp("second")}`;
+    // Ordem da fila (pedido do operador): ordem cronológica DECRESCENTE por
+    // data+horário — a carga mais NOVA (data/horário mais recente/futura) no topo,
+    // as mais antigas embaixo. Sem afundar passadas e sem comparar com "agora".
+    //   - standby (reserva, sem data) sempre por último — FIFO (espera mais longa 1º);
+    //   - linhas sem data vão para o fim (antes do standby).
+    // data/horário das cargas são horário de parede do Brasil (BRT); a comparação é
+    // lexical sobre "YYYY-MM-DD HH:MM:SS", sem conversão de fuso.
+    //
     // Normaliza o horário p/ "HH:MM:SS" (planilha manda HH:MM:SS, sistema HH:MM) —
     // garante a comparação lexical correta por horário mesmo com formatos mistos.
     const timeKey = (h: string | null | undefined) => {
@@ -2889,14 +2884,9 @@ export default function SheetMonitor() {
         if (!ka && !kb) return 0;
         return ka ? -1 : 1;
       }
-      // Passadas afundam pro fim, independentemente do horário.
-      const pastA = ka < nowKey;
-      const pastB = kb < nowKey;
-      if (pastA !== pastB) return pastA ? 1 : -1;
+      // Cronológica DECRESCENTE: mais nova (data+horário) no topo.
       if (ka === kb) return 0;
-      // Futuras: mais próxima primeiro (ASC). Passadas: mais recente primeiro (DESC).
-      if (pastA) return ka < kb ? 1 : -1;
-      return ka < kb ? -1 : 1;
+      return ka < kb ? 1 : -1;
     });
   }, [preStatusRows, statusFilter]);
 
