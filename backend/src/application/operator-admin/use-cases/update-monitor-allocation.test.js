@@ -5,6 +5,7 @@ import {
   query,
   resetTestDatabase,
   seedCargo,
+  seedPublicLead,
   seedUser,
   withPgTransaction,
 } from "../test-harness.js";
@@ -190,6 +191,59 @@ describe("updateMonitorAllocation", () => {
 
     const r = await query(`SELECT active FROM public.monitor_reservas WHERE motorista = 'RESERVADO X'`);
     expect(r.rows[0].active).toBe(false);
+  });
+
+  it("limpar o motorista de carga RESERVADA reabre a carga (status OPEN + lead cancelado)", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-reopen@teste.local" });
+    // Motorista reservou pelo portal: lead APPROVED + carga RESERVED apontando pro lead.
+    const lead = await seedPublicLead({ load_id: id, status: "APPROVED" });
+    await query(
+      `UPDATE public.cargas SET status = 'RESERVED', reserved_public_lead_id = $2 WHERE id = $1`,
+      [id, lead.id],
+    );
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { motorista: "", cavalo: "", carreta: "" },
+      correlationId: "corr-monitor-reopen",
+    });
+
+    // Carga volta a ficar ABERTA pro motorista e a reserva do portal cai.
+    const carga = await query(
+      `SELECT status, reserved_public_lead_id FROM public.cargas WHERE id = $1`,
+      [id],
+    );
+    expect(carga.rows[0].status).toBe("OPEN");
+    expect(carga.rows[0].reserved_public_lead_id).toBeNull();
+    const leadRow = await query(`SELECT status FROM public.load_public_leads WHERE id = $1`, [lead.id]);
+    expect(leadRow.rows[0].status).toBe("CANCELLED");
+  });
+
+  it("mudar SÓ o status de carga RESERVADA não reabre (não mexe na reserva do motorista)", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-noreopen@teste.local" });
+    const lead = await seedPublicLead({ load_id: id, status: "APPROVED" });
+    await query(
+      `UPDATE public.cargas SET status = 'RESERVED', reserved_public_lead_id = $2 WHERE id = $1`,
+      [id, lead.id],
+    );
+
+    // Só status operacional; motorista/veículo ausentes → preservados, sem reabrir.
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { status: "AGUARDANDO DESCARGA" },
+      correlationId: "corr-monitor-noreopen",
+    });
+
+    const carga = await query(
+      `SELECT status, reserved_public_lead_id FROM public.cargas WHERE id = $1`,
+      [id],
+    );
+    expect(carga.rows[0].status).toBe("RESERVED");
+    expect(carga.rows[0].reserved_public_lead_id).toBe(lead.id);
   });
 
   it("lança NotFoundError quando o LH não tem carga correspondente", async () => {

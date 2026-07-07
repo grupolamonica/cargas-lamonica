@@ -92,6 +92,11 @@ const schemaSql = `
     alloc_pinned boolean NOT NULL DEFAULT false,
     alloc_pinned_at timestamptz,
     alloc_pinned_by uuid,
+    reserved_public_lead_id uuid,
+    reserved_at timestamptz,
+    reserved_until timestamptz,
+    reserved_driver_id uuid,
+    reserved_claim_id uuid,
     sheet_synced_at timestamptz,
     viagem_id uuid,
     ordem_viagem integer,
@@ -197,6 +202,17 @@ const schemaSql = `
     validation_summary_json jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.load_public_lead_events (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    load_id uuid NOT NULL,
+    lead_id uuid NOT NULL,
+    event_type text NOT NULL,
+    event_payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+    actor_type text NOT NULL,
+    actor_id text,
+    created_at timestamptz NOT NULL DEFAULT now()
   );
 
   CREATE TABLE public.vehicles (
