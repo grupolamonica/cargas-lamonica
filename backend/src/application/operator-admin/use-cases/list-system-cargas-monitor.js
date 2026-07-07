@@ -117,8 +117,10 @@ export function mapSystemCargoToMonitorRow(c, clientesById = {}, now = null) {
 }
 
 /**
- * Lê TODAS as cargas do sistema (sheet_lh nulo, não-template, não-expiradas)
- * paginando com .range para furar o cap de 1000 linhas do PostgREST. Retorna o
+ * Lê TODAS as cargas do sistema (sheet_lh nulo, não-template, não-expiradas,
+ * não-rascunho) paginando com .range para furar o cap de 1000 linhas do
+ * PostgREST. Rascunho (status='DRAFT') é excluído do Monitor — segue acessível
+ * no painel de Cargas por filtro de status. Retorna o
  * shape de linha do Monitor. Best-effort: lança o erro para o caller decidir
  * (o read do Monitor trata como não-fatal).
  *
@@ -149,6 +151,7 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
       .is("sheet_lh", null)
       .eq("is_template", false)
       .neq("status", "EXPIRED")
+      .neq("status", "DRAFT") // rascunho não aparece no Monitor
       .order("data", { ascending: false })
       .range(from, from + pageSize - 1);
     if (error) throw error;

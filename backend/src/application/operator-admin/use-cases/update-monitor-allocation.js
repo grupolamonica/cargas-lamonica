@@ -4,6 +4,7 @@ import { NotFoundError } from "../../../domain/load-claims/errors.js";
 import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 import { cancelLoadCascade } from "./cancel-load-cascade.js";
+import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
 
 /**
  * Grava a ALOCAÇÃO editada no Monitor (motorista/cavalo/carreta/status operacional)
@@ -41,7 +42,8 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
   const result = await withPgTransaction(async (client) => {
     const { rows } = await client.query(
       `SELECT id, sheet_lh, sheet_motorista, sheet_cavalo, sheet_carreta,
-              alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo
+              alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
+              status, reserved_public_lead_id
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
       [cargoId],
     );
@@ -114,6 +116,16 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       );
     }
 
+    // Limpou o motorista de uma carga RESERVADA (o motorista havia reservado pelo
+    // portal): a reserva cai e a carga tem de voltar a ficar ABERTA pro motorista.
+    // Resolvido FORA da transação (cancelPublicLoadLead abre a própria e trava a
+    // mesma linha) — aqui só sinalizamos o lead a cancelar.
+    const reopenLeadId =
+      !effMotorista && !cancelling &&
+      sheetRow.status === "RESERVED" && sheetRow.reserved_public_lead_id
+        ? sheetRow.reserved_public_lead_id
+        : null;
+
     return {
       statusCode: 200,
       payload: {
@@ -123,6 +135,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
         meta: { correlationId },
       },
       resolvedStatus: finalStatus,
+      reopenLeadId,
       // Valor EFETIVO (o que o Monitor mostra) = override do operador ?? planilha.
       // Usado no write-back pra refletir na planilha; "" limpa a célula.
       effective: {
@@ -155,6 +168,21 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       console.warn(
         `[update-monitor-allocation] cascata de cancelamento falhou para ${lh}:`,
         cascadeErr instanceof Error ? cascadeErr.message : cascadeErr,
+      );
+    }
+  }
+
+  // Reabrir carga reservada: o operador limpou o motorista → cancela o lead do
+  // portal (APPROVED → CANCELLED) e a carga volta a OPEN (cancelPublicLoadLead
+  // zera reserved_* e faz status→OPEN). Best-effort: a limpeza já está commitada;
+  // se falhar, a carga fica RESERVED sem motorista até o operador tentar de novo.
+  if (result.reopenLeadId) {
+    try {
+      await cancelPublicLoadLead({ loadId: cargoId, leadId: result.reopenLeadId, operatorId, correlationId });
+    } catch (reopenErr) {
+      console.warn(
+        `[update-monitor-allocation] reabrir carga reservada falhou para ${lh}:`,
+        reopenErr instanceof Error ? reopenErr.message : reopenErr,
       );
     }
   }

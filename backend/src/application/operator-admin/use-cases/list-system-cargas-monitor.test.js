@@ -129,4 +129,24 @@ describe("listSystemCargasForMonitor", () => {
     const api = { from: () => api, select: () => api, is: () => api, eq: () => api, neq: () => api, order: () => api, range: async () => ({ data: null, error: new Error("boom") }) };
     await expect(listSystemCargasForMonitor(api)).rejects.toThrow("boom");
   });
+
+  it("exclui rascunho (DRAFT) e expiradas da query do Monitor", async () => {
+    const neqCalls = [];
+    const isCalls = [];
+    const eqCalls = [];
+    const api = {
+      from: () => api,
+      select: () => api,
+      is: (col, val) => { isCalls.push([col, val]); return api; },
+      eq: (col, val) => { eqCalls.push([col, val]); return api; },
+      neq: (col, val) => { neqCalls.push([col, val]); return api; },
+      order: () => api,
+      range: async () => ({ data: [], error: null }),
+    };
+    await listSystemCargasForMonitor(api);
+    expect(neqCalls).toContainEqual(["status", "EXPIRED"]);
+    expect(neqCalls).toContainEqual(["status", "DRAFT"]); // rascunho fora do Monitor
+    expect(isCalls).toContainEqual(["sheet_lh", null]);
+    expect(eqCalls).toContainEqual(["is_template", false]);
+  });
 });
