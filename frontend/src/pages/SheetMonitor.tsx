@@ -1399,8 +1399,8 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
         {row.reservaId && (
           <button
             type="button"
-            aria-label="Arrastar standby para uma carga"
-            title={assigningReserva ? "Enviando…" : "Arraste para uma carga da mesma rota para alocar este standby"}
+            aria-label="Arrastar reserva para uma carga"
+            title={assigningReserva ? "Enviando…" : "Arraste para uma carga da mesma rota para alocar esta reserva"}
             draggable={!assigningReserva}
             onClick={(e) => e.stopPropagation()}
             onDragStart={(e) => { if (assigningReserva) { e.preventDefault(); return; } e.stopPropagation(); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", `reserva:${row.reservaId}`); onDragStartHandle(`reserva:${row.reservaId}`); }}
@@ -1427,7 +1427,7 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
             </div>
           )}
           <span className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-semibold text-amber-600 dark:text-amber-400">
-            {assigningReserva ? "puxando p/ a carga…" : "standby — arraste p/ uma carga"}
+            {assigningReserva ? "puxando p/ a carga…" : "reserva — arraste p/ uma carga"}
           </span>
         </div>
       </div>
@@ -1572,8 +1572,8 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
         {canEditAlloc && routeStandbyCount > 0 && onPullStandby && (
           <button
             type="button"
-            title={`Puxar um motorista em standby desta rota (${routeStandbyCount} disponíve${routeStandbyCount === 1 ? "l" : "is"})`}
-            aria-label="Puxar standby para esta carga"
+            title={`Puxar um motorista em reserva desta rota (${routeStandbyCount} disponíve${routeStandbyCount === 1 ? "l" : "is"})`}
+            aria-label="Puxar reserva para esta carga"
             onClick={(e) => { e.stopPropagation(); onPullStandby(row.lh); }}
             className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[0.6rem] font-semibold text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700 dark:text-amber-400 dark:hover:bg-amber-500/10"
           >
@@ -1672,7 +1672,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       {/* LH + Tipo (linha única) */}
       <td className="px-3 py-1.5 align-middle">
         {row.reserva ? (
-          <span className="text-[0.62rem] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">standby</span>
+          <span className="text-[0.62rem] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">reserva</span>
         ) : (
           <div className="truncate" title={row.tipo ? `${row.lh} · ${row.tipo}` : row.lh}>
             <span className="font-mono text-xs font-semibold text-foreground/80">{row.lh || "—"}</span>
@@ -1717,8 +1717,8 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
             {row.descargaLabel && <span className="text-muted-foreground"> → {shortAgenda(row.descargaLabel)}</span>}
           </div>
         ) : row.reserva && row.standbyAt ? (
-          <span className="text-xs text-amber-700 dark:text-amber-300" title={`Em standby desde ${formatStandby(row.standbyAt)}`}>
-            standby {formatStandby(row.standbyAt)}
+          <span className="text-xs text-amber-700 dark:text-amber-300" title={`Em reserva desde ${formatStandby(row.standbyAt)}`}>
+            reserva {formatStandby(row.standbyAt)}
           </span>
         ) : (
           <span className="text-xs text-muted-foreground/40">—</span>
@@ -1863,14 +1863,14 @@ function SheetMonitorTable({
     if (!src || !targetRow) return;
     // Arrastando um STANDBY (reserva) → puxa para a carga de destino (mesma rota).
     if (src.startsWith("reserva:")) {
-      if (targetRow.source === "sistema" || targetRow.reserva) { toast.error("Solte o standby numa carga da planilha."); return; }
+      if (targetRow.source === "sistema" || targetRow.reserva) { toast.error("Solte a reserva numa carga da planilha."); return; }
       const reservaId = src.slice("reserva:".length);
       const reservaRow = rowsRef.current.find((r) => r.reserva && `reserva:${r.reservaId}` === src);
-      if (targetRow.pinned) { toast.error("A carga de destino está fixada. Desafixe antes de puxar o standby."); return; }
+      if (targetRow.pinned) { toast.error("A carga de destino está fixada. Desafixe antes de puxar a reserva."); return; }
       if (!allocEditPolicy(targetRow).editable) { toast.error("A carga de destino está travada (já em atribuição no ASPX)."); return; }
-      if (!reservaRow) { toast.error("A lista atualizou durante o arrasto. Tente puxar o standby de novo."); return; }
+      if (!reservaRow) { toast.error("A lista atualizou durante o arrasto. Tente puxar a reserva de novo."); return; }
       if (routeKeyOf(targetRow) !== routeKeyOf(reservaRow)) {
-        toast.error("O standby é de outra rota. Puxe para uma carga da mesma rota (origem → destino).");
+        toast.error("A reserva é de outra rota. Puxe para uma carga da mesma rota (origem → destino).");
         return;
       }
       onAssignReserva({ reservaId, targetLh: targetRow.lh });
@@ -2492,17 +2492,17 @@ function StandbyPickerModal({ open, carga, standbys, onPick, onClose }: {
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
-            <UserPlus className="h-4 w-4 text-amber-500" /> Puxar standby para a carga
+            <UserPlus className="h-4 w-4 text-amber-500" /> Puxar reserva para a carga
           </DialogTitle>
           <DialogDescription className="pt-1 text-sm text-muted-foreground">
             {viewCarga ? (
-              <>Carga <span className="font-mono font-semibold text-foreground">{viewCarga.lh}</span> — {routeKeyOf(viewCarga)}. Escolha um motorista em standby desta rota:</>
+              <>Carga <span className="font-mono font-semibold text-foreground">{viewCarga.lh}</span> — {routeKeyOf(viewCarga)}. Escolha um motorista em reserva desta rota:</>
             ) : "—"}
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-[55vh] space-y-1.5 overflow-y-auto pr-1">
           {viewStandbys.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">Nenhum motorista em standby nesta rota.</p>
+            <p className="py-6 text-center text-sm text-muted-foreground">Nenhum motorista em reserva nesta rota.</p>
           ) : viewStandbys.map((s) => (
             <button
               key={s.reservaId ?? s.rowKey}
@@ -2515,7 +2515,7 @@ function StandbyPickerModal({ open, carga, standbys, onPick, onClose }: {
                 <p className="truncate text-sm font-medium text-foreground">{s.motoristas || "—"}</p>
                 <p className="truncate text-[0.7rem] text-muted-foreground">
                   {s.cavalo || "—"}{s.carreta ? ` · ${s.carreta}` : ""}
-                  {s.standbyAt ? ` · standby desde ${formatStandby(s.standbyAt)}` : ""}
+                  {s.standbyAt ? ` · reserva desde ${formatStandby(s.standbyAt)}` : ""}
                 </p>
               </div>
               <UserPlus className="h-4 w-4 shrink-0 text-amber-500" />
@@ -2771,15 +2771,15 @@ export default function SheetMonitor() {
     onSuccess: (data) => {
       toast.success(
         data.bumped
-          ? "Standby alocado — o motorista anterior voltou para a reserva."
-          : "Standby alocado na carga.",
+          ? "Reserva alocada — o motorista anterior voltou para a reserva."
+          : "Reserva alocada na carga.",
       );
       void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
       // O selo Angellira/ASPX da carga é re-enriquecido em background → refetch atrasado.
       setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
     },
     onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Não foi possível puxar o standby para a carga.");
+      toast.error(err instanceof Error ? err.message : "Não foi possível puxar a reserva para a carga.");
     },
   });
   const handleAssignReserva = useCallback(
