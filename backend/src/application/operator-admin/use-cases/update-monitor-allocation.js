@@ -14,30 +14,34 @@ import { cancelLoadCascade } from "./cancel-load-cascade.js";
  * + metadados. O sync da planilha NUNCA toca `alloc_*`, então a edição do
  * operador nunca é sobrescrita. Leitura efetiva = COALESCE(alloc_*, sheet_*).
  *
- * Normalização: "" → null = limpa o override (volta a refletir a planilha).
+ * Normalização: "" = vazio EXPLÍCITO → grava "" em alloc_* (NÃO null). Assim
+ * COALESCE(alloc_*, sheet_*) devolve "" e a carga fica realmente sem
+ * motorista/veículo, em vez de "voltar a refletir a planilha" (o que
+ * ressuscitava o valor antigo ao limpar). Mesma semântica do arrastar
+ * (reassign-monitor-allocations).
  *
  * @param {{ lh: string, operatorId: string, payload: object, requestIp?: string, correlationId?: string }} args
  * @returns {Promise<{ statusCode: number, payload: object }>}
  */
 export async function updateMonitorAllocation({ lh, operatorId, payload, requestIp, correlationId }) {
   const cargoId = createSheetLoadId(lh);
-  const norm = (value) => {
-    const trimmed = (value ?? "").toString().trim();
-    return trimmed === "" ? null : trimmed;
-  };
-  const motorista = norm(payload.motorista);
-  const cavalo = norm(payload.cavalo);
-  const carreta = norm(payload.carreta);
-  const status = norm(payload.status);
-  // tipo (ForeCast/Spot/…): override NÃO travado por pinned. undefined = não
-  // enviado → preserva o valor atual (não apaga ao editar só motorista/placa).
-  const tipoProvided = payload.tipo !== undefined;
-  const tipo = norm(payload.tipo);
+  // Semântica de atualização PARCIAL:
+  //  - campo AUSENTE no payload  → preserva o alloc_* atual (não mexe);
+  //  - campo enviado como ""     → vazio EXPLÍCITO: grava "" (NÃO null);
+  //  - campo enviado com valor   → define.
+  // "" fica "" (não vira null) porque null = "sem override → COALESCE volta pra
+  // planilha", que era exatamente o bug: limpar o campo ressuscitava o
+  // motorista/veículo da planilha. Todos os consumidores tratam
+  // COALESCE(alloc, sheet, '') = '' como "sem alocação", então "" é seguro.
+  // Ausente ≠ vazio é essencial: o cancelamento manda só `status`, e o
+  // motorista/veículo precisam sobreviver p/ a cascata poder relocá-los.
+  const has = (k) => Object.prototype.hasOwnProperty.call(payload, k);
+  const norm = (value) => (value ?? "").toString().trim();
 
   const result = await withPgTransaction(async (client) => {
     const { rows } = await client.query(
       `SELECT id, sheet_lh, sheet_motorista, sheet_cavalo, sheet_carreta,
-              alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_tipo
+              alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
       [cargoId],
     );
@@ -50,11 +54,14 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
 
     // Carga FIXA: motorista/veículo são intocáveis — preserva o que já está
     // alocado (ignora os valores recebidos) e deixa passar só o status operacional.
+    // Campo ausente no payload também preserva o alloc_* atual; enviado "" =
+    // vazio explícito; enviado com valor = define.
     const pinned = sheetRow.alloc_pinned === true;
-    const finalMotorista = pinned ? (sheetRow.alloc_motorista ?? null) : motorista;
-    const finalCavalo = pinned ? (sheetRow.alloc_cavalo ?? null) : cavalo;
-    const finalCarreta = pinned ? (sheetRow.alloc_carreta ?? null) : carreta;
-    const finalTipo = tipoProvided ? tipo : (sheetRow.alloc_tipo ?? null);
+    const finalMotorista = pinned || !has("motorista") ? (sheetRow.alloc_motorista ?? null) : norm(payload.motorista);
+    const finalCavalo = pinned || !has("cavalo") ? (sheetRow.alloc_cavalo ?? null) : norm(payload.cavalo);
+    const finalCarreta = pinned || !has("carreta") ? (sheetRow.alloc_carreta ?? null) : norm(payload.carreta);
+    const finalStatus = has("status") ? norm(payload.status) : (sheetRow.alloc_status ?? null);
+    const finalTipo = has("tipo") ? norm(payload.tipo) : (sheetRow.alloc_tipo ?? null);
 
     await client.query(
       `
@@ -70,7 +77,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
             updated_at = now()
         WHERE id = $1
       `,
-      [cargoId, finalMotorista, finalCavalo, finalCarreta, status, operatorId, finalTipo],
+      [cargoId, finalMotorista, finalCavalo, finalCarreta, finalStatus, operatorId, finalTipo],
     );
 
     await insertSecurityAuditEvent(client, {
@@ -88,9 +95,9 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
         motorista: finalMotorista,
         cavalo: finalCavalo,
         carreta: finalCarreta,
-        status,
+        status: finalStatus,
         pinned,
-        cleared: finalMotorista === null && finalCavalo === null && finalCarreta === null && status === null,
+        cleared: !finalMotorista && !finalCavalo && !finalCarreta && !finalStatus,
       },
     });
 
@@ -98,7 +105,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     // reservas ativas desse motorista (senão aparece na carga E no standby). Não
     // baixa em cancelamento — aí quem move é a cascata.
     const effMotorista = (finalMotorista ?? sheetRow.sheet_motorista ?? "").toString().trim();
-    const cancelling = Boolean(status) && /cancel/i.test(status);
+    const cancelling = Boolean(finalStatus) && /cancel/i.test(finalStatus);
     if (effMotorista && !cancelling) {
       await client.query(
         `UPDATE public.monitor_reservas SET active = false, updated_at = now()
@@ -112,9 +119,10 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       payload: {
         ok: true,
         lh,
-        allocation: { motorista: finalMotorista, cavalo: finalCavalo, carreta: finalCarreta, status, source: "operator" },
+        allocation: { motorista: finalMotorista, cavalo: finalCavalo, carreta: finalCarreta, status: finalStatus, source: "operator" },
         meta: { correlationId },
       },
+      resolvedStatus: finalStatus,
       // Valor EFETIVO (o que o Monitor mostra) = override do operador ?? planilha.
       // Usado no write-back pra refletir na planilha; "" limpa a célula.
       effective: {
@@ -127,7 +135,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
 
   // Cancelou no Monitor (status → CANCELADO) → dispara a cascata da rota: o
   // motorista desce a fila (Interpretação A) e o último sem carga vira reserva.
-  const willCascade = Boolean(status) && /cancel/i.test(status);
+  const willCascade = Boolean(result.resolvedStatus) && /cancel/i.test(result.resolvedStatus);
 
   // Write-back best-effort pra planilha (espelho) — FORA da transação e SEM
   // await. Quando vai cascatear, o write-back fica por conta da cascata (que

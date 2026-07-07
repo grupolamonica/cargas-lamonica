@@ -710,7 +710,8 @@ export async function fetchSheetMonitor({ refresh = false }: { refresh?: boolean
 
 /**
  * Salva a alocação editada no Monitor (motorista/cavalo/carreta/status operacional)
- * para um LH. Cada campo: string define o override; null/"" limpa (volta à planilha).
+ * para um LH. Cada campo: string define o override; "" = vazio EXPLÍCITO (a carga
+ * fica sem aquele valor, sobrepondo a planilha — não volta a refletir a planilha).
  */
 export async function updateMonitorAllocation(input: {
   lh: string;

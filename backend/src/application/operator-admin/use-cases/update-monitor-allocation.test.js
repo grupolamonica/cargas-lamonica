@@ -75,7 +75,7 @@ describe("updateMonitorAllocation", () => {
     expect(row.sheet_status).toBe("AGUARDANDO CARREGAMENTO");
   });
 
-  it("normaliza string vazia para null (limpa o override e volta a refletir a planilha)", async () => {
+  it("limpar o campo grava vazio EXPLÍCITO (\"\") — não ressuscita o valor da planilha", async () => {
     const id = await seedSheetCargo();
     const operator = await seedUser({ email: "op-monitor-clear@teste.local" });
 
@@ -87,12 +87,38 @@ describe("updateMonitorAllocation", () => {
     });
 
     const row = await getAlloc(id);
-    expect(row.alloc_motorista).toBeNull();
-    expect(row.alloc_cavalo).toBeNull();
-    expect(row.alloc_carreta).toBeNull();
-    expect(row.alloc_status).toBeNull();
-    // sheet_* segue intocado
+    // "" (vazio explícito), NÃO null: COALESCE(alloc, sheet, '') = '' → a carga
+    // fica realmente sem motorista/veículo, sem voltar a refletir a planilha.
+    expect(row.alloc_motorista).toBe("");
+    expect(row.alloc_cavalo).toBe("");
+    expect(row.alloc_carreta).toBe("");
+    expect(row.alloc_status).toBe("");
+    // sheet_* segue intocado (a planilha continua com o valor original por baixo)
     expect(row.sheet_motorista).toBe("MOTORISTA DA PLANILHA");
+  });
+
+  it("campo AUSENTE preserva o alloc_* atual — enviar só status não apaga motorista/veículo", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-partial@teste.local" });
+    // Alocação já feita pelo operador (override em alloc_*).
+    await query(
+      `UPDATE public.cargas SET alloc_motorista = 'JOSE OVERRIDE', alloc_cavalo = 'OVR1A11', alloc_carreta = 'OVR2B22' WHERE id = $1`,
+      [id],
+    );
+
+    // Payload SÓ com status (motorista/cavalo/carreta ausentes → preserva).
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { status: "AGUARDANDO DESCARGA" },
+      correlationId: "corr-monitor-partial",
+    });
+
+    const row = await getAlloc(id);
+    expect(row.alloc_motorista).toBe("JOSE OVERRIDE"); // preservado (não veio no payload)
+    expect(row.alloc_cavalo).toBe("OVR1A11");          // preservado
+    expect(row.alloc_carreta).toBe("OVR2B22");         // preservado
+    expect(row.alloc_status).toBe("AGUARDANDO DESCARGA"); // atualizado
   });
 
   it("carga FIXA: preserva motorista/veículo e deixa passar só o status", async () => {
