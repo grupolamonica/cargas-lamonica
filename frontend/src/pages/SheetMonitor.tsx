@@ -41,7 +41,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ExternalValidationPill } from "@/components/ExternalValidationPill";
 import { cn } from "@/lib/utils";
 import { allocEditPolicy } from "@/lib/monitorEditPolicy";
 import { computeShiftMoves, computeSwapMoves } from "@/lib/monitorReorder";
@@ -398,6 +397,12 @@ function formatStandby(iso: string | null | undefined): string | null {
   }).format(d);
 }
 
+// "10/02/2026 07:00" → "10/02 07:00": tira o ano para a agenda caber em UMA linha.
+// O label completo (com ano) fica no tooltip.
+function shortAgenda(label: string | null | undefined): string {
+  return (label || "").replace(/(\d{2}\/\d{2})\/\d{4}/, "$1");
+}
+
 // ─── Enriched status dot ──────────────────────────────────────────────────────
 
 // Selo de PRESENÇA (igual à tela de Motoristas): encontrado=azul, não=vermelho,
@@ -499,37 +504,46 @@ function resolveRowSelo(row: SheetMonitorRowType, maps: SeloMaps): SheetMonitorE
   } as SheetMonitorEnrichedRow;
 }
 
-// Selos do MOTORISTA: Angellira vigente + cadastro no ASPX (mesmo selo da tela de Motoristas).
-function DriverChecks({ enriched }: { enriched: SheetMonitorEnrichedRow | undefined }) {
+// Check compacto (letra + cor) — substitui os selos com rótulo p/ ocupar bem menos
+// espaço na linha. Verde = ok, vermelho = não, cinza = não consultado. O detalhe
+// completo (validade, status text) continua no modal da linha; o tooltip resume.
+function MiniCheck({ letter, found, label }: { letter: string; found: boolean | null | undefined; label: string }) {
+  const state = found === true ? "ok" : found === false ? "no" : "na";
+  const stateLabel = state === "ok" ? "ok" : state === "no" ? "não" : "não consultado";
   return (
-    <div className="flex shrink-0 items-center gap-1">
-      <ExternalValidationPill
-        compact scope="motorista" label="Angellira"
-        found={presenceState(enriched?.angellira_driver_found)}
-      />
-      <ExternalValidationPill compact scope="motorista" label="ASPX" found={aspxCadastroState(enriched)} />
-    </div>
+    <span
+      title={`${label}: ${stateLabel}`}
+      aria-label={`${label}: ${stateLabel}`}
+      className={cn(
+        "inline-flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded text-[0.6rem] font-bold leading-none",
+        state === "ok" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300",
+        state === "no" && "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300",
+        state === "na" && "bg-muted text-muted-foreground",
+      )}
+    >
+      {letter}
+    </span>
   );
 }
 
-// Selos do VEÍCULO: Angellira do cavalo e da carreta (ASPX é só do motorista).
+// Selos do MOTORISTA (compactos): A = Angellira, S = cadastro no ASPX.
+function DriverChecks({ enriched }: { enriched: SheetMonitorEnrichedRow | undefined }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-0.5">
+      <MiniCheck letter="A" found={presenceState(enriched?.angellira_driver_found)} label="Angellira" />
+      <MiniCheck letter="S" found={aspxCadastroState(enriched)} label="ASPX" />
+    </span>
+  );
+}
+
+// Selos do VEÍCULO (compactos): C = cavalo, R = carreta (Angellira). ASPX é só do motorista.
 function VehicleChecks({ enriched, hasCavalo, hasCarreta }: { enriched: SheetMonitorEnrichedRow | undefined; hasCavalo: boolean; hasCarreta: boolean }) {
   if (!hasCavalo && !hasCarreta) return null;
   return (
-    <div className="flex shrink-0 items-center gap-1">
-      {hasCavalo && (
-        <ExternalValidationPill
-          compact scope="Angellira do cavalo" label="Cavalo"
-          found={presenceState(enriched?.cavalo_angellira_found)}
-        />
-      )}
-      {hasCarreta && (
-        <ExternalValidationPill
-          compact scope="Angellira da carreta" label="Carreta"
-          found={presenceState(enriched?.carreta_angellira_found)}
-        />
-      )}
-    </div>
+    <span className="inline-flex shrink-0 items-center gap-0.5">
+      {hasCavalo && <MiniCheck letter="C" found={presenceState(enriched?.cavalo_angellira_found)} label="Cavalo (Angellira)" />}
+      {hasCarreta && <MiniCheck letter="R" found={presenceState(enriched?.carreta_angellira_found)} label="Carreta (Angellira)" />}
+    </span>
   );
 }
 
@@ -1347,7 +1361,7 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
     );
   }
   return (
-    <div className="group/alloc flex items-start gap-1">
+    <div className="group/alloc flex items-center gap-1">
       {canEditAlloc ? (
         <button
           type="button"
@@ -1386,34 +1400,33 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
         title={canEditAlloc ? "Clique para editar motorista/veículo" : undefined}
         onClick={canEditAlloc ? (e) => { e.stopPropagation(); onStartEdit(row.lh); } : undefined}
       >
-        {row.motoristas ? (
-          <div className="flex items-center gap-2">
+        {/* Linha única: motorista + placa + checks compactos + selos de estado (fixado / ASPX). */}
+        <div className="flex items-center gap-1.5">
+          {row.motoristas ? (
             <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground" title={row.motoristas}>{row.motoristas}</span>
-            <DriverChecks enriched={enriched} />
-          </div>
-        ) : (
-          <span className="text-xs text-muted-foreground/50">Sem motorista</span>
-        )}
-        {row.cavalo && (
-          <div className="mt-0.5 flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-[0.62rem] text-muted-foreground" title={`${row.cavalo}${row.carreta ? ` · ${row.carreta}` : ""}`}>
+          ) : (
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/50">Sem motorista</span>
+          )}
+          {row.cavalo && (
+            <span className="max-w-[104px] shrink-0 truncate font-mono text-[0.6rem] text-muted-foreground" title={`${row.cavalo}${row.carreta ? ` · ${row.carreta}` : ""}`}>
               {row.cavalo}{row.carreta ? ` · ${row.carreta}` : ""}
             </span>
-            <VehicleChecks enriched={enriched} hasCavalo={Boolean(row.cavalo)} hasCarreta={Boolean(row.carreta)} />
-          </div>
-        )}
-        {pinned && (
-          <span className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-semibold text-amber-600 dark:text-amber-400" title="Fixado nesta carga">
-            <Pin className="h-2.5 w-2.5 fill-current" /> fixado
-          </span>
-        )}
-        {aspxWarning && !pinned && (
-          <span className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-medium text-amber-600 dark:text-amber-400" title="Motorista/veículo já atribuídos no ASPX">
-            <AlertTriangle className="h-2.5 w-2.5" /> atribuído no ASPX
-          </span>
-        )}
+          )}
+          {row.motoristas && <DriverChecks enriched={enriched} />}
+          <VehicleChecks enriched={enriched} hasCavalo={Boolean(row.cavalo)} hasCarreta={Boolean(row.carreta)} />
+          {pinned && (
+            <span title="Fixado nesta carga (motorista/veículo travados)" className="shrink-0 text-amber-500">
+              <Pin className="h-3 w-3 fill-current" />
+            </span>
+          )}
+          {aspxWarning && !pinned && (
+            <span title="Motorista/veículo já atribuídos no ASPX" className="shrink-0 text-amber-500">
+              <AlertTriangle className="h-3 w-3" />
+            </span>
+          )}
+        </div>
       </div>
-      <div className="flex shrink-0 flex-col items-end gap-0.5">
+      <div className="flex shrink-0 items-center gap-0.5">
         {canEditAlloc && routeStandbyCount > 0 && onPullStandby && (
           <button
             type="button"
@@ -1460,7 +1473,7 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
 
 // ─── Table row ────────────────────────────────────────────────────────────────
 
-const ROW_VIRTUALIZATION_STYLE = { contentVisibility: "auto" as const, containIntrinsicSize: "0 40px" as const };
+const ROW_VIRTUALIZATION_STYLE = { contentVisibility: "auto" as const, containIntrinsicSize: "0 34px" as const };
 
 type RowDropIntent = "swap" | "before" | "after" | null;
 
@@ -1540,70 +1553,66 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       )}
     >
       {/* Status */}
-      <td className="px-3 py-1.5 align-top"><StatusBadge status={!row.status && row.motoristas ? "Reservado" : row.status} /></td>
+      <td className="px-3 py-1.5 align-middle"><StatusBadge status={!row.status && row.motoristas ? "Reservado" : row.status} /></td>
 
-      {/* LH + Tipo */}
-      <td className="px-3 py-1.5 align-top">
+      {/* LH + Tipo (linha única) */}
+      <td className="px-3 py-1.5 align-middle">
         {row.reserva ? (
-          <span className="block text-[0.62rem] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">standby</span>
+          <span className="text-[0.62rem] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">standby</span>
         ) : (
-          <>
-            <span className="block font-mono text-xs font-semibold leading-tight text-foreground/80">{row.lh}</span>
-            {row.tipo && <span className="block text-[0.62rem] leading-tight text-muted-foreground">{row.tipo}</span>}
-          </>
+          <div className="truncate" title={row.tipo ? `${row.lh} · ${row.tipo}` : row.lh}>
+            <span className="font-mono text-xs font-semibold text-foreground/80">{row.lh || "—"}</span>
+            {row.tipo && <span className="text-[0.62rem] text-muted-foreground"> · {row.tipo}</span>}
+          </div>
         )}
       </td>
 
       {/* Cliente */}
-      <td className="px-3 py-1.5 align-top">
+      <td className="px-3 py-1.5 align-middle">
         <span className="block truncate text-xs font-medium text-foreground/90" title={row.cliente ?? undefined}>{row.cliente || "—"}</span>
       </td>
 
-      {/* Rota (com código operator-only antes da origem) */}
-      <td className="px-3 py-1.5 align-top">
-        <p className="truncate text-xs font-medium leading-tight text-foreground">
-          {row.routeCodigo != null && (
-            <span className="mr-1 font-mono text-[0.58rem] font-semibold text-muted-foreground/70" title="Código da rota">R{row.routeCodigo}</span>
-          )}
-          {row.origem || "—"}
-        </p>
-        <p className="truncate text-[0.62rem] leading-tight text-muted-foreground">{row.destino || "—"}</p>
-        {row.routeRegistered === false && (
-          <span
-            className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-semibold text-orange-600 dark:text-orange-400"
-            title="O trajeto origem→destino não tem rota cadastrada no catálogo"
-          >
-            <AlertTriangle className="h-3 w-3 shrink-0" /> sem rota cadastrada
+      {/* Rota (origem → destino em UMA linha; código operator-only na frente) */}
+      <td className="px-3 py-1.5 align-middle">
+        <div className="flex items-center gap-1">
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground" title={`${row.origem || "—"} → ${row.destino || "—"}`}>
+            {row.routeCodigo != null && (
+              <span className="mr-1 font-mono text-[0.58rem] font-semibold text-muted-foreground/70" title="Código da rota">R{row.routeCodigo}</span>
+            )}
+            {row.origem || "—"} <span className="text-muted-foreground/60">→</span> <span className="text-muted-foreground">{row.destino || "—"}</span>
           </span>
-        )}
+          {row.routeRegistered === false && (
+            <span title="O trajeto origem→destino não tem rota cadastrada no catálogo" className="shrink-0 text-orange-500">
+              <AlertTriangle className="h-3 w-3" />
+            </span>
+          )}
+        </div>
       </td>
 
-      {/* Agenda: carga + descarga (compacto: C = carregamento, D = descarga) */}
-      <td className="px-3 py-1.5 align-top">
-        {row.carregamentoLabel ? (
-          <p className="truncate text-xs leading-tight text-foreground" title={`Carregamento: ${row.carregamentoLabel}`}>
-            <span className="font-semibold text-muted-foreground/50">C</span> {row.carregamentoLabel}
-          </p>
-        ) : null}
-        {row.descargaLabel ? (
-          <p className="truncate text-[0.68rem] leading-tight text-muted-foreground" title={`Descarga: ${row.descargaLabel}`}>
-            <span className="font-semibold text-muted-foreground/50">D</span> {row.descargaLabel}
-          </p>
-        ) : null}
-        {!row.carregamentoLabel && !row.descargaLabel && (
-          row.reserva && row.standbyAt ? (
-            <div className="leading-tight" title={`Em standby desde ${formatStandby(row.standbyAt)}`}>
-              <p className="text-[0.58rem] font-semibold uppercase tracking-wide text-amber-600/80 dark:text-amber-400/80">Standby desde</p>
-              <p className="text-xs text-amber-700 dark:text-amber-300">{formatStandby(row.standbyAt)}</p>
-            </div>
-          ) : (
-            <span className="text-xs text-muted-foreground/40">—</span>
-          )
+      {/* Agenda: carregamento → descarga em UMA linha (sem o ano, p/ caber) */}
+      <td className="px-3 py-1.5 align-middle">
+        {row.carregamentoLabel || row.descargaLabel ? (
+          <div
+            className="truncate text-xs text-foreground"
+            title={[
+              row.carregamentoLabel ? `Carregamento: ${row.carregamentoLabel}` : null,
+              row.descargaLabel ? `Descarga: ${row.descargaLabel}` : null,
+            ].filter(Boolean).join("  ·  ")}
+          >
+            {shortAgenda(row.carregamentoLabel) || "—"}
+            {row.descargaLabel && <span className="text-muted-foreground"> → {shortAgenda(row.descargaLabel)}</span>}
+          </div>
+        ) : row.reserva && row.standbyAt ? (
+          <span className="text-xs text-amber-700 dark:text-amber-300" title={`Em standby desde ${formatStandby(row.standbyAt)}`}>
+            standby {formatStandby(row.standbyAt)}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground/40">—</span>
         )}
       </td>
 
       {/* Motorista + Placa — editável inline (combobox) */}
-      <td className="px-3 py-1.5 align-top">
+      <td className="px-3 py-1.5 align-middle">
         <AllocCell
           row={row}
           enriched={enriched}
