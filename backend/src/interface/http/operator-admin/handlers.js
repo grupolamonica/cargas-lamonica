@@ -37,7 +37,7 @@ import {
 } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
-import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema } from "../schemas/operator-schemas.js";
+import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorUpdateReservaBodySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
@@ -72,6 +72,10 @@ import { submitDraftAsOperator } from "../../../application/operator-admin/use-c
 import { updateMonitorAllocation } from "../../../application/operator-admin/use-cases/update-monitor-allocation.js";
 import { reassignMonitorAllocations } from "../../../application/operator-admin/use-cases/reassign-monitor-allocations.js";
 import { assignReservaToCarga } from "../../../application/operator-admin/use-cases/assign-reserva-to-carga.js";
+import { getRouteDriverHistory } from "../../../application/operator-admin/use-cases/route-driver-history.js";
+import { createReserva } from "../../../application/operator-admin/use-cases/create-reserva.js";
+import { updateReserva } from "../../../application/operator-admin/use-cases/update-reserva.js";
+import { deleteReserva } from "../../../application/operator-admin/use-cases/delete-reserva.js";
 import { setMonitorAllocationPin } from "../../../application/operator-admin/use-cases/set-monitor-allocation-pin.js";
 import { listSystemCargasForMonitor } from "../../../application/operator-admin/use-cases/list-system-cargas-monitor.js";
 import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-admin/use-cases/planilha-availability.js";
@@ -1158,6 +1162,67 @@ export async function resolveAssignReservaResponse(request) {
       const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
       void enrichSheetRowsByLh(createSupabaseAdminClient(), [targetLh], { correlationId }).catch(() => {});
       return result;
+    },
+  );
+}
+
+export async function resolveRouteDriverHistoryResponse(request) {
+  return withOperatorSession(request, "route-driver-history", async ({ correlationId }) => {
+    const origem = getQueryParam(request, "origem")?.trim();
+    const destino = getQueryParam(request, "destino")?.trim();
+
+    if (!origem || !destino) {
+      return {
+        statusCode: 400,
+        payload: { error: "MISSING_ROUTE", message: "Query params 'origem' e 'destino' são obrigatórios." },
+      };
+    }
+
+    return getRouteDriverHistory({ origem, destino, correlationId });
+  });
+}
+
+export async function resolveCreateReservaResponse(request) {
+  return withOperatorSession(
+    request,
+    "create-reserva",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { motorista, cavalo, carreta, origem, destino } = sheetMonitorCreateReservaBodySchema.parse(await parseJsonBody(request));
+      return createReserva({ motorista, cavalo, carreta, origem, destino, operatorId, requestIp, correlationId });
+    },
+  );
+}
+
+export async function resolveUpdateReservaResponse(request) {
+  return withOperatorSession(
+    request,
+    "update-reserva",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { reservaId, motorista, cavalo, carreta } = sheetMonitorUpdateReservaBodySchema.parse(await parseJsonBody(request));
+      return updateReserva({ reservaId, motorista, cavalo, carreta, operatorId, requestIp, correlationId });
+    },
+  );
+}
+
+export async function resolveDeleteReservaResponse(request) {
+  return withOperatorSession(
+    request,
+    "delete-reserva",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { reservaId } = sheetMonitorDeleteReservaBodySchema.parse(await parseJsonBody(request));
+      return deleteReserva({ reservaId, operatorId, requestIp, correlationId });
     },
   );
 }

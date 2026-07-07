@@ -302,6 +302,15 @@ function createDatabase() {
     implementation: () => crypto.randomUUID(),
   });
 
+  // pg-mem does not implement btrim natively (Postgres' trim). Register the
+  // single-arg form used by the reserva use-cases (btrim(text) trims whitespace).
+  db.public.registerFunction({
+    name: "btrim",
+    args: [DataType.text],
+    returns: DataType.text,
+    implementation: (value) => (value == null ? value : String(value).trim()),
+  });
+
   // pg-mem does not implement jsonb_build_object natively.
   // Register for the arity used in fetchOperatorHistoricoDriverSummaries (14 key-value pairs = 28 text args).
   db.public.registerFunction({
