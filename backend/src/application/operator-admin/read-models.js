@@ -1517,6 +1517,45 @@ function extractAngelliraDataFromApplications(applications) {
   return null;
 }
 
+// Espelha extractAngelliraDataFromApplications para o BRK. Para PUBLIC_LEAD, o
+// resultado do BRK vive no validation_summary_json da candidatura (driver.brk) —
+// não em driver_profiles.brk_* (que só existe p/ motorista REGISTRADO). Extrai o
+// hasBrk (conjunto apto) e a vigência no MESMO formato do buildBrkVigency, para o
+// card do lead mostrar o selo BRK real em vez de "Não cadastrado".
+function extractBrkFromApplications(applications) {
+  for (const app of applications) {
+    if (app.source === "PUBLIC_LEAD" && app.validation?.driver?.brk) {
+      const brk = app.validation.driver.brk;
+      const apto = brk.conjuntoApto === true || brk.status === "vigente";
+
+      let vigency = null;
+      if (brk.status && brk.status !== "erro") {
+        const validUntil = brk.validUntil || null;
+        let daysUntilExpiry = null;
+        let alertLevel = null;
+        if (validUntil) {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const expiryDate = new Date(validUntil + "T00:00:00Z");
+          daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+          alertLevel = daysUntilExpiry < 0 ? "EXPIRED" : daysUntilExpiry <= 30 ? "EXPIRING_SOON" : "OK";
+        }
+        vigency = {
+          status: brk.status || null,
+          statusText: brk.statusText || null,
+          validUntil,
+          daysUntilExpiry,
+          alertLevel,
+          conjuntoApto: typeof brk.conjuntoApto === "boolean" ? brk.conjuntoApto : null,
+          checkedAt: brk.checkedAt || null,
+        };
+      }
+      return { hasBrk: apto, vigency };
+    }
+  }
+  return null;
+}
+
 function mapDriverSummaryRowToItem(row, applications) {
   const driverId = createDriverEntityId(row);
   const limitedApplications = applications.slice(0, 5);
@@ -1544,9 +1583,9 @@ function mapDriverSummaryRowToItem(row, applications) {
 
   let displayName = row.display_name;
   let angelliraVigency = buildAngelliraVigency(row);
-  const brkVigency = buildBrkVigency(row);
+  let brkVigency = buildBrkVigency(row);
   const spxVigency = buildSpxVigency(row);
-  const hasBrk = row.brk_conjunto_apto === true || row.brk_status === "vigente";
+  let hasBrk = row.brk_conjunto_apto === true || row.brk_status === "vigente";
 
   // For PUBLIC_LEAD drivers, extract Angellira data from validation summaries
   // since they have no driver_profiles row with angellira_* columns.
@@ -1561,6 +1600,16 @@ function mapDriverSummaryRowToItem(row, applications) {
       }
       if (!angelliraVigency && extracted.vigency) {
         angelliraVigency = extracted.vigency;
+      }
+    }
+
+    // Idem para o BRK: lead não tem driver_profiles.brk_*, então o resultado vem
+    // da candidatura (validation.driver.brk). Preenche o selo/badge do card.
+    const brkExtracted = extractBrkFromApplications(limitedApplications);
+    if (brkExtracted) {
+      hasBrk = hasBrk || brkExtracted.hasBrk;
+      if (!brkVigency && brkExtracted.vigency) {
+        brkVigency = brkExtracted.vigency;
       }
     }
   }
