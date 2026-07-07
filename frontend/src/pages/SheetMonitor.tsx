@@ -14,13 +14,16 @@ import {
   Loader2,
   Lock,
   MapPin,
+  MessageCircle,
   Pencil,
   Pin,
   PinOff,
+  Plus,
   RefreshCw,
   Search,
   Send,
   ShieldX,
+  Trash2,
   Truck,
   UserCheck,
   UserPlus,
@@ -54,11 +57,16 @@ import {
   previewAspxAllocation,
   reassignMonitorAllocations,
   assignReservaToCarga,
+  createReserva,
+  deleteReserva,
+  fetchRouteDriverHistory,
   setMonitorAllocationPin,
   updateMonitorAllocation,
   updateMonitorCargo,
+  updateReserva,
   type AspxAllocationItem,
   type AspxAllocationPreview,
+  type RouteDriverHistoryEntry,
   type SheetMonitorAllocation,
   type SheetMonitorEnrichedRow,
   type SheetMonitorRow as SheetMonitorRowType,
@@ -401,6 +409,33 @@ function formatStandby(iso: string | null | undefined): string | null {
   return new Intl.DateTimeFormat("pt-BR", {
     day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo",
   }).format(d);
+}
+
+// Faixa de datas (ms epoch; null = sem limite naquele extremo). carFrom/carTo
+// filtram por carregamento (row.data + row.horario); desFrom/desTo por descarga
+// (row.descargaAt). Reservas não têm data → sempre visíveis.
+type DateRangeFilter = { carFrom: number | null; carTo: number | null; desFrom: number | null; desTo: number | null };
+function rowMatchesDateRanges(row: SheetMonitorRowType, r: DateRangeFilter): boolean {
+  if (r.carFrom === null && r.carTo === null && r.desFrom === null && r.desTo === null) return true;
+  if (row.reserva) return true; // reservas não têm data — sempre visíveis
+  const parse = (iso: string | null | undefined): number | null => {
+    const t = iso ? new Date(iso).getTime() : NaN;
+    return Number.isFinite(t) ? t : null;
+  };
+  if (r.carFrom !== null || r.carTo !== null) {
+    const h = row.horario || "00:00:00";
+    const carTs = row.data ? parse(`${row.data}T${h.length === 5 ? `${h}:00` : h}`) : null;
+    if (carTs === null) return false;
+    if (r.carFrom !== null && carTs < r.carFrom) return false;
+    if (r.carTo !== null && carTs > r.carTo) return false;
+  }
+  if (r.desFrom !== null || r.desTo !== null) {
+    const desTs = parse(row.descargaAt);
+    if (desTs === null) return false;
+    if (r.desFrom !== null && desTs < r.desFrom) return false;
+    if (r.desTo !== null && desTs > r.desTo) return false;
+  }
+  return true;
 }
 
 // "10/02/2026 07:00" → "10/02 07:00": tira o ano para a agenda caber em UMA linha.
@@ -1667,14 +1702,18 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       )}
     >
       {/* Status */}
-      <td className="px-3 py-1.5 align-middle"><StatusBadge dense status={!row.status && row.motoristas ? "Reservado" : row.status} /></td>
+      <td className="w-[1%] px-3 py-1.5 align-middle">
+        <div className="max-w-[168px]">
+          <StatusBadge dense status={!row.status && row.motoristas ? "Reservado" : row.status} />
+        </div>
+      </td>
 
-      {/* LH + Tipo (linha única) */}
-      <td className="px-3 py-1.5 align-middle">
+      {/* LH + Tipo (linha única) — content-sized + nowrap: renderiza o LH COMPLETO */}
+      <td className="w-[1%] whitespace-nowrap px-3 py-1.5 align-middle">
         {row.reserva ? (
           <span className="text-[0.62rem] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">reserva</span>
         ) : (
-          <div className="truncate" title={row.tipo ? `${row.lh} · ${row.tipo}` : row.lh}>
+          <div title={row.tipo ? `${row.lh} · ${row.tipo}` : row.lh}>
             <span className="font-mono text-xs font-semibold text-foreground/80">{row.lh || "—"}</span>
             {row.tipo && <span className="text-[0.62rem] text-muted-foreground"> · {row.tipo}</span>}
           </div>
@@ -1682,8 +1721,8 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       </td>
 
       {/* Cliente */}
-      <td className="px-3 py-1.5 align-middle">
-        <span className="block truncate text-xs font-medium text-foreground/90" title={row.cliente ?? undefined}>{row.cliente || "—"}</span>
+      <td className="w-[1%] whitespace-nowrap px-3 py-1.5 align-middle">
+        <span className="block max-w-[150px] truncate text-xs font-medium text-foreground/90" title={row.cliente ?? undefined}>{row.cliente || "—"}</span>
       </td>
 
       {/* Rota (origem → destino em UMA linha; código operator-only na frente) */}
@@ -1703,11 +1742,11 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
         </div>
       </td>
 
-      {/* Agenda: carregamento → descarga em UMA linha (sem o ano, p/ caber) */}
-      <td className="px-3 py-1.5 align-middle">
+      {/* Agenda: carregamento → descarga em UMA linha (content-sized + nowrap = completa) */}
+      <td className="w-[1%] whitespace-nowrap px-3 py-1.5 align-middle">
         {row.carregamentoLabel || row.descargaLabel ? (
           <div
-            className="truncate text-xs text-foreground"
+            className="text-xs text-foreground"
             title={[
               row.carregamentoLabel ? `Carregamento: ${row.carregamentoLabel}` : null,
               row.descargaLabel ? `Descarga: ${row.descargaLabel}` : null,
@@ -1957,24 +1996,25 @@ function SheetMonitorTable({
         </div>
       )}
       <div className="overflow-x-auto overscroll-x-contain pb-1">
-        {/* Larguras em % (não px fixo): as colunas escalam com a viewport — sem o
-            "buraco" no meio (antes só a Rota era flexível e engolia a sobra) e com
-            a coluna Motorista/Placa larga o bastante pro nome não cortar. */}
-        <table className="w-full min-w-[1040px] table-fixed text-sm">
-          <colgroup>
-            {/* Status | LH | Cliente | Rota | Agenda | Motorista/Placa */}
-            <col className="w-[14%]" />
-            <col className="w-[8%]" />
-            <col className="w-[10%]" />
-            <col className="w-[22%]" />
-            <col className="w-[13%]" />
-            <col className="w-[33%]" />
-          </colgroup>
+        {/* Colunas com largura por conteúdo (sem table-fixed): LH e Agenda são
+            content-sized + nowrap, então o código LH renderiza COMPLETO; Status e
+            Cliente encolhem; Rota e Motorista/Placa absorvem a sobra e só truncam
+            quando o espaço aperta. */}
+        <table className="w-full min-w-[920px] text-sm">
           <thead>
             <tr className="border-b border-border/60 bg-primary/[0.028]">
-              {(["Status", "LH", "Cliente", "Rota", "Agenda", "Motorista / Placa"] as const).map((col) => (
-                <th key={col} className="px-3 py-2 text-left text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
-                  {col}
+              {(
+                [
+                  ["Status", "w-[1%] whitespace-nowrap"],
+                  ["LH", "w-[1%] whitespace-nowrap"],
+                  ["Cliente", "w-[1%] whitespace-nowrap"],
+                  ["Rota", ""],
+                  ["Agenda", "w-[1%] whitespace-nowrap"],
+                  ["Motorista / Placa", ""],
+                ] as const
+              ).map(([label, widthClass]) => (
+                <th key={label} className={cn("px-3 py-2 text-left text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70", widthClass)}>
+                  {label}
                 </th>
               ))}
             </tr>
@@ -2471,22 +2511,123 @@ function RowDetailModal({
   );
 }
 
-// Seletor de standby — alternativa ao arrastar (funciona mesmo com o standby
-// noutra página). Lista os motoristas em standby da MESMA rota da carga.
-function StandbyPickerModal({ open, carga, standbys, onPick, onClose }: {
+// Link de WhatsApp p/ um telefone brasileiro (só dígitos; prefixo 55). null se vazio.
+function whatsappHref(telefone: string | null | undefined): string | null {
+  const digits = (telefone || "").replace(/\D/g, "");
+  return digits ? `https://wa.me/55${digits}` : null;
+}
+
+// Renderiza telefone com link de WhatsApp, ou "sem telefone" quando ausente.
+function PhoneLink({ telefone }: { telefone: string | null | undefined }) {
+  const href = whatsappHref(telefone);
+  if (!href) return <span className="text-[0.7rem] text-muted-foreground/60">sem telefone</span>;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      className="inline-flex items-center gap-1 text-[0.7rem] font-medium text-emerald-600 hover:underline dark:text-emerald-400"
+    >
+      <MessageCircle className="h-3 w-3" />
+      {telefone}
+    </a>
+  );
+}
+
+// Painel de reserva — gerencia (CRUD) os motoristas em reserva desta rota e sugere
+// quem já rodou a rota (histórico). Alternativa ao arrastar: puxa a reserva pra
+// carga mesmo com o standby noutra página. Faz query/mutations internas.
+function ReservaPanelModal({ open, carga, reservas, onPull, onClose }: {
   open: boolean;
   carga: SheetMonitorRowType | null;
-  standbys: SheetMonitorRowType[];
-  onPick: (reservaId: string) => void;
+  reservas: SheetMonitorRowType[];
+  onPull: (reservaId: string) => void;
   onClose: () => void;
 }) {
-  // Mantém o último conteúdo enquanto o modal anima a saída: ao fechar, carga/lista
-  // viram null/[] no mesmo render — se o conteúdo "esvaziar" durante a animação de
-  // saída, o Radix Presence trava e o diálogo não desmonta. Congela o que mostrar.
-  const lastRef = useRef<{ carga: SheetMonitorRowType | null; standbys: SheetMonitorRowType[] }>({ carga: null, standbys: [] });
-  if (open && carga) lastRef.current = { carga, standbys };
+  const queryClient = useQueryClient();
+  // Congela o último conteúdo durante a animação de saída (mesma razão do modal
+  // anterior: conteúdo vazio no render de fechamento trava o Radix Presence).
+  const lastRef = useRef<{ carga: SheetMonitorRowType | null; reservas: SheetMonitorRowType[] }>({ carga: null, reservas: [] });
+  if (open && carga) lastRef.current = { carga, reservas };
   const viewCarga = open ? carga : lastRef.current.carga;
-  const viewStandbys = open ? standbys : lastRef.current.standbys;
+  const viewReservas = open ? reservas : lastRef.current.reservas;
+  const origem = viewCarga?.origem ?? "";
+  const destino = viewCarga?.destino ?? "";
+
+  // Formulário de adição (Seção 1) + edição inline por reservaId.
+  const [addOpen, setAddOpen] = useState(false);
+  const [addForm, setAddForm] = useState({ motorista: "", cavalo: "", carreta: "" });
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ motorista: "", cavalo: "", carreta: "" });
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  // Reset dos formulários ao (re)abrir o modal.
+  useEffect(() => {
+    if (open) { setAddOpen(false); setAddForm({ motorista: "", cavalo: "", carreta: "" }); setEditId(null); setConfirmDeleteId(null); }
+  }, [open]);
+
+  const invalidate = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+  }, [queryClient]);
+
+  const historyQuery = useQuery({
+    queryKey: ["admin", "route-driver-history", origem, destino],
+    queryFn: () => fetchRouteDriverHistory({ origem, destino }),
+    enabled: open && Boolean(origem) && Boolean(destino),
+    staleTime: 30_000,
+  });
+
+  const createMut = useMutation({
+    mutationFn: createReserva,
+    onSuccess: () => {
+      toast.success("Adicionado à reserva.");
+      setAddOpen(false);
+      setAddForm({ motorista: "", cavalo: "", carreta: "" });
+      invalidate();
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Não foi possível adicionar à reserva."),
+  });
+  const updateMut = useMutation({
+    mutationFn: updateReserva,
+    onSuccess: () => { toast.success("Reserva atualizada."); setEditId(null); invalidate(); },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Não foi possível atualizar a reserva."),
+  });
+  const deleteMut = useMutation({
+    mutationFn: deleteReserva,
+    onSuccess: () => { toast.success("Reserva removida."); setConfirmDeleteId(null); invalidate(); },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Não foi possível remover a reserva."),
+  });
+
+  const submitAdd = () => {
+    const motorista = addForm.motorista.trim();
+    if (!motorista || !origem || !destino) return;
+    createMut.mutate({ motorista, cavalo: addForm.cavalo.trim() || undefined, carreta: addForm.carreta.trim() || undefined, origem, destino });
+  };
+  const startEdit = (r: SheetMonitorRowType) => {
+    setEditId(r.reservaId ?? null);
+    setEditForm({ motorista: r.motoristas ?? "", cavalo: r.cavalo ?? "", carreta: r.carreta ?? "" });
+  };
+  const submitEdit = () => {
+    if (!editId) return;
+    updateMut.mutate({ reservaId: editId, motorista: editForm.motorista.trim(), cavalo: editForm.cavalo.trim(), carreta: editForm.carreta.trim() });
+  };
+  const addFromHistory = (h: RouteDriverHistoryEntry) => {
+    if (!origem || !destino) return;
+    createMut.mutate({ motorista: h.motorista, cavalo: h.cavalo || undefined, carreta: h.carreta || undefined, origem, destino });
+  };
+
+  // Dedupe: nomes já em reserva (Seção 1) não precisam reaparecer na Seção 2.
+  const reservaNames = useMemo(
+    () => new Set(viewReservas.map((r) => (r.motoristas ?? "").trim().toLowerCase()).filter(Boolean)),
+    [viewReservas],
+  );
+  const historyEntries = (historyQuery.data?.drivers ?? []).filter(
+    (h) => !reservaNames.has((h.motorista ?? "").trim().toLowerCase()),
+  );
+
+  const inputClass = "w-full rounded-lg border border-border/70 bg-white/92 px-2.5 py-1.5 text-xs outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10 dark:bg-muted/40";
+
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="max-w-lg">
@@ -2496,31 +2637,156 @@ function StandbyPickerModal({ open, carga, standbys, onPick, onClose }: {
           </DialogTitle>
           <DialogDescription className="pt-1 text-sm text-muted-foreground">
             {viewCarga ? (
-              <>Carga <span className="font-mono font-semibold text-foreground">{viewCarga.lh}</span> — {routeKeyOf(viewCarga)}. Escolha um motorista em reserva desta rota:</>
+              <>Carga <span className="font-mono font-semibold text-foreground">{viewCarga.lh}</span> — {routeKeyOf(viewCarga)}</>
             ) : "—"}
           </DialogDescription>
         </DialogHeader>
-        <div className="max-h-[55vh] space-y-1.5 overflow-y-auto pr-1">
-          {viewStandbys.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">Nenhum motorista em reserva nesta rota.</p>
-          ) : viewStandbys.map((s) => (
-            <button
-              key={s.reservaId ?? s.rowKey}
-              type="button"
-              disabled={!s.reservaId}
-              onClick={() => { if (s.reservaId) { onPick(s.reservaId); onClose(); } }}
-              className="flex w-full items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2 text-left transition-colors hover:border-amber-400 hover:bg-amber-50/60 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-amber-500/10"
-            >
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-foreground">{s.motoristas || "—"}</p>
-                <p className="truncate text-[0.7rem] text-muted-foreground">
-                  {s.cavalo || "—"}{s.carreta ? ` · ${s.carreta}` : ""}
-                  {s.standbyAt ? ` · reserva desde ${formatStandby(s.standbyAt)}` : ""}
-                </p>
+
+        <div className="max-h-[60vh] space-y-5 overflow-y-auto pr-1">
+          {/* ── Seção 1 — Em reserva nesta rota ── */}
+          <section className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-[0.7rem] font-semibold uppercase tracking-wide text-muted-foreground/80">Em reserva nesta rota</h3>
+              <button
+                type="button"
+                onClick={() => setAddOpen((v) => !v)}
+                className="inline-flex items-center gap-1 rounded-lg border border-amber-400/50 bg-amber-50/60 px-2 py-1 text-[0.7rem] font-semibold text-amber-700 hover:bg-amber-100/70 dark:bg-amber-500/10 dark:text-amber-300"
+              >
+                <Plus className="h-3 w-3" /> Adicionar reserva
+              </button>
+            </div>
+
+            {addOpen && (
+              <div className="space-y-2 rounded-lg border border-amber-400/40 bg-amber-50/40 p-2.5 dark:bg-amber-500/[0.06]">
+                <input className={inputClass} placeholder="Motorista *" value={addForm.motorista}
+                  onChange={(e) => setAddForm((f) => ({ ...f, motorista: e.target.value }))} />
+                <div className="flex gap-2">
+                  <input className={inputClass} placeholder="Cavalo" value={addForm.cavalo}
+                    onChange={(e) => setAddForm((f) => ({ ...f, cavalo: e.target.value }))} />
+                  <input className={inputClass} placeholder="Carreta" value={addForm.carreta}
+                    onChange={(e) => setAddForm((f) => ({ ...f, carreta: e.target.value }))} />
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => setAddOpen(false)}
+                    className="rounded-lg px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground">Cancelar</button>
+                  <button type="button" disabled={!addForm.motorista.trim() || createMut.isPending} onClick={submitAdd}
+                    className="inline-flex items-center gap-1 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50">
+                    {createMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />} Adicionar
+                  </button>
+                </div>
               </div>
-              <UserPlus className="h-4 w-4 shrink-0 text-amber-500" />
-            </button>
-          ))}
+            )}
+
+            {viewReservas.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">Nenhum motorista em reserva nesta rota.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {viewReservas.map((s) => {
+                  const rid = s.reservaId ?? null;
+                  const isEditing = editId != null && editId === rid;
+                  const isConfirming = confirmDeleteId != null && confirmDeleteId === rid;
+                  return (
+                    <div key={rid ?? s.rowKey} className="rounded-lg border border-border/60 px-3 py-2">
+                      {isEditing ? (
+                        <div className="space-y-2">
+                          <input className={inputClass} placeholder="Motorista *" value={editForm.motorista}
+                            onChange={(e) => setEditForm((f) => ({ ...f, motorista: e.target.value }))} />
+                          <div className="flex gap-2">
+                            <input className={inputClass} placeholder="Cavalo" value={editForm.cavalo}
+                              onChange={(e) => setEditForm((f) => ({ ...f, cavalo: e.target.value }))} />
+                            <input className={inputClass} placeholder="Carreta" value={editForm.carreta}
+                              onChange={(e) => setEditForm((f) => ({ ...f, carreta: e.target.value }))} />
+                          </div>
+                          <div className="flex justify-end gap-2">
+                            <button type="button" onClick={() => setEditId(null)}
+                              className="rounded-lg px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground">Cancelar</button>
+                            <button type="button" disabled={!editForm.motorista.trim() || updateMut.isPending} onClick={submitEdit}
+                              className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+                              {updateMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />} Salvar
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 space-y-0.5">
+                            <p className="truncate text-sm font-semibold text-foreground">{s.motoristas || "—"}</p>
+                            <p className="truncate font-mono text-[0.7rem] text-muted-foreground">
+                              {s.cavalo || "—"}{s.carreta ? ` · ${s.carreta}` : ""}
+                            </p>
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                              <PhoneLink telefone={s.telefone} />
+                              {s.standbyAt && (
+                                <span className="text-[0.7rem] text-amber-700 dark:text-amber-300">em reserva desde {formatStandby(s.standbyAt)}</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1">
+                            <button type="button" disabled={!rid} onClick={() => { if (rid) { onPull(rid); onClose(); } }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-amber-400/60 bg-amber-50/70 px-2 py-1 text-[0.7rem] font-semibold text-amber-700 hover:bg-amber-100/80 disabled:opacity-50 dark:bg-amber-500/10 dark:text-amber-300">
+                              <UserPlus className="h-3 w-3" /> Puxar p/ carga
+                            </button>
+                            <button type="button" disabled={!rid} onClick={() => startEdit(s)} title="Editar"
+                              className="rounded-lg border border-border/60 p-1 text-muted-foreground hover:text-foreground disabled:opacity-50">
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button type="button" disabled={!rid} onClick={() => setConfirmDeleteId(rid)} title="Excluir"
+                              className="rounded-lg border border-border/60 p-1 text-muted-foreground hover:text-red-600 disabled:opacity-50">
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {isConfirming && !isEditing && (
+                        <div className="mt-2 flex items-center justify-end gap-2 border-t border-border/50 pt-2">
+                          <span className="mr-auto text-[0.7rem] text-muted-foreground">Excluir esta reserva?</span>
+                          <button type="button" onClick={() => setConfirmDeleteId(null)}
+                            className="rounded-lg px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground">Cancelar</button>
+                          <button type="button" disabled={deleteMut.isPending} onClick={() => { if (rid) deleteMut.mutate({ reservaId: rid }); }}
+                            className="inline-flex items-center gap-1 rounded-lg bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50">
+                            {deleteMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Excluir
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* ── Seção 2 — Já rodaram esta rota ── */}
+          <section className="space-y-2">
+            <h3 className="text-[0.7rem] font-semibold uppercase tracking-wide text-muted-foreground/80">Já rodaram esta rota</h3>
+            {historyQuery.isLoading ? (
+              <p className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Carregando histórico…
+              </p>
+            ) : historyEntries.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">Nenhum motorista no histórico desta rota.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {historyEntries.map((h, i) => (
+                  <div key={`${h.motorista}-${i}`} className="flex items-start justify-between gap-3 rounded-lg border border-border/60 px-3 py-2">
+                    <div className="min-w-0 space-y-0.5">
+                      <p className="truncate text-sm font-medium text-foreground">{h.motorista || "—"}</p>
+                      <p className="truncate font-mono text-[0.7rem] text-muted-foreground">
+                        {h.cavalo || "—"}{h.carreta ? ` · ${h.carreta}` : ""}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <PhoneLink telefone={h.telefone} />
+                        <span className="text-[0.7rem] text-muted-foreground">última {h.ultimaAgendaLabel || h.ultimaData || "—"}</span>
+                        <span className="text-[0.7rem] text-muted-foreground/70">{h.runCount} corrida(s)</span>
+                      </div>
+                    </div>
+                    <button type="button" disabled={createMut.isPending} onClick={() => addFromHistory(h)}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-amber-400/60 bg-amber-50/70 px-2 py-1 text-[0.7rem] font-semibold text-amber-700 hover:bg-amber-100/80 disabled:opacity-50 dark:bg-amber-500/10 dark:text-amber-300">
+                      <Plus className="h-3 w-3" /> Adicionar à reserva
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
       </DialogContent>
     </Dialog>
@@ -2540,6 +2806,8 @@ export default function SheetMonitor() {
   const [editFilter, setEditFilter] = useState<string[]>([]);
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
+  const [descargaFromFilter, setDescargaFromFilter] = useState("");
+  const [descargaToFilter, setDescargaToFilter] = useState("");
   const [page, setPage] = useState(0);
   const [selectedRow, setSelectedRow] = useState<SheetMonitorRowType | null>(null);
   const [editingLh, setEditingLh] = useState<string | null>(null);
@@ -2846,19 +3114,11 @@ export default function SheetMonitor() {
   // no intervalo (as "principais" do dia) — não todas. Mesma lógica de data do
   // filteredRows; reserva (standby, sem data) sempre entra.
   const routeOptions = useMemo(() => {
-    const fromTs = dateFromFilter ? new Date(dateFromFilter).getTime() : null;
-    const toTs = dateToFilter ? new Date(dateToFilter).getTime() : null;
-    const inDate = (row: SheetMonitorRowType) => {
-      if (fromTs === null && toTs === null) return true;
-      if (row.reserva) return true;
-      if (!row.data) return false;
-      const horario = row.horario || "00:00:00";
-      const ts = new Date(`${row.data}T${horario.length === 5 ? `${horario}:00` : horario}`).getTime();
-      if (!Number.isFinite(ts)) return false;
-      if (fromTs !== null && ts < fromTs) return false;
-      if (toTs !== null && ts > toTs) return false;
-      return true;
-    };
+    const carFrom = dateFromFilter ? new Date(dateFromFilter).getTime() : null;
+    const carTo = dateToFilter ? new Date(dateToFilter).getTime() : null;
+    const desFrom = descargaFromFilter ? new Date(descargaFromFilter).getTime() : null;
+    const desTo = descargaToFilter ? new Date(descargaToFilter).getTime() : null;
+    const inDate = (row: SheetMonitorRowType) => rowMatchesDateRanges(row, { carFrom, carTo, desFrom, desTo });
     const byKey = new Map<string, number | null>();
     items.forEach((item) => {
       if (!inDate(item)) return;
@@ -2874,7 +3134,7 @@ export default function SheetMonitor() {
         if (b.codigo != null) return 1;
         return a.key.localeCompare(b.key, "pt-BR");
       });
-  }, [items, dateFromFilter, dateToFilter]);
+  }, [items, dateFromFilter, dateToFilter, descargaFromFilter, descargaToFilter]);
 
   // Se a rota selecionada deixar de existir (ex.: filtro de data a removeu),
   // volta para "todos" pra não ficar travado num filtro sem resultado.
@@ -2931,24 +3191,16 @@ export default function SheetMonitor() {
         return editFilter.some((e) => (e === "editaveis" ? canEdit : e === "bloqueadas" ? !canEdit : false));
       });
 
-    if (dateFromFilter || dateToFilter) {
-      const fromTs = dateFromFilter ? new Date(dateFromFilter).getTime() : null;
-      const toTs = dateToFilter ? new Date(dateToFilter).getTime() : null;
-      result = result.filter((row) => {
-        if (row.reserva) return true; // standby (sem data) — sempre visível na fila da rota
-        if (!row.data) return false;
-        const horario = row.horario || "00:00:00";
-        const iso = `${row.data}T${horario.length === 5 ? `${horario}:00` : horario}`;
-        const ts = new Date(iso).getTime();
-        if (!Number.isFinite(ts)) return false;
-        if (fromTs !== null && ts < fromTs) return false;
-        if (toTs !== null && ts > toTs) return false;
-        return true;
-      });
-    }
+    // Data: duas faixas independentes (carregamento e descarga). Reserva sempre visível.
+    const carFrom = dateFromFilter ? new Date(dateFromFilter).getTime() : null;
+    const carTo = dateToFilter ? new Date(dateToFilter).getTime() : null;
+    const desFrom = descargaFromFilter ? new Date(descargaFromFilter).getTime() : null;
+    const desTo = descargaToFilter ? new Date(descargaToFilter).getTime() : null;
+    if (carFrom !== null || carTo !== null || desFrom !== null || desTo !== null)
+      result = result.filter((row) => rowMatchesDateRanges(row, { carFrom, carTo, desFrom, desTo }));
 
     return result;
-  }, [items, deferredSearch, tipoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter]);
+  }, [items, deferredSearch, tipoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter, descargaFromFilter, descargaToFilter]);
 
   // Contagem por status para os chips clicáveis do "Status na planilha" (mesma
   // chave do resumo: status || "Sem status"). Reserva é linha sintética — não conta.
@@ -3030,9 +3282,10 @@ export default function SheetMonitor() {
 
   const hasActiveFilters =
     deferredSearch.trim().length > 0 || statusFilter.length > 0 || tipoFilter.length > 0 ||
-    routeFilter.length > 0 || assignmentFilter.length > 0 || editFilter.length > 0 || dateFromFilter.length > 0 || dateToFilter.length > 0;
+    routeFilter.length > 0 || assignmentFilter.length > 0 || editFilter.length > 0 || dateFromFilter.length > 0 || dateToFilter.length > 0 ||
+    descargaFromFilter.length > 0 || descargaToFilter.length > 0;
 
-  useEffect(() => { setPage(0); }, [deferredSearch, statusFilter, tipoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter]);
+  useEffect(() => { setPage(0); }, [deferredSearch, statusFilter, tipoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter, descargaFromFilter, descargaToFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages - 1);
@@ -3241,18 +3494,30 @@ export default function SheetMonitor() {
 
               <MultiSelectFilter label="Edição" options={EDIT_OPTIONS} selected={editFilter} onChange={setEditFilter} />
 
-              <input type="datetime-local" value={dateFromFilter} onChange={(e) => setDateFromFilter((prev) => dateFilterWithMidnight(prev, e.target.value))}
-                className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
-                title="Carregamento a partir de (horário padrão 00:00 — edite se quiser)" aria-label="Carregamento a partir de" />
-              <input type="datetime-local" value={dateToFilter} onChange={(e) => setDateToFilter((prev) => dateFilterWithMidnight(prev, e.target.value))} min={dateFromFilter || undefined}
-                className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
-                title="Carregamento até (horário padrão 00:00 — edite se quiser)" aria-label="Carregamento até" />
+              <div className="flex items-center gap-1">
+                <span className="text-[0.6rem] font-semibold uppercase text-muted-foreground/70">Carreg.</span>
+                <input type="datetime-local" value={dateFromFilter} onChange={(e) => setDateFromFilter((prev) => dateFilterWithMidnight(prev, e.target.value))}
+                  className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
+                  title="Carregamento a partir de (horário padrão 00:00 — edite se quiser)" aria-label="Carregamento a partir de" />
+                <input type="datetime-local" value={dateToFilter} onChange={(e) => setDateToFilter((prev) => dateFilterWithMidnight(prev, e.target.value))} min={dateFromFilter || undefined}
+                  className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
+                  title="Carregamento até (horário padrão 00:00 — edite se quiser)" aria-label="Carregamento até" />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-[0.6rem] font-semibold uppercase text-muted-foreground/70">Descarga</span>
+                <input type="datetime-local" value={descargaFromFilter} onChange={(e) => setDescargaFromFilter((prev) => dateFilterWithMidnight(prev, e.target.value))}
+                  className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
+                  title="Descarga a partir de (00:00 padrão)" aria-label="Descarga a partir de" />
+                <input type="datetime-local" value={descargaToFilter} onChange={(e) => setDescargaToFilter((prev) => dateFilterWithMidnight(prev, e.target.value))} min={descargaFromFilter || undefined}
+                  className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
+                  title="Descarga até (00:00 padrão)" aria-label="Descarga até" />
+              </div>
 
               {/* "Limpar" sempre presente (desabilitado sem filtro): ocupa slot fixo
                   no fim da linha de filtros, então nada reflui quando um filtro é
                   aplicado/limpo. A busca é flex-1 e absorve a variação de largura. */}
               <button type="button" disabled={!hasActiveFilters}
-                onClick={() => { setSearch(""); setStatusFilter([]); setTipoFilter([]); setRouteFilter([]); setAssignmentFilter([]); setEditFilter([]); setDateFromFilter(""); setDateToFilter(""); }}
+                onClick={() => { setSearch(""); setStatusFilter([]); setTipoFilter([]); setRouteFilter([]); setAssignmentFilter([]); setEditFilter([]); setDateFromFilter(""); setDateToFilter(""); setDescargaFromFilter(""); setDescargaToFilter(""); }}
                 className="inline-flex items-center gap-1 rounded-xl border border-border/80 bg-white px-3 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 dark:bg-muted/40">
                 <X className="h-3.5 w-3.5" />Limpar
               </button>
@@ -3401,12 +3666,12 @@ export default function SheetMonitor() {
       {/* ── Nova carga (sistema) ── */}
       <NewCargoModal open={newCargoOpen} onClose={() => setNewCargoOpen(false)} statusOptions={OPERATIONAL_STATUS_OPTIONS} />
 
-      {/* ── Puxar standby para uma carga (alternativa ao arrastar) ── */}
-      <StandbyPickerModal
+      {/* ── Painel de reserva: gerenciar reservas da rota + histórico + puxar p/ carga ── */}
+      <ReservaPanelModal
         open={standbyPickerLh !== null}
         carga={standbyPickerCarga}
-        standbys={standbyPickerList}
-        onPick={(reservaId) => { if (standbyPickerLh) handleAssignReserva({ reservaId, targetLh: standbyPickerLh }); }}
+        reservas={standbyPickerList}
+        onPull={(reservaId) => { if (standbyPickerLh) handleAssignReserva({ reservaId, targetLh: standbyPickerLh }); }}
         onClose={() => setStandbyPickerLh(null)}
       />
     </div>
