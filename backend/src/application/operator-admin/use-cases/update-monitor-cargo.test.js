@@ -32,6 +32,19 @@ describe("updateMonitorCargo", () => {
     await closeTestDatabase();
   });
 
+  it("grava a descrição da troca de motorista/veículo em alloc_descricao", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    const op = await seedUser({ email: "op-sys-desc@teste.local" });
+    await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { motorista: "Maria", cavalo: "AAA1A11", descricao: "troca por indisponibilidade do titular" },
+      correlationId: "c-desc",
+    });
+    const { rows } = await query(`SELECT alloc_descricao FROM public.cargas WHERE id = $1`, [id]);
+    expect(rows[0].alloc_descricao).toBe("troca por indisponibilidade do titular");
+  });
+
   it("edita carga do sistema: rota, agenda, LH, status e motorista persistem", async () => {
     const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
     const op = await seedUser({ email: "op-sys@teste.local" });

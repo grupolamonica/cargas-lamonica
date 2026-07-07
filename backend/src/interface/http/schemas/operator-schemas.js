@@ -29,6 +29,9 @@ export const sheetMonitorAllocationBodySchema = z.object({
   status: z.string().trim().max(60).nullable().optional(),
   // Tipo da carga (ForeCast/Spot/Tendência) — override editável no Monitor.
   tipo: z.string().trim().max(60).nullable().optional(),
+  // Motivo da troca de motorista/veículo (modal "Confirmar troca"). Obrigatório
+  // no front ao trocar m/v; opcional no schema (edições que só mexem status/tipo).
+  descricao: z.string().trim().max(500).nullable().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/reassign — reordenar a fila de
@@ -80,6 +83,8 @@ export const sheetMonitorCargoUpdateBodySchema = z.object({
   lh: z.string().trim().max(120).nullable().optional(),
   // Tipo da carga (ForeCast/Spot/Tendência) — gravado em alloc_tipo.
   tipo: z.string().trim().max(60).nullable().optional(),
+  // Motivo da troca de motorista/veículo (modal "Confirmar troca") → alloc_descricao.
+  descricao: z.string().trim().max(500).nullable().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/aspx-assign — confirma a atribuição

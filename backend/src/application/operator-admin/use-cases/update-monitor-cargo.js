@@ -51,7 +51,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
   return withPgTransaction(async (client) => {
     const { rows } = await client.query(
       `SELECT id, sheet_lh, alloc_pinned,
-              alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
+              alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao,
               origem, destino, data, horario, lh_manual, sheet_data_carregamento, sheet_data_descarga
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
       [cargoId],
@@ -75,6 +75,9 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     const allocCarreta = has("carreta") && !pinned ? normAlloc(payload.carreta) : row.alloc_carreta;
     const allocStatus = has("status") ? normAlloc(payload.status) : row.alloc_status;
     const allocTipo = has("tipo") ? normAlloc(payload.tipo) : row.alloc_tipo;
+    // Motivo da troca de motorista/veículo (modal "Confirmar troca"): ausente
+    // preserva o último motivo.
+    const allocDescricao = has("descricao") ? normAlloc(payload.descricao) : row.alloc_descricao;
 
     // canônicos (Rota/Agenda) — NOT NULL: só sobrescreve se vier valor válido
     const origem = has("origem") ? payload.origem : row.origem;
@@ -100,6 +103,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             alloc_carreta = $4,
             alloc_status = $5,
             alloc_tipo = $14,
+            alloc_descricao = $16,
             origem = $6,
             destino = $7,
             data = $8,
@@ -113,7 +117,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             updated_at = now()
         WHERE id = $1
       `,
-      [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga, allocTipo, carregamento],
+      [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga, allocTipo, carregamento, allocDescricao],
     );
 
     await insertSecurityAuditEvent(client, {
@@ -132,6 +136,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
         cavalo: allocCavalo,
         carreta: allocCarreta,
         status: allocStatus,
+        descricao: allocDescricao,
         origem,
         destino,
         data,
