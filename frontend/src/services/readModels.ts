@@ -603,6 +603,8 @@ export interface SheetMonitorRow {
   valor: number | undefined;
   cavalo: string;
   carreta: string;
+  /** Motivo da última troca de motorista/veículo (carga do sistema; planilha usa allocByLh). */
+  descricao?: string | null;
   checklistCavalo: string;
   checklistCarreta: string;
   isAvailable: boolean;
