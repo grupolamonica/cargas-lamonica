@@ -6,6 +6,7 @@ import {
   resetTestDatabase,
   seedCargo,
   seedCliente,
+  seedPacote,
   seedPublicLead,
   seedRoute,
   seedUser,
@@ -468,6 +469,76 @@ describe("operator-admin service", () => {
       statusCode: 409,
       message: "Nao e seguro excluir cargas controladas pelo fluxo operacional.",
     });
+  });
+
+  it("exclui carga de pacote publicado, ressequencia restantes e incrementa version", async () => {
+    const operator = await seedUser({ email: "operador@teste.local" });
+    const pacote = await seedPacote({ status: "publicado", version: 3 });
+
+    const carga1 = await seedCargo({
+      status: "OPEN",
+      viagem_id: pacote.id,
+      ordem_viagem: 1,
+    });
+    const carga2 = await seedCargo({
+      status: "OPEN",
+      viagem_id: pacote.id,
+      ordem_viagem: 2,
+    });
+    const carga3 = await seedCargo({
+      status: "OPEN",
+      viagem_id: pacote.id,
+      ordem_viagem: 3,
+    });
+
+    const response = await service.deleteOperatorCargo({
+      cargoId: carga2.id,
+      operatorId: operator.id,
+      requestIp: "203.0.113.12",
+      correlationId: "corr-delete-cargo-pacote",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.ok).toBe(true);
+
+    const { rows: deleted } = await query(`SELECT id FROM public.cargas WHERE id = $1`, [carga2.id]);
+    expect(deleted).toHaveLength(0);
+
+    const { rows: restantes } = await query(
+      `SELECT id, ordem_viagem FROM public.cargas WHERE viagem_id = $1 ORDER BY ordem_viagem ASC`,
+      [pacote.id],
+    );
+    expect(restantes).toEqual([
+      { id: carga1.id, ordem_viagem: 1 },
+      { id: carga3.id, ordem_viagem: 2 },
+    ]);
+
+    const { rows: pacoteRows } = await query(
+      `SELECT version FROM public.cargas_casadas WHERE id = $1`,
+      [pacote.id],
+    );
+    expect(pacoteRows[0].version).toBe(4);
+  });
+
+  it("bloqueia exclusao de carga em pacote reservado", async () => {
+    const operator = await seedUser({ email: "operador@teste.local" });
+    const pacote = await seedPacote({ status: "reservado" });
+    const carga = await seedCargo({ status: "OPEN", viagem_id: pacote.id, ordem_viagem: 1 });
+
+    await expect(
+      service.deleteOperatorCargo({
+        cargoId: carga.id,
+        operatorId: operator.id,
+        requestIp: "203.0.113.13",
+        correlationId: "corr-delete-cargo-reservado",
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      details: { code: "carga_em_pacote_ativo" },
+    });
+
+    const { rows } = await query(`SELECT id FROM public.cargas WHERE id = $1`, [carga.id]);
+    expect(rows).toHaveLength(1);
   });
 
   it("bloqueia exclusao de cliente com cargas vinculadas", async () => {
