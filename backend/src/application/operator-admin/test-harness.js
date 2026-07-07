@@ -101,10 +101,6 @@ const schemaSql = `
     sheet_synced_at timestamptz,
     viagem_id uuid,
     ordem_viagem integer,
-    reserved_driver_id uuid,
-    reserved_claim_id uuid,
-    reserved_at timestamptz,
-    reserved_until timestamptz,
     is_recurring boolean NOT NULL DEFAULT false,
     recurrence_interval_days integer,
     recurrence_parent_id uuid,
@@ -304,6 +300,15 @@ function createDatabase() {
     returns: DataType.uuid,
     impure: true,
     implementation: () => crypto.randomUUID(),
+  });
+
+  // pg-mem does not implement btrim natively (Postgres' trim). Register the
+  // single-arg form used by the reserva use-cases (btrim(text) trims whitespace).
+  db.public.registerFunction({
+    name: "btrim",
+    args: [DataType.text],
+    returns: DataType.text,
+    implementation: (value) => (value == null ? value : String(value).trim()),
   });
 
   // pg-mem does not implement jsonb_build_object natively.

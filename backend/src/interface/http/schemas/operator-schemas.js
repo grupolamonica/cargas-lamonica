@@ -57,6 +57,30 @@ export const sheetMonitorAssignReservaBodySchema = z.object({
   targetLh: z.string().trim().min(1).max(120),
 }).strict();
 
+/** Body for POST /api/operator/sheet-monitor/reserva — cria uma reserva (standby)
+ *  de motorista para uma rota (origem → destino). */
+export const sheetMonitorCreateReservaBodySchema = z.object({
+  motorista: z.string().trim().min(1).max(180),
+  cavalo: z.string().trim().max(40).optional().default(""),
+  carreta: z.string().trim().max(40).optional().default(""),
+  origem: z.string().trim().min(1).max(180),
+  destino: z.string().trim().min(1).max(180),
+}).strict();
+
+/** Body for PATCH /api/operator/sheet-monitor/reserva — edita uma reserva ativa.
+ *  Parcial: só os campos enviados são alterados. */
+export const sheetMonitorUpdateReservaBodySchema = z.object({
+  reservaId: z.string().uuid(),
+  motorista: z.string().trim().min(1).max(180).optional(),
+  cavalo: z.string().trim().max(40).optional(),
+  carreta: z.string().trim().max(40).optional(),
+}).strict();
+
+/** Body for DELETE /api/operator/sheet-monitor/reserva — remove (soft) uma reserva. */
+export const sheetMonitorDeleteReservaBodySchema = z.object({
+  reservaId: z.string().uuid(),
+}).strict();
+
 /** Body for POST /api/operator/sheet-monitor/pin — fixar/desafixar a alocação de
  *  uma carga (motorista/veículo intocável por arrasto, edição e cascata). */
 export const sheetMonitorPinBodySchema = z.object({

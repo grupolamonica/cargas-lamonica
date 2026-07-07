@@ -64,6 +64,10 @@ import {
   resolveUpdateMonitorAllocationResponse,
   resolveReassignMonitorAllocationsResponse,
   resolveAssignReservaResponse,
+  resolveRouteDriverHistoryResponse,
+  resolveCreateReservaResponse,
+  resolveUpdateReservaResponse,
+  resolveDeleteReservaResponse,
   resolveSetMonitorAllocationPinResponse,
   resolveUpdateMonitorCargoResponse,
   resolvePreviewAspxAllocationResponse,
@@ -365,6 +369,10 @@ export function registerRoutes(app) {
   router.patch("/api/operator/sheet-monitor", wrap(resolveUpdateMonitorAllocationResponse));
   router.post("/api/operator/sheet-monitor/reassign", wrap(resolveReassignMonitorAllocationsResponse));
   router.post("/api/operator/sheet-monitor/assign-reserva", wrap(resolveAssignReservaResponse));
+  router.get("/api/operator/sheet-monitor/route-history", wrap(resolveRouteDriverHistoryResponse));
+  router.post("/api/operator/sheet-monitor/reserva", wrap(resolveCreateReservaResponse));
+  router.patch("/api/operator/sheet-monitor/reserva", wrap(resolveUpdateReservaResponse));
+  router.delete("/api/operator/sheet-monitor/reserva", wrap(resolveDeleteReservaResponse));
   router.post("/api/operator/sheet-monitor/pin", wrap(resolveSetMonitorAllocationPinResponse));
   router.patch("/api/operator/sheet-monitor/cargo", wrap(resolveUpdateMonitorCargoResponse));
   router.post("/api/operator/sheet-monitor/aspx-preview", wrap(resolvePreviewAspxAllocationResponse));
