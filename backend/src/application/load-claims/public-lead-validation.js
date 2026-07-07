@@ -10,7 +10,8 @@ import {
   lookupCachedAngelliraValidation,
   lookupCachedAngelliraPlate,
 } from "../operator-admin/service.js";
-import { syncDriverBrkValidation } from "../operator-admin/use-cases/brk-cache.js";
+import { syncDriverBrkValidation, extractEarliestBrkValidUntil } from "../operator-admin/use-cases/brk-cache.js";
+import { consultarBrkPainel } from "../../infrastructure/brk/brk-client.js";
 import { syncDriverSpxValidation } from "../operator-admin/use-cases/spx-vigency-cache.js";
 
 const VALIDATION_SCHEMA_VERSION = 1;
@@ -448,6 +449,18 @@ export async function validatePublicLeadPreRegistration({
     });
   }
 
+  // BRK (Brasil Risk): consulta o conjunto (motorista + placas) EM PARALELO, atrás da
+  // mesma feature-flag do sync (BRK_SYNC_ENABLED). O resultado vai em summary.driver.brk
+  // e alimenta o card do lead (espelha angelira/aspx, que também vêm da candidatura).
+  // Nunca bloqueia o fluxo: erro/indisponível → null.
+  const brkPlacasParaPainel = plateCacheLookups
+    .map(({ plateLookup }) => plateLookup.value)
+    .filter(Boolean);
+  const brkPainelPromise =
+    process.env.BRK_SYNC_ENABLED === "1" && payload.cpf && !cacheOnly
+      ? consultarBrkPainel({ cpf: payload.cpf, placas: brkPlacasParaPainel, correlationId }).catch(() => null)
+      : Promise.resolve(null);
+
   const [angeliraRaw, aspxDriverLookup, ...plateResults] = await Promise.all([
     useCachedAngellira
       ? Promise.resolve(cachedAngellira.angelliraResult)
@@ -541,6 +554,7 @@ export async function validatePublicLeadPreRegistration({
   });
 
   const supportReasons = warnings.filter(Boolean);
+  const brkPainel = await brkPainelPromise;
   const summary = {
     schemaVersion: VALIDATION_SCHEMA_VERSION,
     checkedAt: new Date().toISOString(),
@@ -566,6 +580,21 @@ export async function validatePublicLeadPreRegistration({
         found: aspxDriverLookup.found,
         displayName: aspxDriverLookup.displayName || null,
       },
+      // BRK (Brasil Risk): aptidão do conjunto vinda da consulta camoufox. Presente
+      // aqui, o card do lead mostra o selo BRK real (antes ficava "Não cadastrado"
+      // porque brk_* só existe em driver_profiles/motorista REGISTRADO).
+      brk:
+        brkPainel && brkPainel.availability === "OK" && brkPainel.status !== "erro"
+          ? {
+              status: brkPainel.status || null,
+              found: brkPainel.conjunto_apto === true || brkPainel.status === "vigente",
+              conjuntoApto: typeof brkPainel.conjunto_apto === "boolean" ? brkPainel.conjunto_apto : null,
+              validUntil: extractEarliestBrkValidUntil(brkPainel.componentes),
+              statusText: brkPainel.label || null,
+              componentes: brkPainel.componentes || null,
+              checkedAt: brkPainel.consultado_em || new Date().toISOString(),
+            }
+          : null,
     },
     plates: plateResults.map((plateResult) => ({
       field: plateResult.field,
