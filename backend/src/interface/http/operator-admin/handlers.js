@@ -74,6 +74,7 @@ import { reassignMonitorAllocations } from "../../../application/operator-admin/
 import { assignReservaToCarga } from "../../../application/operator-admin/use-cases/assign-reserva-to-carga.js";
 import { getRouteDriverHistory } from "../../../application/operator-admin/use-cases/route-driver-history.js";
 import { createReserva } from "../../../application/operator-admin/use-cases/create-reserva.js";
+import { resolveDriverPhones } from "../../../application/operator-admin/use-cases/resolve-driver-phones.js";
 import { updateReserva } from "../../../application/operator-admin/use-cases/update-reserva.js";
 import { deleteReserva } from "../../../application/operator-admin/use-cases/delete-reserva.js";
 import { setMonitorAllocationPin } from "../../../application/operator-admin/use-cases/set-monitor-allocation-pin.js";
@@ -909,6 +910,8 @@ export async function resolveSheetMonitorResponse(request) {
           // Quando o motorista entrou em standby (created_at da reserva) — usado
           // pra exibir "standby desde …" e ordenar a fila de standby (mais antigo 1º).
           standbyAt: r.created_at,
+          // Telefone do motorista (motoristas_historico) — resolvido logo abaixo.
+          telefone: null,
         }));
       }
     } catch (reservaErr) {
@@ -916,6 +919,17 @@ export async function resolveSheetMonitorResponse(request) {
         correlationId,
         message: reservaErr instanceof Error ? reservaErr.message : String(reservaErr),
       });
+    }
+
+    // Telefone das reservas por nome de motorista (opcional — só em
+    // motoristas_historico). Não-fatal: se falhar, telefone fica null.
+    try {
+      const phones = await resolveDriverPhones(reservaRows.map((r) => r.motoristas));
+      for (const r of reservaRows) {
+        r.telefone = phones.get((r.motoristas || "").toLowerCase().trim()) ?? null;
+      }
+    } catch {
+      /* telefone é opcional */
     }
 
     // Cargas criadas no SISTEMA (sheet_lh nulo) — entram na visão unificada do
