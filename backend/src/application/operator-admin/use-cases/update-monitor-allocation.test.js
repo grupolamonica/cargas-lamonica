@@ -246,6 +246,30 @@ describe("updateMonitorAllocation", () => {
     expect(carga.rows[0].reserved_public_lead_id).toBe(lead.id);
   });
 
+  it("grava a descrição da troca (motivo) em alloc_descricao e preserva quando não reenviada", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-desc@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { motorista: "NOVO JOAO", cavalo: "AAA1A11", carreta: "BBB2B22", descricao: "titular desistiu da carga" },
+      correlationId: "corr-monitor-desc-1",
+    });
+    let res = await query(`SELECT alloc_descricao FROM public.cargas WHERE id = $1`, [id]);
+    expect(res.rows[0].alloc_descricao).toBe("titular desistiu da carga");
+
+    // Edição posterior só de status (sem descricao) preserva o motivo registrado.
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { status: "DESCARREGADO" },
+      correlationId: "corr-monitor-desc-2",
+    });
+    res = await query(`SELECT alloc_descricao FROM public.cargas WHERE id = $1`, [id]);
+    expect(res.rows[0].alloc_descricao).toBe("titular desistiu da carga");
+  });
+
   it("lança NotFoundError quando o LH não tem carga correspondente", async () => {
     const operator = await seedUser({ email: "op-monitor-404@teste.local" });
     await expect(

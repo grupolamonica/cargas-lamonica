@@ -786,7 +786,7 @@ export async function resolveSheetMonitorResponse(request) {
         (from, to) =>
           supabaseClient
             .from("cargas")
-            .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_pinned, alloc_updated_at")
+            .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_pinned, alloc_updated_at")
             .not("sheet_lh", "is", null)
             .not("alloc_updated_at", "is", null)
             .order("sheet_lh", { ascending: true })
