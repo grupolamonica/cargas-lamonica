@@ -1843,14 +1843,17 @@ function SheetMonitorTable({
         </div>
       )}
       <div className="overflow-x-auto overscroll-x-contain pb-1">
+        {/* Larguras em % (não px fixo): as colunas escalam com a viewport — sem o
+            "buraco" no meio (antes só a Rota era flexível e engolia a sobra) e com
+            a coluna Motorista/Placa larga o bastante pro nome não cortar. */}
         <table className="w-full min-w-[1040px] table-fixed text-sm">
           <colgroup>
-            <col className="w-[140px]" />
-            <col className="w-[96px]" />
-            <col className="w-[120px]" />
-            <col />
-            <col className="w-[150px]" />
-            <col className="w-[360px]" />
+            <col className="w-[13%]" />
+            <col className="w-[8%]" />
+            <col className="w-[10%]" />
+            <col className="w-[23%]" />
+            <col className="w-[13%]" />
+            <col className="w-[33%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-border/60 bg-primary/[0.028]">
