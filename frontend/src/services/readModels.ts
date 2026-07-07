@@ -683,6 +683,7 @@ export interface SheetMonitorAllocation {
   alloc_carreta: string | null;
   alloc_status: string | null;
   alloc_tipo: string | null;
+  alloc_descricao: string | null;
   alloc_pinned: boolean | null;
   alloc_updated_at: string | null;
 }
@@ -720,6 +721,7 @@ export async function updateMonitorAllocation(input: {
   carreta?: string | null;
   status?: string | null;
   tipo?: string | null;
+  descricao?: string | null; // motivo da troca de motorista/veículo
 }) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{
@@ -798,6 +800,7 @@ export interface MonitorCargoUpdate {
   descarga?: string; // datetime-local 'YYYY-MM-DDTHH:MM' ou '' p/ limpar
   lh?: string | null;
   tipo?: string | null;
+  descricao?: string | null; // motivo da troca de motorista/veículo
 }
 
 /**

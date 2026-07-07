@@ -719,6 +719,74 @@ function ConfirmDialog({
   );
 }
 
+// Confirmação de TROCA de motorista/veículo com DESCRIÇÃO obrigatória (motivo).
+// Aparece sempre que o operador troca o motorista/veículo no Monitor (inline ou
+// modal). Quando a carga está "aguardando chegar no cliente" (já no ASPX), mostra
+// também o aviso do ASPX. O "Salvar troca" só habilita com o motivo preenchido.
+function ChangeReasonDialog({
+  open,
+  aspxWarning = false,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  aspxWarning?: boolean;
+  onConfirm: (reason: string) => void;
+  onCancel: () => void;
+}) {
+  const [reason, setReason] = useState("");
+  useEffect(() => { if (open) setReason(""); }, [open]);
+  const canConfirm = reason.trim().length > 0;
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onCancel(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+            Confirmar troca de motorista/veículo
+          </DialogTitle>
+          <DialogDescription className="pt-1 text-sm leading-relaxed text-muted-foreground">
+            {aspxWarning
+              ? 'Esta carga está "aguardando chegar no cliente" — o motorista e o veículo já estão no ASPX. Descreva o motivo da troca.'
+              : "Descreva o motivo da troca de motorista/veículo."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1.5">
+          <label className="text-xs font-semibold text-foreground">
+            Descrição <span className="text-red-500">*</span>
+          </label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={3}
+            autoFocus
+            maxLength={500}
+            placeholder="Ex.: motorista titular desistiu; troca de veículo por manutenção…"
+            className="w-full resize-none rounded-lg border border-border/80 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+          />
+        </div>
+        <div className="mt-1 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg border border-border/80 px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={() => { if (canConfirm) onConfirm(reason.trim()); }}
+            disabled={!canConfirm}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Salvar troca
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Atribuir no ASPX ───────────────────────────────────────────────────────
 // Pré-visualização (dry-run) + confirmação da atribuição no ASPX. Mostra ao
 // operador, por carga, se vai atribuir / já está / está pendente, e quem será
@@ -1988,7 +2056,7 @@ function RowDetailModal({
 }) {
   const queryClient = useQueryClient();
   const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "", tipo: "" });
-  const [confirmAspx, setConfirmAspx] = useState(false);
+  const [confirmChange, setConfirmChange] = useState(false);
 
   // Pré-preenche com a alocação EFETIVA: override do operador (alloc_*) ?? planilha.
   useEffect(() => {
@@ -2036,7 +2104,7 @@ function RowDetailModal({
   const pinned = Boolean(alloc?.alloc_pinned ?? row.pinned);
   const allocEditable = editable && !pinned;
 
-  const doSave = () => {
+  const doSave = (descricao = "") => {
     saveAllocation.mutate({
       lh: row.lh,
       // Linha travada: preserva o motorista/veículo atual (alloc override; null
@@ -2046,17 +2114,19 @@ function RowDetailModal({
       carreta: allocEditable ? allocForm.carreta : (alloc?.alloc_carreta ?? ""),
       status: allocForm.status,
       tipo: allocForm.tipo, // tipo é livre (não trava por pinned/status)
+      // Motivo da troca — só quando o motorista/veículo mudou (o modal exige).
+      ...(descricao ? { descricao } : {}),
     });
   };
 
-  // "Aguardando chegar no cliente": só pergunta se o motorista/veículo realmente
-  // mudou (mudança só de status não dispara o pop-up).
+  // Trocou o motorista/veículo? (mudança só de status/tipo não pede motivo.)
   const mvChanged =
     allocForm.motorista !== (alloc?.alloc_motorista ?? row.motoristas ?? "") ||
     allocForm.cavalo !== (alloc?.alloc_cavalo ?? row.cavalo ?? "") ||
     allocForm.carreta !== (alloc?.alloc_carreta ?? row.carreta ?? "");
   const requestSave = () => {
-    if (allocEditable && aspxWarning && mvChanged) setConfirmAspx(true);
+    // Trocou m/v → exige o modal "Confirmar troca" com a descrição (motivo).
+    if (allocEditable && mvChanged) setConfirmChange(true);
     else doSave();
   };
 
@@ -2179,6 +2249,11 @@ function RowDetailModal({
                     ))}
                   </select>
                 </div>
+                {alloc?.alloc_descricao && (
+                  <p className="rounded-md bg-muted/40 px-2 py-1 text-[0.62rem] leading-snug text-muted-foreground">
+                    <span className="font-semibold">Último motivo da troca:</span> {alloc.alloc_descricao}
+                  </p>
+                )}
                 <div className="flex items-center justify-between gap-2 pt-1">
                   <span className="text-[0.58rem] leading-tight text-muted-foreground/60">
                     {alloc?.alloc_updated_at
@@ -2331,12 +2406,11 @@ function RowDetailModal({
       </DialogContent>
     </Dialog>
 
-    <ConfirmDialog
-      open={confirmAspx}
-      title="Confirmar troca de motorista/veículo"
-      description={aspxConfirmDescription(1)}
-      onConfirm={() => { setConfirmAspx(false); doSave(); }}
-      onCancel={() => setConfirmAspx(false)}
+    <ChangeReasonDialog
+      open={confirmChange}
+      aspxWarning={allocEditable && aspxWarning}
+      onConfirm={(reason) => { setConfirmChange(false); doSave(reason); }}
+      onCancel={() => setConfirmChange(false)}
     />
     </>
   );
@@ -2488,6 +2562,8 @@ export default function SheetMonitor() {
   const standbyPickerList = standbyPickerCarga ? (standbysByRoute.get(routeKeyOf(standbyPickerCarga)) ?? []) : [];
   // Ação pendente aguardando confirmação no pop-up de ASPX (edição inline / arrastar).
   const [aspxConfirm, setAspxConfirm] = useState<{ count: number; run: () => void } | null>(null);
+  // Troca de motorista/veículo pela edição INLINE → pede o motivo (obrigatório).
+  const [inlineReason, setInlineReason] = useState<{ aspxWarning: boolean; run: (reason: string) => void } | null>(null);
   const [aspxAssignOpen, setAspxAssignOpen] = useState(false);
   const [editingSystemRow, setEditingSystemRow] = useState<SheetMonitorRowType | null>(null);
   const [newCargoOpen, setNewCargoOpen] = useState(false);
@@ -2565,10 +2641,21 @@ export default function SheetMonitor() {
   const handleSaveInline = useCallback(
     (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string; tipo: string }) => {
       const target = itemsRef.current.find((r) => r.lh === payload.lh);
-      const run = () => mutateInlineAlloc(payload);
-      // "Aguardando chegar no cliente" → confirma a troca (motorista/veículo no ASPX).
-      if (target && allocEditPolicy(target).aspxWarning) setAspxConfirm({ count: 1, run });
-      else run();
+      const mvChanged =
+        !target ||
+        payload.motorista !== (target.motoristas ?? "") ||
+        payload.cavalo !== (target.cavalo ?? "") ||
+        payload.carreta !== (target.carreta ?? "");
+      // Trocou motorista/veículo → exige o modal "Confirmar troca" com o motivo
+      // (mostra o aviso do ASPX quando a carga está "aguardando chegar no cliente").
+      if (mvChanged) {
+        setInlineReason({
+          aspxWarning: !!(target && allocEditPolicy(target).aspxWarning),
+          run: (descricao) => mutateInlineAlloc({ ...payload, descricao }),
+        });
+      } else {
+        mutateInlineAlloc(payload); // só status/tipo → sem motivo
+      }
     },
     [mutateInlineAlloc],
   );
@@ -3238,13 +3325,21 @@ export default function SheetMonitor() {
         onClose={() => setSelectedRow(null)}
       />
 
-      {/* ── Confirmação ASPX (edição inline / arrastar) ── */}
+      {/* ── Confirmação ASPX (arrastar / puxar standby) ── */}
       <ConfirmDialog
         open={aspxConfirm !== null}
         title="Confirmar troca de motorista/veículo"
         description={aspxConfirm ? aspxConfirmDescription(aspxConfirm.count) : ""}
         onConfirm={() => { aspxConfirm?.run(); setAspxConfirm(null); }}
         onCancel={() => setAspxConfirm(null)}
+      />
+
+      {/* ── Confirmar troca c/ descrição obrigatória (edição INLINE do motorista/veículo) ── */}
+      <ChangeReasonDialog
+        open={inlineReason !== null}
+        aspxWarning={inlineReason?.aspxWarning ?? false}
+        onConfirm={(reason) => { inlineReason?.run(reason); setInlineReason(null); }}
+        onCancel={() => setInlineReason(null)}
       />
 
       {/* ── Atribuir no ASPX (preview + confirmação) ── */}

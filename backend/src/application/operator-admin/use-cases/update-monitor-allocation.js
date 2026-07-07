@@ -43,7 +43,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     const { rows } = await client.query(
       `SELECT id, sheet_lh, sheet_motorista, sheet_cavalo, sheet_carreta,
               alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
-              status, reserved_public_lead_id
+              alloc_descricao, status, reserved_public_lead_id
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
       [cargoId],
     );
@@ -64,6 +64,8 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     const finalCarreta = pinned || !has("carreta") ? (sheetRow.alloc_carreta ?? null) : norm(payload.carreta);
     const finalStatus = has("status") ? norm(payload.status) : (sheetRow.alloc_status ?? null);
     const finalTipo = has("tipo") ? norm(payload.tipo) : (sheetRow.alloc_tipo ?? null);
+    // Motivo da troca (modal "Confirmar troca"): ausente preserva o último motivo.
+    const finalDescricao = has("descricao") ? norm(payload.descricao) : (sheetRow.alloc_descricao ?? null);
 
     await client.query(
       `
@@ -73,13 +75,14 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
             alloc_carreta = $4,
             alloc_status = $5,
             alloc_tipo = $7,
+            alloc_descricao = $8,
             alloc_source = 'operator',
             alloc_updated_at = now(),
             alloc_updated_by = $6,
             updated_at = now()
         WHERE id = $1
       `,
-      [cargoId, finalMotorista, finalCavalo, finalCarreta, finalStatus, operatorId, finalTipo],
+      [cargoId, finalMotorista, finalCavalo, finalCarreta, finalStatus, operatorId, finalTipo, finalDescricao],
     );
 
     await insertSecurityAuditEvent(client, {
@@ -98,6 +101,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
         cavalo: finalCavalo,
         carreta: finalCarreta,
         status: finalStatus,
+        descricao: finalDescricao,
         pinned,
         cleared: !finalMotorista && !finalCavalo && !finalCarreta && !finalStatus,
       },
