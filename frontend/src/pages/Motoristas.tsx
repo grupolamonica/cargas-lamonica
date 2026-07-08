@@ -233,9 +233,55 @@ function renderAngelliraVigencyBadge(driver: OperatorDriverListItem) {
   return null;
 }
 
-// Espelha renderAngelliraVigencyBadge para o BRK (Brasil Risk). Mesma logica de
-// cor por alertLevel. Renderizacao defensiva: se driver.brkVigency for null
-// (feature-flag desligada -> campos vem null), nenhum badge aparece.
+// Cor do componente BRK (emerald/amber/rose/slate) -> classe de tint do painel.
+const BRK_COMP_TINT: Record<string, string> = {
+  emerald: "admin-tint-success",
+  amber: "admin-tint-warning",
+  rose: "admin-tint-danger",
+  slate: "admin-tint-neutral",
+};
+const BRK_COMP_NOME: Record<string, string> = {
+  motorista: "Motorista",
+  cavalo: "Cavalo",
+  carreta: "Carreta",
+};
+
+// Quebra por componente (motorista/cavalo/carreta): mostra QUAL está apto/vencido/
+// a vencer, não só o veredito do conjunto. O label de cada componente já vem pronto
+// do BRK (ex.: "Apto · vence 28/10/2026", "Vencido", "Não cadastrado").
+type BrkComponente = { status?: string | null; label?: string | null; color?: string | null };
+function renderBrkComponentes(componentes: Record<string, BrkComponente> | null | undefined) {
+  if (!componentes || typeof componentes !== "object") {
+    return null;
+  }
+  const ordem = ["motorista", "cavalo", "carreta"];
+  const chaves = [
+    ...ordem.filter((k) => componentes[k]),
+    ...Object.keys(componentes).filter((k) => !ordem.includes(k)),
+  ];
+  const pills = chaves
+    .map((k) => ({ k, c: componentes[k] }))
+    .filter(({ c }) => c && c.status && c.status !== "nao_aplicavel");
+  if (!pills.length) {
+    return null;
+  }
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {pills.map(({ k, c }) => (
+        <span
+          key={k}
+          className={`${BRK_COMP_TINT[c.color ?? "slate"] ?? "admin-tint-neutral"} inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium`}
+        >
+          {BRK_COMP_NOME[k] ?? k}: {c.label ?? c.status}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// Espelha renderAngelliraVigencyBadge para o BRK (Brasil Risk). Mostra o veredito do
+// conjunto (por alertLevel) E, abaixo, a quebra por componente. Renderizacao defensiva:
+// se driver.brkVigency for null (feature-flag desligada), nenhum badge aparece.
 function renderBrkVigencyBadge(driver: OperatorDriverListItem) {
   const vigency = driver.brkVigency;
 
@@ -245,55 +291,47 @@ function renderBrkVigencyBadge(driver: OperatorDriverListItem) {
 
   const { alertLevel, daysUntilExpiry, validUntil, statusText } = vigency;
 
+  let aggregate: JSX.Element | null = null;
+
   if (alertLevel === "EXPIRED") {
-    return (
+    aggregate = (
       <div className="admin-tint-danger inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
         <XCircle className="h-3.5 w-3.5" />
         BRK: Vigência vencida{validUntil ? ` (${parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""})` : ""}
       </div>
     );
-  }
-
-  if (alertLevel === "EXPIRING_SOON") {
-    return (
+  } else if (alertLevel === "EXPIRING_SOON") {
+    aggregate = (
       <div className="admin-tint-warning inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold animate-pulse">
         <AlertTriangle className="h-3.5 w-3.5" />
         BRK: Vence em {daysUntilExpiry} dia{daysUntilExpiry !== 1 ? "s" : ""}
         {validUntil ? ` (${parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""})` : ""}
       </div>
     );
-  }
-
-  if (alertLevel === "OK" && validUntil) {
-    return (
+  } else if (alertLevel === "OK" && validUntil) {
+    aggregate = (
       <div className="admin-tint-success inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
         <CheckCircle2 className="h-3.5 w-3.5" />
         BRK: ✓ Apto · vence {parseDateStringAsLocal(validUntil)?.toLocaleDateString("pt-BR") ?? ""}
       </div>
     );
-  }
-
-  if (vigency.status === "vigente" || vigency.conjuntoApto === true) {
-    return (
+  } else if (vigency.status === "vigente" || vigency.conjuntoApto === true) {
+    aggregate = (
       <div className="admin-tint-success inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
         <BadgeCheck className="h-3.5 w-3.5" />
         BRK: ✓ Apto{statusText ? ` · ${statusText}` : ""}
       </div>
     );
-  }
-
-  if (vigency.status === "nao_cadastrado") {
-    return (
+  } else if (vigency.status === "nao_cadastrado") {
+    aggregate = (
       <div className="admin-tint-neutral inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
         <CalendarClock className="h-3.5 w-3.5" />
         BRK: Não cadastrado
       </div>
     );
-  }
-
-  // Demais status com sinal (nao_conforme/parcial/expirado sem data): mostra o texto.
-  if (vigency.status) {
-    return (
+  } else if (vigency.status) {
+    // Demais status com sinal (nao_conforme/parcial/expirado sem data): mostra o texto.
+    aggregate = (
       <div className="admin-tint-neutral inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
         <CalendarClock className="h-3.5 w-3.5" />
         BRK: {statusText || vigency.status}
@@ -301,7 +339,16 @@ function renderBrkVigencyBadge(driver: OperatorDriverListItem) {
     );
   }
 
-  return null;
+  if (!aggregate) {
+    return null;
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      {aggregate}
+      {renderBrkComponentes(vigency.componentes)}
+    </div>
+  );
 }
 
 // Espelha os badges de vigencia para a SITUACAO do motorista no SPX (Shopee

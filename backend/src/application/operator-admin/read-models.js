@@ -1412,6 +1412,9 @@ function buildBrkVigency(row) {
     alertLevel,
     conjuntoApto: typeof row.brk_conjunto_apto === "boolean" ? row.brk_conjunto_apto : null,
     checkedAt: row.brk_checked_at || null,
+    // Detalhe por componente (motorista/cavalo/carreta) p/ o card mostrar QUAL está
+    // vencido/a vencer — não só o veredito do conjunto. brk_details guarda os componentes.
+    componentes: row.brk_details || null,
   };
 }
 
@@ -1548,6 +1551,7 @@ function extractBrkFromApplications(applications) {
           alertLevel,
           conjuntoApto: typeof brk.conjuntoApto === "boolean" ? brk.conjuntoApto : null,
           checkedAt: brk.checkedAt || null,
+          componentes: brk.componentes || null,
         };
       }
       return { hasBrk: apto, vigency };
