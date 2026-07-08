@@ -1740,11 +1740,13 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
         </div>
       </td>
 
-      {/* Agenda: carregamento → descarga em UMA linha (trunca p/ caber) */}
+      {/* Agenda: carregamento → descarga em UMA linha (trunca p/ caber).
+          tabular-nums = dígitos de largura fixa → a seta "→" e a 2ª data alinham
+          verticalmente entre as linhas (fonte proporcional deixava "torto"). */}
       <td className="px-3 py-1.5 align-middle">
         {row.carregamentoLabel || row.descargaLabel ? (
           <div
-            className="truncate text-xs text-foreground"
+            className="truncate text-xs text-foreground tabular-nums"
             title={[
               row.carregamentoLabel ? `Carregamento: ${row.carregamentoLabel}` : null,
               row.descargaLabel ? `Descarga: ${row.descargaLabel}` : null,
