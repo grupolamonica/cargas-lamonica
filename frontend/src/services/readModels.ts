@@ -334,6 +334,10 @@ export interface OperatorDriverListItem {
     alertLevel: "OK" | "EXPIRING_SOON" | "EXPIRED" | null;
     conjuntoApto: boolean | null;
     checkedAt: string | null;
+    componentes: Record<
+      string,
+      { status?: string | null; label?: string | null; color?: string | null; limit?: string | null }
+    > | null;
   } | null;
   spxVigency: {
     status: string | null;
