@@ -1702,18 +1702,16 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       )}
     >
       {/* Status */}
-      <td className="w-[1%] px-3 py-1.5 align-middle">
-        <div className="max-w-[168px]">
-          <StatusBadge dense status={!row.status && row.motoristas ? "Reservado" : row.status} />
-        </div>
+      <td className="px-3 py-1.5 align-middle">
+        <StatusBadge dense status={!row.status && row.motoristas ? "Reservado" : row.status} />
       </td>
 
-      {/* LH + Tipo (linha única) — content-sized + nowrap: renderiza o LH COMPLETO */}
-      <td className="w-[1%] whitespace-nowrap px-3 py-1.5 align-middle">
+      {/* LH + Tipo (linha única) — trunca na linha; o LH completo fica no modal (título) */}
+      <td className="px-3 py-1.5 align-middle">
         {row.reserva ? (
           <span className="text-[0.62rem] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">reserva</span>
         ) : (
-          <div title={row.tipo ? `${row.lh} · ${row.tipo}` : row.lh}>
+          <div className="truncate" title={row.tipo ? `${row.lh} · ${row.tipo}` : row.lh}>
             <span className="font-mono text-xs font-semibold text-foreground/80">{row.lh || "—"}</span>
             {row.tipo && <span className="text-[0.62rem] text-muted-foreground"> · {row.tipo}</span>}
           </div>
@@ -1721,8 +1719,8 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       </td>
 
       {/* Cliente */}
-      <td className="w-[1%] whitespace-nowrap px-3 py-1.5 align-middle">
-        <span className="block max-w-[150px] truncate text-xs font-medium text-foreground/90" title={row.cliente ?? undefined}>{row.cliente || "—"}</span>
+      <td className="px-3 py-1.5 align-middle">
+        <span className="block truncate text-xs font-medium text-foreground/90" title={row.cliente ?? undefined}>{row.cliente || "—"}</span>
       </td>
 
       {/* Rota (origem → destino em UMA linha; código operator-only na frente) */}
@@ -1742,11 +1740,11 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
         </div>
       </td>
 
-      {/* Agenda: carregamento → descarga em UMA linha (content-sized + nowrap = completa) */}
-      <td className="w-[1%] whitespace-nowrap px-3 py-1.5 align-middle">
+      {/* Agenda: carregamento → descarga em UMA linha (trunca p/ caber) */}
+      <td className="px-3 py-1.5 align-middle">
         {row.carregamentoLabel || row.descargaLabel ? (
           <div
-            className="text-xs text-foreground"
+            className="truncate text-xs text-foreground"
             title={[
               row.carregamentoLabel ? `Carregamento: ${row.carregamentoLabel}` : null,
               row.descargaLabel ? `Descarga: ${row.descargaLabel}` : null,
@@ -1996,24 +1994,23 @@ function SheetMonitorTable({
         </div>
       )}
       <div className="overflow-x-auto overscroll-x-contain pb-1">
-        {/* Colunas com largura por conteúdo (sem table-fixed): LH e Agenda são
-            content-sized + nowrap, então o código LH renderiza COMPLETO; Status e
-            Cliente encolhem; Rota e Motorista/Placa absorvem a sobra e só truncam
-            quando o espaço aperta. */}
-        <table className="w-full min-w-[920px] text-sm">
+        {/* table-fixed + w-full SEM min-width: a tabela SEMPRE cabe na viewport
+            (sem rolagem lateral) e as colunas escalam com a janela. Conteúdo longo
+            (LH, rota, agenda) trunca na linha — o LH completo aparece no modal. */}
+        <table className="w-full table-fixed text-sm">
+          <colgroup>
+            {/* Status | LH | Cliente | Rota | Agenda | Motorista/Placa */}
+            <col className="w-[12%]" />
+            <col className="w-[10%]" />
+            <col className="w-[8%]" />
+            <col className="w-[24%]" />
+            <col className="w-[14%]" />
+            <col className="w-[32%]" />
+          </colgroup>
           <thead>
             <tr className="border-b border-border/60 bg-primary/[0.028]">
-              {(
-                [
-                  ["Status", "w-[1%] whitespace-nowrap"],
-                  ["LH", "w-[1%] whitespace-nowrap"],
-                  ["Cliente", "w-[1%] whitespace-nowrap"],
-                  ["Rota", ""],
-                  ["Agenda", "w-[1%] whitespace-nowrap"],
-                  ["Motorista / Placa", ""],
-                ] as const
-              ).map(([label, widthClass]) => (
-                <th key={label} className={cn("px-3 py-2 text-left text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70", widthClass)}>
+              {(["Status", "LH", "Cliente", "Rota", "Agenda", "Motorista / Placa"] as const).map((label) => (
+                <th key={label} className="px-3 py-2 text-left text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
                   {label}
                 </th>
               ))}
