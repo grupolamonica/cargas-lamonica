@@ -233,6 +233,25 @@ async function bootstrap() {
     console.warn("[lamonica-backend] analytics_events setup warning:", err?.message);
   }
 
+  // 2c. Garantir tabela app_settings (idempotente) — key/value de toggles de
+  //     runtime, ex.: interruptor da aprovação automática por vigência Angellira.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS public.app_settings (
+        key text PRIMARY KEY,
+        value jsonb NOT NULL DEFAULT '{}'::jsonb,
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        updated_by text
+      )
+    `);
+    // Tabela backend-only: o acesso é via pg direto (bypassa RLS). Ligar RLS sem
+    // policies mantém PostgREST/anon fora — mesmo padrão das outras tabelas.
+    await pool.query(`ALTER TABLE public.app_settings ENABLE ROW LEVEL SECURITY`);
+    console.info("[lamonica-backend] app_settings: OK");
+  } catch (err) {
+    console.warn("[lamonica-backend] app_settings setup warning:", err?.message);
+  }
+
   // 3. Registrar rotas de negócio (43 endpoints)
   registerRoutes(app);
 
@@ -310,6 +329,40 @@ async function bootstrap() {
     }, recurIntervalMs);
   } else {
     console.info("[recurring-cargo-advance] desabilitado (RECURRING_CARGO_ADVANCE_INLINE=false) — esperando cron externo");
+  }
+
+  // 4c. Auto-aprovação por vigência no Angellira — job periódico. Só age quando
+  //     o interruptor no banco (app_settings.auto_approve_angellira.enabled)
+  //     está LIGADO; por padrão vem DESLIGADO (nada aprova sozinho até o
+  //     operador ligar no portal). AUTO_APPROVE_ANGELLIRA_JOB=false desliga até
+  //     o próprio timer (kill-switch de infra).
+  if (process.env.AUTO_APPROVE_ANGELLIRA_JOB !== "false") {
+    let autoApproveRunning = false;
+    const aaIntervalMin = Number(process.env.AUTO_APPROVE_ANGELLIRA_INTERVAL_MIN || 15);
+    const aaIntervalMs = Math.max(1, aaIntervalMin) * 60 * 1000;
+    const aaBatch = Math.max(1, Number(process.env.AUTO_APPROVE_ANGELLIRA_BATCH || 25));
+
+    setInterval(async () => {
+      if (autoApproveRunning) return;
+      autoApproveRunning = true;
+      try {
+        const { getAutoApproveSetting, runAutoApproveAngelliraVigentes } = await import(
+          "./application/operator-admin/use-cases/angellira/auto-approve-vigentes.js"
+        );
+        const { enabled } = await getAutoApproveSetting();
+        if (!enabled) return; // interruptor desligado — no-op
+        const summary = await runAutoApproveAngelliraVigentes({ limit: aaBatch, apply: true, trigger: "timer" });
+        if (summary?.approved > 0) {
+          console.info(`[auto-approve-angellira] aprovou ${summary.approved} de ${summary.scanned} consultado(s)`);
+        }
+      } catch (err) {
+        console.error("[auto-approve-angellira] erro:", err?.message);
+      } finally {
+        autoApproveRunning = false;
+      }
+    }, aaIntervalMs);
+  } else {
+    console.info("[auto-approve-angellira] desabilitado (AUTO_APPROVE_ANGELLIRA_JOB=false)");
   }
 
   // 5. Iniciar HTTP server

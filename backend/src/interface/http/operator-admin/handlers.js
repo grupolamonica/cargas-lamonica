@@ -165,7 +165,7 @@ function toErrorResponse(error, correlationId) {
   );
 }
 
-async function withOperatorSession(request, action, optionsOrExecute, maybeExecute) {
+export async function withOperatorSession(request, action, optionsOrExecute, maybeExecute) {
   const correlationId = getCorrelationId(request);
   const requestIp = getRequestIp(request);
   const options = typeof optionsOrExecute === "function" ? {} : optionsOrExecute;
