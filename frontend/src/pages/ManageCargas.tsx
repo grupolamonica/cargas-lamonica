@@ -36,6 +36,7 @@ import {
 } from "@/services/readModels";
 import { resolveRouteMetrics } from "@/services/routeMetrics";
 import { confirmAction } from "@/lib/confirm";
+import { isOnlineSheetCargo } from "@/lib/cargoOnlineSheet";
 
 interface Cliente {
   id: string;
@@ -160,10 +161,6 @@ function normalizeClientName(value: string) {
     .replace(/[\u0300-\u036f]/g, "")
     .trim()
     .toLowerCase();
-}
-
-function isOnlineSheetCargo(cargo?: Pick<Cargo, "sheet_lh"> | null) {
-  return typeof cargo?.sheet_lh === "string" && cargo.sheet_lh.trim() !== "";
 }
 
 function buildOperatorCargoClientLabel(cargo: Cargo, shopeeClientName?: string | null) {
