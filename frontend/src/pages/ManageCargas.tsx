@@ -880,7 +880,7 @@ const ManageCargas = () => {
                   {(["LH", "Carregamento", "Descarga", "Cliente / Rota", "Veículo", "Compensação", "Status", ""] as const).map((col) => (
                     <th
                       key={col}
-                      className={`px-4 py-3.5 text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground/80 ${col === "Compensação" ? "text-right" : col === "" ? "text-right" : "text-left"}`}
+                      className={`px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground/80 ${col === "Compensação" ? "text-right" : col === "" ? "text-right" : "text-left"}`}
                     >
                       {col}
                     </th>
@@ -951,7 +951,7 @@ const ManageCargas = () => {
                         style={{ animationDelay: `${index * 40}ms` }}
                       >
                         {/* LH */}
-                        <td className="whitespace-nowrap px-4 py-4 align-middle">
+                        <td className="whitespace-nowrap px-4 py-2 align-middle">
                           {cargo.sheet_lh ? (
                             <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
                               {cargo.sheet_lh}
@@ -962,7 +962,7 @@ const ManageCargas = () => {
                         </td>
 
                         {/* Carregamento */}
-                        <td className="whitespace-nowrap px-4 py-4 align-middle">
+                        <td className="whitespace-nowrap px-4 py-2 align-middle">
                           {cargo.sheet_data_carregamento ? (
                             <p className="text-sm font-semibold text-foreground">{cargo.sheet_data_carregamento}</p>
                           ) : (
@@ -974,7 +974,7 @@ const ManageCargas = () => {
                         </td>
 
                         {/* Descarga */}
-                        <td className="whitespace-nowrap px-4 py-4 align-middle">
+                        <td className="whitespace-nowrap px-4 py-2 align-middle">
                           {cargo.sheet_data_descarga ? (
                             <p className="text-sm font-semibold text-foreground">{cargo.sheet_data_descarga}</p>
                           ) : (
@@ -983,16 +983,14 @@ const ManageCargas = () => {
                         </td>
 
                         {/* Cliente / Rota */}
-                        <td className="px-4 py-4 align-middle">
+                        <td className="px-4 py-2 align-middle">
                           <p className="text-sm font-semibold text-foreground leading-snug">
                             {buildOperatorCargoClientLabel(cargo, shopeeClient?.nome)}
                           </p>
-                          <div className="mt-1 flex items-center gap-1.5">
+                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                             <span className="max-w-[120px] truncate text-xs text-muted-foreground">{cargo.origem}</span>
                             <span className="text-muted-foreground/40">→</span>
                             <span className="max-w-[120px] truncate text-xs text-muted-foreground">{cargo.destino}</span>
-                          </div>
-                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                             {matchedRoute ? (
                               <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${matchedRoute.ativa ? "bg-primary/8 text-primary" : "bg-muted text-muted-foreground"}`}>
                                 {matchedRoute.ativa ? "Catálogo ativo" : "Catálogo inativo"}
@@ -1013,17 +1011,19 @@ const ManageCargas = () => {
                         </td>
 
                         {/* Veículo */}
-                        <td className="whitespace-nowrap px-4 py-4 align-middle">
-                          <span className="inline-flex items-center rounded-lg bg-muted/60 px-2.5 py-1 text-xs font-semibold text-foreground">
-                            {publication.perfil || "—"}
-                          </span>
-                          {(cargo.distancia_km ?? 0) > 0 && (
-                            <p className="mt-1 text-xs text-muted-foreground">{cargo.distancia_km?.toFixed(0)} km</p>
-                          )}
+                        <td className="whitespace-nowrap px-4 py-2 align-middle">
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center rounded-lg bg-muted/60 px-2.5 py-1 text-xs font-semibold text-foreground">
+                              {publication.perfil || "—"}
+                            </span>
+                            {(cargo.distancia_km ?? 0) > 0 && (
+                              <span className="text-xs text-muted-foreground">{cargo.distancia_km?.toFixed(0)} km</span>
+                            )}
+                          </div>
                         </td>
 
                         {/* Compensação */}
-                        <td className="whitespace-nowrap px-4 py-4 align-middle text-right">
+                        <td className="whitespace-nowrap px-4 py-2 align-middle text-right">
                           <p className="text-sm font-bold tabular-nums text-foreground">
                             {paymentBreakdown.total !== null ? formatMoneyValue(paymentBreakdown.total) : "—"}
                           </p>
@@ -1037,8 +1037,8 @@ const ManageCargas = () => {
                         </td>
 
                         {/* Status */}
-                        <td className="px-4 py-4 align-middle">
-                          <div className="flex flex-col gap-1.5">
+                        <td className="px-4 py-2 align-middle">
+                          <div className="flex flex-wrap items-center gap-1">
                             <span className={`inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${sc.bg}`}>
                               <span className={`h-1.5 w-1.5 rounded-full ${sc.dot}`} />
                               {sc.text}
@@ -1062,7 +1062,7 @@ const ManageCargas = () => {
                         </td>
 
                         {/* Ações */}
-                        <td className="whitespace-nowrap px-4 py-4 align-middle">
+                        <td className="whitespace-nowrap px-4 py-2 align-middle">
                           <div className="flex items-center justify-end gap-1.5">
                             {MANUAL_STATUS_OPTIONS.includes(cargo.status) && (
                               <button
