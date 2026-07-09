@@ -5,6 +5,7 @@ import {
   query,
   resetTestDatabase,
   seedCargo,
+  seedPublicLead,
   seedUser,
   withPgTransaction,
 } from "../test-harness.js";
@@ -149,6 +150,53 @@ describe("updateMonitorCargo", () => {
     expect(row.alloc_motorista).toBe("Original"); // travado
     expect(row.alloc_cavalo).toBe("AAA1111"); // travado
     expect(row.alloc_status).toBe("DESCARREGADO"); // status passa
+  });
+
+  it("limpar o motorista de carga do sistema RESERVADA reabre a carga (status OPEN + lead cancelado)", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    const op = await seedUser({ email: "op-sys-reopen@teste.local" });
+    // Motorista reservou pelo portal: lead APPROVED + carga RESERVED apontando pro lead.
+    const lead = await seedPublicLead({ load_id: id, status: "APPROVED" });
+    await query(
+      `UPDATE public.cargas SET status = 'RESERVED', reserved_public_lead_id = $2 WHERE id = $1`,
+      [id, lead.id],
+    );
+
+    await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { motorista: "", cavalo: "", carreta: "" },
+      correlationId: "c-sys-reopen",
+    });
+
+    const { rows } = await query(
+      `SELECT status, reserved_public_lead_id FROM public.cargas WHERE id = $1`,
+      [id],
+    );
+    expect(rows[0].status).toBe("OPEN");
+    expect(rows[0].reserved_public_lead_id).toBeNull();
+    const leadRow = await query(`SELECT status FROM public.load_public_leads WHERE id = $1`, [lead.id]);
+    expect(leadRow.rows[0].status).toBe("CANCELLED");
+  });
+
+  it("editar só a rota de carga do sistema RESERVADA NÃO reabre (não mexe na reserva)", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    const op = await seedUser({ email: "op-sys-noreopen@teste.local" });
+    const lead = await seedPublicLead({ load_id: id, status: "APPROVED" });
+    await query(
+      `UPDATE public.cargas SET status = 'RESERVED', reserved_public_lead_id = $2 WHERE id = $1`,
+      [id, lead.id],
+    );
+
+    // Edita só a rota (motorista ausente no payload) → preserva a reserva.
+    await updateMonitorCargo({ cargoId: id, operatorId: op.id, payload: { origem: "Nova Origem" } });
+
+    const { rows } = await query(
+      `SELECT status, reserved_public_lead_id FROM public.cargas WHERE id = $1`,
+      [id],
+    );
+    expect(rows[0].status).toBe("RESERVED");
+    expect(rows[0].reserved_public_lead_id).toBe(lead.id);
   });
 
   it("lança NotFound quando o id não existe", async () => {

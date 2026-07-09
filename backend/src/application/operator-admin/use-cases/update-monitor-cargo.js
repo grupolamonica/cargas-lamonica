@@ -2,6 +2,7 @@ import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
 import { syncedCarregamentoLabel } from "../../../domain/cargo-schedule.js";
+import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
 
 // pg devolve DATE como Date (UTC-midnight) e TIME como string. Normaliza pro
 // formato de parede 'YYYY-MM-DD' / 'HH:MM' (UTC, evita off-by-one).
@@ -48,11 +49,12 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     return t === "" ? null : t;
   };
 
-  return withPgTransaction(async (client) => {
+  const result = await withPgTransaction(async (client) => {
     const { rows } = await client.query(
       `SELECT id, sheet_lh, alloc_pinned,
               alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao,
-              origem, destino, data, horario, lh_manual, sheet_data_carregamento, sheet_data_descarga
+              origem, destino, data, horario, lh_manual, sheet_data_carregamento, sheet_data_descarga,
+              status, reserved_public_lead_id
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
       [cargoId],
     );
@@ -78,6 +80,17 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     // Motivo da troca de motorista/veículo (modal "Confirmar troca"): ausente
     // preserva o último motivo.
     const allocDescricao = has("descricao") ? normAlloc(payload.descricao) : row.alloc_descricao;
+
+    // Limpou o motorista de uma carga do sistema RESERVADA (o motorista reservou
+    // pelo portal): a carga deve voltar a ficar ABERTA. Só quando o operador
+    // REALMENTE esvazia o motorista (não em edição de rota/agenda/status) e não
+    // está fixada. Resolvido FORA da transação (cancelPublicLoadLead abre a
+    // própria e trava a mesma linha) — aqui só sinalizamos o lead a cancelar.
+    const reopenLeadId =
+      has("motorista") && !pinned && !allocMotorista &&
+      row.status === "RESERVED" && row.reserved_public_lead_id
+        ? row.reserved_public_lead_id
+        : null;
 
     // canônicos (Rota/Agenda) — NOT NULL: só sobrescreve se vier valor válido
     const origem = has("origem") ? payload.origem : row.origem;
@@ -166,6 +179,23 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
         },
         meta: { correlationId },
       },
+      reopenLeadId,
     };
   });
+
+  // Reabrir carga reservada do sistema: o operador limpou o motorista → cancela
+  // o lead do portal (APPROVED → CANCELLED) e a carga volta a OPEN
+  // (cancelPublicLoadLead zera reserved_*). Best-effort, fora da transação.
+  if (result.reopenLeadId) {
+    try {
+      await cancelPublicLoadLead({ loadId: cargoId, leadId: result.reopenLeadId, operatorId, correlationId });
+    } catch (reopenErr) {
+      console.warn(
+        `[update-monitor-cargo] reabrir carga reservada falhou para ${cargoId}:`,
+        reopenErr instanceof Error ? reopenErr.message : reopenErr,
+      );
+    }
+  }
+
+  return result;
 }
