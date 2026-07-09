@@ -75,8 +75,15 @@ ON CONFLICT (rota_id, tipo_veiculo, eixos) DO UPDATE SET
 -- ------------------------------------------------------------------
 -- 4. Views: incluir eixos
 -- ------------------------------------------------------------------
+-- CREATE OR REPLACE VIEW nao permite inserir colunas no meio do SELECT
+-- (interpreta como rename das colunas seguintes). DROP + CREATE aqui.
+-- Nenhum objeto depende dessas views hoje (verificado via pg_depend), entao
+-- o DROP CASCADE nao propaga.
 
-CREATE OR REPLACE VIEW public.v_rotas_com_tarifas AS
+DROP VIEW IF EXISTS public.v_rotas_com_tarifas CASCADE;
+DROP VIEW IF EXISTS public.v_clientes_com_rotas CASCADE;
+
+CREATE VIEW public.v_rotas_com_tarifas AS
 SELECT
   r.id          AS rota_id,
   r.origem,
@@ -98,7 +105,7 @@ LEFT JOIN public.rota_tarifas rt ON rt.rota_id = r.id;
 
 -- v_clientes_com_rotas: usa rotas.cliente_id (1:N cliente -> rotas), modelo
 -- vigente desde a migration 20260508000002 (cliente_rotas foi dropada).
-CREATE OR REPLACE VIEW public.v_clientes_com_rotas AS
+CREATE VIEW public.v_clientes_com_rotas AS
 SELECT
   c.id          AS cliente_id,
   c.nome        AS cliente_nome,
