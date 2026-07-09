@@ -77,11 +77,6 @@ import {
   resolveUpdateOperatorClienteResponse,
   resolveUpdateOperatorDriverProfileResponse,
   resolveUpdateOperatorRouteResponse,
-  resolveListRouteTarifasResponse,
-  resolveCreateRouteTarifaResponse,
-  resolveUpdateRouteTarifaResponse,
-  resolveDeleteRouteTarifaResponse,
-  resolveLookupRouteTarifaResponse,
   resolveDriverSponsorClicksResponse,
   resolveOperatorOverviewDigestResponse,
   resolveOperatorCadastrosPendentesResponse,
@@ -413,21 +408,6 @@ export function registerRoutes(app) {
   router.get("/api/operator/routes", wrap(resolveOperatorRoutesListReadModelResponse));
   router.post("/api/operator/routes", wrap(resolveCreateOperatorRouteResponse));
   router.patch("/api/operator/routes/:routeId", wrap(resolveUpdateOperatorRouteResponse));
-
-  // rota_tarifas — múltiplas tarifas por (perfil + eixos) em uma mesma rota.
-  // CRITICAL: rotas com sub-segmentos fixos ANTES do lookup (que também é fixo)
-  // para o Express nao interpretar segmento como :routeId.
-  router.get("/api/operator/routes/tarifa/lookup", wrap(resolveLookupRouteTarifaResponse));
-  router.get("/api/operator/routes/:routeId/tarifas", wrap(resolveListRouteTarifasResponse));
-  router.post("/api/operator/routes/:routeId/tarifas", wrap(resolveCreateRouteTarifaResponse));
-  router.put(
-    "/api/operator/routes/:routeId/tarifas/:tarifaId",
-    wrap(resolveUpdateRouteTarifaResponse),
-  );
-  router.delete(
-    "/api/operator/routes/:routeId/tarifas/:tarifaId",
-    wrap(resolveDeleteRouteTarifaResponse),
-  );
 
   // Cargas casadas (pacote de cargas) — Phase 10
   // CRITICAL T-02-07: rotas com sub-segmentos fixos (reorder/cargas/publish/cancel)

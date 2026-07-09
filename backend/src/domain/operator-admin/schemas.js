@@ -198,32 +198,6 @@ export const routeMutationSchema = z
   })
   .strict();
 
-// Tarifa por veiculo dentro de uma rota (`rota_tarifas`). Uma tarifa =
-// combinacao unica de (perfil, eixos) — habilita CARRETA 2-eixos != CARRETA
-// 3-eixos com valor/bonus proprios no mesmo trecho.
-export const routeTarifaMutationSchema = z
-  .object({
-    perfil: canonicalVehicleProfileSchema,
-    eixos: routeEixosSchema,
-    valor: optionalNumeric,
-    bonus: optionalNumeric,
-    bonus_exigencias: optionalTrimmedString,
-    observacoes: optionalTrimmedString,
-    ativa: z.boolean().default(true),
-  })
-  .strict();
-
-// Query do lookup de tarifa em Editar Carga: dado (origem, destino, perfil,
-// eixos), devolve o valor/bonus para preencher automaticamente.
-export const routeTarifaLookupQuerySchema = z
-  .object({
-    origem: z.string().trim().min(2).max(180),
-    destino: z.string().trim().min(2).max(180),
-    perfil: canonicalVehicleProfileSchema,
-    eixos: routeEixosSchema,
-  })
-  .strict();
-
 export const driverProfileUpdateMutationSchema = z
   .object({
     full_name: z.string().trim().min(3).optional(),

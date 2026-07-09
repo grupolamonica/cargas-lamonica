@@ -23,8 +23,6 @@ import {
   clienteMutationSchema,
   driverProfileUpdateMutationSchema,
   routeMutationSchema,
-  routeTarifaMutationSchema,
-  routeTarifaLookupQuerySchema,
 } from "../../../domain/operator-admin/schemas.js";
 import {
   buildInternalErrorResponse,
@@ -37,14 +35,12 @@ import {
   clienteIdParamsSchema,
   clienteRotaParamsSchema,
 } from "../schemas/cliente-schemas.js";
-import { routeIdParamsSchema, routeTarifaIdParamsSchema } from "../schemas/route-schemas.js";
+import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
 import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorUpdateReservaBodySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
-  createRouteTarifa,
-  deleteRouteTarifa,
   importOperatorCargas,
   createOperatorCliente,
   createOperatorRoute,
@@ -53,14 +49,11 @@ import {
   detachClienteRota,
   fetchOperatorDashboardReadModel,
   listClienteRotas,
-  listRouteTarifas,
-  lookupRouteTarifa,
   redactExpiredPublicLeadPii,
   revalidateAllVehiclesAngellira,
   updateOperatorCargo,
   updateOperatorCliente,
   updateOperatorRoute,
-  updateRouteTarifa,
   duplicateOperatorCargo,
   toggleOperatorCargoStatus,
   updateOperatorDriverProfile,
@@ -572,94 +565,6 @@ export async function resolveUpdateOperatorRouteResponse(request) {
     });
     },
   );
-}
-
-// ── rota_tarifas (uma tarifa = perfil + eixos) ──────────────────────────────
-
-export async function resolveListRouteTarifasResponse(request) {
-  return withOperatorSession(request, "list-route-tarifas", async ({ correlationId }) => {
-    const { routeId } = routeIdParamsSchema.parse({ routeId: getQueryParam(request, "routeId") });
-    return listRouteTarifas({ routeId, correlationId });
-  });
-}
-
-export async function resolveCreateRouteTarifaResponse(request) {
-  return withOperatorSession(
-    request,
-    "create-route-tarifa",
-    {
-      requiredPermission: "routes:write",
-      forbiddenMessage: "Somente operadores com acesso avancado podem alterar tarifas de rotas.",
-    },
-    async ({ correlationId, requestIp, operatorId }) => {
-      const { routeId } = routeIdParamsSchema.parse({ routeId: getQueryParam(request, "routeId") });
-      const payload = routeTarifaMutationSchema.parse(await parseJsonBody(request));
-      return createRouteTarifa({
-        routeId,
-        operatorId,
-        payload,
-        requestIp,
-        correlationId,
-      });
-    },
-  );
-}
-
-export async function resolveUpdateRouteTarifaResponse(request) {
-  return withOperatorSession(
-    request,
-    "update-route-tarifa",
-    {
-      requiredPermission: "routes:write",
-      forbiddenMessage: "Somente operadores com acesso avancado podem alterar tarifas de rotas.",
-    },
-    async ({ correlationId, requestIp, operatorId }) => {
-      const { routeId, tarifaId } = routeTarifaIdParamsSchema.parse({
-        routeId: getQueryParam(request, "routeId"),
-        tarifaId: getQueryParam(request, "tarifaId"),
-      });
-      const payload = routeTarifaMutationSchema.parse(await parseJsonBody(request));
-      return updateRouteTarifa({
-        routeId,
-        tarifaId,
-        operatorId,
-        payload,
-        requestIp,
-        correlationId,
-      });
-    },
-  );
-}
-
-export async function resolveDeleteRouteTarifaResponse(request) {
-  return withOperatorSession(
-    request,
-    "delete-route-tarifa",
-    {
-      requiredPermission: "routes:write",
-      forbiddenMessage: "Somente operadores com acesso avancado podem alterar tarifas de rotas.",
-    },
-    async ({ correlationId, requestIp, operatorId }) => {
-      const { routeId, tarifaId } = routeTarifaIdParamsSchema.parse({
-        routeId: getQueryParam(request, "routeId"),
-        tarifaId: getQueryParam(request, "tarifaId"),
-      });
-      return deleteRouteTarifa({
-        routeId,
-        tarifaId,
-        operatorId,
-        requestIp,
-        correlationId,
-      });
-    },
-  );
-}
-
-export async function resolveLookupRouteTarifaResponse(request) {
-  return withOperatorSession(request, "lookup-route-tarifa", async ({ correlationId }) => {
-    const query = routeTarifaLookupQuerySchema.parse(request.query || {});
-    return lookupRouteTarifa({ query, correlationId });
-  });
 }
 
 export async function resolveOperatorDashboardReadModelResponse(request) {

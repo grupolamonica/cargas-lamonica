@@ -210,37 +210,6 @@ const schemaSql = `
     CONSTRAINT route_metrics_cache_origin_dest_perfil_eixos_unique UNIQUE (origin_key, destination_key, perfil_padrao, eixos)
   );
 
-  CREATE TABLE public.rotas (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    origem text NOT NULL,
-    destino text NOT NULL,
-    distancia_km numeric,
-    duracao_horas numeric,
-    rodovias text,
-    ativa boolean NOT NULL DEFAULT true,
-    observacoes text,
-    -- Migration 20260508000002: 1:N cliente -> rotas (cliente_rotas dropada).
-    cliente_id uuid REFERENCES public.clientes(id) ON DELETE SET NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT rotas_origem_destino_unique UNIQUE (origem, destino)
-  );
-
-  CREATE TABLE public.rota_tarifas (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    rota_id uuid NOT NULL REFERENCES public.rotas(id) ON DELETE CASCADE,
-    tipo_veiculo text NOT NULL,
-    eixos smallint NOT NULL DEFAULT 0,
-    valor_frete numeric,
-    bonus numeric,
-    bonus_exigencias text,
-    ativa boolean NOT NULL DEFAULT true,
-    observacoes text,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT rota_tarifas_rota_veiculo_eixos_unique UNIQUE (rota_id, tipo_veiculo, eixos)
-  );
-
   CREATE TABLE public.load_public_leads (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     load_id uuid NOT NULL REFERENCES public.cargas(id) ON DELETE CASCADE,
@@ -692,78 +661,6 @@ export async function seedRoute(overrides = {}) {
       overrides.perfil_padrao ?? "CARRETA",
       overrides.valor_padrao ?? 7200,
       overrides.bonus_padrao ?? 300,
-      overrides.ativa ?? true,
-      overrides.observacoes ?? null,
-    ],
-  );
-
-  // Espelha em public.rotas para casar com o LEFT JOIN do read-model. Em prod
-  // create-route.js sempre grava nas duas tabelas; o harness segue o padrão.
-  // ON CONFLICT DO NOTHING permite seedRoute chamado várias vezes para o mesmo
-  // trecho (variando perfil/eixos no route_metrics_cache) sem quebrar a UNIQUE
-  // (origem, destino) de public.rotas.
-  await query(
-    `
-      INSERT INTO public.rotas (origem, destino, distancia_km, duracao_horas, ativa, observacoes)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (origem, destino) DO NOTHING
-    `,
-    [
-      overrides.origem ?? "Salvador / BA",
-      overrides.destino ?? "Simoes Filho / BA",
-      overrides.distancia_km ?? 1500,
-      overrides.duracao_horas ?? 24,
-      overrides.ativa ?? true,
-      overrides.observacoes ?? null,
-    ],
-  );
-
-  return { id };
-}
-
-export async function seedRota(overrides = {}) {
-  const id = overrides.id ?? crypto.randomUUID();
-
-  await query(
-    `
-      INSERT INTO public.rotas (
-        id, origem, destino, distancia_km, duracao_horas, rodovias, ativa, observacoes
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    `,
-    [
-      id,
-      overrides.origem ?? "Salvador / BA",
-      overrides.destino ?? "Simoes Filho / BA",
-      overrides.distancia_km ?? 1500,
-      overrides.duracao_horas ?? 24,
-      overrides.rodovias ?? null,
-      overrides.ativa ?? true,
-      overrides.observacoes ?? null,
-    ],
-  );
-
-  return { id };
-}
-
-export async function seedRotaTarifa(overrides = {}) {
-  const id = overrides.id ?? crypto.randomUUID();
-
-  await query(
-    `
-      INSERT INTO public.rota_tarifas (
-        id, rota_id, tipo_veiculo, eixos, valor_frete, bonus, bonus_exigencias, ativa, observacoes
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    `,
-    [
-      id,
-      overrides.rota_id,
-      overrides.tipo_veiculo ?? "CARRETA",
-      overrides.eixos ?? 0,
-      overrides.valor_frete ?? 5000,
-      overrides.bonus ?? 0,
-      overrides.bonus_exigencias ?? null,
       overrides.ativa ?? true,
       overrides.observacoes ?? null,
     ],
