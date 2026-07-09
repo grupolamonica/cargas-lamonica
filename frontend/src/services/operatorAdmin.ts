@@ -325,6 +325,48 @@ export async function updateOperatorRoute(routeId: string, payload: OperatorRout
   });
 }
 
+// Uma tarifa por veículo (perfil + eixos) com valor/bônus próprios.
+export interface RouteTarifaInput {
+  perfil: string;
+  eixos: number;
+  valor: number | null;
+  bonus: number | null;
+  bonus_exigencias: string | null;
+}
+
+// Salva um trecho com N tarifas numa operação (batch). Substitui os N
+// create/update por rota individual — o backend faz upsert das tarifas
+// presentes e remove as que saíram da lista, tudo numa transação.
+export interface RouteTrechoPayload {
+  origem: string;
+  destino: string;
+  distancia_km: number | null;
+  duracao_horas: number | null;
+  tempo_estimado_horas: number | null;
+  ativa: boolean;
+  observacoes: string | null;
+  tarifas: RouteTarifaInput[];
+}
+
+interface RouteTrechoResponse {
+  ok: boolean;
+  rota_id: string | null;
+  tarifasCount: number;
+  deletedCount: number;
+  cascadedCargaCount: number;
+  warnings?: string[];
+  meta: { correlationId: string };
+}
+
+export async function saveRouteTrecho(payload: RouteTrechoPayload) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<RouteTrechoResponse>("/api/operator/routes/trecho", {
+    method: "PUT",
+    accessToken,
+    body: payload,
+  });
+}
+
 // ─── Pacotes (cargas_casadas) — Phase 10 plan 10-07 ─────────────────────────
 
 export type PacoteStatus =
