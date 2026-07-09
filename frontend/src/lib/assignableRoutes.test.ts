@@ -6,6 +6,7 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 import {
   applyAssignableRouteToCargoDraft,
+  applyRouteVehiclePricingToCargoDraft,
   buildCargoTotalPayment,
   buildAssignableRouteKey,
   findAssignableRouteByLocations,
@@ -112,6 +113,25 @@ describe("assignable routes helpers", () => {
       valor: "14000",
       bonus: "500",
     });
+  });
+
+  it("auto-fill do veículo preenche valor/bônus só quando o campo está vazio", () => {
+    const base = { route_key: "", origem: "SAO PAULO", destino: "SIMOES FILHO", perfil: "CARRETA", eixos: 0 };
+
+    // Campos vazios → puxa da rota.
+    expect(
+      applyRouteVehiclePricingToCargoDraft({ ...base, valor: "", bonus: "" }, route),
+    ).toMatchObject({ route_key: route.route_key, valor: "14000", bonus: "500" });
+
+    // Valor já digitado → NÃO sobrescreve (só completa o bônus vazio).
+    expect(
+      applyRouteVehiclePricingToCargoDraft({ ...base, valor: "9999", bonus: "" }, route),
+    ).toMatchObject({ valor: "9999", bonus: "500" });
+
+    // Ambos preenchidos (ex.: carga salva sendo editada) → preserva os dois.
+    expect(
+      applyRouteVehiclePricingToCargoDraft({ ...base, valor: "9999", bonus: "111" }, route),
+    ).toMatchObject({ valor: "9999", bonus: "111" });
   });
 
   it("matches abbreviated operational names like SJ Rio Preto to the route catalog city", () => {

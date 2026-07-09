@@ -249,9 +249,10 @@ export function applyAssignableRouteToCargoDraft<T extends CargoRouteAssignmentD
   };
 }
 
-// Auto-match (operador digitou origem/destino e escolheu o veículo): preenche
-// só valor/bônus da rota daquele veículo, SEM sobrescrever o perfil/eixos que o
-// operador definiu.
+// Auto-match (operador digitou origem/destino e escolheu o veículo): puxa
+// valor/bônus da rota daquele veículo APENAS quando o campo está vazio — nunca
+// sobrescreve um valor já digitado nem o valor salvo de uma carga em edição.
+// SEM sobrescrever o perfil/eixos que o operador definiu.
 export function applyRouteVehiclePricingToCargoDraft<T extends CargoRouteAssignmentDraft>(
   cargo: T,
   route: AssignableRouteOption | null,
@@ -260,12 +261,16 @@ export function applyRouteVehiclePricingToCargoDraft<T extends CargoRouteAssignm
     return cargo;
   }
 
-  const nextValor = route.valor_padrao !== null ? String(route.valor_padrao) : cargo.valor || "";
-  const nextBonus = route.bonus_padrao !== null ? String(route.bonus_padrao) : cargo.bonus || "";
+  const valorIsEmpty = !(cargo.valor && cargo.valor.trim() !== "");
+  const bonusIsEmpty = !(cargo.bonus && cargo.bonus.trim() !== "");
+  const nextValor =
+    valorIsEmpty && route.valor_padrao !== null ? String(route.valor_padrao) : cargo.valor || "";
+  const nextBonus =
+    bonusIsEmpty && route.bonus_padrao !== null ? String(route.bonus_padrao) : cargo.bonus || "";
   const hasChanges =
     cargo.route_key !== route.route_key ||
-    (route.valor_padrao !== null && cargo.valor !== nextValor) ||
-    (route.bonus_padrao !== null && cargo.bonus !== nextBonus);
+    cargo.valor !== nextValor ||
+    cargo.bonus !== nextBonus;
 
   if (!hasChanges) {
     return cargo;
