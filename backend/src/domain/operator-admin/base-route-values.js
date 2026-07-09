@@ -135,11 +135,15 @@ export const baseRouteValues = [
     distanceKm: 1855,
   },
   {
-    // Valor: confirmar com operador — carga anterior na rota registrada por R$ 18.700
+    // Preço confirmado com o operador: R$ 18.700 (mesmo do route_metrics_cache).
+    // O valor anterior (R$ 20.000, estimativa hardcodada) escapou para produção
+    // porque o match no cadastro do operador falhava por diferença de nome
+    // ("Jaboatão/PE" vs "Jaboatão dos Guararapes / PE") e a cascata caía aqui.
+    // Alias de canonicalização em google-sheet-loads.js corrigido em conjunto.
     route: "SAO JOSE DO RIO PRETO X JABOATAO DOS GUARARAPES",
     origin: "SAO JOSE DO RIO PRETO",
     destination: "JABOATAO DOS GUARARAPES",
-    value: 20000,
+    value: 18700,
     distanceKm: 2850,
   },
   {
