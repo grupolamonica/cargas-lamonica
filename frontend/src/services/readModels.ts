@@ -195,6 +195,8 @@ export interface OperatorCargoListItem {
   is_template: boolean;
   cliente_id: string | null;
   sheet_lh: string | null;
+  /** Preenchido só pelo sync da planilha Shopee; NULL em cargas importadas por CSV. */
+  sheet_synced_at: string | null;
   sheet_data_carregamento: string | null;
   sheet_data_descarga: string | null;
   clientes: {
