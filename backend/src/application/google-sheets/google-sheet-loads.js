@@ -86,7 +86,11 @@ function canonicalizeRouteLookupLocation(value) {
     return "simoes filho";
   }
 
-  if (/\bjaboatao dos guararapes\b/.test(normalizedValue)) {
+  // "Jaboatão" isolado no cadastro do operador (route_metrics_cache) representa
+  // a mesma cidade que "Jaboatão dos Guararapes" vindo da planilha do cliente.
+  // Sem esse alias, o match falhava e o sync caía no fallback hardcodado de
+  // BASE_ROUTE_VALUES, ignorando o preço configurado pelo operador.
+  if (/\bjaboatao\b/.test(normalizedValue)) {
     return "jaboatao dos guararapes";
   }
 

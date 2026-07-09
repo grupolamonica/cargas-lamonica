@@ -153,6 +153,14 @@ const SAMPLE_CSV_WITH_OPERATIONAL_ALIASES = SAMPLE_CSV.replace(
   "SoC_PE_Jaboatao dos Guararapes,SoC_BA_Simoes Filho",
   "SJ Rio Preto-02 / SP,SoC_BA_Simoes Filho",
 );
+// Reproduz o caso real de prod que caía no fallback hardcodado: rota da planilha
+// vem como "SJ Rio Preto-03 / SP" → "Jaboatão dos Guararapes / PE", enquanto o
+// cadastro do operador em route_metrics_cache guarda o destino no formato curto
+// "Jaboatão/PE". O sync precisa casar os dois nomes via canonicalização.
+const SAMPLE_CSV_RIO_PRETO_JABOATAO = SAMPLE_CSV.replaceAll(
+  "SoC_PE_Jaboatao dos Guararapes,SoC_BA_Simoes Filho",
+  "SJ Rio Preto-03 / SP,SoC_PE_Jaboatao dos Guararapes",
+);
 const SAMPLE_CSV_WITH_GLUE_DATETIME = SAMPLE_CSV.replace(
   "03/04/2026 22:30:00,4/4/2026 16:30:00",
   "11-04-202607:00,12-04-2026 16:30:00",
@@ -473,6 +481,61 @@ describe("google sheet loads sync", () => {
       bonus: 350,
       distancia_km: 781,
       duracao_horas: 15.5,
+    });
+  });
+
+  it("matches operator-registered route with short destination against long sheet name (regression: SJRP → Jaboatão)", async () => {
+    // Regressão do caso LT0Q7802AM6Z1 (08/07/2026): a rota cadastrada no
+    // route_metrics_cache tem destino "Jaboatão/PE", mas a planilha exporta
+    // "Jaboatão dos Guararapes / PE". Antes do fix, a canonicalização não
+    // alinhava os dois e o sync caía no BASE_ROUTE_VALUES hardcodado, gravando
+    // R$ 20.000 em vez dos R$ 18.700 configurados pelo operador.
+    const supabaseClient = createSupabaseMock({
+      routeCatalogRows: [
+        {
+          id: "route-sjrp-jaboatao",
+          origin_key: "sao jose do rio preto/sp",
+          destination_key: "jaboatao/pe",
+          origem: "São José do Rio Preto/SP",
+          destino: "Jaboatão/PE",
+          distancia_km: 2570.95,
+          duracao_horas: 84,
+          perfil_padrao: "CARRETA",
+          // Valor diagnóstico distinto do BASE_ROUTE_VALUES: se o teste
+          // observar este valor no upsert, o match veio do cadastro do
+          // operador; se observasse 18.700 (hardcode), o cadastro foi ignorado.
+          valor_padrao: 12345,
+          bonus_padrao: 999,
+          ativa: true,
+          updated_at: "2026-07-07T11:51:37.046Z",
+        },
+      ],
+    });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV_RIO_PRETO_JABOATAO)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV_RIO_PRETO_JABOATAO),
+    });
+
+    await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+    });
+
+    const upsertCall = supabaseClient.calls.find((call) => call[0] === "upsert");
+    expect(upsertCall).toBeTruthy();
+    expect(upsertCall[2][0]).toMatchObject({
+      sheet_lh: "LT0Q4302267L1",
+      origem: "SJ Rio Preto-03 / SP",
+      destino: "Jaboatao dos Guararapes / PE",
+      valor: 12345,
+      bonus: 999,
+      distancia_km: 2570.95,
+      duracao_horas: 84,
+      perfil: "CARRETA",
     });
   });
 
