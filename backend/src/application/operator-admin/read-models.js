@@ -289,6 +289,40 @@ function mergeBaseRoutesWithCatalog(routes) {
   return [...mergedBaseRoutes, ...extraPersistedRoutes];
 }
 
+async function fetchRouteTarifasByRotaId(client) {
+  // Uma tarifa por (rota, perfil, eixos). Retorna Map<rota_id, tarifa[]>.
+  // Se `rota_tarifas` ainda nao existir (schema legado), devolve mapa vazio —
+  // o read-model ate entao entrega `tarifas: []` sem quebrar.
+  try {
+    const { rows } = await client.query(`
+      SELECT
+        id, rota_id, tipo_veiculo, eixos, valor_frete, bonus,
+        bonus_exigencias, ativa, observacoes
+      FROM public.rota_tarifas
+      ORDER BY tipo_veiculo ASC, eixos ASC
+    `);
+    const byRotaId = new Map();
+    rows.forEach((row) => {
+      if (!byRotaId.has(row.rota_id)) byRotaId.set(row.rota_id, []);
+      byRotaId.get(row.rota_id).push({
+        id: row.id,
+        perfil: row.tipo_veiculo,
+        eixos: row.eixos ?? 0,
+        valor: parseNullableNumber(row.valor_frete),
+        bonus: parseNullableNumber(row.bonus),
+        bonus_exigencias: row.bonus_exigencias ?? null,
+        ativa: row.ativa,
+        observacoes: row.observacoes ?? null,
+      });
+    });
+    return byRotaId;
+  } catch (error) {
+    const message = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
+    if (message.includes("rota_tarifas")) return new Map();
+    throw error;
+  }
+}
+
 async function fetchPersistedRoutes(client) {
   // LEFT JOIN public.rotas para puxar cliente_id (1:N rota → cliente).
   // Match com normalização (LOWER + BTRIM) para tolerar divergências de
@@ -902,7 +936,14 @@ export async function fetchOperatorRoutesListReadModel({ query, correlationId })
 
   return withPgClient(async (client) => {
     const { rows, supportsCatalogFields } = await fetchPersistedRoutes(client);
-    const mergedRoutes = mergeBaseRoutesWithCatalog(rows);
+    const tarifasByRotaId = await fetchRouteTarifasByRotaId(client);
+    const mergedRoutes = mergeBaseRoutesWithCatalog(rows).map((route) => ({
+      ...route,
+      // Multi-tarifa: cada rota carrega N tarifas por (perfil + eixos). Enquanto
+      // o front nao migrar pra este payload, o campo é aditivo — nao quebra o
+      // consumidor atual que le `perfil_padrao`/`valor_padrao`.
+      tarifas: route.rota_id ? tarifasByRotaId.get(route.rota_id) ?? [] : [],
+    }));
     const filteredRoutes = mergedRoutes.filter((route) => {
       const matchesSearch =
         !search ||
