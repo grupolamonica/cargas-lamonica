@@ -77,6 +77,7 @@ import {
   resolveUpdateOperatorClienteResponse,
   resolveUpdateOperatorDriverProfileResponse,
   resolveUpdateOperatorRouteResponse,
+  resolveSaveRouteTrechoResponse,
   resolveDriverSponsorClicksResponse,
   resolveOperatorOverviewDigestResponse,
   resolveOperatorCadastrosPendentesResponse,
@@ -408,6 +409,8 @@ export function registerRoutes(app) {
   router.get("/api/operator/routes", wrap(resolveOperatorRoutesListReadModelResponse));
   router.post("/api/operator/routes", wrap(resolveCreateOperatorRouteResponse));
   router.patch("/api/operator/routes/:routeId", wrap(resolveUpdateOperatorRouteResponse));
+  // Salvar trecho com múltiplas tarifas por veículo numa operação (batch).
+  router.put("/api/operator/routes/trecho", wrap(resolveSaveRouteTrechoResponse));
 
   // Cargas casadas (pacote de cargas) — Phase 10
   // CRITICAL T-02-07: rotas com sub-segmentos fixos (reorder/cargas/publish/cancel)

@@ -23,6 +23,7 @@ import {
   clienteMutationSchema,
   driverProfileUpdateMutationSchema,
   routeMutationSchema,
+  routeTrechoMutationSchema,
 } from "../../../domain/operator-admin/schemas.js";
 import {
   buildInternalErrorResponse,
@@ -51,6 +52,7 @@ import {
   listClienteRotas,
   redactExpiredPublicLeadPii,
   revalidateAllVehiclesAngellira,
+  saveRouteTrecho,
   updateOperatorCargo,
   updateOperatorCliente,
   updateOperatorRoute,
@@ -563,6 +565,26 @@ export async function resolveUpdateOperatorRouteResponse(request) {
       requestIp,
       correlationId,
     });
+    },
+  );
+}
+
+export async function resolveSaveRouteTrechoResponse(request) {
+  return withOperatorSession(
+    request,
+    "save-route-trecho",
+    {
+      requiredPermission: "routes:write",
+      forbiddenMessage: "Somente operadores com acesso avancado podem alterar rotas padrao.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const payload = routeTrechoMutationSchema.parse(await parseJsonBody(request));
+      return saveRouteTrecho({
+        operatorId,
+        payload,
+        requestIp,
+        correlationId,
+      });
     },
   );
 }
