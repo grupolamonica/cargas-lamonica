@@ -7,6 +7,7 @@ import {
   formatEstimatedTime,
 } from "@/lib/estimatedTime";
 import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
+import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 import { DetailMetric, formatRouteMetric } from "@/pages/DriverCargoDetails";
 import type { PacoteCarga } from "@/services/readModels";
 
@@ -41,7 +42,7 @@ const CargaParadaCard = ({ carga, isCurrent, index }: CargaParadaCardProps) => {
   const loadingLabel = buildOperationalDateLabel(null, carga.data, carga.horario);
   const unloadingLabel = buildOperationalDateLabel(null);
   const estimatedTime = formatEstimatedTime(loadingDate, null);
-  const veiculoLabel = carga.perfil || "A confirmar";
+  const veiculoLabel = carga.perfil ? formatVehicleProfileLabel(carga.perfil) : "A confirmar";
   const percursoLabel = formatRouteMetric(carga.distancia_km, "km");
 
   return (
