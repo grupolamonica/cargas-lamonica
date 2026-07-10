@@ -10,8 +10,8 @@
  * `getOperatorAccessLevel(user)` retorna "advanced" | "intermediate" | null.
  *
  * Convenção:
- *   - `advanced`  → admin pleno (aprovar/rejeitar/bulk/alocar/editar)
- *   - `intermediate` → leitura + ações de baixo risco
+ *   - `advanced`  → admin pleno (edição de perfil / mass-ops / alocar / clientes / rotas / valores)
+ *   - `intermediate` → leitura + cadastrar + aprovar/rejeitar cadastros (alinha c/ backend)
  */
 
 import { useContext } from "react";
@@ -48,9 +48,12 @@ export function useOperatorPermissions(): OperatorPermissions {
     isOperator,
     isAdvanced,
     isIntermediate,
-    // Ações sensíveis (escrita / aprovação / mass-ops): exigem `advanced`.
-    canApproveMotoristas: isAdvanced,
-    canRejectMotoristas: isAdvanced,
+    // Aprovar/rejeitar cadastros: o backend (`/aprovar`, `/rejeitar`) permite
+    // `intermediate` — o front alinha para não esconder a ação de quem pode
+    // executá-la (senão o operador vê "sem permissão" mesmo podendo).
+    canApproveMotoristas: isAdvanced || isIntermediate,
+    canRejectMotoristas: isAdvanced || isIntermediate,
+    // Demais ações sensíveis (edição de perfil / mass-ops / alocação): `advanced`.
     canEditMotoristas: isAdvanced,
     canBulkRevalidateVehicles: isAdvanced,
     canAllocateLeads: isAdvanced,
