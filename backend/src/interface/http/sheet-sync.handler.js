@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 import "../../infrastructure/config/load-env.js";
 
-import { syncGoogleSheetLoads } from "../../application/google-sheets/google-sheet-loads.js";
+import { syncAllSheetSources } from "../../application/google-sheets/google-sheet-loads.js";
 import { syncDriverVinculos } from "../../application/google-sheets/driver-vinculos.js";
 import { createSupabaseAdminClient } from "../../infrastructure/supabase/admin-client.js";
 
@@ -55,7 +55,8 @@ export async function resolveSheetSyncResponse(request) {
 
   try {
     const supabaseClient = createSupabaseAdminClient();
-    const result = await syncGoogleSheetLoads({
+    // Sincroniza todas as fontes (Shopee + Nestlé), cada uma isolada.
+    const result = await syncAllSheetSources({
       supabaseClient,
     });
 

@@ -252,10 +252,12 @@ async function bootstrap() {
       sheetSyncRunning = true;
       const startedAt = Date.now();
       try {
-        const { syncGoogleSheetLoads } = await import("./application/google-sheets/google-sheet-loads.js");
+        const { syncAllSheetSources } = await import("./application/google-sheets/google-sheet-loads.js");
         const { createSupabaseAdminClient } = await import("./infrastructure/supabase/admin-client.js");
         const adminClient = createSupabaseAdminClient();
-        await syncGoogleSheetLoads({ supabaseClient: adminClient });
+        // Sincroniza TODAS as fontes (Shopee + Nestlé) em sequência, cada uma
+        // isolada: uma falha (ex.: cliente Nestlé ausente) não aborta a Shopee.
+        await syncAllSheetSources({ supabaseClient: adminClient });
         // Sync da aba "Vinculo" (motorista -> vínculo) em paralelo lógico ao de
         // cargas. Não-fatal: uma falha aqui não deve abortar o ciclo de cargas.
         try {

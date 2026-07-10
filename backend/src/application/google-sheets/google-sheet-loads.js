@@ -39,6 +39,59 @@ const SHEET_LOAD_VALUE_HEADERS = [
   "pagamento",
   "pgto",
 ];
+
+// ── Multi-sheet support ─────────────────────────────────────────────────────
+//
+// O sync agora puxa cargas de MÚLTIPLAS planilhas (Shopee + Nestlé) sem que uma
+// fonte expire/limpe as cargas da outra. Cada fonte tem:
+//   - source: discriminador persistido em cargas.sheet_source
+//   - clientName: linha esperada em public.clientes.nome (rótulo do Monitor)
+//   - sheetUrl: CSV export da planilha
+//   - headerSchema: mapeamento CANÔNICO → [nomes de coluna candidatos].
+//     O parser resolve cada coluna canônica pelo primeiro candidato presente na
+//     linha de cabeçalho (via normalizeHeaderName). A Shopee usa o schema
+//     identidade (cada canônico → [ele mesmo]) → comportamento IDÊNTICO ao atual.
+//
+// A regra de "disponível" é a mesma para todas as fontes: STATUS em branco +
+// MOTORISTA em branco → OPEN → aparece no portal/monitor.
+
+// Colunas canônicas exigidas de QUALQUER fonte (o header row precisa resolver
+// todas). Deriva de SHEET_LOADS_REQUIRED_HEADERS para não divergir.
+const CANONICAL_REQUIRED_COLUMNS = SHEET_LOADS_REQUIRED_HEADERS;
+
+// Schema da Shopee: identidade — cada coluna canônica mapeia para o próprio
+// nome. Preserva 100% do comportamento pré-multi-sheet.
+const SHOPEE_HEADER_SCHEMA = {
+  lh: ["lh"],
+  tipo: ["tipo"],
+  "data carregamento": ["data carregamento"],
+  "data descarga": ["data descarga"],
+  motoristas: ["motoristas"],
+  origem: ["origem"],
+  destino: ["destino"],
+  status: ["status"],
+  valor: SHEET_LOAD_VALUE_HEADERS,
+};
+
+// Schema da Nestlé: os cabeçalhos reais da planilha (NÃO renomeada) mapeados via
+// aliases. CHEGADA PREVISTA → data carregamento; DESCARGA → data descarga.
+const NESTLE_HEADER_SCHEMA = {
+  lh: ["lh", "nº de ordem", "n de ordem", "no de ordem"],
+  tipo: ["tipo", "vinculo"],
+  "data carregamento": ["data carregamento", "chegada prevista"],
+  "data descarga": ["data descarga", "descarga"],
+  motoristas: ["motoristas", "motorista"],
+  origem: ["origem"],
+  destino: ["destino"],
+  status: ["status"],
+  valor: SHEET_LOAD_VALUE_HEADERS,
+};
+
+const SHEET_SOURCE_SHOPEE = "shopee";
+const SHEET_SOURCE_NESTLE = "nestle";
+
+const NESTLE_DEFAULT_SHEET_URL =
+  "https://docs.google.com/spreadsheets/d/1VdESScwEtkxFuCIqPpganwEOVTOOXu1ZR3MiKUjRUS8/export?format=csv&gid=0";
 function normalizeText(value) {
   return value
     .normalize("NFD")
@@ -52,7 +105,9 @@ function normalizeRouteLocation(value) {
 }
 
 function stripRouteStateSuffix(value) {
-  return value.replace(/\s*\/\s*[a-z]{2}$/i, "").trim();
+  // Aceita sufixo de UF por barra ("/SP") OU hífen ("-SP", " - PE"). A planilha
+  // Nestlé usa hífen; sem isso o sync não casava as cargas com as rotas do catálogo.
+  return value.replace(/\s*[-/]\s*[a-z]{2}$/i, "").trim();
 }
 
 function stripOperationalLocationSuffix(value) {
@@ -104,6 +159,27 @@ function canonicalizeRouteLookupLocation(value) {
 
   if (/\bcamacari\b/.test(normalizedValue)) {
     return "camacari";
+  }
+
+  // Aliases de nome divergente entre a planilha do cliente e o cadastro de rota.
+  // Cabo de Santo Agostinho — planilha Nestlé abrevia "STO", cadastro usa "SANTO".
+  if (/\b(?:sto|santo) agostinho\b/.test(normalizedValue)) {
+    return "cabo de santo agostinho";
+  }
+
+  // Nossa Senhora do Socorro/SE — cadastro abrevia "Nª SRA. DO SOCORRO".
+  if (/\bsocorro\b/.test(normalizedValue)) {
+    return "nossa senhora do socorro";
+  }
+
+  // São Bernardo do Campo — planilha "DO CAMPO", cadastro "DOS CAMPOS".
+  if (/\bsao bernardo d/.test(normalizedValue)) {
+    return "sao bernardo do campo";
+  }
+
+  // Maceió — a rota do catálogo traz sufixo "/AL - N EIXOS" que sobra no canônico.
+  if (/\bmaceio\b/.test(normalizedValue)) {
+    return "maceio";
   }
 
   return normalizedValue;
@@ -190,8 +266,16 @@ function formatUuidFromHex(hex) {
   return `${timeLow}-${timeMid}-${timeHi}-${clockSeq}-${node}`;
 }
 
-export function createSheetLoadId(sheetLh) {
-  const hash = crypto.createHash("sha1").update(`sheet-load:${sheetLh}`).digest("hex");
+export function createSheetLoadId(sheetLh, source) {
+  // ID namespacing por fonte. A Shopee (fonte histórica) mantém o namespace
+  // ORIGINAL `sheet-load:${lh}` para não invalidar os UUIDs já persistidos em
+  // produção. Outras fontes ganham um namespace próprio `sheet-load:${source}:${lh}`,
+  // impedindo colisão de UUID quando duas planilhas usam o mesmo LH.
+  const namespace =
+    !source || source === SHEET_SOURCE_SHOPEE
+      ? `sheet-load:${sheetLh}`
+      : `sheet-load:${source}:${sheetLh}`;
+  const hash = crypto.createHash("sha1").update(namespace).digest("hex");
   return formatUuidFromHex(hash);
 }
 
@@ -280,11 +364,18 @@ function buildHeaderIndex(headerRow) {
   return indexByHeader;
 }
 
-function findHeaderRowIndex(rows) {
+// Uma linha é o cabeçalho quando TODAS as colunas canônicas exigidas resolvem
+// para algum candidato do schema presente naquela linha. Com o SHOPEE_HEADER_SCHEMA
+// (identidade) isto é exatamente o comportamento anterior (`.has(header)` para
+// cada header exigido).
+function findHeaderRowIndex(rows, headerSchema = SHOPEE_HEADER_SCHEMA) {
   return rows.findIndex((row) => {
     const normalizedHeaders = new Set(row.map((cell) => normalizeHeaderName(cell)));
 
-    return SHEET_LOADS_REQUIRED_HEADERS.every((header) => normalizedHeaders.has(header));
+    return CANONICAL_REQUIRED_COLUMNS.every((canonical) => {
+      const candidates = headerSchema[canonical] || [canonical];
+      return candidates.some((candidate) => normalizedHeaders.has(normalizeHeaderName(candidate)));
+    });
   });
 }
 
@@ -303,6 +394,20 @@ function findFirstAvailableHeader(headerIndex, headerNames) {
   return headerNames.find((headerName) => headerIndex.has(normalizeHeaderName(headerName))) || null;
 }
 
+// Resolve cada coluna canônica do schema para o nome de cabeçalho concreto
+// presente na planilha (ou null se ausente). Reusa findFirstAvailableHeader para
+// achar o primeiro candidato do schema que existe no headerIndex. Consumido
+// pelos parsers para ler as células via getCell(row, headerIndex, resolvedName).
+function resolveSchemaColumns(headerIndex, headerSchema = SHOPEE_HEADER_SCHEMA) {
+  const resolved = {};
+
+  for (const [canonical, candidates] of Object.entries(headerSchema)) {
+    resolved[canonical] = findFirstAvailableHeader(headerIndex, candidates);
+  }
+
+  return resolved;
+}
+
 function chunkArray(values, chunkSize) {
   const chunks = [];
 
@@ -313,7 +418,7 @@ function chunkArray(values, chunkSize) {
   return chunks;
 }
 
-async function fetchExistingSheetLoads(supabaseClient) {
+async function fetchExistingSheetLoads(supabaseClient, source = SHEET_SOURCE_SHOPEE) {
   const existingLoads = [];
 
   for (let offset = 0; ; offset += EXISTING_SHEET_LOADS_PAGE_SIZE) {
@@ -323,8 +428,13 @@ async function fetchExistingSheetLoads(supabaseClient) {
       .not("sheet_lh", "is", null)
       // Só cargas que vieram do sync da planilha (sheet_synced_at preenchido).
       // Cargas importadas manualmente têm sheet_lh mas sheet_synced_at NULL —
-      // não pertencem à planilha Shopee e NÃO devem ser expiradas pelo sync.
+      // não pertencem a nenhuma planilha e NÃO devem ser expiradas pelo sync.
       .not("sheet_synced_at", "is", null)
+      // Escopo por FONTE: um sync da Nestlé só enxerga (e portanto só expira/limpa)
+      // cargas da Nestlé; nunca toca cargas da Shopee, e vice-versa. Sem este
+      // filtro, o sync de uma fonte expiraria todas as cargas da outra (que não
+      // aparecem no CSV dela) — o bug de contaminação cross-sheet.
+      .eq("sheet_source", source)
       .order("sheet_lh", { ascending: true })
       .range(offset, offset + EXISTING_SHEET_LOADS_PAGE_SIZE - 1);
 
@@ -671,15 +781,18 @@ async function resolveSheetClientId(supabaseClient, clientName = DEFAULT_SHEET_C
 }
 
 export function parseAvailableGoogleSheetLoads(csvText, options = {}) {
-  const { onInvalidRow } = options;
+  const { onInvalidRow, headerSchema = SHOPEE_HEADER_SCHEMA } = options;
   const rows = parseCsv(csvText);
-  const headerRowIndex = findHeaderRowIndex(rows);
+  const headerRowIndex = findHeaderRowIndex(rows, headerSchema);
 
   if (headerRowIndex === -1) {
     const foundHeaders = rows.length > 0
       ? [...new Set(rows.slice(0, 5).flatMap((row) => row.map((cell) => normalizeHeaderName(cell)).filter(Boolean)))]
       : [];
-    const missingHeaders = SHEET_LOADS_REQUIRED_HEADERS.filter((h) => !foundHeaders.includes(h));
+    const missingHeaders = CANONICAL_REQUIRED_COLUMNS.filter((canonical) => {
+      const candidates = headerSchema[canonical] || [canonical];
+      return !candidates.some((candidate) => foundHeaders.includes(normalizeHeaderName(candidate)));
+    });
     throw new Error(
       `Unable to find the Google Sheet header row. Missing required headers: [${missingHeaders.join(", ")}]. Found in first rows: [${foundHeaders.slice(0, 15).join(", ")}].`,
     );
@@ -687,20 +800,27 @@ export function parseAvailableGoogleSheetLoads(csvText, options = {}) {
 
   const headerRow = rows[headerRowIndex];
   const headerIndex = buildHeaderIndex(headerRow);
-  const valueHeaderName = findFirstAvailableHeader(headerIndex, SHEET_LOAD_VALUE_HEADERS);
+  const columns = resolveSchemaColumns(headerIndex, headerSchema);
+  const valueHeaderName = columns.valor;
   const availableLoads = [];
 
   for (let index = headerRowIndex + 1; index < rows.length; index += 1) {
     const row = rows[index];
-    const lh = getCell(row, headerIndex, "lh");
-    const tipo = getCell(row, headerIndex, "tipo");
-    const dataCarregamento = getCell(row, headerIndex, "data carregamento");
+    const lh = columns.lh ? getCell(row, headerIndex, columns.lh) : "";
+    const tipo = columns.tipo ? getCell(row, headerIndex, columns.tipo) : "";
+    const dataCarregamento = columns["data carregamento"]
+      ? getCell(row, headerIndex, columns["data carregamento"])
+      : "";
+    // Fallback "data carregamento2" (só no schema Shopee) — coluna auxiliar de
+    // data sem hora. Não faz parte dos schemas de aliases; buscada direto.
     const dataCarregamentoFallback = getCell(row, headerIndex, "data carregamento2");
-    const dataDescarga = getCell(row, headerIndex, "data descarga");
-    const motoristas = getCell(row, headerIndex, "motoristas");
-    const origem = getCell(row, headerIndex, "origem");
-    const destino = getCell(row, headerIndex, "destino");
-    const status = getCell(row, headerIndex, "status");
+    const dataDescarga = columns["data descarga"]
+      ? getCell(row, headerIndex, columns["data descarga"])
+      : "";
+    const motoristas = columns.motoristas ? getCell(row, headerIndex, columns.motoristas) : "";
+    const origem = columns.origem ? getCell(row, headerIndex, columns.origem) : "";
+    const destino = columns.destino ? getCell(row, headerIndex, columns.destino) : "";
+    const status = columns.status ? getCell(row, headerIndex, columns.status) : "";
     const rawValue = valueHeaderName ? getCell(row, headerIndex, valueHeaderName) : "";
 
     if (!lh || motoristas !== "" || status !== "" || !origem || !destino) {
@@ -767,9 +887,10 @@ export function parseAvailableGoogleSheetLoads(csvText, options = {}) {
   });
 }
 
-export function parseAllGoogleSheetRows(csvText) {
+export function parseAllGoogleSheetRows(csvText, options = {}) {
+  const { headerSchema = SHOPEE_HEADER_SCHEMA } = options;
   const rows = parseCsv(csvText);
-  const headerRowIndex = findHeaderRowIndex(rows);
+  const headerRowIndex = findHeaderRowIndex(rows, headerSchema);
 
   if (headerRowIndex === -1) {
     return [];
@@ -777,7 +898,8 @@ export function parseAllGoogleSheetRows(csvText) {
 
   const headerRow = rows[headerRowIndex];
   const headerIndex = buildHeaderIndex(headerRow);
-  const valueHeaderName = findFirstAvailableHeader(headerIndex, SHEET_LOAD_VALUE_HEADERS);
+  const columns = resolveSchemaColumns(headerIndex, headerSchema);
+  const valueHeaderName = columns.valor;
 
   const checklistCarretaHeader = findFirstAvailableHeader(headerIndex, [
     "checklist carreta1",
@@ -788,20 +910,24 @@ export function parseAllGoogleSheetRows(csvText) {
 
   for (let index = headerRowIndex + 1; index < rows.length; index += 1) {
     const row = rows[index];
-    const lh = getCell(row, headerIndex, "lh");
+    const lh = columns.lh ? getCell(row, headerIndex, columns.lh) : "";
 
     if (!lh) {
       continue;
     }
 
-    const tipo = getCell(row, headerIndex, "tipo") || null;
-    const status = getCell(row, headerIndex, "status");
-    const motoristas = getCell(row, headerIndex, "motoristas");
-    const origem = getCell(row, headerIndex, "origem");
-    const destino = getCell(row, headerIndex, "destino");
-    const dataCarregamento = getCell(row, headerIndex, "data carregamento");
+    const tipo = (columns.tipo ? getCell(row, headerIndex, columns.tipo) : "") || null;
+    const status = columns.status ? getCell(row, headerIndex, columns.status) : "";
+    const motoristas = columns.motoristas ? getCell(row, headerIndex, columns.motoristas) : "";
+    const origem = columns.origem ? getCell(row, headerIndex, columns.origem) : "";
+    const destino = columns.destino ? getCell(row, headerIndex, columns.destino) : "";
+    const dataCarregamento = columns["data carregamento"]
+      ? getCell(row, headerIndex, columns["data carregamento"])
+      : "";
     const dataCarregamentoFallback = getCell(row, headerIndex, "data carregamento2");
-    const dataDescarga = getCell(row, headerIndex, "data descarga");
+    const dataDescarga = columns["data descarga"]
+      ? getCell(row, headerIndex, columns["data descarga"])
+      : "";
     const rawValue = valueHeaderName ? getCell(row, headerIndex, valueHeaderName) : "";
 
     const cavalo = getCell(row, headerIndex, "cavalo");
@@ -948,6 +1074,7 @@ function buildSheetLoadPayload({
   fallbackSheetClientId,
   syncedAt,
   nowSp,
+  source = SHEET_SOURCE_SHOPEE,
 }) {
   const matchedRouteCatalogDefaults = resolveRouteDefaults(routeCatalogDefaultsByKey, load.origem, load.destino);
   const matchedRouteTemplateDefaults = resolveRouteDefaults(routeTemplateDefaultsByKey, load.origem, load.destino);
@@ -956,8 +1083,9 @@ function buildSheetLoadPayload({
 
   // Sheet-sourced fields: always updated from the Google Sheet (source of truth for scheduling/routing)
   const sheetFields = {
-    id: createSheetLoadId(load.lh),
+    id: createSheetLoadId(load.lh, source),
     sheet_lh: load.lh,
+    sheet_source: source,
     sheet_tipo: load.tipo,
     sheet_data_carregamento: load.carregamentoLabel,
     sheet_data_descarga: load.descargaLabel,
@@ -1042,12 +1170,83 @@ function buildSheetLoadPayload({
   };
 }
 
+// "Puxar tudo" (fontes com pullAllRows, ex.: Nestlé): monta a carga de uma linha
+// JÁ ALOCADA na planilha (motorista/status preenchidos) que ainda NÃO existe no
+// sistema. Nasce BOOKED, com os campos sheet_* de alocação preenchidos e o
+// valor/perfil resolvidos do catálogo de rotas (a planilha do cliente não traz
+// valor). Espelha a planilha inteira em /cargas — não só as disponíveis.
+function buildAllocatedSheetLoadPayload({
+  row,
+  routeCatalogDefaultsByKey,
+  routeTemplateDefaultsByKey,
+  fallbackSheetClientId,
+  syncedAt,
+  source,
+}) {
+  const matchedRouteCatalogDefaults = resolveRouteDefaults(routeCatalogDefaultsByKey, row.origem, row.destino);
+  const matchedRouteTemplateDefaults = resolveRouteDefaults(routeTemplateDefaultsByKey, row.origem, row.destino);
+  const matchedBaseRouteValue = resolveRouteDefaults(BASE_ROUTE_VALUES_BY_KEY, row.origem, row.destino);
+
+  return {
+    id: createSheetLoadId(row.lh, source),
+    sheet_lh: row.lh,
+    sheet_source: source,
+    sheet_tipo: row.tipo,
+    sheet_data_carregamento: row.carregamentoLabel,
+    sheet_data_descarga: row.descargaLabel,
+    sheet_motorista: row.motoristas || null,
+    sheet_cavalo: row.cavalo || null,
+    sheet_carreta: row.carreta || null,
+    sheet_status: row.status || null,
+    data: row.data,
+    horario: row.horario,
+    origem: row.origem,
+    destino: row.destino,
+    sheet_synced_at: syncedAt,
+    perfil: normalizeVehicleProfile(
+      pickFirstNonEmptyString(
+        matchedRouteTemplateDefaults?.perfil,
+        matchedRouteCatalogDefaults?.perfil,
+        DEFAULT_PROFILE,
+      ),
+      DEFAULT_PROFILE,
+    ),
+    valor: pickFirstFiniteNumber(
+      matchedRouteTemplateDefaults?.valor,
+      matchedRouteCatalogDefaults?.valor,
+      matchedBaseRouteValue?.valor,
+      row.valor,
+    ),
+    bonus: pickFirstFiniteNumber(matchedRouteTemplateDefaults?.bonus, matchedRouteCatalogDefaults?.bonus),
+    distancia_km: pickFirstFiniteNumber(
+      matchedRouteTemplateDefaults?.distancia_km,
+      matchedRouteCatalogDefaults?.distancia_km,
+    ),
+    duracao_horas: pickFirstFiniteNumber(
+      matchedRouteTemplateDefaults?.duracao_horas,
+      matchedRouteCatalogDefaults?.duracao_horas,
+    ),
+    status: "BOOKED",
+    is_template: false,
+    cliente_id: pickFirstNonEmptyString(fallbackSheetClientId, matchedRouteTemplateDefaults?.cliente_id),
+    created_by: null,
+  };
+}
+
 // Nome do cliente padrão da planilha (ex.: Shopee). Usado pelo Monitor unificado
 // para rotular as linhas que vêm da planilha (que é toda de um único cliente).
 // [reconstruído após clobber acidental de alteração não-commitada — revisar]
 export function getSheetClientName() {
   return DEFAULT_SHEET_CLIENT_NAME;
 }
+
+// id determinístico do snapshot por fonte. A Shopee mantém o id=1 histórico
+// (byte-compatível com a linha singleton atual). Fontes novas usam ids fixos
+// distintos — o índice UNIQUE(source) é a chave real de upsert (onConflict).
+const SNAPSHOT_ID_BY_SOURCE = {
+  [SHEET_SOURCE_SHOPEE]: 1,
+  [SHEET_SOURCE_NESTLE]: 2,
+};
 
 export function buildSheetSummary(allRows) {
   const summary = {
@@ -1075,22 +1274,49 @@ export function buildSheetSummary(allRows) {
   return summary;
 }
 
-export async function updateSheetMonitorSnapshot({ csvText, supabaseClient }) {
-  const rows = parseAllGoogleSheetRows(csvText);
+export async function updateSheetMonitorSnapshot({
+  csvText,
+  supabaseClient,
+  // Fonte do snapshot. Default 'shopee' → comportamento e payload IDÊNTICOS ao
+  // atual (id=1, onConflict:'id', sem coluna source no payload), garantindo que
+  // a linha da Shopee continue byte-compatível.
+  source = SHEET_SOURCE_SHOPEE,
+  headerSchema = SHOPEE_HEADER_SCHEMA,
+  // Rótulo do cliente da fonte — embutido no summary_json (não há coluna dedicada)
+  // para o Monitor rotular cada fonte. Só é gravado em fontes != shopee, mantendo
+  // o summary_json da Shopee inalterado.
+  clientName,
+} = {}) {
+  const rows = parseAllGoogleSheetRows(csvText, { headerSchema });
   const summary = buildSheetSummary(rows);
   const syncedAt = new Date().toISOString();
+
+  const isShopee = !source || source === SHEET_SOURCE_SHOPEE;
 
   // Persist to DB so future reads are instant.
   // Non-fatal in terms of user experience (rows are still returned), but the
   // caller MUST be able to tell if the save succeeded so it can surface a
   // clear error — otherwise the screen shows data now but "Nenhum dado
   // carregado ainda" on the next reload.
+  //
+  // Snapshot per-source: cada fonte grava a PRÓPRIA linha (chave = coluna
+  // `source`, UNIQUE). A Shopee mantém id=1 + onConflict:'id' + payload sem
+  // `source` — exatamente como antes, sem clobber ao rodar a Nestlé. Fontes
+  // novas usam id determinístico (SNAPSHOT_ID_BY_SOURCE) + onConflict:'source'
+  // e carregam clientName dentro do summary_json.
+  const snapshotRow = isShopee
+    ? { id: 1, rows_json: rows, summary_json: summary, synced_at: syncedAt }
+    : {
+        id: SNAPSHOT_ID_BY_SOURCE[source] ?? undefined,
+        source,
+        rows_json: rows,
+        summary_json: clientName ? { ...summary, clientName } : summary,
+        synced_at: syncedAt,
+      };
+
   const { data, error } = await supabaseClient
     .from("sheet_monitor_snapshot")
-    .upsert(
-      { id: 1, rows_json: rows, summary_json: summary, synced_at: syncedAt },
-      { onConflict: "id" },
-    )
+    .upsert(snapshotRow, { onConflict: isShopee ? "id" : "source" })
     .select("id, synced_at")
     .maybeSingle();
 
@@ -1135,6 +1361,24 @@ export async function syncGoogleSheetLoads({
    * Útil em testes e em pipelines com múltiplos sheets.
    */
   clientName,
+  /**
+   * Fonte da planilha. Default 'shopee' (back-compat total: ids, escopo de
+   * limpeza e snapshot idênticos ao comportamento anterior). Fontes novas
+   * (ex.: 'nestle') isolam suas cargas via cargas.sheet_source.
+   */
+  source = SHEET_SOURCE_SHOPEE,
+  /**
+   * Mapeamento canônico → candidatos de cabeçalho da fonte. Default = SHOPEE
+   * (identidade). A Nestlé passa NESTLE_HEADER_SCHEMA (aliases).
+   */
+  headerSchema = SHOPEE_HEADER_SCHEMA,
+  /**
+   * "Puxar tudo da planilha": quando true, além das disponíveis (→ OPEN), o sync
+   * também IMPORTA as linhas já alocadas (motorista/status) como cargas BOOKED —
+   * espelhando a planilha inteira em /cargas. Default false (Shopee inalterado:
+   * só disponíveis viram carga; alocadas só entram via ciclo OPEN→BOOKED).
+   */
+  pullAllRows = false,
 } = {}) {
   if (typeof fetchImpl !== "function") {
     throw new Error("A fetch implementation is required.");
@@ -1145,6 +1389,7 @@ export async function syncGoogleSheetLoads({
     return {
       skipped: true,
       reason: "GOOGLE_SHEET_ID_NOT_CONFIGURED",
+      source,
       inserted: 0,
       updated: 0,
       deleted: 0,
@@ -1155,6 +1400,7 @@ export async function syncGoogleSheetLoads({
   const invalidRows = [];
   const availableLoads = parseAvailableGoogleSheetLoads(csvText, {
     onInvalidRow: (row) => invalidRows.push(row),
+    headerSchema,
   });
   const syncedAt = new Date().toISOString();
   // "Agora" no relógio de São Paulo (carga.data/horario são horário do Brasil) — usado
@@ -1175,7 +1421,7 @@ export async function syncGoogleSheetLoads({
           supabaseClient,
           clientName ?? DEFAULT_SHEET_CLIENT_NAME,
         );
-  const existingSheetLoads = await fetchExistingSheetLoads(supabaseClient);
+  const existingSheetLoads = await fetchExistingSheetLoads(supabaseClient, source);
   const routeCatalogRows = await fetchRouteCatalogRows(supabaseClient);
   const routeTemplateRows = await fetchRouteTemplateRows(supabaseClient);
   const existingLoadsBySheetLh = new Map(
@@ -1197,6 +1443,7 @@ export async function syncGoogleSheetLoads({
       fallbackSheetClientId,
       syncedAt,
       nowSp,
+      source,
     });
     // Contadores separados (observabilidade): BOOKED→OPEN vs EXPIRED→OPEN.
     if (existingLoad?.status === "BOOKED" && payload.status === DEFAULT_PUBLISHED_STATUS) {
@@ -1226,7 +1473,7 @@ export async function syncGoogleSheetLoads({
   // - staleInSheet: operator assigned driver/status → row still exists in sheet, preserve sheet_lh
   //   so Histórico can look up the live sheet status via sheetLh.
   // - staleTrulyGone: row was completely removed → clear sheet_lh, EXPIRED (OPEN only).
-  const allSheetRows = parseAllGoogleSheetRows(csvText);
+  const allSheetRows = parseAllGoogleSheetRows(csvText, { headerSchema });
   const allSheetRowsByLh = new Map(
     allSheetRows.filter((r) => r.lh && r.lh.trim()).map((r) => [r.lh.trim(), r]),
   );
@@ -1297,6 +1544,11 @@ export async function syncGoogleSheetLoads({
               UNNEST($9::text[])  AS sheet_status
           ) AS v
           WHERE c.id = v.id
+            -- Escopo por FONTE: um sync da Nestlé só fecha cargas da Nestlé.
+            -- Os ids já vêm escopados (fetchExistingSheetLoads filtra por
+            -- sheet_source), mas repetir o filtro aqui é defesa em profundidade
+            -- contra a contaminação cross-sheet.
+            AND c.sheet_source = $10
             -- Anti no-op: só reescreve quando algo MUDOU (ou ainda precisa
             -- transitar OPEN/RESERVED→BOOKED). Sem este guard, todo sync
             -- reescrevia todas as cargas booked com valores idênticos, gerando
@@ -1325,6 +1577,7 @@ export async function syncGoogleSheetLoads({
           staleInSheet.map((s) => s.dataCarregamento),
           staleInSheet.map((s) => s.dataDescarga),
           staleInSheet.map((s) => s.sheetStatus),
+          source,
         ],
       );
     });
@@ -1352,8 +1605,12 @@ export async function syncGoogleSheetLoads({
             sheet_synced_at = NULL,
             status = CASE WHEN status = 'OPEN' THEN 'EXPIRED' ELSE status END
           WHERE id = ANY($1::uuid[])
+            -- Escopo por FONTE: um sync da Nestlé só expira cargas da Nestlé,
+            -- nunca as da Shopee (e vice-versa). Defesa em profundidade — os ids
+            -- já vêm escopados por fetchExistingSheetLoads(source).
+            AND sheet_source = $2
         `,
-        [staleTrulyGone],
+        [staleTrulyGone, source],
       );
     });
 
@@ -1363,10 +1620,78 @@ export async function syncGoogleSheetLoads({
     );
   }
 
+  // "Puxar tudo da planilha" (fontes com pullAllRows, ex.: Nestlé): cria carga
+  // BOOKED para as linhas JÁ ALOCADAS (motorista/status) que ainda não existem
+  // como carga — nem entraram como disponíveis nesta rodada. Assim /cargas
+  // espelha a planilha inteira, não só as disponíveis. Linhas já existentes são
+  // mantidas pelo caminho staleInSheet (OPEN→BOOKED + refresh dos campos sheet_*).
+  // data/horario são NOT NULL → linhas sem data são puladas (log). Shopee
+  // (pullAllRows=false) não passa por aqui: comportamento 100% inalterado.
+  let allocatedCreatedCount = 0;
+  let allocatedSkippedNoDate = 0;
+  if (pullAllRows) {
+    const seenAllocated = new Set();
+    const allocatedPayloads = [];
+    for (const row of allSheetRows) {
+      const lh = row.lh?.trim();
+      if (!lh) continue;
+      const isAllocated = Boolean((row.motoristas || "").trim() || (row.status || "").trim());
+      if (!isAllocated) continue; // disponíveis já foram upsertadas como OPEN
+      if (existingLoadsBySheetLh.has(lh)) continue; // já é carga → staleInSheet cuida
+      if (currentSheetKeys.has(lh)) continue; // já upsertada como disponível nesta rodada
+      if (seenAllocated.has(lh)) continue;
+      if (!row.data || !row.horario) {
+        allocatedSkippedNoDate += 1; // data/horario NOT NULL — não dá pra inserir
+        continue;
+      }
+      seenAllocated.add(lh);
+      allocatedPayloads.push(
+        buildAllocatedSheetLoadPayload({
+          row,
+          routeCatalogDefaultsByKey,
+          routeTemplateDefaultsByKey,
+          fallbackSheetClientId,
+          syncedAt,
+          source,
+        }),
+      );
+    }
+
+    if (allocatedPayloads.length > 0) {
+      const { error: allocatedUpsertError } = await supabaseClient
+        .from(SHEET_LOADS_TABLE)
+        .upsert(allocatedPayloads, { onConflict: "id" });
+
+      if (allocatedUpsertError) {
+        throw allocatedUpsertError;
+      }
+
+      allocatedCreatedCount = allocatedPayloads.length;
+      console.info(
+        `[google-sheet-loads] ${allocatedCreatedCount} cargas já alocadas importadas da planilha (BOOKED)`,
+        { count: allocatedCreatedCount, source },
+      );
+    }
+
+    if (allocatedSkippedNoDate > 0) {
+      console.warn(
+        `[google-sheet-loads] ${allocatedSkippedNoDate} linha(s) alocada(s) pulada(s) por falta de data de carregamento`,
+        { count: allocatedSkippedNoDate, source },
+      );
+    }
+  }
+
   // Persist a full snapshot (all rows + summary) so the Sheet Monitor
   // screen can read from the DB instead of fetching Google Sheets each time.
+  // Per-source: cada fonte grava a própria linha (não faz clobber da outra).
   try {
-    await updateSheetMonitorSnapshot({ csvText, supabaseClient });
+    await updateSheetMonitorSnapshot({
+      csvText,
+      supabaseClient,
+      source,
+      headerSchema,
+      clientName: clientName ?? (source === SHEET_SOURCE_SHOPEE ? DEFAULT_SHEET_CLIENT_NAME : undefined),
+    });
   } catch (snapshotError) {
     // Non-fatal — the sync itself succeeded; log and continue.
     console.error("[sheet-monitor-snapshot] snapshot update failed after sync", {
@@ -1408,7 +1733,9 @@ export async function syncGoogleSheetLoads({
   }
 
   return {
+    source,
     availableLoadsCount: sheetLoadPayloads.length,
+    allocatedCreatedCount,
     unlinkedLoadsCount: staleInSheet.length + staleTrulyGone.length,
     revertedToOpenCount,
     revivedExpiredCount,
@@ -1416,4 +1743,83 @@ export async function syncGoogleSheetLoads({
     cancelCascadeSwept,
     sheetUrl,
   };
+}
+
+// ── SHEET_SOURCES config + multi-source runner ──────────────────────────────
+//
+// Cada entrada descreve uma planilha a sincronizar. `getSheetSources()` é
+// avaliada em runtime (lê env vars a cada chamada — assim testes podem setar
+// GOOGLE_SHEET_NESTLE_URL etc. dinamicamente). A Shopee usa o CSV do
+// GOOGLE_SHEET_ID/GID; a Nestlé usa GOOGLE_SHEET_NESTLE_URL (com default
+// hardcodado) e um clientName configurável (staging usa "Nestle" sem acento;
+// prod "Nestlé").
+export function getSheetSources() {
+  return [
+    {
+      source: SHEET_SOURCE_SHOPEE,
+      clientName: DEFAULT_SHEET_CLIENT_NAME,
+      sheetUrl: getSheetExportUrl(),
+      headerSchema: SHOPEE_HEADER_SCHEMA,
+      // Shopee: só disponíveis viram carga (alocadas entram via ciclo OPEN→BOOKED).
+      pullAllRows: false,
+    },
+    {
+      source: SHEET_SOURCE_NESTLE,
+      clientName: process.env.GOOGLE_SHEET_NESTLE_CLIENT_NAME?.trim() || "Nestlé",
+      sheetUrl: process.env.GOOGLE_SHEET_NESTLE_URL?.trim() || NESTLE_DEFAULT_SHEET_URL,
+      headerSchema: NESTLE_HEADER_SCHEMA,
+      // Nestlé: "puxar tudo" — importa a planilha inteira (alocadas viram BOOKED).
+      pullAllRows: true,
+    },
+  ];
+}
+
+/**
+ * Sincroniza TODAS as fontes de planilha em sequência, cada uma no PRÓPRIO
+ * try/catch. Uma falha em uma fonte (ex.: cliente Nestlé inexistente no DB)
+ * NÃO aborta as outras — o sync da Shopee sempre roda. Retorna um resumo por
+ * fonte (result ou error). Aceita um subconjunto de fontes via `sources`
+ * (default: getSheetSources()).
+ */
+export async function syncAllSheetSources({
+  fetchImpl = globalThis.fetch,
+  supabaseClient = createSupabaseAdminClient(),
+  sources = getSheetSources(),
+} = {}) {
+  const results = [];
+
+  for (const sourceConfig of sources) {
+    try {
+      const result = await syncGoogleSheetLoads({
+        fetchImpl,
+        supabaseClient,
+        sheetUrl: sourceConfig.sheetUrl,
+        clientName: sourceConfig.clientName,
+        source: sourceConfig.source,
+        headerSchema: sourceConfig.headerSchema,
+        pullAllRows: sourceConfig.pullAllRows,
+      });
+      results.push({ source: sourceConfig.source, ok: true, result });
+    } catch (error) {
+      // Isolamento total: log estruturado + segue para a próxima fonte.
+      console.error("[google-sheet-loads] sync de fonte falhou (isolado)", {
+        source: sourceConfig.source,
+        clientName: sourceConfig.clientName,
+        name: error?.name,
+        code: error?.code,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      results.push({
+        source: sourceConfig.source,
+        ok: false,
+        error: {
+          name: error?.name ?? "Error",
+          code: error?.code ?? null,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  return { sources: results };
 }
