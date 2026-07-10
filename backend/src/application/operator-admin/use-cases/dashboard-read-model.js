@@ -362,18 +362,24 @@ async function fetchDriverLoadsReadModelUncached({ query, correlationId }) {
       .filter((entry) => entry.isReady)
       .map((entry) => entry.row);
 
-    // In-memory location filter (SQL ILIKE removed per D-02 — filter on resolved route labels)
+    // Filtro de localização em memória. Casa o termo contra o RÓTULO da rota
+    // resolvida (nome canônico — agrupa variações da mesma cidade) OU contra a
+    // origem/destino CRUA da carga. Sem o "OU crua", cargas que casaram uma rota
+    // do catálogo passam a filtrar só pelo nome canônico (ex.: "SJ Rio Preto-03"
+    // vira "SAO JOSE DO RIO PRETO"), e filtrar pelo nome cru que aparece na carga
+    // (ex.: planilha Nestlé "FEIRA DE SANTANA - BA") não achava. Casar os dois é
+    // robusto: acha tanto pelo nome do facet (rótulo) quanto pelo nome cru.
     const { origem: origemFilter, destino: destinoFilter } = parsedQuery;
+    const matchesCity = (query, labelPart, rawValue) => {
+      const q = query.trim().toUpperCase();
+      const inLabel = (labelPart ?? "").trim().toUpperCase().includes(q);
+      const inRaw = String(rawValue ?? "").trim().toUpperCase().includes(q);
+      return inLabel || inRaw;
+    };
     const filteredRows = publishableRows.filter((row) => {
-      if (origemFilter) {
-        const [routeOrigin] = (row.routeLabel ?? "").split(" X ");
-        if (!routeOrigin?.trim().toUpperCase().includes(origemFilter.trim().toUpperCase())) return false;
-      }
-      if (destinoFilter) {
-        const parts = (row.routeLabel ?? "").split(" X ");
-        const routeDestino = parts[1];
-        if (!routeDestino?.trim().toUpperCase().includes(destinoFilter.trim().toUpperCase())) return false;
-      }
+      const [labelOrigin, labelDestino] = (row.routeLabel ?? "").split(" X ");
+      if (origemFilter && !matchesCity(origemFilter, labelOrigin, row.origem)) return false;
+      if (destinoFilter && !matchesCity(destinoFilter, labelDestino, row.destino)) return false;
       return true;
     });
 
