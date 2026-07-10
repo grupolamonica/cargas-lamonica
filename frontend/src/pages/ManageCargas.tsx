@@ -449,9 +449,11 @@ const ManageCargas = () => {
         ? data
         : applyAssignableRouteToCargoDraft(data, selectedRoute);
       const normalizedSchedule = buildNormalizedCargoSchedule(autoAssignedCargo.data, autoAssignedCargo.horario);
-      const shouldForceShopeeClient = isOnlineSheetCargo(editingCargo);
-      const nextClientId = shouldForceShopeeClient
-        ? shopeeClient?.id || editingCargo?.cliente_id || autoAssignedCargo.cliente_id || ""
+      // Cargas de planilha ficam vinculadas ao cliente da PLANILHA DE ORIGEM
+      // (Shopee, Nestlé, …) — preserva o cliente atual da carga; NÃO força Shopee.
+      const isSheetCargo = isOnlineSheetCargo(editingCargo);
+      const nextClientId = isSheetCargo
+        ? editingCargo?.cliente_id || shopeeClient?.id || autoAssignedCargo.cliente_id || ""
         : autoAssignedCargo.cliente_id || "";
       const routeMetrics =
         selectedRoute &&
@@ -1247,10 +1249,7 @@ const ManageCargas = () => {
                 bonus: editingCargo.bonus?.toString() || "",
                 bonus_exigencias: editingCargo.bonus_exigencias || "",
                 driver_visibility: editingCargo.driver_visibility || "PUBLIC",
-                cliente_id:
-                  isOnlineSheetCargo(editingCargo) && shopeeClient?.id
-                    ? shopeeClient.id
-                    : editingCargo.cliente_id || "",
+                cliente_id: editingCargo.cliente_id || "",
                 status: editingCargo.status,
                 is_template: editingCargo.is_template,
                 is_recurring: editingCargo.is_recurring ?? false,
@@ -1262,10 +1261,9 @@ const ManageCargas = () => {
         }
         lockedClientId={
           editingCargo && isOnlineSheetCargo(editingCargo)
-            ? shopeeClient?.id || editingCargo.cliente_id || ""
+            ? editingCargo.cliente_id || shopeeClient?.id || ""
             : ""
         }
-        lockedClientLabel={editingCargo && isOnlineSheetCargo(editingCargo) ? shopeeClient?.nome || ONLINE_SHEET_CLIENT_NAME : ""}
         canEditValues={canEditValues}
       />
     </div>
