@@ -122,6 +122,8 @@ const cargoMutationBaseShape = {
   duracao_horas: optionalNumeric,
   sheet_data_carregamento: optionalTrimmedString,
   sheet_data_descarga: optionalTrimmedString,
+  // Código de viagem único (opcional). null quando vazio.
+  codigo_viagem: optionalTrimmedString,
 };
 
 export const cargoCreateMutationSchema = z

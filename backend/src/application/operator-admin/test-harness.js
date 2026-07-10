@@ -105,11 +105,14 @@ const schemaSql = `
     recurrence_interval_days integer,
     recurrence_parent_id uuid,
     lh_manual text,
+    codigo_viagem text,
     version integer NOT NULL DEFAULT 0,
     created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
   );
+
+  CREATE UNIQUE INDEX ux_cargas_codigo_viagem ON public.cargas (codigo_viagem);
 
   CREATE TABLE public.monitor_reservas (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -5,7 +5,7 @@
 
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
-import { ForbiddenError, NotFoundError } from "../../../domain/load-claims/errors.js";
+import { ConflictError, ForbiddenError, NotFoundError } from "../../../domain/load-claims/errors.js";
 import { getRouteInfo } from "../../../infrastructure/geoapify/index.js";
 import {
   parseNullableNumber,
@@ -94,6 +94,20 @@ export function isMissingEixosColumnError(error) {
 export function isMissingRecurrenceColumnError(error) {
   const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
   return combinedMessage.includes("is_recurring") || combinedMessage.includes("recurrence_interval_days");
+}
+
+export function isMissingCodigoViagemColumnError(error) {
+  const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
+  return combinedMessage.includes("codigo_viagem");
+}
+
+// Violação da unicidade de codigo_viagem (idx_cargas_codigo_viagem) → 23505.
+// Só existe um índice único que writeCargo pode disparar (codigo_viagem);
+// mapeamos para 409 com mensagem clara em vez de 500 opaco.
+export function isDuplicateCodigoViagemError(error) {
+  if (error?.code !== "23505") return false;
+  const combinedMessage = `${error?.message || ""} ${error?.detail || ""} ${error?.constraint || ""}`.toLowerCase();
+  return combinedMessage.includes("codigo_viagem");
 }
 
 // Phase 10 (cargas-casadas): se a tabela cargas_casadas / coluna viagem_id ainda nao
@@ -682,6 +696,8 @@ export async function writeCargo(
   const nextDriverVisibility = payload.driver_visibility || "PUBLIC";
   const resolvedValor = payload.valor !== undefined ? payload.valor : (existingCargo?.valor ?? null);
   const resolvedBonus = payload.bonus !== undefined ? payload.bonus : (existingCargo?.bonus ?? null);
+  // Código de viagem (único, opcional). null quando não informado.
+  const resolvedCodigoViagem = payload.codigo_viagem ?? null;
   const resolvedIsRecurring = payload.is_recurring === true;
   // Intervalo só faz sentido quando recorrente; NULL/inválido => diário (1).
   const resolvedRecurrenceInterval = resolvedIsRecurring
@@ -704,7 +720,8 @@ export async function writeCargo(
             valor = $9, bonus = $10, bonus_exigencias = $11,
             driver_visibility = $12, cliente_id = $13, status = $14,
             is_template = $15, sheet_data_carregamento = $16, sheet_data_descarga = $17,
-            eixos = $18, is_recurring = $19, recurrence_interval_days = $20
+            eixos = $18, is_recurring = $19, recurrence_interval_days = $20,
+            codigo_viagem = $21
           WHERE id = $1
         `,
         [
@@ -714,16 +731,21 @@ export async function writeCargo(
           clienteId, nextStatus, payload.is_template,
           payload.sheet_data_carregamento ?? null, payload.sheet_data_descarga ?? null,
           payload.eixos ?? null, resolvedIsRecurring, resolvedRecurrenceInterval,
+          resolvedCodigoViagem,
         ],
       );
     } catch (error) {
+      if (isDuplicateCodigoViagemError(error)) {
+        throw new ConflictError("Ja existe uma carga com esse codigo de viagem.");
+      }
       if (
         !isMissingRouteColumnError(error) &&
         !isMissingBonusRequirementsColumnError(error) &&
         !isMissingDriverVisibilityColumnError(error) &&
         !isMissingSheetScheduleColumnsError(error) &&
         !isMissingEixosColumnError(error) &&
-        !isMissingRecurrenceColumnError(error)
+        !isMissingRecurrenceColumnError(error) &&
+        !isMissingCodigoViagemColumnError(error)
       ) {
         throw error;
       }
@@ -752,9 +774,9 @@ export async function writeCargo(
             perfil, valor, bonus, bonus_exigencias, driver_visibility,
             cliente_id, status, is_template, created_by,
             sheet_data_carregamento, sheet_data_descarga, eixos,
-            is_recurring, recurrence_interval_days
+            is_recurring, recurrence_interval_days, codigo_viagem
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
           RETURNING id
         `,
         [
@@ -764,17 +786,22 @@ export async function writeCargo(
           clienteId, nextStatus, payload.is_template, operatorId,
           payload.sheet_data_carregamento ?? null, payload.sheet_data_descarga ?? null,
           payload.eixos ?? null, resolvedIsRecurring, resolvedRecurrenceInterval,
+          resolvedCodigoViagem,
         ],
       );
       createdId = ins.rows[0]?.id ?? null;
     } catch (error) {
+      if (isDuplicateCodigoViagemError(error)) {
+        throw new ConflictError("Ja existe uma carga com esse codigo de viagem.");
+      }
       if (
         !isMissingRouteColumnError(error) &&
         !isMissingBonusRequirementsColumnError(error) &&
         !isMissingDriverVisibilityColumnError(error) &&
         !isMissingSheetScheduleColumnsError(error) &&
         !isMissingEixosColumnError(error) &&
-        !isMissingRecurrenceColumnError(error)
+        !isMissingRecurrenceColumnError(error) &&
+        !isMissingCodigoViagemColumnError(error)
       ) {
         throw error;
       }

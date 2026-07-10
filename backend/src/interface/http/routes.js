@@ -78,6 +78,7 @@ import {
   resolveUpdateOperatorDriverProfileResponse,
   resolveUpdateOperatorRouteResponse,
   resolveSaveRouteTrechoResponse,
+  resolveLookupCargoByCodigoViagemResponse,
   resolveDriverSponsorClicksResponse,
   resolveOperatorOverviewDigestResponse,
   resolveOperatorCadastrosPendentesResponse,
@@ -389,6 +390,8 @@ export function registerRoutes(app) {
   // /import deve ser registrada antes de /:cargoId para Express não tratar "import" como id.
   router.post("/api/operator/cargas/import", wrap(resolveImportOperatorCargasResponse));
   router.get("/api/operator/cargas", wrap(resolveOperatorCargoListReadModelResponse));
+  // Lookup por código de viagem (segmento fixo antes de :cargoId).
+  router.get("/api/operator/cargas/lookup/codigo-viagem", wrap(resolveLookupCargoByCodigoViagemResponse));
   router.post("/api/operator/cargas", wrap(resolveCreateOperatorCargoResponse));
   router.patch("/api/operator/cargas/:cargoId", wrap(resolveUpdateOperatorCargoResponse));
   router.delete("/api/operator/cargas/:cargoId", wrap(resolveDeleteOperatorCargoResponse));
