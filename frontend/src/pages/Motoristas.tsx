@@ -44,6 +44,7 @@ import DashboardHeader from "@/components/DashboardHeader";
 import { ExternalValidationPill } from "@/components/ExternalValidationPill";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
+import { AutoApproveAngelliraCard } from "@/components/operator/AutoApproveAngelliraCard";
 import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
 import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
 import TorreRankingCard from "@/components/operator/TorreRankingCard";
@@ -1217,6 +1218,7 @@ const Motoristas = () => {
           </section>
         ) : mainTab === "pendentes" ? (
           <>
+            <AutoApproveAngelliraCard />
             {/* Pendentes section */}
             <section className="admin-panel overflow-hidden p-5 lg:p-6">
               <div className="flex flex-wrap items-center justify-between gap-4">

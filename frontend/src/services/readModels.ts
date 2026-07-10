@@ -1400,6 +1400,44 @@ export async function rejeitarCadastro(id: string, observacoes?: string) {
   return response.json() as Promise<{ ok: boolean }>;
 }
 
+// ── Auto-aprovação por vigência no Angellira ────────────────────────────
+export interface AutoApproveAngelliraState {
+  ok: boolean;
+  enabled: boolean;
+  running: boolean;
+  lastRun:
+    | {
+        at?: string;
+        trigger?: string;
+        scanned?: number;
+        vigentes?: number;
+        approved?: number;
+        vencidos?: number;
+        notFound?: number;
+        errors?: number;
+      }
+    | null;
+  pendingCount: number;
+}
+
+/** Estado atual do auto-approve (ligado?, rodando?, última execução, fila). */
+export async function getAutoApproveAngellira(): Promise<AutoApproveAngelliraState> {
+  return getOperator<AutoApproveAngelliraState>("/api/operator/settings/auto-approve-angellira");
+}
+
+/** Liga/desliga o job automático. */
+export async function setAutoApproveAngellira(enabled: boolean): Promise<{ ok: boolean; enabled: boolean }> {
+  return putOperator<{ ok: boolean; enabled: boolean }>("/api/operator/settings/auto-approve-angellira", { enabled });
+}
+
+/** Dispara uma leva agora (assíncrono no servidor; acompanhe via getAutoApproveAngellira). */
+export async function runAutoApproveAngellira(limit?: number): Promise<{ ok: boolean; started: boolean }> {
+  return postOperator<{ ok: boolean; started: boolean }>(
+    "/api/operator/cadastros/auto-approve-angellira/run",
+    limit != null ? { limit } : undefined,
+  );
+}
+
 // ── Angellira (DC-111 / Sprint 1) ───────────────────────────────────────
 
 async function postOperator<T>(path: string, body?: unknown): Promise<T> {
@@ -1437,6 +1475,21 @@ async function patchOperator<T>(path: string, body: unknown): Promise<T> {
   const accessToken = await getOperatorAccessToken();
   const response = await fetch(path, {
     method: "PATCH",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    const msg = (errBody as { message?: string })?.message || `HTTP ${response.status}`;
+    throw new Error(msg);
+  }
+  return response.json() as Promise<T>;
+}
+
+async function putOperator<T>(path: string, body: unknown): Promise<T> {
+  const accessToken = await getOperatorAccessToken();
+  const response = await fetch(path, {
+    method: "PUT",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });

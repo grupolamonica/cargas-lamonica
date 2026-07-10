@@ -106,6 +106,12 @@ import {
 } from "./operator-admin/handlers.js";
 
 import {
+  resolveOperatorAutoApproveAngelliraGetResponse,
+  resolveOperatorAutoApproveAngelliraPutResponse,
+  resolveOperatorAutoApproveAngelliraRunResponse,
+} from "./operator-admin/auto-approve-angellira.handlers.js";
+
+import {
   resolveDriverLoadFacetsResponse,
   resolveDriverLoadsDigestResponse,
   resolveDriverLoadsReadModelResponse,
@@ -329,6 +335,10 @@ export function registerRoutes(app) {
   // Cadastros pendentes de motoristas (rota fixa antes da parametrizada)
   router.get("/api/operator/cadastros/rascunhos", wrap(resolveOperatorListDraftRegistrationsResponse));
   router.get("/api/operator/cadastros-pendentes", wrap(resolveOperatorCadastrosPendentesResponse));
+  // Auto-aprovação por vigência no Angellira (rotas fixas antes das :id)
+  router.get("/api/operator/settings/auto-approve-angellira", wrap(resolveOperatorAutoApproveAngelliraGetResponse));
+  router.put("/api/operator/settings/auto-approve-angellira", wrap(resolveOperatorAutoApproveAngelliraPutResponse));
+  router.post("/api/operator/cadastros/auto-approve-angellira/run", wrap(resolveOperatorAutoApproveAngelliraRunResponse));
   router.post("/api/operator/cadastros/:id/aprovar", wrap(resolveOperatorAprovarCadastroResponse));
   router.post("/api/operator/cadastros/:id/rejeitar", wrap(resolveOperatorRejeitarCadastroResponse));
   // Resgate de rascunho: operador completa e submete em nome do motorista
