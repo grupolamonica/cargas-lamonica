@@ -8,6 +8,9 @@ import {
 } from "@/components/ui/dialog";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowDown,
+  ArrowUp,
+  ChevronsUpDown,
   AlertTriangle,
   BadgeCheck,
   BellRing,
@@ -824,6 +827,27 @@ const Motoristas = () => {
   const [pendentesSearch, setPendentesSearch] = useState("");
   const deferredPendentesSearch = useDeferredValue(pendentesSearch.trim());
   const [pendentesPage, setPendentesPage] = useState(1);
+  // Ordenação (DC-197): coluna + direção; server-side (a lista é paginada no backend).
+  type PendentesSortCol = "nome" | "placa" | "enviado" | "status";
+  const [pendentesSort, setPendentesSort] = useState<PendentesSortCol>("enviado");
+  const [pendentesDir, setPendentesDir] = useState<"asc" | "desc">("desc");
+  const handlePendentesSort = (col: PendentesSortCol) => {
+    setPendentesPage(1);
+    if (pendentesSort === col) {
+      setPendentesDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setPendentesSort(col);
+      setPendentesDir(col === "enviado" ? "desc" : "asc");
+    }
+  };
+  const renderPendentesSortIcon = (col: PendentesSortCol) =>
+    pendentesSort !== col ? (
+      <ChevronsUpDown className="h-3.5 w-3.5 opacity-40" />
+    ) : pendentesDir === "asc" ? (
+      <ArrowUp className="h-3.5 w-3.5" />
+    ) : (
+      <ArrowDown className="h-3.5 w-3.5" />
+    );
   const [selectedPendente, setSelectedPendente] = useState<PendingDriverRegistrationItem | null>(null);
   const [rejectObs, setRejectObs] = useState("");
   // Cadastro de motorista pelo operador — mesmo fluxo do DriverPortal
@@ -879,13 +903,15 @@ const Motoristas = () => {
   const migratedDocs = migratedDocsData?.docs ?? [];
 
   const { data: pendentesData, isLoading: pendentesLoading, isFetching: pendentesFetching, error: pendentesError } = useQuery({
-    queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, deferredPendentesSearch, pendentesPage],
+    queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, deferredPendentesSearch, pendentesPage, pendentesSort, pendentesDir],
     queryFn: () =>
       fetchCadastrosPendentes({
         status: pendentesStatusFilter || undefined,
         search: deferredPendentesSearch || undefined,
         page: pendentesPage,
         pageSize: 20,
+        sort: pendentesSort,
+        dir: pendentesDir,
       }),
     enabled: mainTab === "pendentes",
     ...queryOptions,
@@ -1245,10 +1271,26 @@ const Motoristas = () => {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-border text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        <th className="px-5 py-3">Motorista</th>
-                        <th className="px-5 py-3">Placa cavalo</th>
-                        <th className="px-5 py-3">Enviado em</th>
-                        <th className="px-5 py-3">Status</th>
+                        <th className="px-5 py-3">
+                          <button type="button" onClick={() => handlePendentesSort("nome")} className="inline-flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-foreground" title="Ordenar por motorista">
+                            Motorista {renderPendentesSortIcon("nome")}
+                          </button>
+                        </th>
+                        <th className="px-5 py-3">
+                          <button type="button" onClick={() => handlePendentesSort("placa")} className="inline-flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-foreground" title="Ordenar por placa do cavalo">
+                            Placa cavalo {renderPendentesSortIcon("placa")}
+                          </button>
+                        </th>
+                        <th className="px-5 py-3">
+                          <button type="button" onClick={() => handlePendentesSort("enviado")} className="inline-flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-foreground" title="Ordenar por data de envio">
+                            Enviado em {renderPendentesSortIcon("enviado")}
+                          </button>
+                        </th>
+                        <th className="px-5 py-3">
+                          <button type="button" onClick={() => handlePendentesSort("status")} className="inline-flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-foreground" title="Ordenar por status">
+                            Status {renderPendentesSortIcon("status")}
+                          </button>
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
