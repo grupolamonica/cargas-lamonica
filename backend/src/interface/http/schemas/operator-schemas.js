@@ -32,6 +32,8 @@ export const sheetMonitorAllocationBodySchema = z.object({
   // Motivo da troca de motorista/veículo (modal "Confirmar troca"). Obrigatório
   // no front ao trocar m/v; opcional no schema (edições que só mexem status/tipo).
   descricao: z.string().trim().max(500).nullable().optional(),
+  // Vínculo do motorista (col H da planilha: AGREGADO/TERCEIRO/PME/FROTA…).
+  vinculo: z.string().trim().max(80).nullable().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/reassign — reordenar a fila de
@@ -109,6 +111,8 @@ export const sheetMonitorCargoUpdateBodySchema = z.object({
   tipo: z.string().trim().max(60).nullable().optional(),
   // Motivo da troca de motorista/veículo (modal "Confirmar troca") → alloc_descricao.
   descricao: z.string().trim().max(500).nullable().optional(),
+  // Vínculo do motorista → alloc_vinculo.
+  vinculo: z.string().trim().max(80).nullable().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/aspx-assign — confirma a atribuição

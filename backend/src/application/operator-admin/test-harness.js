@@ -88,6 +88,7 @@ const schemaSql = `
     alloc_status text,
     alloc_tipo text,
     alloc_descricao text,
+    alloc_vinculo text,
     alloc_source text,
     alloc_updated_at timestamptz,
     alloc_updated_by uuid,

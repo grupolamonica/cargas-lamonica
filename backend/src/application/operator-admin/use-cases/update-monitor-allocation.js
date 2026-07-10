@@ -41,9 +41,9 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
 
   const result = await withPgTransaction(async (client) => {
     const { rows } = await client.query(
-      `SELECT id, sheet_lh, sheet_motorista, sheet_cavalo, sheet_carreta,
+      `SELECT id, sheet_lh, sheet_motorista, sheet_cavalo, sheet_carreta, sheet_status,
               alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
-              alloc_descricao, status, reserved_public_lead_id
+              alloc_descricao, alloc_vinculo, status, reserved_public_lead_id
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
       [cargoId],
     );
@@ -66,6 +66,8 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     const finalTipo = has("tipo") ? norm(payload.tipo) : (sheetRow.alloc_tipo ?? null);
     // Motivo da troca (modal "Confirmar troca"): ausente preserva o último motivo.
     const finalDescricao = has("descricao") ? norm(payload.descricao) : (sheetRow.alloc_descricao ?? null);
+    // Vínculo (col H da planilha): override do operador. Ausente preserva; ""=limpa.
+    const finalVinculo = has("vinculo") ? norm(payload.vinculo) : (sheetRow.alloc_vinculo ?? null);
 
     await client.query(
       `
@@ -76,13 +78,14 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
             alloc_status = $5,
             alloc_tipo = $7,
             alloc_descricao = $8,
+            alloc_vinculo = $9,
             alloc_source = 'operator',
             alloc_updated_at = now(),
             alloc_updated_by = $6,
             updated_at = now()
         WHERE id = $1
       `,
-      [cargoId, finalMotorista, finalCavalo, finalCarreta, finalStatus, operatorId, finalTipo, finalDescricao],
+      [cargoId, finalMotorista, finalCavalo, finalCarreta, finalStatus, operatorId, finalTipo, finalDescricao, finalVinculo],
     );
 
     await insertSecurityAuditEvent(client, {
@@ -146,6 +149,11 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
         motorista: finalMotorista ?? sheetRow.sheet_motorista ?? "",
         cavalo: finalCavalo ?? sheetRow.sheet_cavalo ?? "",
         carreta: finalCarreta ?? sheetRow.sheet_carreta ?? "",
+        // Status (col L) espelhado sempre — efetivo = alloc ?? planilha.
+        status: finalStatus ?? sheetRow.sheet_status ?? "",
+        // Vínculo (col H) só espelha quando o modal envia o campo (senão o robô
+        // não toca H — evita apagar o vínculo de linhas não editadas).
+        ...(has("vinculo") ? { vinculo: finalVinculo ?? "" } : {}),
       },
     };
   });

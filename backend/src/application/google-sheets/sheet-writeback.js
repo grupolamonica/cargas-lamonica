@@ -22,12 +22,20 @@ export async function writeAllocationsToSheet(updates, { fetchImpl = globalThis.
 
   const list = (updates || [])
     .filter((u) => u && u.lh)
-    .map((u) => ({
-      lh: String(u.lh).trim(),
-      motorista: (u.motorista ?? "").toString(),
-      cavalo: (u.cavalo ?? "").toString(),
-      carreta: (u.carreta ?? "").toString(),
-    }))
+    .map((u) => {
+      const item = {
+        lh: String(u.lh).trim(),
+        motorista: (u.motorista ?? "").toString(),
+        cavalo: (u.cavalo ?? "").toString(),
+        carreta: (u.carreta ?? "").toString(),
+      };
+      // status (col L) e vinculo (col H) são opcionais: só vão quando o caller
+      // manda a chave. O robô só escreve a coluna quando ela vem no item — assim
+      // uma edição sem esses campos não sobrescreve L/H na planilha.
+      if ("status" in u) item.status = (u.status ?? "").toString();
+      if ("vinculo" in u) item.vinculo = (u.vinculo ?? "").toString();
+      return item;
+    })
     .filter((u) => u.lh);
 
   if (list.length === 0) return { ok: true, updated: 0 };

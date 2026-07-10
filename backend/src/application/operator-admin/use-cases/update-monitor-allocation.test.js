@@ -270,6 +270,19 @@ describe("updateMonitorAllocation", () => {
     expect(res.rows[0].alloc_descricao).toBe("titular desistiu da carga");
   });
 
+  it("grava o vínculo do operador em alloc_vinculo", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-vinc@teste.local" });
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { motorista: "JOAO", vinculo: "AGREGADO DEDICADO" },
+      correlationId: "corr-monitor-vinc",
+    });
+    const { rows } = await query(`SELECT alloc_vinculo FROM public.cargas WHERE id = $1`, [id]);
+    expect(rows[0].alloc_vinculo).toBe("AGREGADO DEDICADO");
+  });
+
   it("lança NotFoundError quando o LH não tem carga correspondente", async () => {
     const operator = await seedUser({ email: "op-monitor-404@teste.local" });
     await expect(
