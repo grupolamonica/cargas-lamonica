@@ -124,4 +124,10 @@ FROM public.clientes c
 JOIN public.rotas r          ON r.cliente_id = c.id AND r.ativa = true
 LEFT JOIN public.rota_tarifas rt ON rt.rota_id = r.id AND rt.ativa = true;
 
+-- Hardening: views respeitam RLS do usuário que consulta (não do criador).
+-- Mantém o padrão do secfix 20260625141708 — sem isso o DROP+CREATE acima
+-- deixaria as views como SECURITY DEFINER (advisor security_definer_view).
+ALTER VIEW public.v_rotas_com_tarifas SET (security_invoker = true);
+ALTER VIEW public.v_clientes_com_rotas SET (security_invoker = true);
+
 COMMIT;
