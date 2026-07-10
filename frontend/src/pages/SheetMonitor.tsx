@@ -1,6 +1,8 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   BadgeCheck,
   Ban,
   Check,
@@ -1855,6 +1857,8 @@ function SheetMonitorTable({
   assigningReservaId,
   standbyCountByRoute,
   onPullStandby,
+  agendaSortDir,
+  onToggleAgendaSort,
 }: {
   rows: SheetMonitorRowType[];
   resolveEnriched: (row: SheetMonitorRowType) => SheetMonitorEnrichedRow | undefined;
@@ -1875,6 +1879,8 @@ function SheetMonitorTable({
   assigningReservaId: string | null;
   standbyCountByRoute: Map<string, number>;
   onPullStandby: (lh: string) => void;
+  agendaSortDir: "asc" | "desc";
+  onToggleAgendaSort: () => void;
 }) {
   // Arrastar a fila de motoristas/veículos entre cargas (as viagens são fixas).
   // Modo auto-identificável pelo ponto de soltura: corpo da linha = trocar
@@ -2058,7 +2064,27 @@ function SheetMonitorTable({
             <tr className="border-b border-border/60 bg-primary/[0.028]">
               {(["Status", "LH", "Cliente", "Rota", "Agenda", "Motorista / Placa"] as const).map((label) => (
                 <th key={label} className="px-3 py-2 text-left text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
-                  {label}
+                  {label === "Agenda" ? (
+                    <button
+                      type="button"
+                      onClick={onToggleAgendaSort}
+                      title={
+                        agendaSortDir === "asc"
+                          ? "Agenda: do primeiro ao último (mais antiga no topo). Clique para inverter."
+                          : "Agenda: do último ao primeiro (mais nova no topo). Clique para inverter."
+                      }
+                      className="group inline-flex items-center gap-1 uppercase tracking-[0.16em] text-muted-foreground/70 transition-colors hover:text-foreground"
+                    >
+                      {label}
+                      {agendaSortDir === "asc" ? (
+                        <ArrowUp className="h-3 w-3 text-primary" />
+                      ) : (
+                        <ArrowDown className="h-3 w-3 text-primary" />
+                      )}
+                    </button>
+                  ) : (
+                    label
+                  )}
                 </th>
               ))}
             </tr>
@@ -2873,6 +2899,24 @@ export default function SheetMonitor() {
   const [descargaFromFilter, setDescargaFromFilter] = useState("");
   const [descargaToFilter, setDescargaToFilter] = useState("");
   const [page, setPage] = useState(0);
+  // Ordenação da agenda (Coleta) estilo planilha, escolhida pelo operador:
+  // "desc" = mais NOVA primeiro (padrão histórico), "asc" = mais ANTIGA primeiro
+  // (do primeiro ao último). Preferência persistida em localStorage.
+  const [agendaSortDir, setAgendaSortDir] = useState<"asc" | "desc">(() => {
+    if (typeof window === "undefined") return "desc";
+    return window.localStorage.getItem("lamonica-monitor-agenda-sort") === "asc" ? "asc" : "desc";
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("lamonica-monitor-agenda-sort", agendaSortDir);
+    } catch {
+      /* localStorage indisponível — segue só em memória */
+    }
+  }, [agendaSortDir]);
+  const toggleAgendaSort = useCallback(() => {
+    setPage(0);
+    setAgendaSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
+  }, []);
   const [selectedRow, setSelectedRow] = useState<SheetMonitorRowType | null>(null);
   const [editingLh, setEditingLh] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
@@ -3342,11 +3386,12 @@ export default function SheetMonitor() {
         if (!ka && !kb) return 0;
         return ka ? -1 : 1;
       }
-      // Cronológica DECRESCENTE: mais nova (data+horário) no topo.
+      // Cronológica por agenda (data+horário), direção escolhida pelo operador
+      // (planilha-style): "desc" = mais nova no topo (padrão), "asc" = mais antiga.
       if (ka === kb) return 0;
-      return ka < kb ? 1 : -1;
+      return (ka < kb) === (agendaSortDir === "asc") ? -1 : 1;
     });
-  }, [preStatusRows, statusFilter]);
+  }, [preStatusRows, statusFilter, agendaSortDir]);
 
   // Alterna um status no filtro multi-seleção a partir dos chips do "Status na
   // planilha" (soma vários). Substitui o antigo dropdown "Todos os status".
@@ -3676,6 +3721,8 @@ export default function SheetMonitor() {
                 assigningReservaId={assigningReservaId}
                 standbyCountByRoute={standbyCountByRoute}
                 onPullStandby={handlePullStandby}
+                agendaSortDir={agendaSortDir}
+                onToggleAgendaSort={toggleAgendaSort}
               />
               {!loading && filteredRows.length > PAGE_SIZE && (
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 px-4 py-3 text-xs text-muted-foreground">
