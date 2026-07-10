@@ -500,10 +500,11 @@ export async function seedCargo(overrides = {}) {
         is_recurring,
         recurrence_interval_days,
         viagem_id,
-        ordem_viagem
+        ordem_viagem,
+        codigo_viagem
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
       )
     `,
     [
@@ -531,6 +532,7 @@ export async function seedCargo(overrides = {}) {
       overrides.recurrence_interval_days ?? null,
       overrides.viagem_id ?? null,
       overrides.ordem_viagem ?? null,
+      overrides.codigo_viagem ?? null,
     ],
   );
 
