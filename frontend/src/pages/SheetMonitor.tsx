@@ -3285,7 +3285,10 @@ export default function SheetMonitor() {
   // clicáveis do "Status na planilha" (facetas) e (b) o filtro de status por cima
   // — assim os chips mostram quantas linhas cada status tem sob os demais filtros.
   const preStatusRows = useMemo(() => {
-    let result = items;
+    // Linhas de RESERVA (standby) não entram mais na tabela — só poluíam a lista.
+    // Continuam disponíveis via `items` para o painel de reserva e o botão
+    // "puxar standby" (standbysByRoute), que seguem enxergando todos os standbys.
+    let result = items.filter((r) => !r.reserva);
 
     if (deferredSearch.trim()) {
       const q = deferredSearch.trim().toLowerCase();
