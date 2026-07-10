@@ -708,9 +708,14 @@ export async function writeCargo(
       });
 
   const shouldLockSheetClient = Boolean(existingCargo?.sheet_lh);
-  const sheetClientId = shouldLockSheetClient ? await findSheetClientId(client) : null;
+  // Carga de planilha MANTÉM o cliente que o sync definiu por fonte (Shopee,
+  // Nestlé/"Produtos Alimentícios", …). Antes forçávamos o cliente DEFAULT aqui,
+  // o que sobrescrevia cargas Nestlé para o cliente da Shopee (E-COMMERCE) a cada
+  // edição. Só caímos no cliente default se a carga não tiver cliente (legado).
+  const sheetClientId =
+    shouldLockSheetClient && !existingCargo?.cliente_id ? await findSheetClientId(client) : null;
   const clienteId = shouldLockSheetClient
-    ? sheetClientId || existingCargo?.cliente_id || null
+    ? existingCargo?.cliente_id || sheetClientId || null
     : payload.cliente_id;
   const nextStatus =
     existingCargo && !MANUAL_CARGO_STATUSES.has(existingCargo.status)
