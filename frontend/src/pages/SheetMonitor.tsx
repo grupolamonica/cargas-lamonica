@@ -306,25 +306,50 @@ function StatusBreakdown({
 // da barra de filtros do Monitor. Vazio = "todos". Semântica OR entre os
 // selecionados. Trigger mostra "Rótulo · N" com a contagem de selecionados.
 type MultiOption = { value: string; label: string };
+
+// Normaliza texto p/ busca no filtro: sem acentos + minúsculo.
+function normalizeFilterText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+}
+
 function MultiSelectFilter({
   label,
   options,
   selected,
   onChange,
   widthClass,
+  searchable = false,
 }: {
   label: string;
   options: MultiOption[];
   selected: string[];
   onChange: (next: string[]) => void;
   widthClass?: string;
+  /** Mostra um campo de busca no topo (útil quando há muitas opções, ex.: rotas). */
+  searchable?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const count = selected.length;
   const toggle = (v: string) =>
     onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
+
+  // Ao fechar, limpa a busca — a próxima abertura começa com a lista completa.
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (!next) setQuery("");
+  };
+
+  const normalizedQuery = searchable ? normalizeFilterText(query.trim()) : "";
+  const visibleOptions = normalizedQuery
+    ? options.filter((o) => normalizeFilterText(o.label).includes(normalizedQuery))
+    : options;
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -344,11 +369,26 @@ function MultiSelectFilter({
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-60 p-1.5">
+        {searchable && (
+          <div className="relative mb-1.5">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+            <input
+              autoFocus
+              type="text"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={`Buscar ${label.toLowerCase()}…`}
+              className="w-full rounded-md border border-border/70 bg-background py-1.5 pl-7 pr-2 text-sm outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+            />
+          </div>
+        )}
         <div className="max-h-64 overflow-y-auto">
           {options.length === 0 ? (
             <p className="px-2 py-1.5 text-xs text-muted-foreground">Nenhuma opção</p>
+          ) : visibleOptions.length === 0 ? (
+            <p className="px-2 py-1.5 text-xs text-muted-foreground">Nenhum resultado para “{query.trim()}”.</p>
           ) : (
-            options.map((o) => {
+            visibleOptions.map((o) => {
               const active = selected.includes(o.value);
               return (
                 <button
@@ -3527,7 +3567,7 @@ export default function SheetMonitor() {
 
               <MultiSelectFilter label="Tipos" options={tipoSelectOptions} selected={tipoFilter} onChange={setTipoFilter} />
 
-              <MultiSelectFilter label="Rotas" options={routeSelectOptions} selected={routeFilter} onChange={setRouteFilter} widthClass="max-w-[220px]" />
+              <MultiSelectFilter label="Rotas" options={routeSelectOptions} selected={routeFilter} onChange={setRouteFilter} widthClass="max-w-[220px]" searchable />
 
               <MultiSelectFilter label="Atribuição" options={ASSIGNMENT_OPTIONS} selected={assignmentFilter} onChange={setAssignmentFilter} />
 
