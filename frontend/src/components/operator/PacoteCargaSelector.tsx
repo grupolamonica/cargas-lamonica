@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { fetchOperatorCargas, type OperatorCargoListItem } from "@/services/readModels";
 import { formatCurrency } from "@/lib/currency";
+import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 import { MAX_CARGAS_POR_PACOTE } from "@/lib/pacoteConstants";
 
 interface Props {
@@ -119,7 +120,7 @@ const PacoteCargaSelector = ({ selectedCargaIds, currentPacoteId = null, onAdd }
                   </div>
                   <div className="text-xs text-muted-foreground truncate">
                     {c.clientes?.nome ?? "Sem cliente"} ·{" "}
-                    {c.valor != null ? formatCurrency(c.valor) : "—"} · {c.perfil}
+                    {c.valor != null ? formatCurrency(c.valor) : "—"} · {c.perfil ? formatVehicleProfileLabel(c.perfil) : "—"}
                   </div>
                 </div>
                 <Button

@@ -933,7 +933,7 @@ const DriverClaimPanel = ({
                             {item.origem} {" → "} {item.destino}
                           </h4>
                           <p className="mt-2 text-[13px] leading-6 text-muted-foreground sm:text-sm sm:leading-normal">
-                            {(item.clienteNome?.trim() || "Cliente a confirmar")} • {item.perfil || "Perfil a confirmar"}
+                            {(item.clienteNome?.trim() || "Cliente a confirmar")} • {item.perfil ? formatVehicleProfileLabel(item.perfil) : "Perfil a confirmar"}
                           </p>
                           <p className="mt-4 text-base font-semibold tracking-tight text-primary sm:text-lg">
                             {totalPayment !== null ? formatCurrency(totalPayment) : "A combinar"}

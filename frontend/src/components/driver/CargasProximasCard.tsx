@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { MapPin, LocateOff, Loader2, WifiOff } from "lucide-react";
 
 import ClientLogo from "@/components/ClientLogo";
+import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 
 export interface CargaProximaItem {
   id: string;
@@ -100,7 +101,7 @@ export default function CargasProximasCard({
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             {item.perfil ? (
               <span className="shrink-0 rounded bg-gray-200 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-gray-700">
-                {item.perfil}
+                {formatVehicleProfileLabel(item.perfil)}
               </span>
             ) : null}
             {item.distLabel ? (

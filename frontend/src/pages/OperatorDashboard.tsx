@@ -22,6 +22,7 @@ import {
   resolveAssignableRouteForCargo,
 } from "@/lib/assignableRoutes";
 import { resolveCargoPublicationReadiness } from "@/lib/loadPublication";
+import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -566,7 +567,7 @@ const OperatorDashboard = () => {
                               {cargo.origem} {"\u2192"} {cargo.destino}
                             </h3>
                             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                              Cliente: {formatMaybeText(cargo.cliente?.nome, "Não vinculado")} | Perfil: {publication.perfil || "A confirmar"}
+                              Cliente: {formatMaybeText(cargo.cliente?.nome, "Não vinculado")} | Perfil: {publication.perfil ? formatVehicleProfileLabel(publication.perfil) : "A confirmar"}
                             </p>
                           </div>
 
@@ -683,7 +684,7 @@ const OperatorDashboard = () => {
                     {" \u00b7 "}
                     Cliente: {formatMaybeText(detailCargo.cliente?.nome, "Não vinculado")}
                     {" \u00b7 "}
-                    Perfil: {publication.perfil || "A confirmar"}
+                    Perfil: {publication.perfil ? formatVehicleProfileLabel(publication.perfil) : "A confirmar"}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">

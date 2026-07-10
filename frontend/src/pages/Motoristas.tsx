@@ -41,6 +41,7 @@ import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 import { AspxSyncCard } from "@/components/AspxSyncCard";
 import { BrkSyncCard } from "@/components/BrkSyncCard";
 import DashboardHeader from "@/components/DashboardHeader";
+import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 import { ExternalValidationPill } from "@/components/ExternalValidationPill";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
@@ -2096,7 +2097,7 @@ const Motoristas = () => {
 
                         <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
                           <span>
-                            Carga {application.load.id} • {application.load.perfil}
+                            Carga {application.load.id} • {application.load.perfil ? formatVehicleProfileLabel(application.load.perfil) : "—"}
                           </span>
                           <span>
                             {formatShortDateTime(buildDisplayDateTime(application.load.data, application.load.horario), "A confirmar")}

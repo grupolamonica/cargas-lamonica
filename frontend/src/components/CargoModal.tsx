@@ -313,7 +313,7 @@ const CargoModal = ({
               {selectableRoutes.map((route) => (
                 <option key={route.id} value={route.route_key}>
                   {getAssignableRouteLabel(route)}
-                  {route.perfil_padrao ? ` — ${route.perfil_padrao}` : ""}
+                  {route.perfil_padrao ? ` — ${formatVehicleProfileLabel(route.perfil_padrao)}` : ""}
                   {route.eixos ? ` ${route.eixos} eixos` : ""}
                 </option>
               ))}
@@ -337,7 +337,7 @@ const CargoModal = ({
                   </span>
                 </p>
                 <p>
-                  Perfil: <span className="font-medium text-foreground">{selectedRoute.perfil_padrao || "A definir"}</span>
+                  Perfil: <span className="font-medium text-foreground">{selectedRoute.perfil_padrao ? formatVehicleProfileLabel(selectedRoute.perfil_padrao) : "A definir"}</span>
                 </p>
                 <p>
                   Valor base: <span className="font-medium text-foreground">{formatRouteMoney(selectedRoute.valor_padrao)}</span>

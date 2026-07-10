@@ -30,6 +30,7 @@ import ClientLogo from "@/components/ClientLogo";
 import { cn } from "@/lib/utils";
 import { publicSupabase } from "@/integrations/supabase/public-client";
 import { getBadgeIcon } from "@/lib/badgeIcons";
+import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 import type { CustomBadgeItem } from "@/services/operatorAdmin";
 import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
 
@@ -514,7 +515,7 @@ const DriverClientDetails = () => {
                       <div className="min-w-0 space-y-2">
                         <div className="flex flex-wrap items-center gap-2">
                           <Badge variant="outline" className="border-primary/20 bg-primary/5 text-primary">
-                            {load.perfil}
+                            {formatVehicleProfileLabel(load.perfil)}
                           </Badge>
                           <Badge variant="outline" className="border-border/60 bg-muted/35 text-muted-foreground">
                             {formatDate(load.data)} - {load.horario.slice(0, 5)}
