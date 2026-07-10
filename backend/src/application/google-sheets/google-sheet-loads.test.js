@@ -194,8 +194,17 @@ function createSupabaseMock({
   clientRows = [{ id: SHEET_CLIENT_ID, nome: "Shopee" }],
 } = {}) {
   const calls = [];
+  // Cargas de planilha já sincronizadas são, por padrão, da fonte "shopee"
+  // (a migration de multi-sheet faz backfill de cargas.sheet_source='shopee'
+  // para toda carga com sheet_lh). O sync escopa fetchExistingSheetLoads por
+  // sheet_source, então os fixtures precisam refletir esse backfill. Rows que
+  // já declaram sheet_source explicitamente são preservadas.
+  const scopedExistingRows = existingSheetRows.map((row) => ({
+    sheet_source: "shopee",
+    ...row,
+  }));
   const tableRows = {
-    cargas: [...existingSheetRows, ...templateRows],
+    cargas: [...scopedExistingRows, ...templateRows],
     route_metrics_cache: routeCatalogRows,
     clientes: clientRows,
   };

@@ -45,7 +45,6 @@ interface CargoModalProps {
   routes: AssignableRouteOption[];
   initialData?: CargoData | null;
   lockedClientId?: string;
-  lockedClientLabel?: string;
   canEditValues?: boolean;
 }
 
@@ -90,7 +89,6 @@ const CargoModal = ({
   routes,
   initialData,
   lockedClientId = "",
-  lockedClientLabel = "",
   canEditValues = true,
 }: CargoModalProps) => {
   const defaultSchedule = buildDefaultCargoSchedule();
@@ -364,7 +362,7 @@ const CargoModal = ({
             </select>
             {isClientLocked ? (
               <p className="mt-2 text-xs text-muted-foreground">
-                Cargas vindas da planilha online ficam vinculadas automaticamente ao cliente {lockedClientLabel || "Shopee"}.
+                Cliente definido pela planilha de origem — sincronizado automaticamente e não pode ser alterado por aqui.
               </p>
             ) : null}
           </div>

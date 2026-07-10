@@ -81,6 +81,7 @@ const schemaSql = `
     sheet_cavalo text,
     sheet_carreta text,
     sheet_status text,
+    sheet_source text,
     alloc_motorista text,
     alloc_cavalo text,
     alloc_carreta text,
@@ -287,6 +288,14 @@ const schemaSql = `
     aspx_matched_at  TIMESTAMPTZ,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.sheet_monitor_snapshot (
+    id           smallint    PRIMARY KEY DEFAULT 1,
+    source       text,
+    rows_json    jsonb   NOT NULL DEFAULT '[]'::jsonb,
+    summary_json jsonb   NOT NULL DEFAULT '{}'::jsonb,
+    synced_at    timestamptz NOT NULL DEFAULT now()
   );
 `;
 

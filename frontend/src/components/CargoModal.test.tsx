@@ -99,7 +99,6 @@ describe("CargoModal", () => {
         ]}
         routes={[route]}
         lockedClientId="client-shopee"
-        lockedClientLabel="Shopee"
         initialData={{
           data: "2026-04-07",
           horario: "08:00",
