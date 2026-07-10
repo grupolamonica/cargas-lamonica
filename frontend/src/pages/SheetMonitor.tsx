@@ -1675,7 +1675,7 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
 
 // ─── Table row ────────────────────────────────────────────────────────────────
 
-const ROW_VIRTUALIZATION_STYLE = { contentVisibility: "auto" as const, containIntrinsicSize: "0 34px" as const };
+const ROW_VIRTUALIZATION_STYLE = { contentVisibility: "auto" as const, containIntrinsicSize: "0 48px" as const };
 
 type RowDropIntent = "swap" | "before" | "after" | null;
 
@@ -1764,9 +1764,9 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
         {row.reserva ? (
           <span className="text-[0.62rem] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">reserva</span>
         ) : (
-          <div className="truncate" title={row.tipo ? `${row.lh} · ${row.tipo}` : row.lh}>
-            <span className="font-mono text-xs font-semibold text-foreground/80">{row.lh || "—"}</span>
-            {row.tipo && <span className="text-[0.62rem] text-muted-foreground"> · {row.tipo}</span>}
+          <div className="min-w-0" title={row.tipo ? `${row.lh} · ${row.tipo}` : row.lh}>
+            <div className="truncate font-mono text-xs font-semibold text-foreground/80">{row.lh || "—"}</div>
+            {row.tipo && <div className="truncate text-[0.62rem] text-muted-foreground">{row.tipo}</div>}
           </div>
         )}
       </td>
@@ -1776,37 +1776,40 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
         <span className="block truncate text-xs font-medium text-foreground/90" title={row.cliente ?? undefined}>{row.cliente || "—"}</span>
       </td>
 
-      {/* Rota (origem → destino em UMA linha; código operator-only na frente) */}
+      {/* Rota em DUAS linhas: origem (com código da rota na frente) em cima,
+          destino embaixo — layout de 2 linhas por viagem. */}
       <td className="px-3 py-1.5 align-middle">
-        <div className="flex items-center gap-1">
-          <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground" title={`${row.origem || "—"} → ${row.destino || "—"}`}>
-            {row.routeCodigo != null && (
-              <span className="mr-1 font-mono text-[0.58rem] font-semibold text-muted-foreground/70" title="Código da rota">R{row.routeCodigo}</span>
-            )}
-            {row.origem || "—"} <span className="text-muted-foreground/60">→</span> <span className="text-muted-foreground">{row.destino || "—"}</span>
-          </span>
+        <div className="flex items-start gap-1" title={`${row.origem || "—"} → ${row.destino || "—"}`}>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-medium text-foreground">
+              {row.routeCodigo != null && (
+                <span className="mr-1 font-mono text-[0.58rem] font-semibold text-muted-foreground/70" title="Código da rota">R{row.routeCodigo}</span>
+              )}
+              {row.origem || "—"}
+            </div>
+            <div className="truncate text-xs text-muted-foreground">{row.destino || "—"}</div>
+          </div>
           {row.routeRegistered === false && (
-            <span title="O trajeto origem→destino não tem rota cadastrada no catálogo" className="shrink-0 text-orange-500">
+            <span title="O trajeto origem→destino não tem rota cadastrada no catálogo" className="mt-0.5 shrink-0 text-orange-500">
               <AlertTriangle className="h-3 w-3" />
             </span>
           )}
         </div>
       </td>
 
-      {/* Agenda: carregamento → descarga em UMA linha (trunca p/ caber).
-          tabular-nums = dígitos de largura fixa → a seta "→" e a 2ª data alinham
-          verticalmente entre as linhas (fonte proporcional deixava "torto"). */}
+      {/* Agenda em DUAS linhas: carregamento em cima, descarga embaixo.
+          tabular-nums = dígitos de largura fixa → as datas alinham verticalmente. */}
       <td className="px-3 py-1.5 align-middle">
         {row.carregamentoLabel || row.descargaLabel ? (
           <div
-            className="truncate text-xs text-foreground tabular-nums"
+            className="text-xs text-foreground tabular-nums"
             title={[
               row.carregamentoLabel ? `Carregamento: ${row.carregamentoLabel}` : null,
               row.descargaLabel ? `Descarga: ${row.descargaLabel}` : null,
             ].filter(Boolean).join("  ·  ")}
           >
-            {shortAgenda(row.carregamentoLabel) || "—"}
-            {row.descargaLabel && <span className="text-muted-foreground"> → {shortAgenda(row.descargaLabel)}</span>}
+            <div className="truncate">{shortAgenda(row.carregamentoLabel) || "—"}</div>
+            {row.descargaLabel && <div className="truncate text-muted-foreground">{shortAgenda(row.descargaLabel)}</div>}
           </div>
         ) : row.reserva && row.standbyAt ? (
           <span className="text-xs text-amber-700 dark:text-amber-300" title={`Em reserva desde ${formatStandby(row.standbyAt)}`}>
