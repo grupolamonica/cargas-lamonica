@@ -134,6 +134,46 @@ describe("assignable routes helpers", () => {
     ).toMatchObject({ valor: "9999", bonus: "111" });
   });
 
+  it("fluxo Editar Carga: escolher perfil+eixos puxa o preço da tarifa certa e preserva valor já definido", () => {
+    // Catálogo do trecho com 2 tarifas, como o read-model devolveria (flat).
+    const carreta2: AssignableRouteOption = {
+      ...route,
+      id: "rt-carreta-2",
+      route_key: "sao paulo|simoes filho|CARRETA|2",
+      eixos: 2,
+      valor_padrao: 5300,
+      bonus_padrao: 260,
+    };
+    const bitrem6: AssignableRouteOption = {
+      ...route,
+      id: "rt-bitrem-6",
+      route_key: "sao paulo|simoes filho|BITREM|6",
+      perfil_padrao: "BITREM",
+      eixos: 6,
+      valor_padrao: 9000,
+      bonus_padrao: 500,
+    };
+    const catalogo = [carreta2, bitrem6];
+
+    // Operador abre uma carga NOVA (valor/bônus vazios) e escolhe CARRETA 2 eixos.
+    const matchedCarreta = findAssignableRouteByVehicle(catalogo, "SAO PAULO", "SIMOES FILHO", "CARRETA", 2);
+    expect(matchedCarreta?.id).toBe("rt-carreta-2");
+    const draft = applyRouteVehiclePricingToCargoDraft(
+      { route_key: "", origem: "SAO PAULO", destino: "SIMOES FILHO", perfil: "CARRETA", eixos: 2, valor: "", bonus: "" },
+      matchedCarreta,
+    );
+    expect(draft.valor).toBe("5300");
+    expect(draft.bonus).toBe("260");
+
+    // Troca para BITREM 6 eixos — acha a tarifa certa, mas como já há valor
+    // definido, o auto-preenchimento NÃO sobrescreve (regra "só se vazio").
+    const matchedBitrem = findAssignableRouteByVehicle(catalogo, "SAO PAULO", "SIMOES FILHO", "BITREM", 6);
+    expect(matchedBitrem?.id).toBe("rt-bitrem-6");
+    const draft2 = applyRouteVehiclePricingToCargoDraft({ ...draft, perfil: "BITREM", eixos: 6 }, matchedBitrem);
+    expect(draft2.valor).toBe("5300");
+    expect(draft2.bonus).toBe("260");
+  });
+
   it("matches abbreviated operational names like SJ Rio Preto to the route catalog city", () => {
     const sjRioPretoRoute: AssignableRouteOption = {
       ...route,
