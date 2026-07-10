@@ -276,9 +276,15 @@ export function buildRouteLabelMap(loadRows) {
 
       // Fallback: construct a displayable label from the cargo's own origem/destino.
       // Use the raw string (not canonicalized — that strips accents for matching purposes).
-      // Strip the "/UF" state suffix only (e.g. "São Bernardo do Campo/SP" → "SÃO BERNARDO DO CAMPO").
-      const rawOrigin = String(row.origem ?? "").replace(/\s*\/\s*[A-Za-z]{2}$/i, "").trim();
-      const rawDest = String(row.destino ?? "").replace(/\s*\/\s*[A-Za-z]{2}$/i, "").trim();
+      // Strip the state suffix por BARRA ("/BA") OU HÍFEN ("- BA" / "-AL") — a planilha
+      // Nestlé usa hífen. Sem tirar o hífen, o facet fragmentava a mesma cidade em
+      // opções diferentes ("MACEIO-AL" vs "MACEIO", "FEIRA DE SANTANA - BA" vs
+      // "FEIRA DE SANTANA"): filtrar por uma não achava a outra ("nomes parecidos,
+      // rotas diferentes"). Limpar o sufixo alinha com o rótulo canônico das rotas casadas.
+      const stripStateSuffix = (value) =>
+        String(value ?? "").replace(/\s*[-/]\s*[A-Za-z]{2}$/i, "").trim();
+      const rawOrigin = stripStateSuffix(row.origem);
+      const rawDest = stripStateSuffix(row.destino);
       const fallbackLabel = rawOrigin && rawDest ? `${rawOrigin.toUpperCase()} X ${rawDest.toUpperCase()}` : null;
       if (!fallbackLabel) unmatched.push({ id: row.id, origem: row.origem, destino: row.destino });
       return [row.id, fallbackLabel];
