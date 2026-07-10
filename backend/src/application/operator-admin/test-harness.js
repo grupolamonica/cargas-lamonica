@@ -645,12 +645,13 @@ export async function seedRoute(overrides = {}) {
         duracao_horas,
         tempo_estimado_horas,
         perfil_padrao,
+        eixos,
         valor_padrao,
         bonus_padrao,
         ativa,
         observacoes
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     `,
     [
       id,
@@ -662,6 +663,7 @@ export async function seedRoute(overrides = {}) {
       overrides.duracao_horas ?? 24,
       overrides.tempo_estimado_horas ?? 24,
       overrides.perfil_padrao ?? "CARRETA",
+      overrides.eixos ?? 0,
       overrides.valor_padrao ?? 7200,
       overrides.bonus_padrao ?? 300,
       overrides.ativa ?? true,

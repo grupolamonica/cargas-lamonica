@@ -156,6 +156,7 @@ export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
           tempo_estimado_horas,
           duracao_horas,
           perfil_padrao,
+          eixos,
           valor_padrao,
           bonus_padrao
         FROM public.route_metrics_cache
@@ -200,6 +201,7 @@ export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
       }
       routeMetricsByLocation.get(locationKey).push({
         perfil_padrao: profile,
+        eixos: parseNullableNumber(row.eixos) ?? 0,
         metrics: {
           distancia_km: distanceKm,
           tempo_estimado_horas: routeEstimatedHours,
@@ -211,6 +213,10 @@ export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
       });
     });
 
+    // Uma rota por veículo = (perfil, eixos). Preferimos a tarifa cujo perfil E
+    // nº de eixos casam com a carga; depois qualquer tarifa do mesmo perfil;
+    // por fim a primeira do trecho. Sem isso, uma carga sem valor próprio num
+    // trecho com 5 e 6 eixos poderia herdar o preço do eixo errado.
     const pickRouteMetrics = (row) => {
       const locationKey = createRouteLookupKeys(row.origem, row.destino).find((routeKey) =>
         routeMetricsByLocation.has(routeKey),
@@ -218,15 +224,26 @@ export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
       if (!locationKey) return null;
       const candidates = routeMetricsByLocation.get(locationKey);
       const cargoProfile = String(row.perfil ?? "").trim().toUpperCase();
+      const cargoEixos = parseNullableNumber(row.eixos) ?? 0;
+      const sameProfile = cargoProfile
+        ? candidates.filter((c) => String(c.perfil_padrao ?? "").toUpperCase() === cargoProfile)
+        : [];
       const matched =
-        (cargoProfile && candidates.find((c) => String(c.perfil_padrao ?? "").toUpperCase() === cargoProfile)) ||
+        sameProfile.find((c) => (c.eixos ?? 0) === cargoEixos) ||
+        sameProfile[0] ||
         candidates[0];
       return matched ? matched.metrics : null;
     };
 
     return new Map(loadRows.map((row) => [row.id, pickRouteMetrics(row)]));
   } catch (error) {
-    if (isMissingRouteCatalogTableError(error) || isMissingRouteCatalogColumnsError(error)) {
+    // Schema legado sem a coluna eixos (ou colunas de catálogo): degrada para
+    // sem métricas de rota — a carga usa o próprio valor/bônus. Nunca 500.
+    if (
+      isMissingRouteCatalogTableError(error) ||
+      isMissingRouteCatalogColumnsError(error) ||
+      isMissingRouteColumnError(error)
+    ) {
       return new Map();
     }
     throw error;
