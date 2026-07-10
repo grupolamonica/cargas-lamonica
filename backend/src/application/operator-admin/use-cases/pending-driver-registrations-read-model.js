@@ -12,9 +12,11 @@ const PENDING_DRIVER_MAX_PAGE_SIZE = 100;
  * @param {string|null} opts.status   - Filtro: 'pendente' | 'em_revisao' | 'aprovado' | 'rejeitado' | null (todos)
  * @param {number} opts.page
  * @param {number} opts.pageSize
+ * @param {string} [opts.sort]   - Ordenação (DC-197): 'nome' | 'placa' | 'enviado' | 'status' (default 'enviado')
+ * @param {string} [opts.dir]    - Direção: 'asc' | 'desc' (default 'desc')
  * @param {string} [opts.correlationId]
  */
-export async function fetchPendingDriverRegistrations({ status, search, page, pageSize, correlationId }) {
+export async function fetchPendingDriverRegistrations({ status, search, page, pageSize, sort, dir, correlationId }) {
   const safePage = Math.max(1, Number.parseInt(String(page || 1), 10) || 1);
   const safePageSize = Math.min(
     PENDING_DRIVER_MAX_PAGE_SIZE,
@@ -27,6 +29,19 @@ export async function fetchPendingDriverRegistrations({ status, search, page, pa
   const searchTerm = typeof search === "string" && search.trim() ? search.trim() : null;
   const searchDigits = searchTerm ? searchTerm.replace(/\D/g, "") : "";
   const searchDigitsFilter = searchDigits.length >= 3 ? searchDigits : null;
+
+  // Ordenação (DC-197): colunas permitidas mapeadas para expressões SEGURAS.
+  // Nunca interpola entrada crua — a chave é validada contra este whitelist.
+  const SORT_EXPR = {
+    nome: "dados->'motorista'->>'nome'",
+    placa: "dados->'cavalo'->>'placa'",
+    enviado: "created_at",
+    status: "status",
+  };
+  const sortKey = typeof sort === "string" && Object.hasOwn(SORT_EXPR, sort) ? sort : "enviado";
+  const sortDir = String(dir || "").toLowerCase() === "asc" ? "ASC" : "DESC";
+  // Tiebreaker estável (created_at, id) → paginação determinística.
+  const orderByClause = `ORDER BY ${SORT_EXPR[sortKey]} ${sortDir} NULLS LAST, created_at DESC, id DESC`;
 
   // WHERE compartilhado entre a query de itens e a de contagem ($1=status, $2=termo, $3=dígitos).
   const whereClause = `
@@ -60,7 +75,7 @@ export async function fetchPendingDriverRegistrations({ status, search, page, pa
           dados                        AS dados
         FROM public.pending_driver_registrations
         ${whereClause}
-        ORDER BY created_at DESC
+        ${orderByClause}
         LIMIT $4 OFFSET $5
         `,
         [statusFilter, searchTerm, searchDigitsFilter, safePageSize, offset],

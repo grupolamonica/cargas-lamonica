@@ -1275,6 +1275,8 @@ export async function fetchCadastrosPendentes(params: {
   search?: string;
   page?: number;
   pageSize?: number;
+  sort?: "nome" | "placa" | "enviado" | "status";
+  dir?: "asc" | "desc";
 }) {
   const accessToken = await getOperatorAccessToken();
   const query = new URLSearchParams(

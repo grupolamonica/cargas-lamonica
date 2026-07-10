@@ -1587,6 +1587,8 @@ export async function resolveOperatorCadastrosPendentesResponse(request) {
       search: typeof query.search === "string" ? query.search.trim() : null,
       page: query.page,
       pageSize: query.pageSize,
+      sort: typeof query.sort === "string" ? query.sort.trim() : null,
+      dir: typeof query.dir === "string" ? query.dir.trim() : null,
       correlationId,
     });
   });
