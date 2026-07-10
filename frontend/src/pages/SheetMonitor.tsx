@@ -1135,7 +1135,7 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
 // Cargas do sistema (sheet_lh nulo) são editadas como uma planilha: Status, LH,
 // Rota, Agenda, Motorista/Placa — todos editáveis (a carga é a fonte da verdade).
 
-type CargoForm = { lh: string; status: string; tipo: string; origem: string; destino: string; carregamento: string; descarga: string; motorista: string; cavalo: string; carreta: string };
+type CargoForm = { lh: string; status: string; tipo: string; origem: string; destino: string; carregamento: string; descarga: string; motorista: string; cavalo: string; carreta: string; vinculo: string };
 
 function MonitorCargoFields({ form, setForm, statusOptions }: {
   form: CargoForm;
@@ -1180,11 +1180,14 @@ function MonitorCargoFields({ form, setForm, statusOptions }: {
       <label className="col-span-1 text-xs font-medium text-muted-foreground">Carreta
         <input list={CARRETA_DATALIST_ID} autoComplete="off" className={field} value={form.carreta} onChange={set("carreta")} maxLength={40} />
       </label>
+      <label className="col-span-2 text-xs font-medium text-muted-foreground">Vínculo
+        <input list="monitor-vinculo-datalist" autoComplete="off" className={field} value={form.vinculo} onChange={set("vinculo")} placeholder="Ex.: AGREGADO DEDICADO, TERCEIRO, PME…" maxLength={80} />
+      </label>
     </div>
   );
 }
 
-const EMPTY_CARGO_FORM: CargoForm = { lh: "", status: "", tipo: "", origem: "", destino: "", carregamento: "", descarga: "", motorista: "", cavalo: "", carreta: "" };
+const EMPTY_CARGO_FORM: CargoForm = { lh: "", status: "", tipo: "", origem: "", destino: "", carregamento: "", descarga: "", motorista: "", cavalo: "", carreta: "", vinculo: "" };
 
 // datetime-local 'YYYY-MM-DDTHH:MM' → { data:'YYYY-MM-DD', horario:'HH:MM' }
 function splitCarregamento(dt: string): { data: string; horario: string } {
@@ -1227,6 +1230,7 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
         motorista: row.motoristas ?? "",
         cavalo: row.cavalo ?? "",
         carreta: row.carreta ?? "",
+        vinculo: row.vinculo ?? "",
       });
     }
   }, [open, row]);
@@ -1267,6 +1271,7 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
       motorista: form.motorista.trim(),
       cavalo: form.cavalo.trim(),
       carreta: form.carreta.trim(),
+      vinculo: form.vinculo.trim(),
       ...(descricao ? { descricao } : {}),
     });
   };
@@ -2144,7 +2149,7 @@ function RowDetailModal({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "", tipo: "" });
+  const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "", tipo: "", vinculo: "" });
   const [confirmChange, setConfirmChange] = useState(false);
 
   // Pré-preenche com a alocação EFETIVA: override do operador (alloc_*) ?? planilha.
@@ -2156,6 +2161,7 @@ function RowDetailModal({
       carreta: alloc?.alloc_carreta ?? row.carreta ?? "",
       status: alloc?.alloc_status ?? row.status ?? "",
       tipo: alloc?.alloc_tipo ?? (row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "") ?? "",
+      vinculo: alloc?.alloc_vinculo ?? row.vinculo ?? "",
     });
   }, [row, alloc, open]);
 
@@ -2203,6 +2209,9 @@ function RowDetailModal({
       carreta: allocEditable ? allocForm.carreta : (alloc?.alloc_carreta ?? ""),
       status: allocForm.status,
       tipo: allocForm.tipo, // tipo é livre (não trava por pinned/status)
+      // Vínculo (col H): sempre enviado (prefilled com o valor efetivo) — o
+      // backend espelha na planilha; se não mudou, reescreve o mesmo valor.
+      vinculo: allocForm.vinculo,
       // Motivo da troca — só quando o motorista/veículo mudou (o modal exige).
       ...(descricao ? { descricao } : {}),
     });
@@ -2347,6 +2356,21 @@ function RowDetailModal({
                       <option key={s} value={s}>{s}</option>
                     ))}
                   </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Vínculo</label>
+                  <Input
+                    list="monitor-vinculo-datalist"
+                    value={allocForm.vinculo}
+                    onChange={(e) => setAllocForm((f) => ({ ...f, vinculo: e.target.value }))}
+                    placeholder="Ex.: AGREGADO DEDICADO, TERCEIRO, PME, FROTA…"
+                    className="h-8 text-xs"
+                  />
+                  <datalist id="monitor-vinculo-datalist">
+                    {["AGREGADO DEDICADO", "TERCEIRO DEDICADO", "TERCEIRO", "PME", "FROTA", "PX"].map((v) => (
+                      <option key={v} value={v} />
+                    ))}
+                  </datalist>
                 </div>
                 <div className="flex items-center justify-between gap-2 pt-1">
                   <span className="text-[0.58rem] leading-tight text-muted-foreground/60">

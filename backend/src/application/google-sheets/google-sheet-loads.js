@@ -932,6 +932,7 @@ export function parseAllGoogleSheetRows(csvText, options = {}) {
 
     const cavalo = getCell(row, headerIndex, "cavalo");
     const carreta = getCell(row, headerIndex, "carreta");
+    const vinculo = getCell(row, headerIndex, "vinculo");
     const checklistCavalo = getCell(row, headerIndex, "checklist cavalo");
     const checklistCarreta = checklistCarretaHeader
       ? getCell(row, headerIndex, checklistCarretaHeader)
@@ -989,6 +990,7 @@ export function parseAllGoogleSheetRows(csvText, options = {}) {
       valor: valueHeaderName ? parseSpreadsheetCurrency(rawValue) : undefined,
       cavalo,
       carreta,
+      vinculo,
       checklistCavalo,
       checklistCarreta,
       isAvailable,

@@ -52,7 +52,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
   const result = await withPgTransaction(async (client) => {
     const { rows } = await client.query(
       `SELECT id, sheet_lh, alloc_pinned,
-              alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao,
+              alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo,
               origem, destino, data, horario, lh_manual, sheet_data_carregamento, sheet_data_descarga,
               status, reserved_public_lead_id
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
@@ -80,6 +80,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     // Motivo da troca de motorista/veículo (modal "Confirmar troca"): ausente
     // preserva o último motivo.
     const allocDescricao = has("descricao") ? normAlloc(payload.descricao) : row.alloc_descricao;
+    const allocVinculo = has("vinculo") ? normAlloc(payload.vinculo) : row.alloc_vinculo;
 
     // Limpou o motorista de uma carga do sistema RESERVADA (o motorista reservou
     // pelo portal): a carga deve voltar a ficar ABERTA. Só quando o operador
@@ -117,6 +118,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             alloc_status = $5,
             alloc_tipo = $14,
             alloc_descricao = $16,
+            alloc_vinculo = $17,
             origem = $6,
             destino = $7,
             data = $8,
@@ -130,7 +132,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             updated_at = now()
         WHERE id = $1
       `,
-      [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga, allocTipo, carregamento, allocDescricao],
+      [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga, allocTipo, carregamento, allocDescricao, allocVinculo],
     );
 
     await insertSecurityAuditEvent(client, {

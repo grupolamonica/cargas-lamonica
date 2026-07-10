@@ -56,6 +56,25 @@ describe("sheet-writeback", () => {
     ]);
   });
 
+  it("status/vinculo só vão quando a chave está presente (senão omite p/ não sobrescrever L/H)", async () => {
+    process.env[URL_KEY] = TEST_URL;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true, updated: 2 }));
+    await writeAllocationsToSheet(
+      [
+        { lh: "L1", motorista: "A", status: "DESCARREGADO", vinculo: "TERCEIRO" },
+        { lh: "L2", motorista: "B" }, // sem status/vinculo → omitidos
+      ],
+      { fetchImpl },
+    );
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.updates[0]).toEqual({
+      lh: "L1", motorista: "A", cavalo: "", carreta: "", status: "DESCARREGADO", vinculo: "TERCEIRO",
+    });
+    expect(body.updates[1]).toEqual({ lh: "L2", motorista: "B", cavalo: "", carreta: "" });
+    expect("status" in body.updates[1]).toBe(false);
+    expect("vinculo" in body.updates[1]).toBe(false);
+  });
+
   it("resposta ok:false (ex.: forbidden) → ok:false, não lança", async () => {
     process.env[URL_KEY] = TEST_URL;
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: false, error: "forbidden" }));
