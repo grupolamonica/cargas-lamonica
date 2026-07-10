@@ -1248,6 +1248,12 @@ function dateFilterWithMidnight(prev: string, next: string): string {
   return nd !== pd ? `${nd}T00:00` : next;
 }
 
+// Data de HOJE no fuso local do operador (BRT), no formato do <input datetime-local>.
+function todayLocalDate(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
   row: SheetMonitorRowType | null;
   open: boolean;
@@ -2894,17 +2900,20 @@ export default function SheetMonitor() {
   const [routeFilter, setRouteFilter] = useState<string[]>([]);
   const [editFilter, setEditFilter] = useState<string[]>([]);
   const [clienteFilter, setClienteFilter] = useState<string[]>([]);
-  const [dateFromFilter, setDateFromFilter] = useState("");
-  const [dateToFilter, setDateToFilter] = useState("");
+  // Filtro de carregamento já começa em HOJE (00:00–23:59) ao abrir a tela: o
+  // operador vê direto a agenda do dia. É só um valor inicial — pode limpar ou
+  // alterar. Descarga sem filtro inicial.
+  const [dateFromFilter, setDateFromFilter] = useState(() => `${todayLocalDate()}T00:00`);
+  const [dateToFilter, setDateToFilter] = useState(() => `${todayLocalDate()}T23:59`);
   const [descargaFromFilter, setDescargaFromFilter] = useState("");
   const [descargaToFilter, setDescargaToFilter] = useState("");
   const [page, setPage] = useState(0);
   // Ordenação da agenda (Coleta) estilo planilha, escolhida pelo operador:
-  // "desc" = mais NOVA primeiro (padrão histórico), "asc" = mais ANTIGA primeiro
-  // (do primeiro ao último). Preferência persistida em localStorage.
+  // "asc" = mais ANTIGA primeiro (do primeiro ao último) — PADRÃO; "desc" = mais
+  // NOVA primeiro. A preferência salva sobrepõe o padrão.
   const [agendaSortDir, setAgendaSortDir] = useState<"asc" | "desc">(() => {
-    if (typeof window === "undefined") return "desc";
-    return window.localStorage.getItem("lamonica-monitor-agenda-sort") === "asc" ? "asc" : "desc";
+    if (typeof window === "undefined") return "asc";
+    return window.localStorage.getItem("lamonica-monitor-agenda-sort") === "desc" ? "desc" : "asc";
   });
   useEffect(() => {
     try {
