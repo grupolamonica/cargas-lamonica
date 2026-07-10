@@ -4,6 +4,7 @@ import ClientLogo from "@/components/ClientLogo";
 import { cn } from "@/lib/utils";
 import { resolveVinculoStyle } from "@/lib/vinculo";
 import { buildDisplayDateTime, formatFullDateTime, formatShortDateTime } from "@/lib/dateDisplay";
+import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 import type { OperatorLeadGroup, OperatorLeadPacoteMeta, PublicLeadValidationSummary } from "@/services/loadClaims";
 
 function maskCpfSuffix(cpf: string | null | undefined) {
@@ -289,7 +290,7 @@ const OperatorPacoteLeadCard = ({
           </span>
           {firstParadaPerfil ? (
             <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[0.6rem] font-semibold text-muted-foreground">
-              {firstParadaPerfil}
+              {formatVehicleProfileLabel(firstParadaPerfil)}
             </span>
           ) : null}
           {valorTotalLabel ? (
