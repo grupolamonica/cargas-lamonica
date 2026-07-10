@@ -2803,6 +2803,7 @@ export default function SheetMonitor() {
   const [assignmentFilter, setAssignmentFilter] = useState<string[]>([]);
   const [routeFilter, setRouteFilter] = useState<string[]>([]);
   const [editFilter, setEditFilter] = useState<string[]>([]);
+  const [clienteFilter, setClienteFilter] = useState<string[]>([]);
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
   const [descargaFromFilter, setDescargaFromFilter] = useState("");
@@ -3109,6 +3110,13 @@ export default function SheetMonitor() {
     return Array.from(s).sort();
   }, [items]);
 
+  // Clientes presentes no dataset (ex.: Shopee, Nestle) — para o filtro multi-seleção.
+  const clienteOptions = useMemo(() => {
+    const s = new Set<string>();
+    items.forEach((item) => { if (item.cliente) s.add(item.cliente); });
+    return Array.from(s).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [items]);
+
   // Rotas do filtro: quando há filtro de DATA, mostra só as rotas que têm carga
   // no intervalo (as "principais" do dia) — não todas. Mesma lógica de data do
   // filteredRows; reserva (standby, sem data) sempre entra.
@@ -3147,6 +3155,7 @@ export default function SheetMonitor() {
 
   // Opções (shape do MultiSelectFilter) para os filtros de tipo e rota.
   const tipoSelectOptions = useMemo<MultiOption[]>(() => tipoOptions.map((t) => ({ value: t, label: t })), [tipoOptions]);
+  const clienteSelectOptions = useMemo<MultiOption[]>(() => clienteOptions.map((c) => ({ value: c, label: c })), [clienteOptions]);
   const routeSelectOptions = useMemo<MultiOption[]>(
     () => routeOptions.map((r) => ({ value: r.key, label: r.codigo != null ? `R${r.codigo} — ${r.key}` : r.key })),
     [routeOptions],
@@ -3168,6 +3177,11 @@ export default function SheetMonitor() {
 
     if (tipoFilter.length > 0)
       result = result.filter((r) => r.tipo != null && tipoFilter.includes(r.tipo));
+
+    // Cliente — OR entre os selecionados (Shopee, Nestle, …). Linha de reserva
+    // (standby, sem cliente) sai quando há filtro de cliente ativo.
+    if (clienteFilter.length > 0)
+      result = result.filter((r) => r.cliente != null && clienteFilter.includes(r.cliente));
 
     if (routeFilter.length > 0)
       result = result.filter((r) => routeFilter.includes(routeKeyOf(r)));
@@ -3199,7 +3213,7 @@ export default function SheetMonitor() {
       result = result.filter((row) => rowMatchesDateRanges(row, { carFrom, carTo, desFrom, desTo }));
 
     return result;
-  }, [items, deferredSearch, tipoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter, descargaFromFilter, descargaToFilter]);
+  }, [items, deferredSearch, tipoFilter, clienteFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter, descargaFromFilter, descargaToFilter]);
 
   // Contagem por status para os chips clicáveis do "Status na planilha" (mesma
   // chave do resumo: status || "Sem status"). Reserva é linha sintética — não conta.
@@ -3280,7 +3294,7 @@ export default function SheetMonitor() {
   const handleClearStatus = useCallback(() => setStatusFilter([]), []);
 
   const hasActiveFilters =
-    deferredSearch.trim().length > 0 || statusFilter.length > 0 || tipoFilter.length > 0 ||
+    deferredSearch.trim().length > 0 || statusFilter.length > 0 || tipoFilter.length > 0 || clienteFilter.length > 0 ||
     routeFilter.length > 0 || assignmentFilter.length > 0 || editFilter.length > 0 || dateFromFilter.length > 0 || dateToFilter.length > 0 ||
     descargaFromFilter.length > 0 || descargaToFilter.length > 0;
 
@@ -3485,6 +3499,8 @@ export default function SheetMonitor() {
                   className="w-full rounded-xl border border-border/80 bg-white/92 py-2.5 pl-10 pr-4 text-sm outline-none transition-all placeholder:text-muted-foreground focus:border-primary/30 focus:ring-4 focus:ring-primary/10" />
               </div>
 
+              <MultiSelectFilter label="Clientes" options={clienteSelectOptions} selected={clienteFilter} onChange={setClienteFilter} />
+
               <MultiSelectFilter label="Tipos" options={tipoSelectOptions} selected={tipoFilter} onChange={setTipoFilter} />
 
               <MultiSelectFilter label="Rotas" options={routeSelectOptions} selected={routeFilter} onChange={setRouteFilter} widthClass="max-w-[220px]" />
@@ -3516,7 +3532,7 @@ export default function SheetMonitor() {
                   no fim da linha de filtros, então nada reflui quando um filtro é
                   aplicado/limpo. A busca é flex-1 e absorve a variação de largura. */}
               <button type="button" disabled={!hasActiveFilters}
-                onClick={() => { setSearch(""); setStatusFilter([]); setTipoFilter([]); setRouteFilter([]); setAssignmentFilter([]); setEditFilter([]); setDateFromFilter(""); setDateToFilter(""); setDescargaFromFilter(""); setDescargaToFilter(""); }}
+                onClick={() => { setSearch(""); setStatusFilter([]); setTipoFilter([]); setClienteFilter([]); setRouteFilter([]); setAssignmentFilter([]); setEditFilter([]); setDateFromFilter(""); setDateToFilter(""); setDescargaFromFilter(""); setDescargaToFilter(""); }}
                 className="inline-flex items-center gap-1 rounded-xl border border-border/80 bg-white px-3 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 dark:bg-muted/40">
                 <X className="h-3.5 w-3.5" />Limpar
               </button>

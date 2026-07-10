@@ -99,7 +99,7 @@ import {
 } from "../../../domain/load-claims/errors.js";
 import { assertOperatorAccessLevel, assertOperatorPermission, hasOperatorPermission } from "../../../application/load-claims/operator-access.js";
 import { getAdminClient, requireOperatorSession } from "../../../application/load-claims/auth.js";
-import { syncGoogleSheetLoads } from "../../../application/google-sheets/google-sheet-loads.js";
+import { syncAllSheetSources } from "../../../application/google-sheets/google-sheet-loads.js";
 import { createSupabaseAdminClient } from "../../../infrastructure/supabase/admin-client.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 
@@ -685,11 +685,13 @@ export async function resolveOperatorSheetSyncResponse(request) {
     },
     async ({ correlationId }) => {
       const supabaseClient = createSupabaseAdminClient();
-      const result = await syncGoogleSheetLoads({ supabaseClient });
+      // Sincroniza todas as fontes (Shopee + Nestlé), cada uma isolada.
+      const result = await syncAllSheetSources({ supabaseClient });
       logStructuredEvent("info", "operator-admin.sheet-sync.requested", {
         correlationId,
-        inserted: result?.inserted ?? null,
-        updated: result?.updated ?? null,
+        sources: Array.isArray(result?.sources)
+          ? result.sources.map((s) => ({ source: s.source, ok: s.ok }))
+          : null,
       });
       return {
         statusCode: 200,
@@ -1029,13 +1031,13 @@ export async function resolveSheetMonitorResponse(request) {
     // ----------------------------------------------------------------
     // READ path: always from the DB snapshot — never hits Google Sheets.
     // ----------------------------------------------------------------
-    let snapshot = null;
+    // Lê TODOS os snapshots por-fonte (Shopee id=1 + Nestlé etc.) e mescla.
+    let snapshotRows = null;
     try {
       const { data, error } = await supabaseClient
         .from("sheet_monitor_snapshot")
-        .select("rows_json, summary_json, synced_at")
-        .eq("id", 1)
-        .maybeSingle();
+        .select("rows_json, summary_json, synced_at, source")
+        .order("id", { ascending: true });
 
       if (error) {
         logStructuredEvent("error", "sheet-monitor.snapshot-read-failed", {
@@ -1044,7 +1046,7 @@ export async function resolveSheetMonitorResponse(request) {
           message: error.message,
         });
       } else {
-        snapshot = data;
+        snapshotRows = data;
       }
     } catch (dbError) {
       logStructuredEvent("error", "sheet-monitor.db-error", {
@@ -1053,16 +1055,49 @@ export async function resolveSheetMonitorResponse(request) {
       });
     }
 
-    if (snapshot) {
+    if (snapshotRows && snapshotRows.length > 0) {
       // Enriquecimento salvo: planilha por lh, sistema por cargo_id.
       const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
 
-      const baseRows = snapshot.rows_json ?? [];
+      // Mescla as linhas de todas as fontes. A Shopee (source nulo/'shopee') fica
+      // sem rótulo — o buildUnifiedMonitor aplica getSheetClientName() (byte-idêntico
+      // ao comportamento antigo). Fontes != shopee rotulam cada linha com o cliente
+      // (clientName gravado no summary_json) e ganham rowKey namespaced pra não
+      // colidir com um LH da Shopee.
+      const baseRows = [];
+      let latestSyncedAt = null;
+      let onlyShopee = true;
+      for (const snap of snapshotRows) {
+        const rows = snap.rows_json ?? [];
+        const isShopeeSnap = !snap.source || snap.source === "shopee";
+        if (isShopeeSnap) {
+          baseRows.push(...rows);
+        } else {
+          onlyShopee = false;
+          const label = snap.summary_json?.clientName || snap.source;
+          for (const r of rows) {
+            baseRows.push(
+              r.rowKey
+                ? r
+                : { ...r, cliente: r.cliente ?? label, rowKey: `sheet:${snap.source}:${r.lh}`, source: "planilha" },
+            );
+          }
+        }
+        if (snap.synced_at && (!latestSyncedAt || snap.synced_at > latestSyncedAt)) {
+          latestSyncedAt = snap.synced_at;
+        }
+      }
+
+      // Summary: Shopee-only → byte-idêntico (summary_json da Shopee). Multi-fonte
+      // → recomputa sobre as linhas mescladas.
+      const shopeeSnap = snapshotRows.find((s) => !s.source || s.source === "shopee");
+      const baseSummary = onlyShopee ? (shopeeSnap?.summary_json ?? emptySummary) : buildSheetSummary(baseRows);
+
       const unified = buildUnifiedMonitor({
         baseRows,
         systemRows,
         reservaRows,
-        baseSummary: snapshot.summary_json ?? emptySummary,
+        baseSummary,
         openLhSet,
         allocByLh,
         now,
@@ -1081,7 +1116,7 @@ export async function resolveSheetMonitorResponse(request) {
           meta: {
             correlationId,
             sheetConfigured: true,
-            cachedAt: snapshot.synced_at,
+            cachedAt: latestSyncedAt,
           },
         },
       };
