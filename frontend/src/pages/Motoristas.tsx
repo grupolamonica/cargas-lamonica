@@ -46,6 +46,7 @@ import { ExternalValidationPill } from "@/components/ExternalValidationPill";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
 import { AutoApproveAngelliraCard } from "@/components/operator/AutoApproveAngelliraCard";
+import { CadastrosComErroPanel } from "@/components/operator/CadastrosComErroPanel";
 import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
 import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
 import TorreRankingCard from "@/components/operator/TorreRankingCard";
@@ -829,6 +830,8 @@ const Motoristas = () => {
   const [pendentesSearch, setPendentesSearch] = useState("");
   const deferredPendentesSearch = useDeferredValue(pendentesSearch.trim());
   const [pendentesPage, setPendentesPage] = useState(1);
+  // DC-196: sub-abas dentro de Pendentes — "revisao" (fila normal) | "erro" (falhas no cadastro externo).
+  const [pendentesSubTab, setPendentesSubTab] = useState<"revisao" | "erro">("revisao");
   // Ordenação (DC-197): coluna + direção; server-side (a lista é paginada no backend).
   type PendentesSortCol = "nome" | "placa" | "enviado" | "status";
   const [pendentesSort, setPendentesSort] = useState<PendentesSortCol>("enviado");
@@ -1220,6 +1223,38 @@ const Motoristas = () => {
         ) : mainTab === "pendentes" ? (
           <>
             <AutoApproveAngelliraCard />
+            {/* DC-196: sub-abas — Pendentes de revisão | Com erro */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPendentesSubTab("revisao")}
+                className={cn(
+                  "rounded-full px-4 py-2 text-sm font-semibold transition-colors",
+                  pendentesSubTab === "revisao"
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "bg-muted/50 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                Pendentes de revisão
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendentesSubTab("erro")}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors",
+                  pendentesSubTab === "erro"
+                    ? "bg-rose-600 text-white shadow-sm"
+                    : "bg-muted/50 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <AlertTriangle className="h-3.5 w-3.5" /> Com erro
+              </button>
+            </div>
+
+            {pendentesSubTab === "erro" && <CadastrosComErroPanel />}
+
+            {pendentesSubTab === "revisao" && (
+              <>
             {/* Pendentes section */}
             <section className="admin-panel overflow-hidden p-5 lg:p-6">
               <div className="flex flex-wrap items-center justify-between gap-4">
@@ -1679,6 +1714,8 @@ const Motoristas = () => {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
+              </>
+            )}
           </>
         ) : (
           <>
