@@ -16,6 +16,8 @@ export { detachClienteRota } from "./use-cases/detach-cliente-rota.js";
 export { listClienteRotas } from "./use-cases/list-cliente-rotas.js";
 export { createOperatorRoute } from "./use-cases/create-route.js";
 export { updateOperatorRoute } from "./use-cases/update-route.js";
+export { saveRouteTrecho } from "./use-cases/save-route-trecho.js";
+export { lookupCargoByCodigoViagem } from "./use-cases/lookup-cargo-by-codigo-viagem.js";
 export { fetchOperatorDashboardReadModel, fetchDriverLoadsReadModel, fetchDriverLoadFacets } from "./use-cases/dashboard-read-model.js";
 export { getHealthSnapshot } from "./use-cases/health-snapshot.js";
 export { redactExpiredPublicLeadPii } from "./use-cases/redact-public-lead-pii.js";

@@ -1,20 +1,27 @@
 import { useEffect, useState } from "react";
-import { Loader2, X } from "lucide-react";
+import { Loader2, Plus, Trash2, X } from "lucide-react";
 import { VEHICLE_PROFILE_OPTIONS, normalizeVehicleProfile, EIXOS_OPTIONS } from "@/lib/vehicleProfiles";
 import { CitySelector } from "@/components/CitySelector";
+
+// Uma tarifa = combinação (perfil + eixos) com valor/bônus próprios. `key` é
+// só um id local pra renderização/edição das linhas (não vai pro backend).
+export interface RouteTarifaFormRow {
+  key: string;
+  perfil: string;
+  eixos: number;
+  valor: string;
+  bonus: string;
+  bonus_exigencias: string;
+}
 
 export interface RouteFormData {
   origem: string;
   destino: string;
   distancia_km: string;
   tempo_estimado_horas: string;
-  perfil_padrao: string;
-  eixos: number;
-  valor_padrao: string;
-  bonus_padrao: string;
-  bonus_exigencias: string;
   ativa: boolean;
   cliente_id: string | null;
+  tarifas: RouteTarifaFormRow[];
 }
 
 export interface ClienteOption {
@@ -31,19 +38,29 @@ interface RouteModalProps {
   clientes: ClienteOption[];
 }
 
-const emptyForm: RouteFormData = {
-  origem: "",
-  destino: "",
-  distancia_km: "",
-  tempo_estimado_horas: "",
-  perfil_padrao: "CARRETA",
-  eixos: 0,
-  valor_padrao: "",
-  bonus_padrao: "",
-  bonus_exigencias: "",
-  ativa: true,
-  cliente_id: null,
-};
+function makeTarifaRow(overrides: Partial<RouteTarifaFormRow> = {}): RouteTarifaFormRow {
+  return {
+    key: crypto.randomUUID(),
+    perfil: "CARRETA",
+    eixos: 0,
+    valor: "",
+    bonus: "",
+    bonus_exigencias: "",
+    ...overrides,
+  };
+}
+
+function emptyForm(): RouteFormData {
+  return {
+    origem: "",
+    destino: "",
+    distancia_km: "",
+    tempo_estimado_horas: "",
+    ativa: true,
+    cliente_id: null,
+    tarifas: [makeTarifaRow()],
+  };
+}
 
 const RouteModal = ({
   open,
@@ -61,14 +78,22 @@ const RouteModal = ({
       return;
     }
 
-    setForm(
-      initialData
-        ? {
-            ...initialData,
-            perfil_padrao: normalizeVehicleProfile(initialData.perfil_padrao),
-          }
-        : emptyForm,
-    );
+    if (initialData) {
+      setForm({
+        ...initialData,
+        tarifas:
+          initialData.tarifas.length > 0
+            ? initialData.tarifas.map((tarifa) => ({
+                ...tarifa,
+                key: tarifa.key || crypto.randomUUID(),
+                perfil: normalizeVehicleProfile(tarifa.perfil),
+              }))
+            : [makeTarifaRow()],
+      });
+      return;
+    }
+
+    setForm(emptyForm());
   }, [initialData, open]);
 
   if (!open) {
@@ -78,8 +103,37 @@ const RouteModal = ({
   const inputClass =
     "w-full rounded-lg border border-border bg-secondary px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground transition-all duration-200 focus:bg-card focus:outline-none focus:ring-2 focus:ring-ring";
 
+  // (perfil + eixos) é a identidade da tarifa; duas linhas iguais são ambíguas.
+  const dedupeKeys = form.tarifas.map((tarifa) => `${normalizeVehicleProfile(tarifa.perfil)}|${tarifa.eixos}`);
+  const hasDuplicateTarifa = new Set(dedupeKeys).size !== dedupeKeys.length;
+
+  const updateTarifa = (key: string, patch: Partial<RouteTarifaFormRow>) => {
+    setForm((current) => ({
+      ...current,
+      tarifas: current.tarifas.map((tarifa) => (tarifa.key === key ? { ...tarifa, ...patch } : tarifa)),
+    }));
+  };
+
+  const addTarifa = () => {
+    setForm((current) => ({ ...current, tarifas: [...current.tarifas, makeTarifaRow()] }));
+  };
+
+  const removeTarifa = (key: string) => {
+    setForm((current) => ({
+      ...current,
+      // Sempre mantém ao menos uma linha — a rota precisa de pelo menos uma tarifa.
+      tarifas:
+        current.tarifas.length <= 1
+          ? current.tarifas
+          : current.tarifas.filter((tarifa) => tarifa.key !== key),
+    }));
+  };
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (hasDuplicateTarifa) {
+      return;
+    }
     setSaving(true);
 
     try {
@@ -98,7 +152,7 @@ const RouteModal = ({
         aria-label={initialData ? "Editar rota padrão" : "Cadastrar nova rota"}
         onClick={(event) => event.stopPropagation()}
         onSubmit={(event) => void handleSubmit(event)}
-        className="relative max-h-[92vh] w-full max-w-[720px] overflow-y-auto rounded-2xl bg-card shadow-elevated animate-slide-up"
+        className="relative max-h-[92vh] w-full max-w-[760px] overflow-y-auto rounded-2xl bg-card shadow-elevated animate-slide-up"
       >
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
           <div>
@@ -106,7 +160,7 @@ const RouteModal = ({
               {initialData ? "Editar rota padrão" : "Cadastrar nova rota"}
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Defina origem, destino, métricas e os valores padrão que o operador quer usar nessa rota.
+              Defina o trecho e cadastre um valor/bônus para cada tipo de veículo que roda nele.
             </p>
           </div>
 
@@ -177,9 +231,7 @@ const RouteModal = ({
             <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Cliente</label>
             <select
               value={form.cliente_id ?? ""}
-              onChange={(event) =>
-                setForm({ ...form, cliente_id: event.target.value || null })
-              }
+              onChange={(event) => setForm({ ...form, cliente_id: event.target.value || null })}
               className={`${inputClass} cursor-pointer`}
             >
               <option value="">Sem cliente vinculado</option>
@@ -190,86 +242,121 @@ const RouteModal = ({
               ))}
             </select>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              Vincule esta rota a um embarcador. Cada rota pode ser associada a um cliente — ao selecionar um novo, a rota é transferida.
+              Cada rota pode ser associada a um cliente — ao selecionar um novo, a rota é transferida.
             </p>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Perfil do veículo *</label>
-              <select
-                value={form.perfil_padrao}
-                onChange={(event) => setForm({ ...form, perfil_padrao: event.target.value })}
+          {/* ── Tarifas por veículo ─────────────────────────────────────── */}
+          <div className="rounded-2xl border border-primary/12 bg-primary/[0.03] px-4 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary/70">Tarifas por veículo</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Um valor e bônus para cada Perfil + Eixos que roda neste trecho.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={addTarifa}
                 disabled={!supportsCatalogFields}
-                className={`${inputClass} cursor-pointer`}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-semibold text-primary transition-colors duration-200 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {VEHICLE_PROFILE_OPTIONS.map((routeProfile) => (
-                  <option key={routeProfile.value} value={routeProfile.value}>
-                    {routeProfile.label}
-                  </option>
-                ))}
-              </select>
+                <Plus className="h-3.5 w-3.5" />
+                Adicionar veículo
+              </button>
             </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Eixos</label>
-              <select
-                value={form.eixos}
-                onChange={(event) => setForm({ ...form, eixos: Number(event.target.value) })}
-                disabled={!supportsCatalogFields}
-                className={`${inputClass} cursor-pointer`}
-              >
-                {EIXOS_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
 
-          <div className="rounded-2xl border border-primary/12 bg-primary/[0.04] px-4 py-2.5 text-xs text-muted-foreground">
-            Mesma origem e destino pode ter uma rota por veículo (perfil + eixos), cada uma com seu próprio valor e bônus.
-          </div>
+            <div className="mt-4 space-y-3">
+              {form.tarifas.map((tarifa) => (
+                <div
+                  key={tarifa.key}
+                  className="rounded-xl border border-border/70 bg-card/70 p-3"
+                >
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-[1.4fr_1fr_1fr_1fr_auto]">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Perfil *</label>
+                      <select
+                        value={tarifa.perfil}
+                        onChange={(event) => updateTarifa(tarifa.key, { perfil: event.target.value })}
+                        disabled={!supportsCatalogFields}
+                        className={`${inputClass} cursor-pointer`}
+                      >
+                        {VEHICLE_PROFILE_OPTIONS.map((routeProfile) => (
+                          <option key={routeProfile.value} value={routeProfile.value}>
+                            {routeProfile.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Eixos</label>
+                      <select
+                        value={tarifa.eixos}
+                        onChange={(event) => updateTarifa(tarifa.key, { eixos: Number(event.target.value) })}
+                        disabled={!supportsCatalogFields}
+                        className={`${inputClass} cursor-pointer`}
+                      >
+                        {EIXOS_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Valor (R$)</label>
+                      <input
+                        type="text"
+                        placeholder="Ex: 3200,00"
+                        value={tarifa.valor}
+                        onChange={(event) => updateTarifa(tarifa.key, { valor: event.target.value })}
+                        disabled={!supportsCatalogFields}
+                        className={inputClass}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Bônus (R$)</label>
+                      <input
+                        type="text"
+                        placeholder="Ex: 250,00"
+                        value={tarifa.bonus}
+                        onChange={(event) => updateTarifa(tarifa.key, { bonus: event.target.value })}
+                        disabled={!supportsCatalogFields}
+                        className={inputClass}
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <button
+                        type="button"
+                        onClick={() => removeTarifa(tarifa.key)}
+                        disabled={form.tarifas.length <= 1}
+                        aria-label="Remover veículo"
+                        className="inline-flex h-[42px] w-full items-center justify-center rounded-lg border border-border/70 text-muted-foreground transition-colors duration-200 hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40 sm:w-[42px]"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Valor padrão (R$)</label>
-              <input
-                type="text"
-                placeholder="Ex: 3200,00"
-                value={form.valor_padrao}
-                onChange={(event) => setForm({ ...form, valor_padrao: event.target.value })}
-                disabled={!supportsCatalogFields}
-                className={inputClass}
-              />
+                  <div className="mt-2">
+                    <input
+                      type="text"
+                      placeholder="Regras para liberar o bônus (opcional)"
+                      value={tarifa.bonus_exigencias}
+                      onChange={(event) => updateTarifa(tarifa.key, { bonus_exigencias: event.target.value })}
+                      disabled={!supportsCatalogFields}
+                      className={`${inputClass} text-xs`}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Bônus padrão (R$)</label>
-              <input
-                type="text"
-                placeholder="Ex: 250,00"
-                value={form.bonus_padrao}
-                onChange={(event) => setForm({ ...form, bonus_padrao: event.target.value })}
-                disabled={!supportsCatalogFields}
-                className={inputClass}
-              />
-            </div>
-          </div>
 
-          <div className="admin-accent-tint rounded-2xl border px-4 py-4 shadow-[0_16px_28px_-24px_hsl(224_94%_37%/0.25)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary/70">Regras para liberar o bônus</p>
-            <h3 className="mt-2 text-sm font-semibold text-foreground">Explique o que o motorista precisa cumprir</h3>
-            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              Escreva uma regra por linha. Esse texto vai aparecer em destaque na especificação da carga.
-            </p>
-            <textarea
-              value={form.bonus_exigencias}
-              onChange={(event) => setForm({ ...form, bonus_exigencias: event.target.value })}
-              disabled={!supportsCatalogFields}
-              rows={5}
-              placeholder={"Ex: Entregar dentro da janela acordada\nChecklist e comprovante enviados\nSeguir todas as normas operacionais"}
-              className="mt-4 min-h-[132px] w-full resize-y rounded-lg border border-border bg-secondary px-3 py-3 text-sm text-foreground placeholder:text-muted-foreground transition-all duration-200 focus:bg-card focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
-            />
+            {hasDuplicateTarifa ? (
+              <p className="mt-3 text-xs font-medium text-destructive">
+                Há tarifas repetidas (mesmo perfil e nº de eixos). Cada combinação só pode aparecer uma vez.
+              </p>
+            ) : null}
           </div>
 
           <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/70 bg-secondary/40 px-4 py-3">
@@ -302,7 +389,7 @@ const RouteModal = ({
           </button>
           <button
             type="submit"
-            disabled={saving}
+            disabled={saving || hasDuplicateTarifa}
             className="gradient-blue inline-flex cursor-pointer items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-blue transition-all duration-200 hover:-translate-y-0.5 hover:shadow-elevated disabled:cursor-not-allowed disabled:opacity-70"
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

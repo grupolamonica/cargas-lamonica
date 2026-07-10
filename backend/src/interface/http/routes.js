@@ -77,6 +77,8 @@ import {
   resolveUpdateOperatorClienteResponse,
   resolveUpdateOperatorDriverProfileResponse,
   resolveUpdateOperatorRouteResponse,
+  resolveSaveRouteTrechoResponse,
+  resolveLookupCargoByCodigoViagemResponse,
   resolveDriverSponsorClicksResponse,
   resolveOperatorOverviewDigestResponse,
   resolveOperatorCadastrosPendentesResponse,
@@ -388,6 +390,8 @@ export function registerRoutes(app) {
   // /import deve ser registrada antes de /:cargoId para Express não tratar "import" como id.
   router.post("/api/operator/cargas/import", wrap(resolveImportOperatorCargasResponse));
   router.get("/api/operator/cargas", wrap(resolveOperatorCargoListReadModelResponse));
+  // Lookup por código de viagem (segmento fixo antes de :cargoId).
+  router.get("/api/operator/cargas/lookup/codigo-viagem", wrap(resolveLookupCargoByCodigoViagemResponse));
   router.post("/api/operator/cargas", wrap(resolveCreateOperatorCargoResponse));
   router.patch("/api/operator/cargas/:cargoId", wrap(resolveUpdateOperatorCargoResponse));
   router.delete("/api/operator/cargas/:cargoId", wrap(resolveDeleteOperatorCargoResponse));
@@ -408,6 +412,8 @@ export function registerRoutes(app) {
   router.get("/api/operator/routes", wrap(resolveOperatorRoutesListReadModelResponse));
   router.post("/api/operator/routes", wrap(resolveCreateOperatorRouteResponse));
   router.patch("/api/operator/routes/:routeId", wrap(resolveUpdateOperatorRouteResponse));
+  // Salvar trecho com múltiplas tarifas por veículo numa operação (batch).
+  router.put("/api/operator/routes/trecho", wrap(resolveSaveRouteTrechoResponse));
 
   // Cargas casadas (pacote de cargas) — Phase 10
   // CRITICAL T-02-07: rotas com sub-segmentos fixos (reorder/cargas/publish/cancel)

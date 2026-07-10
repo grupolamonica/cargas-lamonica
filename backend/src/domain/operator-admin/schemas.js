@@ -122,6 +122,8 @@ const cargoMutationBaseShape = {
   duracao_horas: optionalNumeric,
   sheet_data_carregamento: optionalTrimmedString,
   sheet_data_descarga: optionalTrimmedString,
+  // Código de viagem único (opcional). null quando vazio.
+  codigo_viagem: optionalTrimmedString,
 };
 
 export const cargoCreateMutationSchema = z
@@ -195,6 +197,31 @@ export const routeMutationSchema = z
     bonus_exigencias: optionalTrimmedString,
     ativa: z.boolean().default(true),
     observacoes: optionalTrimmedString,
+  })
+  .strict();
+
+// Salvar trecho com N tarifas por veículo numa operação. Cada tarifa =
+// (perfil, eixos) com valor/bônus. As métricas (distância/tempo) são do trecho.
+const routeTarifaItemSchema = z
+  .object({
+    perfil: canonicalVehicleProfileSchema,
+    eixos: routeEixosSchema,
+    valor: optionalNumeric,
+    bonus: optionalNumeric,
+    bonus_exigencias: optionalTrimmedString,
+  })
+  .strict();
+
+export const routeTrechoMutationSchema = z
+  .object({
+    origem: z.string().trim().min(2).max(180),
+    destino: z.string().trim().min(2).max(180),
+    distancia_km: optionalNumeric,
+    duracao_horas: optionalNumeric,
+    tempo_estimado_horas: optionalNumeric,
+    ativa: z.boolean().default(true),
+    observacoes: optionalTrimmedString,
+    tarifas: z.array(routeTarifaItemSchema).min(1, "Informe ao menos uma tarifa (perfil + valor)."),
   })
   .strict();
 

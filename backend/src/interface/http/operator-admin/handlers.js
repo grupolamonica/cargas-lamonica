@@ -23,13 +23,14 @@ import {
   clienteMutationSchema,
   driverProfileUpdateMutationSchema,
   routeMutationSchema,
+  routeTrechoMutationSchema,
 } from "../../../domain/operator-admin/schemas.js";
 import {
   buildInternalErrorResponse,
   buildServiceErrorResponse,
 } from "../error-mapping.js";
 import { zodErrorToHttpResponse } from "../schemas/common.js";
-import { cargoIdParamsSchema } from "../schemas/cargo-schemas.js";
+import { cargoIdParamsSchema, cargoCodigoViagemQuerySchema } from "../schemas/cargo-schemas.js";
 import {
   attachClienteRotaBodySchema,
   clienteIdParamsSchema,
@@ -49,8 +50,10 @@ import {
   detachClienteRota,
   fetchOperatorDashboardReadModel,
   listClienteRotas,
+  lookupCargoByCodigoViagem,
   redactExpiredPublicLeadPii,
   revalidateAllVehiclesAngellira,
+  saveRouteTrecho,
   updateOperatorCargo,
   updateOperatorCliente,
   updateOperatorRoute,
@@ -239,6 +242,15 @@ async function withOperatorSession(request, action, optionsOrExecute, maybeExecu
 
     return toErrorResponse(error, correlationId);
   }
+}
+
+export async function resolveLookupCargoByCodigoViagemResponse(request) {
+  return withOperatorSession(request, "lookup-cargo-codigo-viagem", async ({ correlationId }) => {
+    const { codigo_viagem } = cargoCodigoViagemQuerySchema.parse({
+      codigo_viagem: getQueryParam(request, "codigo_viagem"),
+    });
+    return lookupCargoByCodigoViagem({ codigoViagem: codigo_viagem, correlationId });
+  });
 }
 
 export async function resolveCreateOperatorCargoResponse(request) {
@@ -563,6 +575,26 @@ export async function resolveUpdateOperatorRouteResponse(request) {
       requestIp,
       correlationId,
     });
+    },
+  );
+}
+
+export async function resolveSaveRouteTrechoResponse(request) {
+  return withOperatorSession(
+    request,
+    "save-route-trecho",
+    {
+      requiredPermission: "routes:write",
+      forbiddenMessage: "Somente operadores com acesso avancado podem alterar rotas padrao.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const payload = routeTrechoMutationSchema.parse(await parseJsonBody(request));
+      return saveRouteTrecho({
+        operatorId,
+        payload,
+        requestIp,
+        correlationId,
+      });
     },
   );
 }

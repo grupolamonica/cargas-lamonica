@@ -32,6 +32,8 @@ export interface OperatorCargoPayload {
   duracao_horas: number | null;
   sheet_data_carregamento: string | null;
   sheet_data_descarga: string | null;
+  /** Código único de viagem (opcional). null quando vazio. */
+  codigo_viagem: string | null;
 }
 
 export interface CustomBadgeItem {
@@ -104,6 +106,30 @@ export async function updateOperatorCargo(cargoId: string, payload: OperatorCarg
     method: "PATCH",
     accessToken,
     body: payload,
+  });
+}
+
+export interface CargoCodigoViagemLookup {
+  exists: boolean;
+  cargo: {
+    id: string;
+    origem: string;
+    destino: string;
+    data: string | null;
+    horario: string | null;
+    status: string;
+    perfil: string | null;
+    codigo_viagem: string | null;
+  } | null;
+  meta: { correlationId: string };
+}
+
+// Consulta se um código de viagem já existe (para o fluxo de duplicata ao criar carga).
+export async function lookupCargoByCodigoViagem(codigoViagem: string) {
+  const accessToken = await getOperatorAccessToken();
+  const qs = new URLSearchParams({ codigo_viagem: codigoViagem }).toString();
+  return requestJson<CargoCodigoViagemLookup>(`/api/operator/cargas/lookup/codigo-viagem?${qs}`, {
+    accessToken,
   });
 }
 
@@ -320,6 +346,48 @@ export async function updateOperatorRoute(routeId: string, payload: OperatorRout
   const accessToken = await getOperatorAccessToken();
   return requestJson<MutationResponse>(`/api/operator/routes/${routeId}`, {
     method: "PATCH",
+    accessToken,
+    body: payload,
+  });
+}
+
+// Uma tarifa por veículo (perfil + eixos) com valor/bônus próprios.
+export interface RouteTarifaInput {
+  perfil: string;
+  eixos: number;
+  valor: number | null;
+  bonus: number | null;
+  bonus_exigencias: string | null;
+}
+
+// Salva um trecho com N tarifas numa operação (batch). Substitui os N
+// create/update por rota individual — o backend faz upsert das tarifas
+// presentes e remove as que saíram da lista, tudo numa transação.
+export interface RouteTrechoPayload {
+  origem: string;
+  destino: string;
+  distancia_km: number | null;
+  duracao_horas: number | null;
+  tempo_estimado_horas: number | null;
+  ativa: boolean;
+  observacoes: string | null;
+  tarifas: RouteTarifaInput[];
+}
+
+interface RouteTrechoResponse {
+  ok: boolean;
+  rota_id: string | null;
+  tarifasCount: number;
+  deletedCount: number;
+  cascadedCargaCount: number;
+  warnings?: string[];
+  meta: { correlationId: string };
+}
+
+export async function saveRouteTrecho(payload: RouteTrechoPayload) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<RouteTrechoResponse>("/api/operator/routes/trecho", {
+    method: "PUT",
     accessToken,
     body: payload,
   });

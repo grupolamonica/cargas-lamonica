@@ -91,7 +91,7 @@ describe("ManageRoutes", () => {
   it("exibe a tela em modo somente leitura para operador intermediario", () => {
     render(<ManageRoutes />);
 
-    expect(screen.getByText("Rotas com distância, tempo estimado e valores de referência")).toBeInTheDocument();
+    expect(screen.getByText("Rotas com distância, tempo estimado e tarifa por veículo")).toBeInTheDocument();
     const readOnlyBadges = screen.getAllByText(/somente leitura/i);
     expect(readOnlyBadges.length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByRole("button", { name: /Nova rota/i })).not.toBeInTheDocument();

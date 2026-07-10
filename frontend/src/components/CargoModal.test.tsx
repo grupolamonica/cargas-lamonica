@@ -44,10 +44,30 @@ describe("CargoModal", () => {
       target: { value: route.route_key },
     });
 
-    expect(screen.getByDisplayValue("Carreta")).toBeInTheDocument();
+    // Com o trecho tendo veículo cadastrado, o Perfil/Eixos deixam de aparecer:
+    // o principal passa a ser o seletor "Veículo da rota". Valor/bônus seguem visíveis.
+    expect(screen.getByText("Veículo da rota")).toBeInTheDocument();
+    expect(screen.queryByText("Perfil do Caminhão *")).not.toBeInTheDocument();
     expect(screen.getByDisplayValue("14000")).toBeInTheDocument();
     expect(screen.getByDisplayValue("500")).toBeInTheDocument();
     expect(screen.getByText("Rota atribuída")).toBeInTheDocument();
+  });
+
+  it("permite informar o código da viagem", () => {
+    const onSave = vi.fn();
+    render(
+      <CargoModal
+        open
+        onClose={vi.fn()}
+        onSave={onSave}
+        clientes={[{ id: "cliente-1", nome: "Cliente Teste" }]}
+        routes={[route]}
+      />,
+    );
+
+    const codigo = screen.getByPlaceholderText("Ex: LT-2026-001");
+    fireEvent.change(codigo, { target: { value: "LT-2026-XYZ" } });
+    expect(screen.getByDisplayValue("LT-2026-XYZ")).toBeInTheDocument();
   });
 
   it("atribui automaticamente a rota pelo trecho + veiculo (origem/destino/perfil)", () => {

@@ -107,11 +107,14 @@ const schemaSql = `
     recurrence_interval_days integer,
     recurrence_parent_id uuid,
     lh_manual text,
+    codigo_viagem text,
     version integer NOT NULL DEFAULT 0,
     created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
   );
+
+  CREATE UNIQUE INDEX ux_cargas_codigo_viagem ON public.cargas (codigo_viagem);
 
   CREATE TABLE public.monitor_reservas (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -652,12 +655,13 @@ export async function seedRoute(overrides = {}) {
         duracao_horas,
         tempo_estimado_horas,
         perfil_padrao,
+        eixos,
         valor_padrao,
         bonus_padrao,
         ativa,
         observacoes
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     `,
     [
       id,
@@ -669,6 +673,7 @@ export async function seedRoute(overrides = {}) {
       overrides.duracao_horas ?? 24,
       overrides.tempo_estimado_horas ?? 24,
       overrides.perfil_padrao ?? "CARRETA",
+      overrides.eixos ?? 0,
       overrides.valor_padrao ?? 7200,
       overrides.bonus_padrao ?? 300,
       overrides.ativa ?? true,
