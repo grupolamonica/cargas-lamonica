@@ -92,6 +92,37 @@ export function formatDateOnly(value: DateDisplayInput, fallback = "A confirmar"
 }
 
 /**
+ * Rótulo de agenda (Coleta/Entrega) exibido em cargas/monitor.
+ *
+ * Cargas de planilha guardam um rótulo já amigável em sheet_data_* (ex.
+ * "11/07 08:00") — devolvemos inalterado. Cargas adicionadas manualmente guardam
+ * o valor cru do <input type="datetime-local"> ("2026-07-11T12:00"); nesse caso
+ * formatamos os componentes direto para "DD-MM-AAAA HH:mm", SEM converter para
+ * instante/fuso (o valor é a hora de parede escolhida pelo operador — parseISO +
+ * fuso deslocaria a hora).
+ */
+export function formatScheduleLabel(value: DateDisplayInput, fallback = "") {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const trimmedValue = value.trim();
+  if (!trimmedValue || PLACEHOLDER_VALUES.has(trimmedValue.toLowerCase())) {
+    return fallback;
+  }
+
+  // ISO datetime-local ("YYYY-MM-DDTHH:mm" ou "YYYY-MM-DD HH:mm") → formata direto.
+  const isoLocal = trimmedValue.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+  if (isoLocal) {
+    const [, year, month, day, hour, minute] = isoLocal;
+    return `${day}-${month}-${year} ${hour}:${minute}`;
+  }
+
+  // Já é um rótulo amigável (planilha) — devolve como está.
+  return trimmedValue;
+}
+
+/**
  * Parse a date-only string (e.g. "2025-12-31") as local time noon,
  * preventing UTC-negative timezone display as the previous day.
  */
