@@ -37,7 +37,10 @@ export function normalizeRouteLocation(value) {
 }
 
 export function stripRouteStateSuffix(value) {
-  return value.replace(/\s*\/\s*[a-z]{2}$/i, "").trim();
+  // Aceita sufixo de UF tanto por barra ("/SP") quanto por hífen ("-SP", " - PE").
+  // A planilha Nestlé usa hífen; sem isso "cordeiropolis-sp" nunca reduzia a
+  // "cordeiropolis" e não casava com a rota cadastrada ("CORDEIRÓPOLIS/SP").
+  return value.replace(/\s*[-/]\s*[a-z]{2}$/i, "").trim();
 }
 
 export function stripOperationalLocationSuffix(value) {
@@ -89,6 +92,29 @@ export function canonicalizeRouteLookupLocation(value) {
 
   if (/\bcamacari\b/.test(normalizedValue)) {
     return "camacari";
+  }
+
+  // Aliases de nome divergente entre a planilha do cliente e o cadastro de rota
+  // do operador (route_metrics_cache). Sem eles o match cai no fallback e a carga
+  // fica sem valor/rota.
+  // Cabo de Santo Agostinho — planilha Nestlé abrevia "STO", cadastro usa "SANTO".
+  if (/\b(?:sto|santo) agostinho\b/.test(normalizedValue)) {
+    return "cabo de santo agostinho";
+  }
+
+  // Nossa Senhora do Socorro/SE — cadastro abrevia "Nª SRA. DO SOCORRO".
+  if (/\bsocorro\b/.test(normalizedValue)) {
+    return "nossa senhora do socorro";
+  }
+
+  // São Bernardo do Campo — planilha "DO CAMPO", cadastro "DOS CAMPOS".
+  if (/\bsao bernardo d/.test(normalizedValue)) {
+    return "sao bernardo do campo";
+  }
+
+  // Maceió — a rota do catálogo traz sufixo "/AL - N EIXOS" que sobra no canônico.
+  if (/\bmaceio\b/.test(normalizedValue)) {
+    return "maceio";
   }
 
   return normalizedValue;
