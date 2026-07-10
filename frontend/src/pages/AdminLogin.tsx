@@ -10,6 +10,19 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Algo deu errado. Tente novamente.";
 }
 
+// Operadores internos usam @grupolamonica.com.br. Permite logar só com o usuário
+// (ex.: "evelin.silva") completando o domínio automaticamente. E-mail completo
+// (de qualquer domínio) continua funcionando — só completa quando não há "@".
+const DEFAULT_OPERATOR_EMAIL_DOMAIN = "grupolamonica.com.br";
+
+function normalizeLoginIdentifier(raw: string) {
+  const value = raw.trim().toLowerCase();
+  if (!value || value.includes("@")) {
+    return value;
+  }
+  return `${value}@${DEFAULT_OPERATOR_EMAIL_DOMAIN}`;
+}
+
 const AdminLogin = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -22,7 +35,8 @@ const AdminLogin = () => {
     setLoading(true);
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const loginEmail = normalizeLoginIdentifier(email);
+      const { error } = await supabase.auth.signInWithPassword({ email: loginEmail, password });
 
       if (error) {
         throw error;
@@ -76,15 +90,19 @@ const AdminLogin = () => {
 
             <form onSubmit={handleSubmit} className="relative mt-5 space-y-3.5 sm:mt-6 sm:space-y-4">
               <div className="space-y-1.5">
-                <label className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground">Email</label>
+                <label className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground">Usuário ou e-mail</label>
                 <div className="relative">
                   <Mail className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <input
-                    type="email"
+                    type="text"
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
-                    placeholder="operador@empresa.com"
+                    placeholder="evelin.silva"
                     required
+                    autoComplete="username"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                     className="admin-input-surface w-full rounded-2xl border py-3 pl-11 pr-4 text-sm outline-none transition-all duration-200 placeholder:text-muted-foreground focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
                   />
                 </div>
