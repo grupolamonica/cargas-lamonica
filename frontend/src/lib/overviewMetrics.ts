@@ -1,6 +1,7 @@
 import { differenceInHours } from "date-fns";
 
 import { buildLoadingDateTime } from "@/lib/estimatedTime";
+import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 
 const DRIVER_VISIBLE_LOAD_STATUSES = new Set(["OPEN", "RESERVED", "BOOKED"]);
 const ACTIVE_CLAIM_STATUSES = new Set(["WON_RESERVATION", "WAITLISTED", "PROMOTED", "CONFIRMED"]);
@@ -159,7 +160,7 @@ function buildActivityFeed(
         id: `cargo:${cargo.id}`,
         type: "load",
         title,
-        description: `${routeLabel} | Perfil ${cargo.perfil}`,
+        description: `${routeLabel} | Perfil ${cargo.perfil ? formatVehicleProfileLabel(cargo.perfil) : "—"}`,
         timestamp: cargo.updated_at || cargo.created_at,
         relativeTime: buildRelativeTimeLabel(cargo.updated_at || cargo.created_at, now),
       };

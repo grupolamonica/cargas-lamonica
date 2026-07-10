@@ -17,7 +17,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { ApiError, approveOperatorLoadLead, cancelOperatorLoadLead, createDirectAllocation, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type DirectAllocationPayload, type OperatorLeadGroup, type OperatorLeadPacoteMeta, type PublicLeadValidationSummary } from "@/services/loadClaims";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { VEHICLE_PROFILE_OPTIONS } from "@/lib/vehicleProfiles";
+import { VEHICLE_PROFILE_OPTIONS, formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 import { fetchOperatorClientes, fetchSheetMonitor, type SheetMonitorRow } from "@/services/readModels";
 
 interface SheetAllocation {
@@ -1167,7 +1167,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                       ) : null}
                       <LoadStatusBadge status={effectiveStatus} />
                       <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[0.6rem] font-semibold text-muted-foreground">
-                        {group.load.perfil}
+                        {formatVehicleProfileLabel(group.load.perfil)}
                       </span>
                       <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[0.6rem] font-semibold text-muted-foreground">
                         {group.queueCount} na fila

@@ -17,6 +17,7 @@ import DashboardHeader from "@/components/DashboardHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import PacoteFormModal from "@/components/operator/PacoteFormModal";
+import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 
 import {
   cancelPacote,
@@ -358,7 +359,7 @@ const PacoteDetails = () => {
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {c.cliente_nome ?? "Sem cliente"} ·{" "}
-                    {c.valor != null ? formatCurrency(c.valor) : "—"} · {c.perfil ?? "—"}
+                    {c.valor != null ? formatCurrency(c.valor) : "—"} · {c.perfil ? formatVehicleProfileLabel(c.perfil) : "—"}
                   </p>
                 </div>
                 <div className="flex flex-col items-end gap-1">

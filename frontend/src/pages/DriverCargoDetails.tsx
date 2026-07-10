@@ -12,6 +12,7 @@ import {
 import { toast } from "sonner";
 import type { CustomBadgeItem } from "@/services/operatorAdmin";
 import { getBadgeIcon } from "@/lib/badgeIcons";
+import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 import { Link, useParams } from "react-router-dom";
 
 import DriverClaimPanel, { type PreSubmitInterceptor } from "@/components/driver/DriverClaimPanel";
@@ -883,7 +884,7 @@ const DriverCargoDetails = () => {
               <DetailMetric icon={Clock3} label="Carregamento" value={loadingLabel} />
               <DetailMetric icon={Clock3} label="Descarga" value={unloadingLabel} />
               <DetailMetric icon={Package} label="Tempo estimado" value={estimatedTime} />
-              <DetailMetric icon={Truck} label="Tipo de veículo" value={cargo.perfil ? (cargo.eixos ? `${cargo.perfil} · ${cargo.eixos} eixos` : cargo.perfil) : "A confirmar"} />
+              <DetailMetric icon={Truck} label="Tipo de veículo" value={cargo.perfil ? (cargo.eixos ? `${formatVehicleProfileLabel(cargo.perfil)} · ${cargo.eixos} eixos` : formatVehicleProfileLabel(cargo.perfil)) : "A confirmar"} />
               <DetailMetric icon={MapPinned} label="Percurso recomendado" value={formatRouteMetric(cargo.distancia_km, "km")} />
             </CardContent>
           </Card>

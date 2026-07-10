@@ -19,7 +19,7 @@ import { resolveCargoPublicationReadiness } from "@/lib/loadPublication";
 import { normalizeOperatorCargoDate, normalizeOperatorCargoTime } from "@/lib/operatorCargoSchedule";
 import { useAuth } from "@/hooks/useAuth";
 import { canWriteMonetaryValues } from "@/lib/operatorAccess";
-import { VEHICLE_PROFILE_OPTIONS, normalizeVehicleProfile } from "@/lib/vehicleProfiles";
+import { VEHICLE_PROFILE_OPTIONS, normalizeVehicleProfile, formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 import {
   createOperatorCargo,
   deleteOperatorCargo,
@@ -1043,7 +1043,7 @@ const ManageCargas = () => {
                         <td className="whitespace-nowrap px-4 py-2 align-middle">
                           <div className="flex items-center gap-2">
                             <span className="inline-flex items-center rounded-lg bg-muted/60 px-2.5 py-1 text-xs font-semibold text-foreground">
-                              {publication.perfil || "—"}
+                              {publication.perfil ? formatVehicleProfileLabel(publication.perfil) : "—"}
                             </span>
                             {(cargo.distancia_km ?? 0) > 0 && (
                               <span className="text-xs text-muted-foreground">{cargo.distancia_km?.toFixed(0)} km</span>
@@ -1190,7 +1190,7 @@ const ManageCargas = () => {
                       <span>·</span>
                       <span>{displayTime}</span>
                       <span>·</span>
-                      <span>{publication.perfil || "Perfil pendente"}</span>
+                      <span>{publication.perfil ? formatVehicleProfileLabel(publication.perfil) : "Perfil pendente"}</span>
                       {paymentBreakdown.total !== null && (
                         <>
                           <span>·</span>

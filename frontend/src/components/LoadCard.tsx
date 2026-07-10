@@ -10,6 +10,7 @@ import DriverClaimPanel, {
   type PreSubmitInterceptor,
 } from "@/components/driver/DriverClaimPanel";
 import PacoteHeader from "@/components/load-card/PacoteHeader";
+import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 import type { PreCheckResponse } from "@/api/candidaturaApi";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -126,7 +127,8 @@ const LoadCard = memo(({
   const destinationLabel = destinoEstado ? `${safeDestinoCidade}, ${destinoEstado}` : safeDestinoCidade;
   const topRightLabel = safeClienteNome || "Cliente não informado";
   // Rotula o veículo com o nº de eixos quando informado (ex.: "Carreta · 6 eixos").
-  const vehicleLabel = eixos ? `${tipoVeiculo} · ${eixos} eixos` : tipoVeiculo;
+  const vehicleProfileLabel = formatVehicleProfileLabel(tipoVeiculo);
+  const vehicleLabel = eixos ? `${vehicleProfileLabel} · ${eixos} eixos` : vehicleProfileLabel;
   const loadingLabel = carregamentoLabel?.trim() || "A confirmar";
   const unloadingLabel = descargaLabel?.trim() || "A confirmar";
   const kmLabel = routeDistanceLabel || "A confirmar";
@@ -308,7 +310,7 @@ const LoadCard = memo(({
                       Veículo
                     </span>
                   </div>
-                  <p className="text-xs font-extrabold text-card-foreground">{pacoteMeta.perfil_uniforme}</p>
+                  <p className="text-xs font-extrabold text-card-foreground">{formatVehicleProfileLabel(pacoteMeta.perfil_uniforme)}</p>
                 </div>
               ) : null}
             </div>
@@ -330,7 +332,7 @@ const LoadCard = memo(({
                       Veículo
                     </p>
                     <p className="mt-2 text-[1.02rem] font-bold tracking-tight text-card-foreground">
-                      {pacoteMeta.perfil_uniforme}
+                      {formatVehicleProfileLabel(pacoteMeta.perfil_uniforme)}
                     </p>
                   </div>
                 ) : <div />}
