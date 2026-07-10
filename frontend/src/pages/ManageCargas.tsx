@@ -1284,6 +1284,10 @@ const ManageCargas = () => {
                 is_template: editingCargo.is_template,
                 is_recurring: editingCargo.is_recurring ?? false,
                 recurrence_interval_days: editingCargo.recurrence_interval_days ?? 1,
+                // Viagens de planilha (Shopee/Nestlé/futuras) já têm o LH em sheet_lh:
+                // ao editar, o Código da viagem vem preenchido com o código salvo ou,
+                // na ausência, com o próprio LH (source-agnostic).
+                codigo_viagem: editingCargo.codigo_viagem?.trim() || editingCargo.sheet_lh?.trim() || "",
                 sheet_data_carregamento: toIsoDatetimeLocal(editingCargo.sheet_data_carregamento),
                 sheet_data_descarga: toIsoDatetimeLocal(editingCargo.sheet_data_descarga),
               }

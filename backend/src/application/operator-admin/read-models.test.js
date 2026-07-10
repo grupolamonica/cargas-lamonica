@@ -79,6 +79,27 @@ describe("operator-admin read models", () => {
     expect(response.payload.meta.totalCount).toBe(1);
   });
 
+  it("expoe codigo_viagem na lista de cargas (contrato usado pelo Editar Carga)", async () => {
+    const cliente = await seedCliente({ nome: "Cliente Codigo Viagem" });
+
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Salvador / BA",
+      destino: "Aracaju / SE",
+      status: "OPEN",
+      codigo_viagem: "LT-READMODEL-1",
+    });
+
+    const response = await readModels.fetchOperatorCargoListReadModel({
+      query: { page: "1", pageSize: "10", status: "OPEN" },
+      correlationId: "corr-codigo-viagem",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const match = response.payload.items.find((item) => item.origem === "Salvador / BA");
+    expect(match?.codigo_viagem).toBe("LT-READMODEL-1");
+  });
+
   it("oculta cargas expiradas da visao padrao Todos, mas mantem acesso via filtro explicito", async () => {
     const cliente = await seedCliente({ nome: "Cliente Expiradas" });
 
