@@ -4,11 +4,12 @@ import { Lock, X } from "lucide-react";
 import {
   applyAssignableRouteToCargoDraft,
   applyRouteVehiclePricingToCargoDraft,
+  createRouteLookupKeys,
   findAssignableRouteByVehicle,
   getAssignableRouteLabel,
   type AssignableRouteOption,
 } from "@/lib/assignableRoutes";
-import { VEHICLE_PROFILE_OPTIONS, EIXOS_OPTIONS, normalizeVehicleProfile } from "@/lib/vehicleProfiles";
+import { VEHICLE_PROFILE_OPTIONS, EIXOS_OPTIONS, formatVehicleProfileLabel, normalizeVehicleProfile } from "@/lib/vehicleProfiles";
 import { CitySelector } from "@/components/CitySelector";
 
 interface CargoData {
@@ -157,6 +158,33 @@ const CargoModal = ({
   );
   const selectedRoute = selectableRoutes.find((route) => route.route_key === form.route_key) || autoMatchedRoute || null;
 
+  // Veículos (tarifas) cadastrados NESTE trecho — origem+destino da carga.
+  // Uma rota agora tem várias tarifas por (perfil + eixos); aqui o operador
+  // escolhe o veículo a partir do que a rota oferece.
+  const trechoVehicles = useMemo(() => {
+    if (!form.origem || !form.destino) {
+      return [];
+    }
+    const keys = new Set(createRouteLookupKeys(form.origem, form.destino));
+    return selectableRoutes
+      .filter(
+        (route) =>
+          route.perfil_padrao &&
+          createRouteLookupKeys(route.origem, route.destino).some((key) => keys.has(key)),
+      )
+      .sort(
+        (a, b) =>
+          (a.perfil_padrao || "").localeCompare(b.perfil_padrao || "") || (a.eixos ?? 0) - (b.eixos ?? 0),
+      );
+  }, [form.origem, form.destino, selectableRoutes]);
+
+  const selectedTrechoVehicleKey =
+    trechoVehicles.find(
+      (route) =>
+        normalizeVehicleProfile(route.perfil_padrao || "") === normalizeVehicleProfile(form.perfil) &&
+        (route.eixos ?? 0) === (form.eixos ?? 0),
+    )?.route_key ?? "";
+
   useEffect(() => {
     if (!autoMatchedRoute) {
       return;
@@ -229,6 +257,20 @@ const CargoModal = ({
         nextRoute,
       ),
     );
+  };
+
+  // Escolher o veículo pela rota: aplica perfil + eixos + valor + bônus da
+  // tarifa escolhida (ação explícita do operador — sobrescreve o preço atual).
+  const handleVehicleFromRouteChange = (routeKey: string) => {
+    if (!routeKey) {
+      return;
+    }
+    const chosen = trechoVehicles.find((route) => route.route_key === routeKey);
+    if (!chosen) {
+      return;
+    }
+    hasUserEditedValuesRef.current = false;
+    setForm((currentForm) => applyAssignableRouteToCargoDraft(currentForm, chosen));
   };
 
   const inputClass =
@@ -389,6 +431,31 @@ const CargoModal = ({
               />
             </div>
           </div>
+
+          {trechoVehicles.length > 0 ? (
+            <div className="rounded-2xl border border-primary/15 bg-primary/[0.04] px-4 py-3">
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-primary/70">
+                Veículo da rota
+              </label>
+              <select
+                value={selectedTrechoVehicleKey}
+                onChange={(event) => handleVehicleFromRouteChange(event.target.value)}
+                className={`${inputClass} cursor-pointer`}
+              >
+                <option value="">Escolher veículo cadastrado nesta rota…</option>
+                {trechoVehicles.map((route) => (
+                  <option key={route.id} value={route.route_key}>
+                    {formatVehicleProfileLabel(route.perfil_padrao)}
+                    {route.eixos ? ` · ${route.eixos} eixos` : ""}
+                    {route.valor_padrao !== null ? ` — ${formatRouteMoney(route.valor_padrao)}` : ""}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Escolha o tipo de veículo desta rota — preenche perfil, eixos, valor e bônus automaticamente.
+              </p>
+            </div>
+          ) : null}
 
           <div className="grid grid-cols-2 gap-4">
             <div>
