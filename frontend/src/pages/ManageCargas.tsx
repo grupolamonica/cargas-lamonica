@@ -24,6 +24,7 @@ import {
   createOperatorCargo,
   deleteOperatorCargo,
   duplicateOperatorCargo,
+  lookupCargoByCodigoViagem,
   syncOperatorCargasSheet,
   toggleOperatorCargoStatus,
   updateOperatorCargo,
@@ -53,6 +54,7 @@ interface CargoFormData {
   destino: string;
   perfil: string;
   eixos?: number;
+  codigo_viagem?: string;
   valor?: string;
   bonus?: string;
   bonus_exigencias?: string;
@@ -512,11 +514,39 @@ const ManageCargas = () => {
           : null,
         sheet_data_carregamento: autoAssignedCargo.sheet_data_carregamento?.trim() || null,
         sheet_data_descarga: autoAssignedCargo.sheet_data_descarga?.trim() || null,
+        codigo_viagem: autoAssignedCargo.codigo_viagem?.trim() || null,
       };
 
+      // Código de viagem é único. Ao CRIAR com um código que já existe, pergunta
+      // se o operador quer atualizar aquela viagem ou voltar e trocar o código.
+      let targetCargoId = editingCargo?.id ?? null;
+      let switchedToUpdate = false;
+      if (!editingCargo && payload.codigo_viagem) {
+        try {
+          const lookup = await lookupCargoByCodigoViagem(payload.codigo_viagem);
+          if (lookup.exists && lookup.cargo) {
+            const existing = lookup.cargo;
+            const wantsUpdate = confirmAction(
+              `Já existe uma carga com o código de viagem "${payload.codigo_viagem}" ` +
+                `(${existing.origem} → ${existing.destino}${existing.data ? `, ${existing.data}` : ""}).\n\n` +
+                `OK = ATUALIZAR essa viagem com os dados preenchidos agora.\n` +
+                `Cancelar = voltar e ALTERAR o código da viagem.`,
+            );
+            if (!wantsUpdate) {
+              return; // operador vai trocar o código
+            }
+            targetCargoId = existing.id;
+            switchedToUpdate = true;
+          }
+        } catch (lookupError) {
+          // Lookup falhou — segue para o save; o backend ainda valida a unicidade (409).
+          if (import.meta.env.DEV) console.warn("lookup codigo_viagem falhou", lookupError);
+        }
+      }
+
       const saveCargoMutation = async (nextPayload: typeof payload) => {
-        return editingCargo?.id
-          ? updateOperatorCargo(editingCargo.id, nextPayload)
+        return targetCargoId
+          ? updateOperatorCargo(targetCargoId, nextPayload)
           : createOperatorCargo(nextPayload);
       };
 
@@ -558,7 +588,7 @@ const ManageCargas = () => {
         toast.warning("A carga foi salva, mas as regras do bônus não foram persistidas porque essa coluna ainda não existe no banco.");
       }
 
-      toast.success(editingCargo ? "Carga atualizada!" : "Carga cadastrada!");
+      toast.success(editingCargo || switchedToUpdate ? "Carga atualizada!" : "Carga cadastrada!");
 
       setModalOpen(false);
       setEditingCargo(null);

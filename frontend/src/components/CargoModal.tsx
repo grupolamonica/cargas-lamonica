@@ -20,6 +20,7 @@ interface CargoData {
   destino: string;
   perfil: string;
   eixos?: number;
+  codigo_viagem?: string;
   valor?: string;
   bonus?: string;
   bonus_exigencias?: string;
@@ -103,6 +104,7 @@ const CargoModal = ({
     destino: "",
     perfil: "CARRETA",
     eixos: 0,
+    codigo_viagem: "",
     valor: "",
     bonus: "",
     bonus_exigencias: "",
@@ -131,6 +133,7 @@ const CargoModal = ({
       destino: "",
       perfil: "CARRETA",
       eixos: 0,
+      codigo_viagem: "",
       valor: "",
       bonus: "",
       bonus_exigencias: "",
@@ -390,6 +393,20 @@ const CargoModal = ({
           </div>
 
           <div>
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Código da viagem</label>
+            <input
+              type="text"
+              placeholder="Ex: LT-2026-001"
+              value={form.codigo_viagem || ""}
+              onChange={(event) => setForm({ ...form, codigo_viagem: event.target.value })}
+              className={inputClass}
+            />
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Código único da viagem. Se já existir no sistema, o sistema pergunta se quer atualizar aquela viagem ou trocar o código.
+            </p>
+          </div>
+
+          <div>
             <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Cliente</label>
             <select
               value={isClientLocked ? lockedClientId : form.cliente_id || ""}
@@ -457,35 +474,42 @@ const CargoModal = ({
             </div>
           ) : null}
 
+          {/* Perfil/Eixos só como fallback quando o trecho não tem veículo cadastrado.
+              Havendo "Veículo da rota", ele é o principal e define perfil + eixos. */}
+          {trechoVehicles.length === 0 ? (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Perfil do Caminhão *</label>
+                <select
+                  value={form.perfil}
+                  onChange={(event) => setForm({ ...form, perfil: event.target.value })}
+                  className={`${inputClass} cursor-pointer`}
+                >
+                  {VEHICLE_PROFILE_OPTIONS.map((perfil) => (
+                    <option key={perfil.value} value={perfil.value}>
+                      {perfil.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Eixos</label>
+                <select
+                  value={form.eixos ?? 0}
+                  onChange={(event) => setForm({ ...form, eixos: Number(event.target.value) })}
+                  className={`${inputClass} cursor-pointer`}
+                >
+                  {EIXOS_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          ) : null}
+
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Perfil do Caminhão *</label>
-              <select
-                value={form.perfil}
-                onChange={(event) => setForm({ ...form, perfil: event.target.value })}
-                className={`${inputClass} cursor-pointer`}
-              >
-                {VEHICLE_PROFILE_OPTIONS.map((perfil) => (
-                  <option key={perfil.value} value={perfil.value}>
-                    {perfil.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Eixos</label>
-              <select
-                value={form.eixos ?? 0}
-                onChange={(event) => setForm({ ...form, eixos: Number(event.target.value) })}
-                className={`${inputClass} cursor-pointer`}
-              >
-                {EIXOS_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
                 Valor da carga (R$)
