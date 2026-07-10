@@ -14,7 +14,7 @@ import {
   resolveAssignableRouteForCargo,
 } from "@/lib/assignableRoutes";
 import { formatCargoStatusLabel } from "@/lib/cargoStatus";
-import { formatDateOnly } from "@/lib/dateDisplay";
+import { formatDateOnly, formatScheduleLabel } from "@/lib/dateDisplay";
 import { resolveCargoPublicationReadiness } from "@/lib/loadPublication";
 import { normalizeOperatorCargoDate, normalizeOperatorCargoTime } from "@/lib/operatorCargoSchedule";
 import { useAuth } from "@/hooks/useAuth";
@@ -993,7 +993,7 @@ const ManageCargas = () => {
                         {/* Carregamento */}
                         <td className="whitespace-nowrap px-4 py-2 align-middle">
                           {cargo.sheet_data_carregamento ? (
-                            <p className="text-sm font-semibold text-foreground">{cargo.sheet_data_carregamento}</p>
+                            <p className="text-sm font-semibold text-foreground">{formatScheduleLabel(cargo.sheet_data_carregamento)}</p>
                           ) : (
                             <>
                               <p className="text-sm font-semibold text-foreground">{displayDate}</p>
@@ -1005,7 +1005,7 @@ const ManageCargas = () => {
                         {/* Descarga */}
                         <td className="whitespace-nowrap px-4 py-2 align-middle">
                           {cargo.sheet_data_descarga ? (
-                            <p className="text-sm font-semibold text-foreground">{cargo.sheet_data_descarga}</p>
+                            <p className="text-sm font-semibold text-foreground">{formatScheduleLabel(cargo.sheet_data_descarga)}</p>
                           ) : (
                             <span className="text-xs text-muted-foreground/60">A confirmar</span>
                           )}
