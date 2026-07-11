@@ -47,6 +47,7 @@ import DriverDetailModal, { type DriverDetailModalData } from "@/components/Driv
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
 import { AutoApproveAngelliraCard } from "@/components/operator/AutoApproveAngelliraCard";
 import { CadastrosComErroPanel } from "@/components/operator/CadastrosComErroPanel";
+import { CadastroBotsHealthBanner } from "@/components/operator/CadastroBotsHealthBanner";
 import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
 import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
 import TorreRankingCard from "@/components/operator/TorreRankingCard";
@@ -1222,6 +1223,7 @@ const Motoristas = () => {
           </section>
         ) : mainTab === "pendentes" ? (
           <>
+            <CadastroBotsHealthBanner />
             <AutoApproveAngelliraCard />
             {/* DC-196: sub-abas — Pendentes de revisão | Com erro */}
             <div className="flex flex-wrap items-center gap-2">

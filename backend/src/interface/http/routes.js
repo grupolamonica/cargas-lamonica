@@ -113,6 +113,7 @@ import {
 } from "./operator-admin/auto-approve-angellira.handlers.js";
 
 import { resolveOperatorCadastrosComErroResponse } from "./operator-admin/cadastros-com-erro.handlers.js";
+import { resolveOperatorCadastroBotsHealthResponse } from "./operator-admin/cadastro-bots-health.handlers.js";
 
 import {
   resolveDriverLoadFacetsResponse,
@@ -339,6 +340,7 @@ export function registerRoutes(app) {
   router.get("/api/operator/cadastros/rascunhos", wrap(resolveOperatorListDraftRegistrationsResponse));
   router.get("/api/operator/cadastros-pendentes", wrap(resolveOperatorCadastrosPendentesResponse));
   router.get("/api/operator/cadastros-com-erro", wrap(resolveOperatorCadastrosComErroResponse));
+  router.get("/api/operator/cadastro-bots/health", wrap(resolveOperatorCadastroBotsHealthResponse));
   // Auto-aprovação por vigência no Angellira (rotas fixas antes das :id)
   router.get("/api/operator/settings/auto-approve-angellira", wrap(resolveOperatorAutoApproveAngelliraGetResponse));
   router.put("/api/operator/settings/auto-approve-angellira", wrap(resolveOperatorAutoApproveAngelliraPutResponse));

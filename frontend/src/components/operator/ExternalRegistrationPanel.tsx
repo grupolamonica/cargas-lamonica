@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronRight,
   Info,
+  KeyRound,
   Loader2,
   PlayCircle,
   RefreshCw,
@@ -29,6 +30,7 @@ import {
   type AngelliraJobStep,
   type ExternalRegistrationJob,
 } from "@/services/readModels";
+import { refreshAspxSession } from "@/services/aspxAdmin";
 
 type Props = {
   cadastroId: string;
@@ -76,14 +78,17 @@ const SPX_ERROR_LABELS: Record<string, { label: string; hint: string }> = {
   SPX_PIPELINE_UNEXPECTED:   { label: "Erro inesperado no SPX",            hint: "Erro interno no pipeline SPX. Verifique os logs e tente novamente." },
 };
 
-function getAngelliraErrorInfo(code?: string) {
+// Códigos mapeados têm hint curado; para NÃO-mapeados não inventa hint genérico
+// — a mensagem pt-BR do backend (sempre presente) é a fonte da verdade e já é
+// renderizada abaixo, evitando "Consulte os logs" quando há causa específica.
+function getAngelliraErrorInfo(code?: string): { label: string; hint: string | null } | null {
   if (!code) return null;
-  return ANGELLIRA_ERROR_LABELS[code] ?? { label: code, hint: "Consulte os logs para mais detalhes." };
+  return ANGELLIRA_ERROR_LABELS[code] ?? { label: code, hint: null };
 }
 
-function getSpxErrorInfo(code?: string) {
+function getSpxErrorInfo(code?: string): { label: string; hint: string | null } | null {
   if (!code) return null;
-  return SPX_ERROR_LABELS[code] ?? { label: code, hint: "Consulte os logs para mais detalhes." };
+  return SPX_ERROR_LABELS[code] ?? { label: code, hint: null };
 }
 
 /**
@@ -212,8 +217,36 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
     onError: (err: Error) => toast.error(err.message || "Falha ao verificar SPX."),
   });
 
+  // B2 (DC-222 AC5): renovar a sessão SPX na hora, sem sair da tela do cadastro.
+  const refreshSpxSessionMutation = useMutation({
+    mutationFn: () => refreshAspxSession(),
+    onSuccess: (r) => {
+      if (r.alive) {
+        toast.success("Sessão SPX renovada. Clique em 'Cadastrar no SPX' para tentar novamente.");
+      } else {
+        toast.error(
+          r.detail
+            ? `Não foi possível renovar a sessão SPX: ${r.detail}`
+            : "Sessão SPX expirada e não foi possível renová-la automaticamente — refaça o login no portal SPX.",
+        );
+      }
+      queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (err: Error) => toast.error(err.message || "Falha ao renovar a sessão SPX."),
+  });
+
   const isAngelliraRunning = cadastrarMutation.isPending || overallStatus === "IN_PROGRESS";
   const isSpxRunning = cadastrarSpxMutation.isPending || spxStatus === "IN_PROGRESS";
+  // Detecta sessão SPX expirada em QUALQUER etapa (proprietário/cavalo/carreta/motorista/unificada).
+  const spxSessionExpired = useMemo(
+    () =>
+      spxJobs.some(
+        (j) =>
+          j.status === "ERROR" &&
+          (j.error as { code?: string } | null | undefined)?.code === "SPX_SESSAO_EXPIRADA",
+      ),
+    [spxJobs],
+  );
 
   return (
     <section className="admin-panel mt-4 p-5">
@@ -374,6 +407,27 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
             <SpxJobRow job={spxMotoristaJob} />
           </div>
         ) : null}
+
+        {/* B2 (DC-222 AC5): sessão SPX expirada — renovar na hora, sem sair da tela */}
+        {spxSessionExpired ? (
+          <div className="mt-2 flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50/70 px-3 py-2.5 text-xs text-amber-900 sm:flex-row sm:items-center sm:justify-between">
+            <span className="flex items-start gap-1.5">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              Sessão do SPX expirada — por isso o cadastro falhou. Renove a sessão e tente novamente.
+            </span>
+            <button
+              type="button"
+              disabled={refreshSpxSessionMutation.isPending}
+              onClick={() => refreshSpxSessionMutation.mutate()}
+              className="inline-flex shrink-0 items-center gap-1 self-start whitespace-nowrap rounded-lg bg-amber-600 px-2.5 py-1.5 font-semibold text-white hover:bg-amber-700 disabled:opacity-60 sm:self-auto"
+            >
+              {refreshSpxSessionMutation.isPending
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <KeyRound className="h-3 w-3" />}
+              Renovar sessão SPX
+            </button>
+          </div>
+        ) : null}
       </div>
     </section>
   );
@@ -399,7 +453,10 @@ function VerifyResultBanner({ type, text }: { type: "ok" | "warn" | "info" | "er
 
 function SpxJobRow({ job }: { job: ExternalRegistrationJob }) {
   const status = job.status;
-  const error = job.error as { code?: string; message?: string; acao?: string } | null | undefined;
+  const error = job.error as
+    | { code?: string; message?: string; acao?: string; retcode?: number | null; httpStatus?: number | null }
+    | null
+    | undefined;
   const errInfo = getSpxErrorInfo(error?.code);
   return (
     <div className={cn(
@@ -434,6 +491,9 @@ function SpxJobRow({ job }: { job: ExternalRegistrationJob }) {
             {error.acao ? (
               <p className="italic text-rose-700">→ {error.acao}</p>
             ) : null}
+            {typeof error.retcode === "number" || typeof error.httpStatus === "number" ? (
+              <p className="text-[10px] text-rose-400">código do robô: {error.retcode ?? error.httpStatus}</p>
+            ) : null}
           </div>
         ) : null}
         {status === "OK" ? (
@@ -455,7 +515,10 @@ function StepRow({
   isRetrying: boolean;
 }) {
   const status = (job?.status || "NONE") as ExternalRegistrationJob["status"] | "NONE";
-  const error = job?.error as { code?: string; message?: string; acao?: string } | null | undefined;
+  const error = job?.error as
+    | { code?: string; message?: string; acao?: string; retcode?: number | null; httpStatus?: number | null }
+    | null
+    | undefined;
   const errInfo = getAngelliraErrorInfo(error?.code);
   const externalId = job?.external_id;
 
@@ -518,6 +581,9 @@ function StepRow({
                   !errInfo?.hint && <p>Erro desconhecido.</p>
                 )}
                 {error.acao ? <p className="italic text-rose-700">→ {error.acao}</p> : null}
+                {typeof error.retcode === "number" || typeof error.httpStatus === "number" ? (
+                  <p className="text-[10px] text-rose-400">código do robô: {error.retcode ?? error.httpStatus}</p>
+                ) : null}
               </div>
             ) : null}
           </>
