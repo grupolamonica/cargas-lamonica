@@ -17,6 +17,8 @@ import {
   formatSpreadsheetLocation,
   createSheetLoadId,
   parseAvailableGoogleSheetLoads,
+  parseAllGoogleSheetRows,
+  NESTLE_HEADER_SCHEMA,
   SheetClientNotConfiguredError,
   syncGoogleSheetLoads,
   updateSheetMonitorSnapshot,
@@ -1251,6 +1253,30 @@ describe("google sheet loads sync", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe("Nestlé header schema — tipo vs vínculo", () => {
+  const NESTLE_CSV = [
+    "PROGRAMAÇÃO NESTLÉ",
+    "",
+    ["Nº DE ORDEM", "CHEGADA PREVISTA", "DESCARGA", "VINCULO", "MOTORISTA", "CAVALO", "CARRETA", "STATUS", "ORIGEM", "DESTINO"].join(","),
+    ["B999", "13/07/2026 12:00:00", "17/07/2026 23:00:00", "FROTA", "ADAUTO SOARES", "SKA6G12", "RDC0H37", "AGUAR. CARREGAMENTO", "CORDEIROPOLIS-SP", "FEIRA DE SANTANA-BA"].join(","),
+    ["B888", "14/07/2026 08:00:00", "18/07/2026 10:00:00", "AGREGADO", "", "", "", "", "SIMOES FILHO-BA", "RECIFE-PE"].join(","),
+  ].join("\n");
+
+  it("não coloca o VÍNCULO no campo tipo — tipo fica null, vínculo separado", () => {
+    const rows = parseAllGoogleSheetRows(NESTLE_CSV, { headerSchema: NESTLE_HEADER_SCHEMA });
+    expect(rows).toHaveLength(2);
+    const byLh = Object.fromEntries(rows.map((r) => [r.lh, r]));
+
+    expect(byLh["B999"].tipo).toBeNull();
+    expect(byLh["B999"].vinculo).toBe("FROTA");
+    expect(byLh["B888"].tipo).toBeNull();
+    expect(byLh["B888"].vinculo).toBe("AGREGADO");
+    // Nenhum tipo pode ser um valor de vínculo (o que poluía o filtro de Tipo).
+    expect(rows.map((r) => r.tipo)).not.toContain("FROTA");
+    expect(rows.map((r) => r.tipo)).not.toContain("AGREGADO");
   });
 });
 

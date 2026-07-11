@@ -20,9 +20,12 @@ const ROUTE_TEMPLATE_PAGE_SIZE = 1000;
 const SHEET_LOADS_TABLE = "cargas";
 const SHEET_CLIENTS_TABLE = "clientes";
 const ROUTE_CATALOG_TABLE = "route_metrics_cache";
+// `tipo` NÃO é obrigatório: nem toda planilha tem coluna de tipo de carga (a
+// Nestlé não tem — só VINCULO). Deixar `tipo` fora da lista de obrigatórios
+// permite que essas fontes resolvam o cabeçalho sem precisar "emprestar" outra
+// coluna (o que antes fazia o vínculo vazar para o campo tipo).
 const SHEET_LOADS_REQUIRED_HEADERS = [
   "lh",
-  "tipo",
   "data carregamento",
   "data descarga",
   "motoristas",
@@ -75,9 +78,13 @@ const SHOPEE_HEADER_SCHEMA = {
 
 // Schema da Nestlé: os cabeçalhos reais da planilha (NÃO renomeada) mapeados via
 // aliases. CHEGADA PREVISTA → data carregamento; DESCARGA → data descarga.
-const NESTLE_HEADER_SCHEMA = {
+export const NESTLE_HEADER_SCHEMA = {
   lh: ["lh", "nº de ordem", "n de ordem", "no de ordem"],
-  tipo: ["tipo", "vinculo"],
+  // A Nestlé NÃO tem coluna de tipo de carga (só VINCULO — FROTA/AGREGADO/
+  // TERCEIRO, que é o vínculo do motorista). Antes o alias caía em "vinculo" e
+  // o vínculo vazava para o campo `tipo`, poluindo o filtro de Tipo do Monitor.
+  // Sem coluna "tipo" → tipo fica null; o vínculo é lido separadamente.
+  tipo: ["tipo"],
   "data carregamento": ["data carregamento", "chegada prevista"],
   "data descarga": ["data descarga", "descarga"],
   motoristas: ["motoristas", "motorista"],
