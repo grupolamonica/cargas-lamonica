@@ -2899,6 +2899,7 @@ export default function SheetMonitor() {
   // Filtros multi-seleção (vazio = "todos"; semântica OR entre os selecionados).
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [tipoFilter, setTipoFilter] = useState<string[]>([]);
+  const [vinculoFilter, setVinculoFilter] = useState<string[]>([]);
   const [assignmentFilter, setAssignmentFilter] = useState<string[]>([]);
   const [routeFilter, setRouteFilter] = useState<string[]>([]);
   const [editFilter, setEditFilter] = useState<string[]>([]);
@@ -3230,6 +3231,14 @@ export default function SheetMonitor() {
     return Array.from(s).sort();
   }, [items]);
 
+  // Vínculos presentes no dataset (ex.: FROTA, AGREGADO, TERCEIRO da Nestlé) —
+  // para o filtro multi-seleção dedicado. Shopee normalmente não tem vínculo.
+  const vinculoOptions = useMemo(() => {
+    const s = new Set<string>();
+    items.forEach((item) => { if (item.vinculo) s.add(item.vinculo); });
+    return Array.from(s).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [items]);
+
   // Clientes presentes no dataset (ex.: Shopee, Nestle) — para o filtro multi-seleção.
   const clienteOptions = useMemo(() => {
     const s = new Set<string>();
@@ -3275,6 +3284,7 @@ export default function SheetMonitor() {
 
   // Opções (shape do MultiSelectFilter) para os filtros de tipo e rota.
   const tipoSelectOptions = useMemo<MultiOption[]>(() => tipoOptions.map((t) => ({ value: t, label: t })), [tipoOptions]);
+  const vinculoSelectOptions = useMemo<MultiOption[]>(() => vinculoOptions.map((v) => ({ value: v, label: v })), [vinculoOptions]);
   const clienteSelectOptions = useMemo<MultiOption[]>(() => clienteOptions.map((c) => ({ value: c, label: c })), [clienteOptions]);
   const routeSelectOptions = useMemo<MultiOption[]>(
     () => routeOptions.map((r) => ({ value: r.key, label: r.codigo != null ? `R${r.codigo} — ${r.key}` : r.key })),
@@ -3300,6 +3310,9 @@ export default function SheetMonitor() {
 
     if (tipoFilter.length > 0)
       result = result.filter((r) => r.tipo != null && tipoFilter.includes(r.tipo));
+
+    if (vinculoFilter.length > 0)
+      result = result.filter((r) => r.vinculo != null && vinculoFilter.includes(r.vinculo));
 
     // Cliente — OR entre os selecionados (Shopee, Nestle, …). Linha de reserva
     // (standby, sem cliente) sai quando há filtro de cliente ativo.
@@ -3336,7 +3349,7 @@ export default function SheetMonitor() {
       result = result.filter((row) => rowMatchesDateRanges(row, { carFrom, carTo, desFrom, desTo }));
 
     return result;
-  }, [items, deferredSearch, tipoFilter, clienteFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter, descargaFromFilter, descargaToFilter]);
+  }, [items, deferredSearch, tipoFilter, vinculoFilter, clienteFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter, descargaFromFilter, descargaToFilter]);
 
   // Contagem por status para os chips clicáveis do "Status na planilha" (mesma
   // chave do resumo: status || "Sem status"). Reserva é linha sintética — não conta.
@@ -3418,11 +3431,11 @@ export default function SheetMonitor() {
   const handleClearStatus = useCallback(() => setStatusFilter([]), []);
 
   const hasActiveFilters =
-    deferredSearch.trim().length > 0 || statusFilter.length > 0 || tipoFilter.length > 0 || clienteFilter.length > 0 ||
+    deferredSearch.trim().length > 0 || statusFilter.length > 0 || tipoFilter.length > 0 || vinculoFilter.length > 0 || clienteFilter.length > 0 ||
     routeFilter.length > 0 || assignmentFilter.length > 0 || editFilter.length > 0 || dateFromFilter.length > 0 || dateToFilter.length > 0 ||
     descargaFromFilter.length > 0 || descargaToFilter.length > 0;
 
-  useEffect(() => { setPage(0); }, [deferredSearch, statusFilter, tipoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter, descargaFromFilter, descargaToFilter]);
+  useEffect(() => { setPage(0); }, [deferredSearch, statusFilter, tipoFilter, vinculoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter, descargaFromFilter, descargaToFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages - 1);
@@ -3626,6 +3639,7 @@ export default function SheetMonitor() {
               <MultiSelectFilter label="Clientes" options={clienteSelectOptions} selected={clienteFilter} onChange={setClienteFilter} />
 
               <MultiSelectFilter label="Tipos" options={tipoSelectOptions} selected={tipoFilter} onChange={setTipoFilter} />
+              <MultiSelectFilter label="Vínculos" options={vinculoSelectOptions} selected={vinculoFilter} onChange={setVinculoFilter} />
 
               <MultiSelectFilter label="Rotas" options={routeSelectOptions} selected={routeFilter} onChange={setRouteFilter} widthClass="max-w-[220px]" searchable />
 
@@ -3656,7 +3670,7 @@ export default function SheetMonitor() {
                   no fim da linha de filtros, então nada reflui quando um filtro é
                   aplicado/limpo. A busca é flex-1 e absorve a variação de largura. */}
               <button type="button" disabled={!hasActiveFilters}
-                onClick={() => { setSearch(""); setStatusFilter([]); setTipoFilter([]); setClienteFilter([]); setRouteFilter([]); setAssignmentFilter([]); setEditFilter([]); setDateFromFilter(""); setDateToFilter(""); setDescargaFromFilter(""); setDescargaToFilter(""); }}
+                onClick={() => { setSearch(""); setStatusFilter([]); setTipoFilter([]); setVinculoFilter([]); setClienteFilter([]); setRouteFilter([]); setAssignmentFilter([]); setEditFilter([]); setDateFromFilter(""); setDateToFilter(""); setDescargaFromFilter(""); setDescargaToFilter(""); }}
                 className="inline-flex items-center gap-1 rounded-xl border border-border/80 bg-white px-3 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 dark:bg-muted/40">
                 <X className="h-3.5 w-3.5" />Limpar
               </button>
