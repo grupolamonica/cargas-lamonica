@@ -19,6 +19,7 @@ import { resolveAnttCascade } from "../../../application/candidatura/use-cases/a
 import { verifyDocument } from "../../../application/candidatura/use-cases/verify-document.js";
 import { getExistingMotorista } from "../../../application/candidatura/use-cases/get-existing-motorista.js";
 import { getExistingCavalo } from "../../../application/candidatura/use-cases/get-existing-cavalo.js";
+import { collectMissingRequiredDocuments } from "../../../application/candidatura/use-cases/required-documents.js";
 import {
   getAuthorizationHeader,
   getCorrelationId,
@@ -602,13 +603,20 @@ export async function resolveCandidaturaSubmitResponse(request) {
     };
   }
 
+  // DC-195 — flags "entidade veio parcial/reidratada" (capturadas no merge) para
+  // o gate de documentos obrigatorios nao cobrar anexo de entidade pulada.
+  let motoristaWasPartial = false;
+  let cavaloWasPartial = false;
+  let cavaloOwnerWasRehydrated = false;
+
   // Bug 7 fix — Step A pode ter sido pulado no wizard (motorista ja cadastrado).
   // Nesse caso `body.dados.motorista` chega ausente/parcial e o schema rejeitaria.
   // Mesclamos o motorista persistido (use case get-existing-motorista) ANTES da
   // validacao zod. Frontend completo continua funcionando — apenas cobre o gap.
   if (body && typeof body === "object" && body.dados && typeof body.dados === "object") {
     const incomingMotorista = body.dados.motorista;
-    if (isMotoristaPartial(incomingMotorista)) {
+    motoristaWasPartial = isMotoristaPartial(incomingMotorista);
+    if (motoristaWasPartial) {
       // CPF para lookup no fluxo publico: tenta body.dados.motorista.cpf.
       let lookupCpf = (incomingMotorista?.cpf ?? "").toString().replace(/\D/g, "");
       // Se autenticado, prefere profile.document_number (D-02 source of truth).
@@ -653,7 +661,8 @@ export async function resolveCandidaturaSubmitResponse(request) {
     // veículo já vigente) deixa cavalo ausente — o schema agora aceita. Sem este
     // guard, o fallback abaixo criava um cavalo SEM placa ({owner_doc}) que
     // falhava no cavaloSchema.
-    if (incomingCavalo && isCavaloPartial(incomingCavalo)) {
+    cavaloWasPartial = Boolean(incomingCavalo && isCavaloPartial(incomingCavalo));
+    if (cavaloWasPartial) {
       const placaForLookup = String(incomingCavalo?.placa ?? "").trim();
       let lookupCpf = (body.dados.motorista?.cpf ?? "").toString().replace(/\D/g, "");
       if (driverUserId) {
@@ -686,6 +695,7 @@ export async function resolveCandidaturaSubmitResponse(request) {
               (!body.dados.cavalo_owner || typeof body.dados.cavalo_owner !== "object")
             ) {
               body.dados.cavalo_owner = existing.cavalo_owner;
+              cavaloOwnerWasRehydrated = true;
             }
           }
         } catch (err) {
@@ -727,6 +737,28 @@ export async function resolveCandidaturaSubmitResponse(request) {
       };
     }
     throw err;
+  }
+
+  // DC-195 — anexo de documentos obrigatorio. Cobra apenas entidades enviadas
+  // COMPLETAS nesta submissao (nao as pulas/mescladas de cadastro vigente),
+  // usando as flags capturadas no merge acima.
+  const missingDocuments = collectMissingRequiredDocuments(parsedInput.dados, {
+    motoristaWasPartial,
+    cavaloWasPartial,
+    cavaloOwnerWasRehydrated,
+  });
+  if (missingDocuments.length > 0) {
+    return {
+      statusCode: 422,
+      payload: {
+        error: "DOCUMENTOS_OBRIGATORIOS",
+        message:
+          "Anexe os documentos obrigatorios antes de enviar: " +
+          missingDocuments.map((doc) => doc.message).join(" "),
+        issues: missingDocuments,
+        meta: { correlationId },
+      },
+    };
   }
 
   // CPF: autenticado usa profile.document_number; publico usa dados.motorista.cpf.
