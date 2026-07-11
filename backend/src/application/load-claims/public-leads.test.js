@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LOAD_STATUS, PUBLIC_LEAD_STATUS } from "../../domain/load-claims/constants.js";
+import { LOAD_STATUS, PUBLIC_LEAD_STATUS, PUBLIC_LEAD_EVENT_TYPE } from "../../domain/load-claims/constants.js";
 import { normalizeDriverNameKey } from "../google-sheets/driver-vinculos.js";
 import { getSaoPauloWallClock } from "../../domain/sao-paulo-time.js";
 
@@ -774,6 +774,29 @@ describe.sequential("public load leads", () => {
     expect(load.reserved_driver_id).toBeNull();
     expect(load.reserved_claim_id).toBeNull();
     expect(load.booked_driver_id).toBeNull();
+  });
+
+  it("registra evento SHEET_WRITEBACK no histórico ao reservar (write-back p/ planilha)", async () => {
+    const { id: loadId } = await harness.seedLoad({ sheet_lh: "LT-HIST-1" });
+    const operator = await harness.seedOperator();
+
+    const preregistered = await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-writeback-prereg",
+    });
+    await service.approvePublicLoadLead({
+      loadId,
+      leadId: preregistered.payload.lead.id,
+      operatorId: operator.id,
+      correlationId: "corr-writeback",
+    });
+
+    const events = await harness.getPublicLeadEventsByLoad(loadId);
+    const types = events.map((e) => e.event_type);
+    // A reserva gera o evento de aprovação E o de write-back p/ a planilha (histórico do modal).
+    expect(types).toContain(PUBLIC_LEAD_EVENT_TYPE.APPROVED);
+    expect(types).toContain(PUBLIC_LEAD_EVENT_TYPE.SHEET_WRITEBACK);
   });
 
   const isoDateOf = (value) =>

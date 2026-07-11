@@ -483,6 +483,23 @@ export async function fetchOperatorCargas(params: Record<string, string>) {
   });
 }
 
+export interface CargoHistoryEvent {
+  eventType: string;
+  label: string;
+  payload: Record<string, unknown>;
+  actorType: string | null;
+  createdAt: string;
+}
+
+/** Histórico de eventos de uma carga (por LH da planilha) — modal do Monitor. */
+export async function fetchCargoHistory(lh: string) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ items: CargoHistoryEvent[]; meta: unknown }>(
+    `/api/operator/cargas/historico?lh=${encodeURIComponent(lh)}`,
+    { accessToken },
+  );
+}
+
 export async function fetchOperatorClientes(params: Record<string, string>) {
   const accessToken = await getOperatorAccessToken();
   const query = new URLSearchParams(params).toString();

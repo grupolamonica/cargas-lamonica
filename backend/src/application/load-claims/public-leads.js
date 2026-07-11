@@ -26,6 +26,7 @@ import { addDaysIso, computeNextRecurrenceDate, toIsoDate } from "../../domain/r
 import { syncedCarregamentoLabel } from "../../domain/cargo-schedule.js";
 import { lookupAspxDriverByCpf } from "../../infrastructure/aspx/aspx-directory.js";
 import { loadDriverVinculoMap, normalizeDriverNameKey } from "../google-sheets/driver-vinculos.js";
+import { writeAllocationsToSheet, isSheetWritebackEnabled } from "../google-sheets/sheet-writeback.js";
 const DEFAULT_PUBLIC_LEAD_PRE_REGISTRATION_MAX_ATTEMPTS = 6;
 const DEFAULT_PUBLIC_LEAD_PRE_REGISTRATION_WINDOW_SECONDS = 600;
 const DEFAULT_PUBLIC_LEAD_WHATSAPP_QUEUE_MAX_ATTEMPTS = 8;
@@ -605,6 +606,75 @@ async function insertPublicLeadEvent(client, event) {
       event.actorId ?? null,
     ],
   );
+}
+
+/**
+ * Reflete uma reserva na planilha de origem + registra o evento SHEET_WRITEBACK
+ * no histórico da carga (consumido pelo modal do Monitor).
+ *
+ * - Dentro da transação: consulta sheet_lh + placas + nome e GRAVA o evento
+ *   (atômico com a reserva). É best-effort — falha de histórico não derruba a
+ *   reserva.
+ * - O POST na planilha (write-back) é fire-and-forget (NÃO awaited): não segura
+ *   a transação nem falha a reserva. A planilha é espelho; o banco é a verdade.
+ *
+ * trigger: "operator_direct" (alocação direta) | "lead_approved" (aprovou fila).
+ */
+async function reflectReservationOnSheet(client, { loadId, leadId, trigger, actorType, actorId }) {
+  let info = null;
+  try {
+    const { rows } = await client.query(
+      `
+        SELECT c.sheet_lh AS sheet_lh,
+               l.horse_plate AS horse_plate,
+               l.trailer_plate AS trailer_plate,
+               l.validation_summary_json AS validation_summary_json
+        FROM public.cargas c
+        LEFT JOIN public.load_public_leads l ON l.id = $2
+        WHERE c.id = $1
+      `,
+      [loadId, leadId],
+    );
+    info = rows[0] ?? null;
+  } catch {
+    info = null;
+  }
+
+  const sheetLh = info?.sheet_lh ? String(info.sheet_lh).trim() : "";
+  const motorista = resolveLeadDriverName({ validation_summary_json: info?.validation_summary_json }) ?? "";
+  const cavalo = info?.horse_plate ? String(info.horse_plate).trim() : "";
+  const carreta = info?.trailer_plate ? String(info.trailer_plate).trim() : "";
+  const enabled = isSheetWritebackEnabled();
+
+  // Evento do histórico (atômico com a reserva). Registra a INTENÇÃO/valores
+  // gravados; o resultado do POST fica no log do sheet-writeback.
+  try {
+    await insertPublicLeadEvent(client, {
+      loadId,
+      leadId,
+      eventType: PUBLIC_LEAD_EVENT_TYPE.SHEET_WRITEBACK,
+      payload: {
+        trigger: trigger ?? null,
+        sheet_lh: sheetLh || null,
+        motorista: motorista || null,
+        cavalo: cavalo || null,
+        carreta: carreta || null,
+        enabled,
+      },
+      actorType,
+      actorId,
+    });
+  } catch {
+    /* histórico é best-effort */
+  }
+
+  // Write-back na planilha: fire-and-forget. Só quando há LH e a integração
+  // está ligada. Nunca awaited — não bloqueia nem falha a reserva.
+  if (sheetLh && enabled) {
+    void writeAllocationsToSheet([
+      { lh: sheetLh, motorista, cavalo, carreta, status: "RESERVADO" },
+    ]).catch(() => {});
+  }
 }
 
 async function assertPublicLeadAttemptAllowed(
@@ -2162,6 +2232,15 @@ export async function createDirectLeadAllocation({ loadId, payload, operatorId, 
       actorId: operatorId,
     });
 
+    // Reserva confirmada → reflete na planilha + registra no histórico.
+    await reflectReservationOnSheet(client, {
+      loadId,
+      leadId: leadRow.id,
+      trigger: "operator_direct",
+      actorType: "operator",
+      actorId: operatorId,
+    });
+
     logLoadClaimEvent("info", "load-public-leads.direct-allocation.reserved", {
       correlation_id: resolvedCorrelationId,
       load_id: loadId,
@@ -2282,6 +2361,15 @@ export async function approvePublicLoadLead({ loadId, leadId, operatorId, correl
       [loadId, LOAD_STATUS.RESERVED, leadId],
     );
     const reservedLoad = reservedLoadRows[0] ?? null;
+
+    // Reserva confirmada → reflete na planilha + registra no histórico.
+    await reflectReservationOnSheet(client, {
+      loadId,
+      leadId,
+      trigger: "lead_approved",
+      actorType: "operator",
+      actorId: operatorId,
+    });
 
     // Clone-on-reserve: se a carga reservada for recorrente, gera a próxima
     // ocorrência (cópia OPEN, fila vazia) e desmarca a recorrência da reservada
