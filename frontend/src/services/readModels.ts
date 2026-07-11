@@ -1293,6 +1293,26 @@ export async function fetchCadastrosPendentes(params: {
 }
 
 // ─── Cadastros com erro no cadastro externo (DC-196) ─────────────────────────
+export interface CadastroBotHealth {
+  key: "angellira" | "spx" | "unificada";
+  label: string;
+  online: boolean;
+  detail: string | null;
+}
+
+export interface CadastroBotsHealthResponse {
+  bots: CadastroBotHealth[];
+  anyOffline: boolean;
+  offline: { key: string; label: string; detail: string | null }[];
+  meta: { correlationId: string | null; checkedAt: string };
+}
+
+/** B3 (DC-222 AC6): saúde dos robôs de cadastro externo (Angellira/SPX/Dossiê). */
+export async function fetchCadastroBotsHealth(): Promise<CadastroBotsHealthResponse> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<CadastroBotsHealthResponse>("/api/operator/cadastro-bots/health", { accessToken });
+}
+
 export interface CadastroComErroFalha {
   target: string;
   step: string;
