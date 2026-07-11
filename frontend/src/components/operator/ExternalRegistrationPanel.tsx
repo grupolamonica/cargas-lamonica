@@ -76,14 +76,17 @@ const SPX_ERROR_LABELS: Record<string, { label: string; hint: string }> = {
   SPX_PIPELINE_UNEXPECTED:   { label: "Erro inesperado no SPX",            hint: "Erro interno no pipeline SPX. Verifique os logs e tente novamente." },
 };
 
-function getAngelliraErrorInfo(code?: string) {
+// Códigos mapeados têm hint curado; para NÃO-mapeados não inventa hint genérico
+// — a mensagem pt-BR do backend (sempre presente) é a fonte da verdade e já é
+// renderizada abaixo, evitando "Consulte os logs" quando há causa específica.
+function getAngelliraErrorInfo(code?: string): { label: string; hint: string | null } | null {
   if (!code) return null;
-  return ANGELLIRA_ERROR_LABELS[code] ?? { label: code, hint: "Consulte os logs para mais detalhes." };
+  return ANGELLIRA_ERROR_LABELS[code] ?? { label: code, hint: null };
 }
 
-function getSpxErrorInfo(code?: string) {
+function getSpxErrorInfo(code?: string): { label: string; hint: string | null } | null {
   if (!code) return null;
-  return SPX_ERROR_LABELS[code] ?? { label: code, hint: "Consulte os logs para mais detalhes." };
+  return SPX_ERROR_LABELS[code] ?? { label: code, hint: null };
 }
 
 /**
@@ -399,7 +402,10 @@ function VerifyResultBanner({ type, text }: { type: "ok" | "warn" | "info" | "er
 
 function SpxJobRow({ job }: { job: ExternalRegistrationJob }) {
   const status = job.status;
-  const error = job.error as { code?: string; message?: string; acao?: string } | null | undefined;
+  const error = job.error as
+    | { code?: string; message?: string; acao?: string; retcode?: number | null; httpStatus?: number | null }
+    | null
+    | undefined;
   const errInfo = getSpxErrorInfo(error?.code);
   return (
     <div className={cn(
@@ -434,6 +440,9 @@ function SpxJobRow({ job }: { job: ExternalRegistrationJob }) {
             {error.acao ? (
               <p className="italic text-rose-700">→ {error.acao}</p>
             ) : null}
+            {typeof error.retcode === "number" || typeof error.httpStatus === "number" ? (
+              <p className="text-[10px] text-rose-400">código do robô: {error.retcode ?? error.httpStatus}</p>
+            ) : null}
           </div>
         ) : null}
         {status === "OK" ? (
@@ -455,7 +464,10 @@ function StepRow({
   isRetrying: boolean;
 }) {
   const status = (job?.status || "NONE") as ExternalRegistrationJob["status"] | "NONE";
-  const error = job?.error as { code?: string; message?: string; acao?: string } | null | undefined;
+  const error = job?.error as
+    | { code?: string; message?: string; acao?: string; retcode?: number | null; httpStatus?: number | null }
+    | null
+    | undefined;
   const errInfo = getAngelliraErrorInfo(error?.code);
   const externalId = job?.external_id;
 
@@ -518,6 +530,9 @@ function StepRow({
                   !errInfo?.hint && <p>Erro desconhecido.</p>
                 )}
                 {error.acao ? <p className="italic text-rose-700">→ {error.acao}</p> : null}
+                {typeof error.retcode === "number" || typeof error.httpStatus === "number" ? (
+                  <p className="text-[10px] text-rose-400">código do robô: {error.retcode ?? error.httpStatus}</p>
+                ) : null}
               </div>
             ) : null}
           </>
