@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronRight,
   Info,
+  KeyRound,
   Loader2,
   PlayCircle,
   RefreshCw,
@@ -29,6 +30,7 @@ import {
   type AngelliraJobStep,
   type ExternalRegistrationJob,
 } from "@/services/readModels";
+import { refreshAspxSession } from "@/services/aspxAdmin";
 
 type Props = {
   cadastroId: string;
@@ -215,8 +217,36 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
     onError: (err: Error) => toast.error(err.message || "Falha ao verificar SPX."),
   });
 
+  // B2 (DC-222 AC5): renovar a sessão SPX na hora, sem sair da tela do cadastro.
+  const refreshSpxSessionMutation = useMutation({
+    mutationFn: () => refreshAspxSession(),
+    onSuccess: (r) => {
+      if (r.alive) {
+        toast.success("Sessão SPX renovada. Clique em 'Cadastrar no SPX' para tentar novamente.");
+      } else {
+        toast.error(
+          r.detail
+            ? `Não foi possível renovar a sessão SPX: ${r.detail}`
+            : "Sessão SPX expirada e não foi possível renová-la automaticamente — refaça o login no portal SPX.",
+        );
+      }
+      queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (err: Error) => toast.error(err.message || "Falha ao renovar a sessão SPX."),
+  });
+
   const isAngelliraRunning = cadastrarMutation.isPending || overallStatus === "IN_PROGRESS";
   const isSpxRunning = cadastrarSpxMutation.isPending || spxStatus === "IN_PROGRESS";
+  // Detecta sessão SPX expirada em QUALQUER etapa (proprietário/cavalo/carreta/motorista/unificada).
+  const spxSessionExpired = useMemo(
+    () =>
+      spxJobs.some(
+        (j) =>
+          j.status === "ERROR" &&
+          (j.error as { code?: string } | null | undefined)?.code === "SPX_SESSAO_EXPIRADA",
+      ),
+    [spxJobs],
+  );
 
   return (
     <section className="admin-panel mt-4 p-5">
@@ -375,6 +405,27 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
         {spxMotoristaJob ? (
           <div className="mt-2 grid gap-1.5">
             <SpxJobRow job={spxMotoristaJob} />
+          </div>
+        ) : null}
+
+        {/* B2 (DC-222 AC5): sessão SPX expirada — renovar na hora, sem sair da tela */}
+        {spxSessionExpired ? (
+          <div className="mt-2 flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50/70 px-3 py-2.5 text-xs text-amber-900 sm:flex-row sm:items-center sm:justify-between">
+            <span className="flex items-start gap-1.5">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              Sessão do SPX expirada — por isso o cadastro falhou. Renove a sessão e tente novamente.
+            </span>
+            <button
+              type="button"
+              disabled={refreshSpxSessionMutation.isPending}
+              onClick={() => refreshSpxSessionMutation.mutate()}
+              className="inline-flex shrink-0 items-center gap-1 self-start whitespace-nowrap rounded-lg bg-amber-600 px-2.5 py-1.5 font-semibold text-white hover:bg-amber-700 disabled:opacity-60 sm:self-auto"
+            >
+              {refreshSpxSessionMutation.isPending
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <KeyRound className="h-3 w-3" />}
+              Renovar sessão SPX
+            </button>
           </div>
         ) : null}
       </div>
