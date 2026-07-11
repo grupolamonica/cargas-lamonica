@@ -1830,5 +1830,18 @@ export async function syncAllSheetSources({
     }
   }
 
+  // Auto-cura do write-back: com os snapshots já frescos, grava na planilha as
+  // cargas tomadas no sistema que ficaram em branco na planilha (só preenche
+  // vazios). Isolado — nunca derruba o resultado do sync.
+  try {
+    const { reconcileTakenCargosToSheet } = await import("./reconcile-sheet-allocations.js");
+    const reconcile = await reconcileTakenCargosToSheet();
+    results.push({ source: "__reconcile_writeback__", ok: true, result: reconcile });
+  } catch (error) {
+    console.error("[google-sheet-loads] reconcile write-back falhou (isolado)", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   return { sources: results };
 }
