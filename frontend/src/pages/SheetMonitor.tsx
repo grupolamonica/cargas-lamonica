@@ -2903,11 +2903,11 @@ export default function SheetMonitor() {
   const [routeFilter, setRouteFilter] = useState<string[]>([]);
   const [editFilter, setEditFilter] = useState<string[]>([]);
   const [clienteFilter, setClienteFilter] = useState<string[]>([]);
-  // Filtro de carregamento já começa em HOJE (00:00–23:59) ao abrir a tela: o
-  // operador vê direto a agenda do dia. É só um valor inicial — pode limpar ou
-  // alterar. Descarga sem filtro inicial.
+  // Filtro de carregamento começa em HOJE em diante (a partir de 00:00 de hoje,
+  // SEM teto) ao abrir a tela: o operador vê a agenda de hoje e das próximas
+  // datas — não só de hoje. É só um valor inicial; pode limpar/alterar.
   const [dateFromFilter, setDateFromFilter] = useState(() => `${todayLocalDate()}T00:00`);
-  const [dateToFilter, setDateToFilter] = useState(() => `${todayLocalDate()}T23:59`);
+  const [dateToFilter, setDateToFilter] = useState("");
   const [descargaFromFilter, setDescargaFromFilter] = useState("");
   const [descargaToFilter, setDescargaToFilter] = useState("");
   const [page, setPage] = useState(0);
