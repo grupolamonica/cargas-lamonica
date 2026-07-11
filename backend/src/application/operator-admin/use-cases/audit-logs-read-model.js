@@ -13,7 +13,7 @@ const AUDIT_LOGS_MAX_PAGE_SIZE = 200;
 const OPERATOR_DIRECTORY_TTL_MS = 60_000;
 let operatorDirectoryCache = { at: 0, map: new Map() };
 
-async function resolveOperatorDirectory() {
+export async function resolveOperatorDirectory() {
   const now = Date.now();
   if (now - operatorDirectoryCache.at < OPERATOR_DIRECTORY_TTL_MS) {
     return operatorDirectoryCache.map;

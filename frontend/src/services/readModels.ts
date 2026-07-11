@@ -484,11 +484,16 @@ export async function fetchOperatorCargas(params: Record<string, string>) {
 }
 
 export interface CargoHistoryEvent {
-  eventType: string;
-  label: string;
-  payload: Record<string, unknown>;
-  actorType: string | null;
-  createdAt: string;
+  /** Momento do evento (ISO). Pode ser null para entradas sem data. */
+  quando: string | null;
+  /** Título curto e claro do que aconteceu (ex.: "Motorista reservado"). */
+  titulo: string;
+  /** Detalhe em linguagem do operador: motorista + veículos + motivo. */
+  detalhe: string | null;
+  /** Quem realizou a ação (nome do operador, "Motorista (pelo portal)" ou "Sistema"). */
+  por: string | null;
+  /** Código do tipo do evento (uso interno para ícone/estilo). */
+  tipo: string;
 }
 
 /** Histórico de eventos de uma carga (por LH da planilha) — modal do Monitor. */

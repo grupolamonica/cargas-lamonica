@@ -455,6 +455,26 @@ function formatStandby(iso: string | null | undefined): string | null {
   }).format(d);
 }
 
+// Cor do marcador do histórico por tipo de evento — pista visual do que
+// aconteceu (verde = reservado/gravado, âmbar = na fila, vermelho = cancelado).
+function cargoHistoryDotClass(tipo: string): string {
+  switch (tipo) {
+    case "APPROVED":
+    case "ALLOC_OPERADOR":
+      return "bg-emerald-500";
+    case "SHEET_WRITEBACK":
+      return "bg-sky-500";
+    case "QUEUED":
+    case "PRE_REGISTERED":
+    case "WHATSAPP_CLICKED":
+      return "bg-amber-500";
+    case "CANCELLED":
+      return "bg-red-500";
+    default:
+      return "bg-primary/60";
+  }
+}
+
 // Faixa de datas (ms epoch; null = sem limite naquele extremo). carFrom/carTo
 // filtram por carregamento (row.data + row.horario); desFrom/desTo por descarga
 // (row.descargaAt). Reservas não têm data → sempre visíveis.
@@ -2355,17 +2375,21 @@ function RowDetailModal({
               ) : (historyEvents.data?.items?.length ?? 0) === 0 ? (
                 <p className="py-1 text-xs text-muted-foreground">Sem histórico registrado para esta carga.</p>
               ) : (
-                <ol className="space-y-1.5">
+                <ol className="space-y-2.5">
                   {(historyEvents.data?.items ?? []).map((ev: CargoHistoryEvent, i: number) => (
                     <li key={i} className="flex items-start gap-2 text-xs">
-                      <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/60" />
-                      <div className="min-w-0">
-                        <span className="font-medium text-foreground">{ev.label}</span>
-                        {ev.eventType === "SHEET_WRITEBACK" && ev.payload?.motorista ? (
-                          <span className="text-muted-foreground"> · {String(ev.payload.motorista)}</span>
+                      <span
+                        className={`mt-1 h-2 w-2 shrink-0 rounded-full ${cargoHistoryDotClass(ev.tipo)}`}
+                      />
+                      <div className="min-w-0 leading-snug">
+                        <span className="font-semibold text-foreground">{ev.titulo}</span>
+                        {ev.detalhe ? (
+                          <span className="block text-foreground/80">{ev.detalhe}</span>
                         ) : null}
                         <span className="block text-[0.65rem] text-muted-foreground/70">
-                          {formatStandby(ev.createdAt) ?? ""}
+                          {ev.por ? `por ${ev.por}` : ""}
+                          {ev.por && ev.quando ? " · " : ""}
+                          {ev.quando ? (formatStandby(ev.quando) ?? "") : ""}
                         </span>
                       </div>
                     </li>
