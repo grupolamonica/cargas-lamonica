@@ -30,15 +30,6 @@ const SLIDES: Slide[] = [
     selfContained: true,
   },
   {
-    src: "/sponsors/bolao_fill.jpg",
-    alt: "Venha bater um bolão com a gente e ser o motorista bola cheia da Lamônica — cadastre-se aqui.",
-    href: "https://wa.me/557139950665?text=Ol%C3%A1%2C%20vi%20a%20campanha%20%22Motorista%20Bola%20Cheia%22%20no%20portal%20e%20quero%20me%20cadastrar%20como%20motorista%20da%20Lam%C3%B4nica.",
-    brand: "LAMONICA BOLAO",
-    tagline: "Seja o motorista bola cheia da Lamônica",
-    cta: "Cadastre-se aqui",
-    selfContained: true,
-  },
-  {
     src: "/sponsors/lamonica-postos-pe.png",
     alt: "Lamônica Postos — nova parceria: 3 novos postos em Pernambuco com valor diferenciado para agregados e parceiros",
     href: "https://wa.me/557139950665?text=Ol%C3%A1%2C%20vi%20a%20parceria%20dos%20postos%20em%20PE%20no%20portal%20e%20quero%20saber%20mais%20sobre%20o%20valor%20diferenciado.",
