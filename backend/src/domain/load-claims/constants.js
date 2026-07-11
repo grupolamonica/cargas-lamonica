@@ -68,6 +68,10 @@ export const PUBLIC_LEAD_EVENT_TYPE = Object.freeze({
   QUEUED: "QUEUED",
   APPROVED: "APPROVED",
   CANCELLED: "CANCELLED",
+  // Registro do write-back da reserva para a planilha (motorista/placas gravados
+  // na planilha de origem quando a carga é reservada pelo sistema). Alimenta o
+  // histórico exibido no modal do Monitor.
+  SHEET_WRITEBACK: "SHEET_WRITEBACK",
 });
 
 export const IDEMPOTENCY_SCOPE = Object.freeze({

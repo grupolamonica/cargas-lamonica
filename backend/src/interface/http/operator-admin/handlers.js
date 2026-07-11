@@ -30,7 +30,7 @@ import {
   buildServiceErrorResponse,
 } from "../error-mapping.js";
 import { zodErrorToHttpResponse } from "../schemas/common.js";
-import { cargoIdParamsSchema, cargoCodigoViagemQuerySchema } from "../schemas/cargo-schemas.js";
+import { cargoIdParamsSchema, cargoCodigoViagemQuerySchema, cargoHistoryQuerySchema } from "../schemas/cargo-schemas.js";
 import {
   attachClienteRotaBodySchema,
   clienteIdParamsSchema,
@@ -51,6 +51,7 @@ import {
   fetchOperatorDashboardReadModel,
   listClienteRotas,
   lookupCargoByCodigoViagem,
+  fetchCargoHistoryByLh,
   redactExpiredPublicLeadPii,
   revalidateAllVehiclesAngellira,
   saveRouteTrecho,
@@ -250,6 +251,13 @@ export async function resolveLookupCargoByCodigoViagemResponse(request) {
       codigo_viagem: getQueryParam(request, "codigo_viagem"),
     });
     return lookupCargoByCodigoViagem({ codigoViagem: codigo_viagem, correlationId });
+  });
+}
+
+export async function resolveCargoHistoryResponse(request) {
+  return withOperatorSession(request, "cargo-history", async ({ correlationId }) => {
+    const { lh } = cargoHistoryQuerySchema.parse({ lh: getQueryParam(request, "lh") });
+    return fetchCargoHistoryByLh({ lh, correlationId });
   });
 }
 

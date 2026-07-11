@@ -73,6 +73,8 @@ import {
   type SheetMonitorEnrichedRow,
   type SheetMonitorRow as SheetMonitorRowType,
   type SheetMonitorSummary,
+  fetchCargoHistory,
+  type CargoHistoryEvent,
 } from "@/services/readModels";
 
 const SHEET_MONITOR_QUERY_KEY = ["admin", "sheet-monitor"] as const;
@@ -2266,6 +2268,15 @@ function RowDetailModal({
     },
   });
 
+  // Histórico da carga (eventos: fila, reserva/aprovação, write-back na planilha)
+  // — "as mudanças feitas em cada etapa". Por LH; só busca com o modal aberto.
+  const historyEvents = useQuery({
+    queryKey: ["admin", "cargo-history", row?.lh ?? ""],
+    queryFn: () => fetchCargoHistory(row!.lh),
+    enabled: open && !!row?.lh,
+    staleTime: 30_000,
+  });
+
   if (!row) return null;
 
   // Trava motorista/veículo conforme o status (mesma regra da tabela) E pelo
@@ -2334,6 +2345,34 @@ function RowDetailModal({
                 <p className="mt-0.5 whitespace-pre-wrap text-sm leading-snug text-foreground">{alloc.alloc_descricao}</p>
               </div>
             )}
+
+            {/* ── Histórico (reserva, aprovação, write-back na planilha) ── */}
+            <ModalSection title="Histórico">
+              {historyEvents.isLoading ? (
+                <p className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Carregando…
+                </p>
+              ) : (historyEvents.data?.items?.length ?? 0) === 0 ? (
+                <p className="py-1 text-xs text-muted-foreground">Sem histórico registrado para esta carga.</p>
+              ) : (
+                <ol className="space-y-1.5">
+                  {(historyEvents.data?.items ?? []).map((ev: CargoHistoryEvent, i: number) => (
+                    <li key={i} className="flex items-start gap-2 text-xs">
+                      <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/60" />
+                      <div className="min-w-0">
+                        <span className="font-medium text-foreground">{ev.label}</span>
+                        {ev.eventType === "SHEET_WRITEBACK" && ev.payload?.motorista ? (
+                          <span className="text-muted-foreground"> · {String(ev.payload.motorista)}</span>
+                        ) : null}
+                        <span className="block text-[0.65rem] text-muted-foreground/70">
+                          {formatStandby(ev.createdAt) ?? ""}
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </ModalSection>
 
             {/* ── Alocação (editável no sistema) ── */}
             <ModalSection title="Alocação · editar no sistema">

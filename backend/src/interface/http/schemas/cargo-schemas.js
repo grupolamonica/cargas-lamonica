@@ -10,3 +10,8 @@ export const cargoIdParamsSchema = z.object({
 export const cargoCodigoViagemQuerySchema = z.object({
   codigo_viagem: z.string().trim().min(1).max(255),
 });
+
+/** Query for GET /api/operator/cargas/historico?lh= */
+export const cargoHistoryQuerySchema = z.object({
+  lh: z.string().trim().min(1).max(255),
+});
