@@ -38,11 +38,22 @@ export function buildRegistrationApprovedMessage({ nome } = {}) {
 /**
  * Seam de notificação (DC-198). PURO e best-effort — nunca lança.
  * Decide se deve notificar e devolve a mensagem pronta; NÃO envia (canal pendente).
- * @returns {{sent:boolean, reason:"feature_disabled"|"no_phone"|"pending_channel", message?:string, recipientPhone?:string}}
+ *
+ * REGRA (pedido do operador): só notifica quando o cadastro está TODO CONFORME no
+ * Angellira E no SPX (`allConforme === true`) — só avisamos "você está apto a
+ * carregar" quem de fato está apto. A conformidade vem do precheck (Angellira
+ * motorista/cavalo/carreta vigentes + SPX vigente/na nossa agência).
+ *
+ * @param {{nome?:string, telefone?:string, allConforme?:boolean}} args
+ * @returns {{sent:boolean, reason:"feature_disabled"|"nao_conforme"|"no_phone"|"pending_channel", message?:string, recipientPhone?:string}}
  */
-export function notifyRegistrationApproved({ nome, telefone } = {}, { env = process.env } = {}) {
+export function notifyRegistrationApproved({ nome, telefone, allConforme } = {}, { env = process.env } = {}) {
   if (!isRegistrationApprovedOutreachEnabled(env)) {
     return { sent: false, reason: "feature_disabled" };
+  }
+  if (allConforme !== true) {
+    // Não conforme (ou conformidade desconhecida) → não avisa "apto".
+    return { sent: false, reason: "nao_conforme" };
   }
   const phone = String(telefone ?? "").replace(/\D/g, "");
   if (phone.length < 10) {

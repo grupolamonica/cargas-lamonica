@@ -1781,7 +1781,10 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
       // DESLIGADA por flag até a fundação driver-outreach + Cloud API/DC-176).
       // Best-effort e não-bloqueante: nunca derruba a aprovação.
       try {
-        const outreach = notifyRegistrationApproved({ nome, telefone });
+        // Só notifica "apto" quando o precheck do modal veio TODO conforme
+        // (Angellira + SPX). A conformidade chega no corpo do request (body.conformidade).
+        const allConforme = Boolean(body?.conformidade?.angellira && body?.conformidade?.spx);
+        const outreach = notifyRegistrationApproved({ nome, telefone, allConforme });
         if (outreach.reason === "pending_channel") {
           logStructuredEvent("info", "driver-outreach.registration-approved.ready", {
             driverId,

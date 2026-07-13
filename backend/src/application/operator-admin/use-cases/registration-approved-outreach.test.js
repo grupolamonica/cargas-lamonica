@@ -35,17 +35,27 @@ describe("registration-approved-outreach (DC-198)", () => {
     const ON = { DRIVER_OUTREACH_REGISTRATION_APPROVED_ENABLED: "true" };
 
     it("flag off → feature_disabled, não envia", () => {
-      const r = notifyRegistrationApproved({ nome: "Rafael", telefone: "11999998888" }, { env: {} });
+      const r = notifyRegistrationApproved({ nome: "Rafael", telefone: "11999998888", allConforme: true }, { env: {} });
       expect(r).toEqual({ sent: false, reason: "feature_disabled" });
     });
 
-    it("flag on + telefone inválido → no_phone", () => {
-      expect(notifyRegistrationApproved({ nome: "Rafael", telefone: "" }, { env: ON }).reason).toBe("no_phone");
-      expect(notifyRegistrationApproved({ nome: "Rafael", telefone: "123" }, { env: ON }).reason).toBe("no_phone");
+    it("flag on + NÃO conforme → nao_conforme (não avisa 'apto')", () => {
+      expect(
+        notifyRegistrationApproved({ nome: "Rafael", telefone: "11999998888", allConforme: false }, { env: ON }).reason,
+      ).toBe("nao_conforme");
+      // conformidade desconhecida (undefined) também não notifica
+      expect(
+        notifyRegistrationApproved({ nome: "Rafael", telefone: "11999998888" }, { env: ON }).reason,
+      ).toBe("nao_conforme");
     });
 
-    it("flag on + telefone ok → pending_channel com a mensagem (mas NÃO envia)", () => {
-      const r = notifyRegistrationApproved({ nome: "Rafael Sales", telefone: "(11) 99999-8888" }, { env: ON });
+    it("flag on + conforme + telefone inválido → no_phone", () => {
+      expect(notifyRegistrationApproved({ nome: "Rafael", telefone: "", allConforme: true }, { env: ON }).reason).toBe("no_phone");
+      expect(notifyRegistrationApproved({ nome: "Rafael", telefone: "123", allConforme: true }, { env: ON }).reason).toBe("no_phone");
+    });
+
+    it("flag on + conforme + telefone ok → pending_channel com a mensagem (mas NÃO envia)", () => {
+      const r = notifyRegistrationApproved({ nome: "Rafael Sales", telefone: "(11) 99999-8888", allConforme: true }, { env: ON });
       expect(r.sent).toBe(false);
       expect(r.reason).toBe("pending_channel");
       expect(r.recipientPhone).toBe("11999998888");

@@ -1486,12 +1486,16 @@ export type ExternalRegistrationJob = {
  *
  * DC-111 / Sprint 1.
  */
-export async function aprovarCadastro(id: string, options?: { jobs?: string[] }) {
+export async function aprovarCadastro(
+  id: string,
+  options?: { jobs?: string[]; conformidade?: { angellira: boolean; spx: boolean } },
+) {
   const accessToken = await getOperatorAccessToken();
   const response = await fetch(`/api/operator/cadastros/${id}/aprovar`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ jobs: options?.jobs ?? [] }),
+    // conformidade (DC-198): usada só pelo gatilho de WhatsApp; não altera a aprovação.
+    body: JSON.stringify({ jobs: options?.jobs ?? [], conformidade: options?.conformidade }),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);

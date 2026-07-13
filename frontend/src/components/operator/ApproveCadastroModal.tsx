@@ -33,8 +33,8 @@ type Props = {
   motoristaCpf?: string;
   hasCavalo?: boolean;
   hasCarreta?: boolean;
-  /** invocado com o array de jobs ['angellira'] (ou vazio se só criar conta) */
-  onConfirm: (jobs: ApproveJob[]) => void;
+  /** invocado com o array de jobs ['angellira'] (ou vazio) + a conformidade do precheck (DC-198) */
+  onConfirm: (jobs: ApproveJob[], conformidade: { angellira: boolean; spx: boolean }) => void;
   isSubmitting?: boolean;
 };
 
@@ -213,7 +213,9 @@ export default function ApproveCadastroModal({
     const jobs: ApproveJob[] = [];
     if (effectiveAngellira) jobs.push("angellira");
     if (effectiveSpx) jobs.push("spx");
-    onConfirm(jobs);
+    // DC-198 — conformidade do precheck (Angellira todos vigentes + SPX vigente/na
+    // nossa agência) para o gatilho de WhatsApp "cadastro aprovado".
+    onConfirm(jobs, { angellira: angellTodosVigentes, spx: spxVigenteOuJaNossa });
   };
 
   const nomeFmt = motoristaNome?.toUpperCase() || "—";
