@@ -115,3 +115,28 @@ export function getCadastroProblemas(dados, opts = {}) {
 export function isCadastroIncompleto(dados, opts = {}) {
   return getCadastroProblemas(dados, opts).length > 0;
 }
+
+// Motivo sintético para o backlog antigo (cadastros criados até o cutoff) que
+// não tem nenhum problema de dado — pra não aparecer "sem motivo" na aba.
+export const BACKLOG_PROBLEMA = Object.freeze({
+  area: "geral",
+  tipo: "incompleto",
+  motivo: "Backlog anterior — revisar e completar.",
+});
+
+/**
+ * Decide o balde de um pendente ("incompletos" | "revisao") combinando:
+ *  - problemas de dado (getCadastroProblemas), e
+ *  - o cutoff de backlog (feature "zerar a fila"): criado ATÉ o cutoff → backlog.
+ * Puro e testável. Quando é backlog sem problema, injeta BACKLOG_PROBLEMA pra a
+ * aba mostrar um motivo.
+ * @returns {{ bucket: "incompletos"|"revisao", problemas: Array }}
+ */
+export function resolveBucket({ createdAt, problemas, cutoffIso }) {
+  const list = Array.isArray(problemas) ? [...problemas] : [];
+  const created = createdAt ? new Date(createdAt).getTime() : NaN;
+  const cutoff = cutoffIso ? new Date(cutoffIso).getTime() : NaN;
+  const isBacklog = Number.isFinite(created) && Number.isFinite(cutoff) && created <= cutoff;
+  if (isBacklog && list.length === 0) list.push({ ...BACKLOG_PROBLEMA });
+  return { bucket: isBacklog || list.length > 0 ? "incompletos" : "revisao", problemas: list };
+}

@@ -1292,6 +1292,9 @@ export interface PendingDriverRegistrationItem {
   cpf_motorista: string | null;
   placa_cavalo: string | null;
   dados: Record<string, unknown> | null;
+  /** Presente só no balde "incompletos" (aba Dados incompletos). */
+  problemas?: CadastroProblema[];
+  n_problemas?: number;
 }
 
 export async function fetchCadastrosPendentes(params: {
@@ -1303,6 +1306,8 @@ export async function fetchCadastrosPendentes(params: {
   dir?: "asc" | "desc";
   /** Aba "Dados incompletos": esconde da revisão os cadastros com problema. */
   excluirIncompletos?: boolean;
+  /** Balde da fila: "revisao" (default) ou "incompletos" (mesma tabela acionável). */
+  bucket?: "revisao" | "incompletos";
 }) {
   const accessToken = await getOperatorAccessToken();
   const query = new URLSearchParams(

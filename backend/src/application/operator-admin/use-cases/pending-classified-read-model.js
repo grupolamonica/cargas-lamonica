@@ -1,6 +1,7 @@
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { buildPaginationMeta } from "../../../domain/operator-admin/route-utils.js";
-import { getCadastroProblemas } from "./pending-registration-problemas.js";
+import { getCadastroProblemas, resolveBucket } from "./pending-registration-problemas.js";
+import { getBacklogCutoff } from "./pending-backlog-cutoff.js";
 
 // Lista de pendentes CLASSIFICADA em dois baldes (aba "Dados incompletos" + a
 // própria "Pendentes de revisão"):
@@ -59,6 +60,9 @@ export async function fetchPendingClassified({ bucket, search, page, pageSize, s
   const sortKey = Object.hasOwn(SORT_ACCESSORS, sort) ? sort : "enviado";
   const asc = String(dir || "").toLowerCase() === "asc";
 
+  // Cutoff reversível do backlog (feature "zerar a fila"), lido do app_settings.
+  const cutoffIso = await getBacklogCutoff();
+
   return withPgClient(async (client) => {
     // Só cadastros pendentes de revisão participam da classificação.
     const { rows } = await client.query(
@@ -89,8 +93,12 @@ export async function fetchPendingClassified({ bucket, search, page, pageSize, s
     const selected = [];
     for (const row of rows) {
       if (!matchesSearch(row, term, searchDigits)) continue;
-      const problemas = getCadastroProblemas(row.dados);
-      const isIncompleto = problemas.length > 0;
+      const { bucket, problemas } = resolveBucket({
+        createdAt: row.created_at,
+        problemas: getCadastroProblemas(row.dados),
+        cutoffIso,
+      });
+      const isIncompleto = bucket === "incompletos";
       if (isIncompleto) countIncompletos += 1;
       else countRevisao += 1;
       if (isIncompleto === wantIncompletos) {
