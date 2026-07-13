@@ -75,6 +75,9 @@ import {
   type SheetMonitorSummary,
   fetchCargoHistory,
   type CargoHistoryEvent,
+  fetchVehicleChecklist,
+  type VehicleChecklistEntry,
+  type VehicleChecklistLevel,
 } from "@/services/readModels";
 
 const SHEET_MONITOR_QUERY_KEY = ["admin", "sheet-monitor"] as const;
@@ -2245,6 +2248,78 @@ function SourceBadge({ source }: { source: string | null | undefined }) {
 
 // ─── Detail Modal ─────────────────────────────────────────────────────────────
 
+// Semáforo do checklist do veículo (verde/amarelo/vermelho/cinza).
+const CHECKLIST_LEVEL_STYLE: Record<VehicleChecklistLevel, { dot: string; badge: string }> = {
+  ok: { dot: "bg-emerald-500", badge: "border-emerald-500/40 bg-emerald-500/10 text-emerald-600" },
+  warning: { dot: "bg-amber-500", badge: "border-amber-500/40 bg-amber-500/10 text-amber-600" },
+  overdue: { dot: "bg-red-500", badge: "border-red-500/40 bg-red-500/10 text-red-600" },
+  unknown: { dot: "bg-muted-foreground/40", badge: "border-border bg-muted/40 text-muted-foreground" },
+};
+
+// Resumo em linguagem do operador do nível de um veículo/item.
+function checklistSummary(level: VehicleChecklistLevel, daysToDue: number | null): string {
+  if (level === "ok") return daysToDue != null ? `Em dia · vence em ${daysToDue} dia(s)` : "Em dia";
+  if (level === "warning") return daysToDue != null ? `Vence em ${daysToDue} dia(s)` : "Próximo a vencer";
+  if (level === "overdue") {
+    if (daysToDue != null && daysToDue < 0) return `Vencido há ${Math.abs(daysToDue)} dia(s)`;
+    return "Reprovado / problema";
+  }
+  return "Sem dados de checklist";
+}
+
+function ChecklistDot({ level }: { level: VehicleChecklistLevel }) {
+  return <span className={`mt-1 inline-block h-2.5 w-2.5 shrink-0 rounded-full ${CHECKLIST_LEVEL_STYLE[level].dot}`} />;
+}
+
+// Card visual do checklist de uma placa (cavalo/carreta): semáforo + itens.
+function VehicleChecklistCard({
+  placa,
+  papel,
+  entry,
+  loading,
+}: {
+  placa: string;
+  papel: "cavalo" | "carreta";
+  entry: VehicleChecklistEntry | undefined;
+  loading: boolean;
+}) {
+  const level: VehicleChecklistLevel = entry?.level ?? "unknown";
+  const style = CHECKLIST_LEVEL_STYLE[level];
+  return (
+    <div className="rounded-xl border border-border/60 bg-muted/20 p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${style.dot}`} />
+          <span className="font-mono text-xs font-bold text-foreground">{placa}</span>
+          <span className="text-[0.6rem] text-muted-foreground/50">{papel}</span>
+        </div>
+        <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[0.62rem] font-semibold ${style.badge}`}>
+          {loading ? "…" : checklistSummary(level, entry?.daysToDue ?? null)}
+        </span>
+      </div>
+      {loading ? null : !entry || !entry.found ? (
+        <p className="text-[0.7rem] italic text-muted-foreground/50">Sem checklist para esta placa na planilha.</p>
+      ) : (
+        <ul className="space-y-1">
+          {entry.items.map((item, index) => (
+            <li key={index} className="flex items-start gap-2 text-[0.7rem]">
+              <ChecklistDot level={item.level} />
+              <div className="min-w-0 leading-snug">
+                <span className="font-medium text-foreground">{item.statusRaw || "—"}</span>
+                {item.tipoVeiculo ? <span className="text-muted-foreground"> · {item.tipoVeiculo}</span> : null}
+                <span className="block text-muted-foreground/70">
+                  {item.validade ? `Validade: ${item.validade}` : "Sem validade"}
+                  {item.proprietario ? ` · ${item.proprietario}` : ""}
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function RowDetailModal({
   row,
   enriched,
@@ -2307,6 +2382,17 @@ function RowDetailModal({
     queryKey: ["admin", "cargo-history", row?.lh ?? ""],
     queryFn: () => fetchCargoHistory(row!.lh),
     enabled: open && !!row?.lh,
+    staleTime: 30_000,
+  });
+
+  // Checklist do veículo (semáforo) por placa EFETIVA (override do operador ?? planilha).
+  const checklistCavalo = (alloc?.alloc_cavalo ?? row?.cavalo ?? "").trim();
+  const checklistCarreta = (alloc?.alloc_carreta ?? row?.carreta ?? "").trim();
+  const checklistPlacas = [checklistCavalo, checklistCarreta].filter(Boolean);
+  const vehicleChecklist = useQuery({
+    queryKey: ["admin", "vehicle-checklist", checklistCavalo, checklistCarreta],
+    queryFn: () => fetchVehicleChecklist(checklistPlacas),
+    enabled: open && checklistPlacas.length > 0,
     staleTime: 30_000,
   });
 
@@ -2606,6 +2692,30 @@ function RowDetailModal({
                 </div>
               )}
             </ModalSection>
+
+            {/* ── Checklist do veículo (semáforo verde/amarelo/vermelho) ── */}
+            {(checklistCavalo || checklistCarreta) && (
+              <ModalSection title="Checklist do veículo">
+                <div className="space-y-3">
+                  {checklistCavalo && (
+                    <VehicleChecklistCard
+                      placa={checklistCavalo}
+                      papel="cavalo"
+                      entry={vehicleChecklist.data?.byPlaca?.[checklistCavalo]}
+                      loading={vehicleChecklist.isLoading}
+                    />
+                  )}
+                  {checklistCarreta && (
+                    <VehicleChecklistCard
+                      placa={checklistCarreta}
+                      papel="carreta"
+                      entry={vehicleChecklist.data?.byPlaca?.[checklistCarreta]}
+                      loading={vehicleChecklist.isLoading}
+                    />
+                  )}
+                </div>
+              </ModalSection>
+            )}
 
             {/* ── Veículos ── */}
             <ModalSection title="Veículos">
