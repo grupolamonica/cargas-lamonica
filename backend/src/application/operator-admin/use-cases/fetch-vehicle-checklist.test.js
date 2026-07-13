@@ -27,12 +27,12 @@ describe("fetchVehicleChecklist", () => {
     expect(payload.byPlaca["MTY-0443"].items[0].tipoVeiculo).toBe("CARRETA 1");
   });
 
-  it("REGRESSÃO: usa o Vencimento do robô, não a data 'Validade' passada", async () => {
+  it("usa a validade real da consulta (aba viva ChecklistViaAPI) — caso FDB0605", async () => {
     canned.map = new Map([
-      ["OZI8371", [{ statusRaw: "Aprovado", vencimentoDias: 16, validadeMs: NOW - 49 * DAY }]],
+      ["FDB0605", [{ statusRaw: "Aprovado", validadeMs: NOW + 2 * DAY, vencimentoDias: 2, dataInclusao: "13/07/2026 07:20:10" }]],
     ]);
-    const { payload } = await fetchVehicleChecklist({ placas: "OZI-8371", nowMs: NOW });
-    expect(payload.byPlaca["OZI-8371"]).toMatchObject({ level: "warning", daysToDue: 16 });
+    const { payload } = await fetchVehicleChecklist({ placas: "FDB-0605", nowMs: NOW });
+    expect(payload.byPlaca["FDB-0605"]).toMatchObject({ found: true, level: "warning", daysToDue: 2 });
   });
 
   it("consolida o pior nível e o menor daysToDue entre os itens do veículo", async () => {

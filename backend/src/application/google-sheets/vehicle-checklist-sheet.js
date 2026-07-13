@@ -1,10 +1,16 @@
 import { parseCsv, fetchGoogleSheetCsv } from "./google-sheet-loads.js";
 import { normalizePlate } from "../../domain/vehicle-checklist/status.js";
 
-// Planilha do robô GRIFFI (aba "Checklist") que replica o LiraLOG a cada ~5 min.
-// Lida por CSV público (mesma abordagem do sync de cargas — sem service account).
+// Planilha do robô GRIFFI que replica o LiraLOG a cada ~5 min. Lida por CSV
+// público (mesma abordagem do sync de cargas — sem service account).
+//
+// ATENÇÃO: a aba VIVA é "ChecklistViaAPI" (pipeline via API, atualizada
+// diariamente). A aba "CHECKLIST" (a primeira/default) está CONGELADA desde
+// ~mai/2026. Por isso apontamos por GID (export?format=csv&gid=) — o gviz por
+// nome cai CALADO na primeira aba quando o nome não bate, mascarando o erro.
 const DEFAULT_CHECKLIST_SHEET_ID = "1r39V0i-t56BjVuS-np-m5LxnAG8Ja625W9o-5Al7Ogk";
-const DEFAULT_CHECKLIST_SHEET_NAME = "Checklist";
+const DEFAULT_CHECKLIST_SHEET_GID = "1616923863"; // aba "ChecklistViaAPI"
+const DEFAULT_CHECKLIST_SHEET_NAME = "ChecklistViaAPI";
 
 // BRT = UTC-3. As datas da planilha são hora de parede local; converto para
 // instante para comparar com Date.now() sem depender do fuso do servidor.
@@ -22,7 +28,9 @@ export function getVehicleChecklistSheetUrl() {
   const sheetId = process.env.VEHICLE_CHECKLIST_SHEET_ID?.trim() || DEFAULT_CHECKLIST_SHEET_ID;
   if (!sheetId) return null;
 
-  const gid = process.env.VEHICLE_CHECKLIST_SHEET_GID?.trim();
+  // Por GID (export CSV) é o caminho DEFAULT e robusto: gid errado → HTTP 400
+  // (falha alto), sem o fallback silencioso do gviz para a primeira aba.
+  const gid = process.env.VEHICLE_CHECKLIST_SHEET_GID?.trim() || DEFAULT_CHECKLIST_SHEET_GID;
   if (gid) {
     return `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
   }
