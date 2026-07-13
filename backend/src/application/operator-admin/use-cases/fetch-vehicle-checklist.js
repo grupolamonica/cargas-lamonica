@@ -37,6 +37,7 @@ export async function fetchVehicleChecklist({ placas, correlationId, nowMs = Dat
 
     const resolvedItems = items.map((item) => {
       const { level, daysToDue } = computeChecklistLevel({
+        vencimentoDias: item.vencimentoDias,
         validadeMs: item.validadeMs,
         statusRaw: item.statusRaw,
         nowMs,
@@ -46,7 +47,6 @@ export async function fetchVehicleChecklist({ placas, correlationId, nowMs = Dat
         tipoVeiculo: item.tipoVeiculo,
         statusRaw: item.statusRaw,
         ultimoStatus: item.ultimoStatus,
-        validade: item.validadeLabel,
         proprietario: item.proprietario,
         dataInclusao: item.dataInclusao,
         level,

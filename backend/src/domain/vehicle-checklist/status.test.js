@@ -55,6 +55,25 @@ describe("computeChecklistLevel", () => {
     expect(computeChecklistLevel({ validadeMs: null, statusRaw: "Reprovado", nowMs: NOW }).level).toBe(CHECKLIST_LEVEL.OVERDUE);
     expect(computeChecklistLevel({ validadeMs: null, statusRaw: "", nowMs: NOW }).level).toBe(CHECKLIST_LEVEL.UNKNOWN);
   });
+
+  it("usa o Vencimento do robô como dias restantes (positivo → amarelo/verde)", () => {
+    expect(computeChecklistLevel({ vencimentoDias: 16, statusRaw: "Aprovado", nowMs: NOW, yellowDays: 30 })).toEqual({ level: CHECKLIST_LEVEL.WARNING, daysToDue: 16 });
+    expect(computeChecklistLevel({ vencimentoDias: 35, statusRaw: "Aprovado", nowMs: NOW, yellowDays: 30 })).toEqual({ level: CHECKLIST_LEVEL.OK, daysToDue: 35 });
+    expect(computeChecklistLevel({ vencimentoDias: -5, statusRaw: "Aprovado", nowMs: NOW })).toEqual({ level: CHECKLIST_LEVEL.OVERDUE, daysToDue: -5 });
+  });
+
+  it("REGRESSÃO: Vencimento manda mesmo quando a data 'Validade' já passou", () => {
+    // Bug: 431 aprovados apareciam VERMELHO porque a data "Data Validade
+    // Checklist" está no passado, mas o Vencimento do robô é positivo.
+    const r = computeChecklistLevel({
+      vencimentoDias: 16,
+      validadeMs: NOW - 66 * DAY, // data enganosa (passada)
+      statusRaw: "Aprovado",
+      nowMs: NOW,
+      yellowDays: 30,
+    });
+    expect(r).toEqual({ level: CHECKLIST_LEVEL.WARNING, daysToDue: 16 });
+  });
 });
 
 describe("aggregateLevel", () => {

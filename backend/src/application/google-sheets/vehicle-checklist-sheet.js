@@ -63,6 +63,14 @@ const HEADER_ALIASES = {
   codCheck: ["cod check monitor", "cod check"],
 };
 
+/** coluna "Vencimento" (dias restantes, ex.: "0", "16", "-45") → int ou null. */
+function parseVencimentoDias(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const parsed = Number.parseInt(text.replace(/[^\d-]/g, ""), 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 /** validade "08/05/2026 19:09:39" (BRT) → epoch ms. Retorna null se inválida/vazia. */
 function parseBrDateTimeMs(value) {
   const text = String(value ?? "").trim();
@@ -134,6 +142,7 @@ export function parseVehicleChecklistCsv(csvText) {
       ultimoStatus: cell(row, "ultimoStatus") || null,
       validadeLabel: validadeLabel || null,
       validadeMs: parseBrDateTimeMs(validadeLabel),
+      vencimentoDias: parseVencimentoDias(cell(row, "vencimento")),
       proprietario: cell(row, "proprietario") || null,
       dataInclusao: cell(row, "dataInclusao") || null,
       codViagem: cell(row, "codViagem") || null,
