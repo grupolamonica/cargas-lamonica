@@ -505,6 +505,42 @@ export async function fetchCargoHistory(lh: string) {
   );
 }
 
+/** Semáforo do checklist do veículo: verde/amarelo/vermelho/cinza. */
+export type VehicleChecklistLevel = "ok" | "warning" | "overdue" | "unknown";
+
+export interface VehicleChecklistItem {
+  tipoVeiculo: string | null;
+  statusRaw: string | null;
+  ultimoStatus: string | null;
+  validade: string | null;
+  proprietario: string | null;
+  dataInclusao: string | null;
+  level: VehicleChecklistLevel;
+  daysToDue: number | null;
+}
+
+export interface VehicleChecklistEntry {
+  placa: string;
+  found: boolean;
+  level: VehicleChecklistLevel;
+  daysToDue: number | null;
+  items: VehicleChecklistItem[];
+}
+
+/**
+ * Checklist de veículo por placa (cavalo/carreta) — card de status do Monitor.
+ * Status/cor calculados ao vivo no backend (validade × agora), a partir da aba
+ * Checklist do robô GRIFFI (LiraLOG). Indexado pela placa EXATA enviada.
+ */
+export async function fetchVehicleChecklist(placas: string[]) {
+  const accessToken = await getOperatorAccessToken();
+  const query = encodeURIComponent(placas.map((p) => p.trim()).filter(Boolean).join(","));
+  return requestJson<{ byPlaca: Record<string, VehicleChecklistEntry>; meta: unknown }>(
+    `/api/operator/vehicle-checklist?placas=${query}`,
+    { accessToken },
+  );
+}
+
 export async function fetchOperatorClientes(params: Record<string, string>) {
   const accessToken = await getOperatorAccessToken();
   const query = new URLSearchParams(params).toString();
