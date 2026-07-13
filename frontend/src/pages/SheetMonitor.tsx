@@ -372,7 +372,7 @@ function MultiSelectFilter({
           <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-60 p-1.5">
+      <PopoverContent align="start" className="w-[22rem] max-w-[92vw] p-1.5">
         {searchable && (
           <div className="relative mb-1.5">
             <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
@@ -399,17 +399,17 @@ function MultiSelectFilter({
                   key={o.value}
                   type="button"
                   onClick={() => toggle(o.value)}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/60"
+                  className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/60"
                 >
                   <span
                     className={cn(
-                      "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                      "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border",
                       active ? "border-primary bg-primary text-primary-foreground" : "border-input",
                     )}
                   >
                     {active && <Check className="h-3 w-3" />}
                   </span>
-                  <span className="truncate">{o.label}</span>
+                  <span className="min-w-0 flex-1 whitespace-normal break-words leading-snug" title={o.label}>{o.label}</span>
                 </button>
               );
             })
