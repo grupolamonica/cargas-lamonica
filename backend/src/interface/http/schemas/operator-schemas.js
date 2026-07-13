@@ -13,6 +13,11 @@ export const sheetMonitorRowQuerySchema = z.object({
   lh: z.string().min(1, "Query param 'lh' is required"),
 });
 
+/** Query params for GET /api/operator/vehicle-checklist?placas=A,B */
+export const vehicleChecklistQuerySchema = z.object({
+  placas: z.string().trim().min(1, "Query param 'placas' is required").max(2000),
+});
+
 /** Body for POST /api/operator/sheet-monitor/enrich */
 export const sheetMonitorEnrichBodySchema = z.object({
   force: z.boolean().optional(),

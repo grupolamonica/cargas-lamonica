@@ -39,7 +39,7 @@ import {
 } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
-import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorUpdateReservaBodySchema } from "../schemas/operator-schemas.js";
+import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorUpdateReservaBodySchema, vehicleChecklistQuerySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
@@ -53,6 +53,7 @@ import {
   listClienteRotas,
   lookupCargoByCodigoViagem,
   fetchCargoHistoryByLh,
+  fetchVehicleChecklist,
   redactExpiredPublicLeadPii,
   revalidateAllVehiclesAngellira,
   saveRouteTrecho,
@@ -259,6 +260,13 @@ export async function resolveCargoHistoryResponse(request) {
   return withOperatorSession(request, "cargo-history", async ({ correlationId }) => {
     const { lh } = cargoHistoryQuerySchema.parse({ lh: getQueryParam(request, "lh") });
     return fetchCargoHistoryByLh({ lh, correlationId });
+  });
+}
+
+export async function resolveVehicleChecklistResponse(request) {
+  return withOperatorSession(request, "vehicle-checklist", async ({ correlationId }) => {
+    const { placas } = vehicleChecklistQuerySchema.parse({ placas: getQueryParam(request, "placas") });
+    return fetchVehicleChecklist({ placas, correlationId });
   });
 }
 
