@@ -32,31 +32,31 @@ function normalizeStatusText(value) {
 /**
  * Nível do semáforo de UM item de checklist.
  *
- * Fonte primária de "dias restantes" = a coluna **Vencimento** da planilha
- * (dias que o próprio robô/LiraLOG recalcula a cada ~5 min). A coluna
- * "Data Validade Checklist" NÃO é a expiração real — diverge sistematicamente
- * do Vencimento (ex.: validade 25/05 "passada" mas Vencimento=+16) — então só
- * serve de fallback quando não há Vencimento numérico. O Status bruto
- * ("Reprovado"/"Vencido") sempre força vermelho.
+ * Fonte primária de "dias restantes" = a **data de validade real** do checklist
+ * (na aba viva ChecklistViaAPI ela bate com o Vencimento do robô e, por ser uma
+ * data, AUTO-CORRIGE caso a planilha congele — o veículo vira vermelho sozinho
+ * quando a validade passa). A coluna **Vencimento** (dias já calculados pelo robô)
+ * é fallback para as linhas sem validade. O Status bruto ("Reprovado"/"Vencido")
+ * sempre força vermelho.
  *
  * @param {object} p
- * @param {number|null} [p.vencimentoDias] - dias restantes segundo o robô (negativo = vencido)
- * @param {number|null} [p.validadeMs] - fallback: validade em epoch ms
+ * @param {number|null} [p.validadeMs] - validade real em epoch ms (fonte primária)
+ * @param {number|null} [p.vencimentoDias] - fallback: dias restantes segundo o robô
  * @param {string} p.statusRaw - coluna "Status" (Aprovado/Reprovado/Vencido)
  * @param {number} p.nowMs - agora (epoch ms), injetado para testabilidade
  * @param {number} [p.yellowDays=30] - janela do amarelo (dias)
  * @returns {{ level: string, daysToDue: number|null }}
  */
-export function computeChecklistLevel({ vencimentoDias, validadeMs, statusRaw, nowMs, yellowDays = 30 }) {
+export function computeChecklistLevel({ validadeMs, vencimentoDias, statusRaw, nowMs, yellowDays = 30 }) {
   const s = normalizeStatusText(statusRaw);
   const isProblem = s.includes("reprovad"); // reprovado = problema
   const isExpiredStatus = s.includes("vencid");
   const isApproved = s.includes("aprovad");
 
-  const daysToDue = Number.isFinite(vencimentoDias)
-    ? vencimentoDias
-    : Number.isFinite(validadeMs)
-      ? Math.floor((validadeMs - nowMs) / DAY_MS)
+  const daysToDue = Number.isFinite(validadeMs)
+    ? Math.floor((validadeMs - nowMs) / DAY_MS)
+    : Number.isFinite(vencimentoDias)
+      ? vencimentoDias
       : null;
 
   // Status explícito de problema/vencido manda (vermelho).
