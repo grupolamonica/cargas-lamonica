@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Download, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User, UserPlus } from "lucide-react";
-import { differenceInDays } from "date-fns";
+import { differenceInDays, format } from "date-fns";
 import { toast } from "sonner";
 
 import ClientLogo from "@/components/ClientLogo";
@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 import { resolveVinculoStyle } from "@/lib/vinculo";
 import { confirmAction } from "@/lib/confirm";
 import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
-import { buildDisplayDateTime, formatFullDateTime, formatShortDateTime } from "@/lib/dateDisplay";
+import { buildDisplayDateTime, formatFullDateTime, formatScheduleLabel } from "@/lib/dateDisplay";
 import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { ApiError, approveOperatorLoadLead, cancelOperatorLoadLead, createDirectAllocation, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type DirectAllocationPayload, type OperatorLeadGroup, type OperatorLeadPacoteMeta, type PublicLeadValidationSummary } from "@/services/loadClaims";
@@ -746,10 +746,11 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
       const effectiveStatus = sheetAllocation?.status || group.load.sheetStatus || group.load.status;
       const statusLabel =
         STATUS_LABELS[effectiveStatus] ?? STATUS_LABELS[(effectiveStatus || "").toUpperCase()] ?? effectiveStatus ?? "";
+      const coletaFallback = buildDisplayDateTime(group.load.data, group.load.horario);
       const coleta =
-        group.load.sheetDataCarregamento ||
-        formatShortDateTime(buildDisplayDateTime(group.load.data, group.load.horario), "");
-      const entrega = group.load.sheetDataDescarga || "";
+        formatScheduleLabel(group.load.sheetDataCarregamento) ||
+        (coletaFallback ? format(coletaFallback, "dd-MM-yyyy HH:mm") : "");
+      const entrega = formatScheduleLabel(group.load.sheetDataDescarga) || "";
       for (const lead of group.leads) {
         rows.push([
           group.load.id,
@@ -1116,10 +1117,11 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                 isNearDeadline = diffMs >= -60 * 60 * 1000 && diffMs <= 6 * 60 * 60 * 1000;
               }
 
+              const coletaFallback = buildDisplayDateTime(group.load.data, group.load.horario);
               const coletaLabel =
-                group.load.sheetDataCarregamento ||
-                formatShortDateTime(buildDisplayDateTime(group.load.data, group.load.horario), "A confirmar");
-              const entregaLabel = group.load.sheetDataDescarga || null;
+                formatScheduleLabel(group.load.sheetDataCarregamento) ||
+                (coletaFallback ? format(coletaFallback, "dd-MM-yyyy HH:mm") : "A confirmar");
+              const entregaLabel = formatScheduleLabel(group.load.sheetDataDescarga) || null;
 
               return (
                 <article
