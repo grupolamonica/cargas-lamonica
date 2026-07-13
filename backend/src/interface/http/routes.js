@@ -80,6 +80,7 @@ import {
   resolveSaveRouteTrechoResponse,
   resolveLookupCargoByCodigoViagemResponse,
   resolveCargoHistoryResponse,
+  resolveVehicleChecklistResponse,
   resolveDriverSponsorClicksResponse,
   resolveOperatorOverviewDigestResponse,
   resolveOperatorCadastrosPendentesResponse,
@@ -411,6 +412,7 @@ export function registerRoutes(app) {
   // Lookup por código de viagem (segmento fixo antes de :cargoId).
   router.get("/api/operator/cargas/lookup/codigo-viagem", wrap(resolveLookupCargoByCodigoViagemResponse));
   router.get("/api/operator/cargas/historico", wrap(resolveCargoHistoryResponse));
+  router.get("/api/operator/vehicle-checklist", wrap(resolveVehicleChecklistResponse));
   router.post("/api/operator/cargas", wrap(resolveCreateOperatorCargoResponse));
   router.patch("/api/operator/cargas/:cargoId", wrap(resolveUpdateOperatorCargoResponse));
   router.delete("/api/operator/cargas/:cargoId", wrap(resolveDeleteOperatorCargoResponse));
