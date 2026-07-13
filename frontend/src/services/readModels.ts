@@ -540,6 +540,25 @@ export async function fetchVehicleChecklist(placas: string[]) {
   );
 }
 
+/** Nível compacto por placa (para os ícones de semáforo na linha do Monitor). */
+export interface VehicleChecklistLevelEntry {
+  level: VehicleChecklistLevel;
+  daysToDue: number | null;
+}
+
+/**
+ * Mapa COMPACTO de níveis de checklist de TODAS as placas (chave = placa
+ * normalizada, só alfanumérico maiúsculo). Uma chamada alimenta os ícones de
+ * todas as linhas do Monitor sem N+1.
+ */
+export async function fetchVehicleChecklistLevels() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ byPlaca: Record<string, VehicleChecklistLevelEntry>; meta: unknown }>(
+    `/api/operator/vehicle-checklist/levels`,
+    { accessToken },
+  );
+}
+
 export async function fetchOperatorClientes(params: Record<string, string>) {
   const accessToken = await getOperatorAccessToken();
   const query = new URLSearchParams(params).toString();

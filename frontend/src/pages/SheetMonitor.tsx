@@ -76,8 +76,10 @@ import {
   fetchCargoHistory,
   type CargoHistoryEvent,
   fetchVehicleChecklist,
+  fetchVehicleChecklistLevels,
   type VehicleChecklistEntry,
   type VehicleChecklistLevel,
+  type VehicleChecklistLevelEntry,
 } from "@/services/readModels";
 
 const SHEET_MONITOR_QUERY_KEY = ["admin", "sheet-monitor"] as const;
@@ -651,6 +653,49 @@ function VehicleChecks({ enriched, hasCavalo, hasCarreta }: { enriched: SheetMon
     <span className="inline-flex shrink-0 items-center gap-0.5">
       {hasCavalo && <MiniCheck letter="C" found={presenceState(enriched?.cavalo_angellira_found)} label="Cavalo (Angellira)" />}
       {hasCarreta && <MiniCheck letter="R" found={presenceState(enriched?.carreta_angellira_found)} label="Carreta (Angellira)" />}
+    </span>
+  );
+}
+
+// Cor do ícone de veículo por status do checklist (semáforo).
+const CHECKLIST_ICON_COLOR: Record<VehicleChecklistLevel, string> = {
+  ok: "text-emerald-500",
+  warning: "text-amber-500",
+  overdue: "text-red-500",
+  unknown: "text-muted-foreground/30",
+};
+
+// Resumo curto p/ o tooltip do ícone (checklistSummary é function declaration
+// hoisted, definida mais abaixo).
+function checklistIconTitle(papel: string, plate: string, entry: VehicleChecklistLevelEntry | undefined): string {
+  const label = entry ? checklistSummary(entry.level, entry.daysToDue) : "Sem dados de checklist";
+  return `${papel} ${plate} — checklist: ${label}`;
+}
+
+// Ícone de caminhão para cavalo e carreta, tintado pelo status do checklist de
+// cada um (verde=ok, amarelo=próximo a vencer, vermelho=vencido/problema,
+// cinza=sem dados). Visão rápida na linha, sem abrir o modal.
+function VehicleChecklistIcons({ cavalo, carreta, cavaloChecklist, carretaChecklist }: {
+  cavalo: string | null;
+  carreta: string | null;
+  cavaloChecklist?: VehicleChecklistLevelEntry;
+  carretaChecklist?: VehicleChecklistLevelEntry;
+}) {
+  const vehicles: Array<{ papel: string; plate: string; entry?: VehicleChecklistLevelEntry }> = [];
+  if (cavalo) vehicles.push({ papel: "Cavalo", plate: cavalo, entry: cavaloChecklist });
+  if (carreta) vehicles.push({ papel: "Carreta", plate: carreta, entry: carretaChecklist });
+  if (!vehicles.length) return null;
+  return (
+    <span className="inline-flex shrink-0 items-center gap-0.5">
+      {vehicles.map(({ papel, plate, entry }) => (
+        <span
+          key={papel}
+          className={cn("flex items-center", CHECKLIST_ICON_COLOR[entry?.level ?? "unknown"])}
+          title={checklistIconTitle(papel, plate, entry)}
+        >
+          <Truck className="h-3.5 w-3.5" />
+        </span>
+      ))}
     </span>
   );
 }
@@ -1486,6 +1531,8 @@ function NewCargoModal({ open, onClose, statusOptions }: { open: boolean; onClos
 type AllocCellProps = {
   row: SheetMonitorRowType;
   enriched: SheetMonitorEnrichedRow | undefined;
+  cavaloChecklist?: VehicleChecklistLevelEntry;
+  carretaChecklist?: VehicleChecklistLevelEntry;
   editing: boolean;
   saving: boolean;
   pinning: boolean;
@@ -1503,7 +1550,7 @@ type AllocCellProps = {
   onPullStandby?: (lh: string) => void;
 };
 
-function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle, assigningReserva, routeStandbyCount = 0, onPullStandby }: AllocCellProps) {
+function AllocCell({ row, enriched, cavaloChecklist, carretaChecklist, editing, saving, pinning, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle, assigningReserva, routeStandbyCount = 0, onPullStandby }: AllocCellProps) {
   // Linha de RESERVA (standby na rota) — exibe o motorista/veículo e um punho de
   // arrasto: o operador puxa o standby para uma carga da MESMA rota (alocar).
   if (row.reserva) {
@@ -1638,6 +1685,7 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
           )}
           {row.motoristas && <DriverChecks enriched={enriched} />}
           <VehicleChecks enriched={enriched} hasCavalo={Boolean(row.cavalo)} hasCarreta={Boolean(row.carreta)} />
+          <VehicleChecklistIcons cavalo={row.cavalo} carreta={row.carreta} cavaloChecklist={cavaloChecklist} carretaChecklist={carretaChecklist} />
           {/* Slot de largura FIXA para o marcador de estado (fixado / aviso ASPX).
               Fica reservado mesmo sem marcador, para as placas e os selos A/S/C/R
               não deslocarem entre linhas com e sem marcador (DC-226). */}
@@ -1720,6 +1768,8 @@ type RowDropIntent = "swap" | "before" | "after" | null;
 const SheetMonitorRow = memo(function SheetMonitorRow({
   row,
   enriched,
+  cavaloChecklist,
+  carretaChecklist,
   selected,
   editing,
   saving,
@@ -1742,6 +1792,8 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
 }: {
   row: SheetMonitorRowType;
   enriched: SheetMonitorEnrichedRow | undefined;
+  cavaloChecklist?: VehicleChecklistLevelEntry;
+  carretaChecklist?: VehicleChecklistLevelEntry;
   selected: boolean;
   editing: boolean;
   saving: boolean;
@@ -1863,6 +1915,8 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
         <AllocCell
           row={row}
           enriched={enriched}
+          cavaloChecklist={cavaloChecklist}
+          carretaChecklist={carretaChecklist}
           editing={editing}
           saving={saving}
           pinning={pinning}
@@ -1887,6 +1941,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
 function SheetMonitorTable({
   rows,
   resolveEnriched,
+  resolveChecklistLevel,
   allocByLh,
   selectedLh,
   editingLh,
@@ -1909,6 +1964,7 @@ function SheetMonitorTable({
 }: {
   rows: SheetMonitorRowType[];
   resolveEnriched: (row: SheetMonitorRowType) => SheetMonitorEnrichedRow | undefined;
+  resolveChecklistLevel: (plate: string | null | undefined) => VehicleChecklistLevelEntry | undefined;
   allocByLh: Record<string, SheetMonitorAllocation>;
   selectedLh: string | null;
   editingLh: string | null;
@@ -2142,6 +2198,8 @@ function SheetMonitorTable({
                 key={row.rowKey ?? `${row.lh}-${idx}`}
                 row={row}
                 enriched={resolveEnriched(row)}
+                cavaloChecklist={resolveChecklistLevel(row.cavalo)}
+                carretaChecklist={resolveChecklistLevel(row.carreta)}
                 selected={row.lh === selectedLh}
                 editing={row.lh === editingLh}
                 saving={row.lh === savingLh}
@@ -3139,6 +3197,25 @@ export default function SheetMonitor() {
   const seloMaps = useMemo(() => buildSeloMaps(enrichedByLh, enrichedByCargoId), [enrichedByLh, enrichedByCargoId]);
   const resolveEnriched = useCallback((row: SheetMonitorRowType) => resolveRowSelo(row, seloMaps), [seloMaps]);
 
+  // Mapa de níveis do checklist (uma chamada p/ todas as placas) → ícones de
+  // semáforo por linha. Status calculado ao vivo no backend; TTL curto.
+  const vehicleChecklistLevelsQuery = useQuery({
+    queryKey: ["admin", "vehicle-checklist-levels"],
+    queryFn: fetchVehicleChecklistLevels,
+    staleTime: 60_000,
+    gcTime: 120_000,
+    refetchOnWindowFocus: false,
+  });
+  const checklistLevelsByPlate = vehicleChecklistLevelsQuery.data?.byPlaca;
+  const resolveChecklistLevel = useCallback(
+    (plate: string | null | undefined): VehicleChecklistLevelEntry | undefined => {
+      if (!plate || !checklistLevelsByPlate) return undefined;
+      // Normaliza igual ao backend (só alfanumérico maiúsculo).
+      return checklistLevelsByPlate[plate.toUpperCase().replace(/[^A-Z0-9]/g, "")];
+    },
+    [checklistLevelsByPlate],
+  );
+
   // Alocação efetiva: o override do operador (alloc_*) sobrepõe o valor da
   // planilha. Reflete na tabela/contadores o que foi editado no Monitor.
   const items = useMemo(() => {
@@ -3920,6 +3997,7 @@ export default function SheetMonitor() {
               <SheetMonitorTable
                 rows={paginatedRows}
                 resolveEnriched={resolveEnriched}
+                resolveChecklistLevel={resolveChecklistLevel}
                 allocByLh={allocByLh}
                 selectedLh={selectedRow?.lh ?? null}
                 editingLh={editingLh}

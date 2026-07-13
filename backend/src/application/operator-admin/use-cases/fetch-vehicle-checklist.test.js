@@ -6,7 +6,7 @@ vi.mock("../vehicle-checklist-cache.js", () => ({
   readVehicleChecklistMapCached: async () => canned.map,
 }));
 
-const { fetchVehicleChecklist } = await import("./fetch-vehicle-checklist.js");
+const { fetchVehicleChecklist, fetchVehicleChecklistLevels } = await import("./fetch-vehicle-checklist.js");
 
 const NOW = Date.UTC(2026, 4, 1, 12, 0, 0);
 const DAY = 86_400_000;
@@ -56,5 +56,18 @@ describe("fetchVehicleChecklist", () => {
   it("deduplica placas repetidas e ignora vazias", async () => {
     const { payload } = await fetchVehicleChecklist({ placas: "AAA1A11, ,AAA1A11", nowMs: NOW });
     expect(Object.keys(payload.byPlaca)).toEqual(["AAA1A11"]);
+  });
+
+  it("fetchVehicleChecklistLevels devolve mapa compacto (level+daysToDue) por placa normalizada", async () => {
+    canned.map = new Map([
+      ["ABC1D23", [{ statusRaw: "Aprovado", validadeMs: NOW + 5 * DAY }]],
+      ["XYZ9K88", [{ statusRaw: "Reprovado", validadeMs: NOW + 90 * DAY }]],
+    ]);
+    const { payload } = await fetchVehicleChecklistLevels({ nowMs: NOW });
+    expect(payload.byPlaca.ABC1D23).toEqual({ level: "warning", daysToDue: 5 });
+    expect(payload.byPlaca.XYZ9K88.level).toBe("overdue"); // reprovado força vermelho
+    // Compacto: sem lista de itens.
+    expect(payload.byPlaca.ABC1D23.items).toBeUndefined();
+    expect(payload.meta.count).toBe(2);
   });
 });
