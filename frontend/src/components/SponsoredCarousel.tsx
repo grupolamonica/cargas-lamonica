@@ -30,6 +30,15 @@ const SLIDES: Slide[] = [
     selfContained: true,
   },
   {
+    src: "/sponsors/agregar_fill.jpg",
+    alt: "Venha agregar com a gente — rotas no eixo BA x PE, mais produtividade, operação mais dinâmica e atendimento diferenciado. Vem pra Lamônica.",
+    href: "https://wa.me/557139950665?text=Ol%C3%A1%2C%20vi%20a%20campanha%20%22Venha%20Agregar%22%20no%20portal%20e%20quero%20agregar%20com%20a%20Lam%C3%B4nica.",
+    brand: "LAMONICA AGREGADOS",
+    tagline: "Agregue com a gente — eixo BA x PE",
+    cta: "Quero agregar",
+    selfContained: true,
+  },
+  {
     src: "/sponsors/lamonica-postos-pe.png",
     alt: "Lamônica Postos — nova parceria: 3 novos postos em Pernambuco com valor diferenciado para agregados e parceiros",
     href: "https://wa.me/557139950665?text=Ol%C3%A1%2C%20vi%20a%20parceria%20dos%20postos%20em%20PE%20no%20portal%20e%20quero%20saber%20mais%20sobre%20o%20valor%20diferenciado.",
