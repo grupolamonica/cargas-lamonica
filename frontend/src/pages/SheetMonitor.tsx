@@ -770,12 +770,12 @@ function MonitorDatalists({
 // cliente" editam; demais travam — já em atribuição no ASPX) em
 // @/lib/monitorEditPolicy (allocEditPolicy), para ser testável.
 
-// Texto do pop-up de confirmação para cargas "aguardando chegar no cliente"
+// Texto do pop-up de confirmação para cargas já em atribuição/execução no ASPX
 // (motorista/veículo já no ASPX). Pergunta antes de efetivar a troca.
 function aspxConfirmDescription(count: number) {
   return count > 1
-    ? `${count} cargas estão "aguardando chegar no cliente" — o motorista e o veículo já estão no ASPX. Tem certeza de que quer fazer a troca?`
-    : `Esta carga está "aguardando chegar no cliente" — o motorista e o veículo já estão no ASPX. Tem certeza de que quer fazer a troca?`;
+    ? `${count} cargas já estão em atribuição/execução no ASPX — o motorista e o veículo já estão no ASPX. Tem certeza de que quer fazer a troca?`
+    : `Esta carga já está em atribuição/execução no ASPX — o motorista e o veículo já estão no ASPX. Tem certeza de que quer fazer a troca?`;
 }
 
 // Pop-up de confirmação genérico (sim/cancelar) sobre o Dialog existente.
@@ -829,8 +829,8 @@ function ConfirmDialog({
 
 // Confirmação de TROCA de motorista/veículo com DESCRIÇÃO obrigatória (motivo).
 // Aparece sempre que o operador troca o motorista/veículo no Monitor (inline ou
-// modal). Quando a carga está "aguardando chegar no cliente" (já no ASPX), mostra
-// também o aviso do ASPX. O "Salvar troca" só habilita com o motivo preenchido.
+// modal). Quando a carga já está em atribuição/execução no ASPX, mostra também o
+// aviso do ASPX. O "Salvar troca" só habilita com o motivo preenchido.
 function ChangeReasonDialog({
   open,
   aspxWarning = false,
@@ -855,7 +855,7 @@ function ChangeReasonDialog({
           </DialogTitle>
           <DialogDescription className="pt-1 text-sm leading-relaxed text-muted-foreground">
             {aspxWarning
-              ? 'Esta carga está "aguardando chegar no cliente" — o motorista e o veículo já estão no ASPX. Descreva o motivo da troca.'
+              ? "Esta carga já está em atribuição/execução no ASPX — o motorista e o veículo já estão no ASPX. Descreva o motivo da troca."
               : "Descreva o motivo da troca de motorista/veículo."}
           </DialogDescription>
         </DialogHeader>

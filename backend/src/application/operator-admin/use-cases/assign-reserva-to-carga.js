@@ -4,12 +4,6 @@ import { NotFoundError, ValidationError } from "../../../domain/load-claims/erro
 import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 
-// Status efetivo editável: vazio (Disponível/Reservado) ou os estágios PRÉ-
-// carregamento ("aguardando carregamento" / "aguardando chegar no cliente").
-// Espelha allocEditPolicy do front — de CARREGADO em diante (descarga, CTE,
-// cancelado, etc.) trava a carga (viagem já em execução no ASPX).
-const PRE_CARREGAMENTO_RE = /aguardando\s+(chegar|carreg)/i;
-
 /**
  * Puxa um motorista em STANDBY (monitor_reservas) para uma carga da planilha
  * (arrastar a reserva e soltar na carga). Grava a alocação do standby em
@@ -41,11 +35,10 @@ export async function assignReservaToCarga({ reservaId, targetLh, operatorId, re
     if (carga.alloc_pinned === true) {
       throw new ValidationError("A carga de destino está fixada. Desafixe antes de puxar o standby.");
     }
-    // Trava por status (defesa no servidor — o front também bloqueia via allocEditPolicy).
-    const effStatus = (carga.alloc_status ?? carga.sheet_status ?? "").toString().trim();
-    if (effStatus && !PRE_CARREGAMENTO_RE.test(effStatus)) {
-      throw new ValidationError(`A carga de destino está travada (status "${effStatus}") e não aceita standby.`);
-    }
+    // DC-224: sem trava por status — puxar reserva (motorista substituto) é
+    // permitido em QUALQUER status da viagem, inclusive pós-carregamento. A troca
+    // é auditada (insertSecurityAuditEvent abaixo); fixação (pin) e mesma-rota
+    // continuam sendo as únicas restrições.
 
     // 2) Agora trava a reserva.
     const { rows: rsv } = await client.query(
