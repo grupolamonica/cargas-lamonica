@@ -949,7 +949,8 @@ const Motoristas = () => {
   const rascunhosItems = rascunhosData?.items ?? [];
 
   const aprovarMutation = useMutation({
-    mutationFn: ({ id, jobs }: { id: string; jobs: ApproveJob[] }) => aprovarCadastro(id, { jobs }),
+    mutationFn: ({ id, jobs, conformidade }: { id: string; jobs: ApproveJob[]; conformidade?: { angellira: boolean; spx: boolean } }) =>
+      aprovarCadastro(id, { jobs, conformidade }),
     // Abre o modal de PROGRESSO ANTES da request voltar, para que o polling de
     // GET /external-jobs comece já no início do disparo síncrono do backend.
     // (O backend roda o pipeline dentro do POST /aprovar mas faz commit imediato
@@ -1610,7 +1611,7 @@ const Motoristas = () => {
                   Array.isArray((selectedPendente.dados as { carretas?: unknown[] })?.carretas),
                 )}
                 isSubmitting={aprovarMutation.isPending}
-                onConfirm={(jobs) => aprovarMutation.mutate({ id: selectedPendente.id, jobs })}
+                onConfirm={(jobs, conformidade) => aprovarMutation.mutate({ id: selectedPendente.id, jobs, conformidade })}
               />
             ) : null}
 

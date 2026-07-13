@@ -6,6 +6,7 @@ import { ZodError } from "zod";
 
 import { insertSecurityAuditEvent, recordSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
+import { notifyRegistrationApproved } from "../../../application/operator-admin/use-cases/registration-approved-outreach.js";
 import { selectAllPaginated } from "../../../infrastructure/supabase/paginate.js";
 import { readEnrichedMapsCached } from "../../../application/operator-admin/sheet-monitor-enriched-cache.js";
 import {
@@ -1775,6 +1776,28 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
         correlationId,
         metadata: { driverId, cpf: cpfClean, nome, jobs: requestedJobs },
       });
+
+      // 6.5. DC-198 — notificação WhatsApp "cadastro aprovado" (lógica pronta,
+      // DESLIGADA por flag até a fundação driver-outreach + Cloud API/DC-176).
+      // Best-effort e não-bloqueante: nunca derruba a aprovação.
+      try {
+        // Só notifica "apto" quando o precheck do modal veio TODO conforme
+        // (Angellira + SPX). A conformidade chega no corpo do request (body.conformidade).
+        const allConforme = Boolean(body?.conformidade?.angellira && body?.conformidade?.spx);
+        const outreach = notifyRegistrationApproved({ nome, telefone, allConforme });
+        if (outreach.reason === "pending_channel") {
+          logStructuredEvent("info", "driver-outreach.registration-approved.ready", {
+            driverId,
+            correlationId,
+            note: "flag on; mensagem pronta, canal de envio ainda nao conectado (foundation/Cloud API pendente)",
+          });
+        }
+      } catch (outreachError) {
+        logStructuredEvent("warn", "driver-outreach.registration-approved.failed", {
+          correlationId,
+          message: outreachError instanceof Error ? outreachError.message : String(outreachError),
+        });
+      }
 
       // 7. Opcional: dispara pipelines externos (DC-111 / Sprint 1)
       let angellira = null;
