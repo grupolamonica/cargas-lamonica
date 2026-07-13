@@ -1301,6 +1301,8 @@ export async function fetchCadastrosPendentes(params: {
   pageSize?: number;
   sort?: "nome" | "placa" | "enviado" | "status";
   dir?: "asc" | "desc";
+  /** Aba "Dados incompletos": esconde da revisão os cadastros com problema. */
+  excluirIncompletos?: boolean;
 }) {
   const accessToken = await getOperatorAccessToken();
   const query = new URLSearchParams(
@@ -1310,6 +1312,43 @@ export async function fetchCadastrosPendentes(params: {
   ).toString();
   return requestJson<{ items: PendingDriverRegistrationItem[]; meta: PaginationMeta }>(
     `/api/operator/cadastros-pendentes${query ? `?${query}` : ""}`,
+    { accessToken },
+  );
+}
+
+// ─── Cadastros com dados incompletos / não conformes (aba derivada) ──────────
+export interface CadastroProblema {
+  area: "motorista" | "cavalo" | "carreta" | "proprietario";
+  tipo: "incompleto" | "nao_conforme";
+  motivo: string;
+}
+
+export interface CadastroIncompletoItem extends PendingDriverRegistrationItem {
+  problemas: CadastroProblema[];
+  n_problemas: number;
+}
+
+export interface CadastrosIncompletosResponse {
+  items: CadastroIncompletoItem[];
+  meta: PaginationMeta;
+  counts: { revisao: number; incompletos: number; total: number };
+}
+
+export async function fetchCadastrosIncompletos(params: {
+  search?: string;
+  page?: number;
+  pageSize?: number;
+  sort?: "nome" | "placa" | "enviado" | "status";
+  dir?: "asc" | "desc";
+}) {
+  const accessToken = await getOperatorAccessToken();
+  const query = new URLSearchParams(
+    Object.entries(params)
+      .filter(([, v]) => v !== undefined && v !== null && v !== "")
+      .map(([k, v]) => [k, String(v)]),
+  ).toString();
+  return requestJson<CadastrosIncompletosResponse>(
+    `/api/operator/cadastros-incompletos${query ? `?${query}` : ""}`,
     { accessToken },
   );
 }

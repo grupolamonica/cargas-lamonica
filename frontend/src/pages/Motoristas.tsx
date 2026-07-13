@@ -47,6 +47,7 @@ import DriverDetailModal, { type DriverDetailModalData } from "@/components/Driv
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
 import { AutoApproveAngelliraCard } from "@/components/operator/AutoApproveAngelliraCard";
 import { CadastrosComErroPanel } from "@/components/operator/CadastrosComErroPanel";
+import { CadastrosIncompletosPanel } from "@/components/operator/CadastrosIncompletosPanel";
 import { CadastroBotsHealthBanner } from "@/components/operator/CadastroBotsHealthBanner";
 import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
 import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
@@ -832,7 +833,7 @@ const Motoristas = () => {
   const deferredPendentesSearch = useDeferredValue(pendentesSearch.trim());
   const [pendentesPage, setPendentesPage] = useState(1);
   // DC-196: sub-abas dentro de Pendentes — "revisao" (fila normal) | "erro" (falhas no cadastro externo).
-  const [pendentesSubTab, setPendentesSubTab] = useState<"revisao" | "erro">("revisao");
+  const [pendentesSubTab, setPendentesSubTab] = useState<"revisao" | "incompletos" | "erro">("revisao");
   // Ordenação (DC-197): coluna + direção; server-side (a lista é paginada no backend).
   type PendentesSortCol = "nome" | "placa" | "enviado" | "status";
   const [pendentesSort, setPendentesSort] = useState<PendentesSortCol>("enviado");
@@ -918,6 +919,9 @@ const Motoristas = () => {
         pageSize: 20,
         sort: pendentesSort,
         dir: pendentesDir,
+        // Aba "Dados incompletos": na fila de revisão (status pendente) escondemos
+        // os cadastros com problema — eles aparecem na aba própria.
+        excluirIncompletos: pendentesStatusFilter === "pendente" ? true : undefined,
       }),
     enabled: mainTab === "pendentes",
     ...queryOptions,
@@ -1241,6 +1245,18 @@ const Motoristas = () => {
               </button>
               <button
                 type="button"
+                onClick={() => setPendentesSubTab("incompletos")}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors",
+                  pendentesSubTab === "incompletos"
+                    ? "bg-amber-500 text-white shadow-sm"
+                    : "bg-muted/50 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <AlertTriangle className="h-3.5 w-3.5" /> Dados incompletos
+              </button>
+              <button
+                type="button"
                 onClick={() => setPendentesSubTab("erro")}
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors",
@@ -1253,6 +1269,7 @@ const Motoristas = () => {
               </button>
             </div>
 
+            {pendentesSubTab === "incompletos" && <CadastrosIncompletosPanel />}
             {pendentesSubTab === "erro" && <CadastrosComErroPanel />}
 
             {pendentesSubTab === "revisao" && (

@@ -1629,6 +1629,8 @@ export async function resolveOperatorCadastrosPendentesResponse(request) {
       pageSize: query.pageSize,
       sort: typeof query.sort === "string" ? query.sort.trim() : null,
       dir: typeof query.dir === "string" ? query.dir.trim() : null,
+      // Aba "Dados incompletos": esconde da revisão os cadastros com problema.
+      excluirIncompletos: query.excluirIncompletos === "true" || query.excluirIncompletos === true,
       correlationId,
     });
   });

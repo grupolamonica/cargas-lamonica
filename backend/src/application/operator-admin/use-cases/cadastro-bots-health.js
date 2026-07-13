@@ -43,10 +43,16 @@ export async function getCadastroBotsHealth({ correlationId } = {}) {
     return { key: b.key, label: b.label, online: norm.online, detail: norm.detail };
   });
   const offline = bots.filter((b) => !b.online);
+  // Contrato dos read-models operator: { statusCode, payload } — o wrap() faz
+  // `const { statusCode, payload } = await handler()`. Retornar objeto plano
+  // fazia o endpoint dar 500 para operador autenticado (banner nunca aparecia).
   return {
-    bots,
-    anyOffline: offline.length > 0,
-    offline: offline.map((b) => ({ key: b.key, label: b.label, detail: b.detail })),
-    meta: { correlationId: correlationId ?? null, checkedAt: new Date().toISOString() },
+    statusCode: 200,
+    payload: {
+      bots,
+      anyOffline: offline.length > 0,
+      offline: offline.map((b) => ({ key: b.key, label: b.label, detail: b.detail })),
+      meta: { correlationId: correlationId ?? null, checkedAt: new Date().toISOString() },
+    },
   };
 }

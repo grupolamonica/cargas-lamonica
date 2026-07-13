@@ -1,5 +1,6 @@
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { buildPaginationMeta } from "../../../domain/operator-admin/route-utils.js";
+import { fetchPendingClassified } from "./pending-classified-read-model.js";
 
 const PENDING_DRIVER_DEFAULT_PAGE_SIZE = 20;
 const PENDING_DRIVER_MAX_PAGE_SIZE = 100;
@@ -16,7 +17,13 @@ const PENDING_DRIVER_MAX_PAGE_SIZE = 100;
  * @param {string} [opts.dir]    - Direção: 'asc' | 'desc' (default 'desc')
  * @param {string} [opts.correlationId]
  */
-export async function fetchPendingDriverRegistrations({ status, search, page, pageSize, sort, dir, correlationId }) {
+export async function fetchPendingDriverRegistrations({ status, search, page, pageSize, sort, dir, excluirIncompletos, correlationId }) {
+  // Aba "Dados incompletos": quando a revisão pede pra esconder os cadastros com
+  // problema, delega ao read-model classificado (mesma classificação JS, fonte
+  // única, derivado — sem mutação). Só pendentes participam da classificação.
+  if (excluirIncompletos) {
+    return fetchPendingClassified({ bucket: "revisao", search, page, pageSize, sort, dir, correlationId });
+  }
   const safePage = Math.max(1, Number.parseInt(String(page || 1), 10) || 1);
   const safePageSize = Math.min(
     PENDING_DRIVER_MAX_PAGE_SIZE,
