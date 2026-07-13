@@ -13,18 +13,24 @@ describe("allocEditPolicy", () => {
     expect(allocEditPolicy({ status: "Aguardando chegar no cliente" })).toEqual({ editable: true, aspxWarning: true });
   });
 
-  it('"aguardando carregamento" (pré-carregamento) → editável COM aviso de ASPX', () => {
+  it('"aguardando carregamento" → editável COM aviso de ASPX', () => {
     expect(allocEditPolicy({ status: "AGUARDANDO CARREGAMENTO" })).toEqual({ editable: true, aspxWarning: true });
     expect(allocEditPolicy({ status: "Aguardando carregamento" })).toEqual({ editable: true, aspxWarning: true });
   });
 
-  it("NÃO confunde 'aguardando descarga' (pós-carregamento) → travado", () => {
-    expect(allocEditPolicy({ status: "AGUARDANDO DESCARGA" })).toEqual({ editable: false, aspxWarning: false });
-  });
-
-  it("demais status operacionais → travados", () => {
-    for (const status of ["CARREGADO", "DESCARREGADO", "DESCARREGANDO", "CTE ENVIADO", "CTE EM EMISSÃO", "NO SHOW", "CANCELADO", "Em transito"]) {
-      expect(allocEditPolicy({ status })).toEqual({ editable: false, aspxWarning: false });
+  it("DC-224: status pós-carregamento agora são editáveis COM aviso de ASPX", () => {
+    for (const status of [
+      "AGUARDANDO DESCARGA",
+      "CARREGADO",
+      "DESCARREGADO",
+      "DESCARREGANDO",
+      "CTE ENVIADO",
+      "CTE EM EMISSÃO",
+      "NO SHOW",
+      "CANCELADO",
+      "Em transito",
+    ]) {
+      expect(allocEditPolicy({ status })).toEqual({ editable: true, aspxWarning: true });
     }
   });
 });
