@@ -45,6 +45,9 @@ describe("dateDisplay", () => {
     expect(formatScheduleLabel("2026-07-11T12:00")).toBe("11-07-2026 12:00");
     expect(formatScheduleLabel("2026-07-11T12:00:00")).toBe("11-07-2026 12:00");
     expect(formatScheduleLabel("2026-07-11 08:30")).toBe("11-07-2026 08:30");
+    // Fila: sheet_data_* denormalizado pode chegar como timestamp serializado
+    // (…Z). Formata a hora de parede escrita no valor, sem deslocar por fuso.
+    expect(formatScheduleLabel("2026-05-10T16:30:00.000Z")).toBe("10-05-2026 16:30");
   });
 
   it("preserva rótulos amigáveis da planilha e trata vazio", () => {
