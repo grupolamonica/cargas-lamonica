@@ -54,6 +54,7 @@ import {
   lookupCargoByCodigoViagem,
   fetchCargoHistoryByLh,
   fetchVehicleChecklist,
+  fetchVehicleChecklistLevels,
   redactExpiredPublicLeadPii,
   revalidateAllVehiclesAngellira,
   saveRouteTrecho,
@@ -267,6 +268,12 @@ export async function resolveVehicleChecklistResponse(request) {
   return withOperatorSession(request, "vehicle-checklist", async ({ correlationId }) => {
     const { placas } = vehicleChecklistQuerySchema.parse({ placas: getQueryParam(request, "placas") });
     return fetchVehicleChecklist({ placas, correlationId });
+  });
+}
+
+export async function resolveVehicleChecklistLevelsResponse(request) {
+  return withOperatorSession(request, "vehicle-checklist-levels", async ({ correlationId }) => {
+    return fetchVehicleChecklistLevels({ correlationId });
   });
 }
 
