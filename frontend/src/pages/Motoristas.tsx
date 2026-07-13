@@ -47,7 +47,6 @@ import DriverDetailModal, { type DriverDetailModalData } from "@/components/Driv
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
 import { AutoApproveAngelliraCard } from "@/components/operator/AutoApproveAngelliraCard";
 import { CadastrosComErroPanel } from "@/components/operator/CadastrosComErroPanel";
-import { CadastrosIncompletosPanel } from "@/components/operator/CadastrosIncompletosPanel";
 import { CadastroBotsHealthBanner } from "@/components/operator/CadastroBotsHealthBanner";
 import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
 import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
@@ -909,8 +908,17 @@ const Motoristas = () => {
   });
   const migratedDocs = migratedDocsData?.docs ?? [];
 
+  // Balde da fila: aba "Dados incompletos" → "incompletos"; aba de revisão →
+  // "revisao" só quando o filtro é "pendente" (senão, fluxo normal por status).
+  const pendentesBucket =
+    pendentesSubTab === "incompletos"
+      ? "incompletos"
+      : pendentesStatusFilter === "pendente"
+        ? "revisao"
+        : undefined;
+
   const { data: pendentesData, isLoading: pendentesLoading, isFetching: pendentesFetching, error: pendentesError } = useQuery({
-    queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, deferredPendentesSearch, pendentesPage, pendentesSort, pendentesDir],
+    queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, deferredPendentesSearch, pendentesPage, pendentesSort, pendentesDir, pendentesBucket],
     queryFn: () =>
       fetchCadastrosPendentes({
         status: pendentesStatusFilter || undefined,
@@ -919,9 +927,8 @@ const Motoristas = () => {
         pageSize: 20,
         sort: pendentesSort,
         dir: pendentesDir,
-        // Aba "Dados incompletos": na fila de revisão (status pendente) escondemos
-        // os cadastros com problema — eles aparecem na aba própria.
-        excluirIncompletos: pendentesStatusFilter === "pendente" ? true : undefined,
+        // Aba de revisão / Dados incompletos: mesma tabela acionável, baldes diferentes.
+        bucket: pendentesBucket,
       }),
     enabled: mainTab === "pendentes",
     ...queryOptions,
@@ -1269,18 +1276,23 @@ const Motoristas = () => {
               </button>
             </div>
 
-            {pendentesSubTab === "incompletos" && <CadastrosIncompletosPanel />}
             {pendentesSubTab === "erro" && <CadastrosComErroPanel />}
 
-            {pendentesSubTab === "revisao" && (
+            {(pendentesSubTab === "revisao" || pendentesSubTab === "incompletos") && (
               <>
             {/* Pendentes section */}
             <section className="admin-panel overflow-hidden p-5 lg:p-6">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">Cadastros automáticos</p>
-                  <h2 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">Revisão de candidatos</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">Cadastros enviados pelo formulário público /cadastro aguardando revisão.</p>
+                  <h2 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
+                    {pendentesSubTab === "incompletos" ? "Dados incompletos" : "Revisão de candidatos"}
+                  </h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {pendentesSubTab === "incompletos"
+                      ? "Cadastros com dado faltando ou não conforme — revise, complete e aprove/rejeite por aqui."
+                      : "Cadastros enviados pelo formulário público /cadastro aguardando revisão."}
+                  </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="relative">
@@ -1371,6 +1383,15 @@ const Motoristas = () => {
                           <td className="px-5 py-3">
                             <p className="font-semibold text-foreground">{item.nome_motorista || "—"}</p>
                             <p className="text-xs text-muted-foreground">{item.cpf_motorista || ""}</p>
+                            {item.problemas?.length ? (
+                              <ul className="mt-1 space-y-0.5">
+                                {item.problemas.map((problema, i) => (
+                                  <li key={i} className="text-[0.7rem] leading-tight text-amber-700">
+                                    • {problema.motivo}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : null}
                           </td>
                           <td className="px-5 py-3 text-foreground">{item.placa_cavalo || "—"}</td>
                           <td className="px-5 py-3 text-muted-foreground">

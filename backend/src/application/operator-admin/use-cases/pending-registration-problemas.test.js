@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getCadastroProblemas, isCadastroIncompleto } from "./pending-registration-problemas.js";
+import { getCadastroProblemas, isCadastroIncompleto, resolveBucket } from "./pending-registration-problemas.js";
 
 const HOJE = new Date(Date.UTC(2026, 6, 11)); // 2026-07-11
 
@@ -82,5 +82,40 @@ describe("getCadastroProblemas — aba Dados incompletos", () => {
   it("defensivo: dados nulo/vazio → sem problemas", () => {
     expect(getCadastroProblemas(null)).toEqual([]);
     expect(getCadastroProblemas({})).toEqual([]);
+  });
+});
+
+describe("resolveBucket — cutoff de backlog + problemas", () => {
+  const CUTOFF = "2026-07-13T12:00:00Z";
+
+  it("sem cutoff, sem problema → revisao", () => {
+    expect(resolveBucket({ createdAt: "2026-07-01T00:00:00Z", problemas: [], cutoffIso: null }))
+      .toEqual({ bucket: "revisao", problemas: [] });
+  });
+
+  it("sem cutoff, com problema → incompletos (problemas intactos)", () => {
+    const problemas = [{ area: "cavalo", tipo: "incompleto", motivo: "CRLV do cavalo não anexado." }];
+    const r = resolveBucket({ createdAt: "2026-07-01T00:00:00Z", problemas, cutoffIso: null });
+    expect(r.bucket).toBe("incompletos");
+    expect(r.problemas).toEqual(problemas);
+  });
+
+  it("cutoff setado, criado ANTES sem problema → incompletos + motivo backlog", () => {
+    const r = resolveBucket({ createdAt: "2026-07-01T00:00:00Z", problemas: [], cutoffIso: CUTOFF });
+    expect(r.bucket).toBe("incompletos");
+    expect(r.problemas).toHaveLength(1);
+    expect(r.problemas[0].motivo).toMatch(/Backlog anterior/);
+  });
+
+  it("cutoff setado, criado DEPOIS sem problema → revisao (não é backlog)", () => {
+    expect(resolveBucket({ createdAt: "2026-07-20T00:00:00Z", problemas: [], cutoffIso: CUTOFF }))
+      .toEqual({ bucket: "revisao", problemas: [] });
+  });
+
+  it("cutoff setado, criado ANTES COM problema → incompletos, sem duplicar motivo backlog", () => {
+    const problemas = [{ area: "motorista", tipo: "incompleto", motivo: "CNH do motorista não anexada." }];
+    const r = resolveBucket({ createdAt: "2026-07-01T00:00:00Z", problemas, cutoffIso: CUTOFF });
+    expect(r.bucket).toBe("incompletos");
+    expect(r.problemas).toEqual(problemas);
   });
 });
