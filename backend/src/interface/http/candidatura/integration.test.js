@@ -412,6 +412,10 @@ function basePayload(overrides = {}) {
         senha: "***",
         id_rastreador: "RT123",
       },
+      // DC-195 — anexos obrigatorios (storage_paths do bucket cadastro-drafts).
+      cnh_url: "12345678901/carga/motorista_cnh_1.pdf",
+      selfie_cnh_url: "12345678901/carga/motorista_selfie_cnh_1.jpg",
+      comprovante_url: "12345678901/carga/motorista_comprovante_1.pdf",
     },
     cavalo: {
       placa: "ABC1D23",
@@ -422,6 +426,7 @@ function basePayload(overrides = {}) {
       cor: "Branca",
       owner_doc: "12345678000199",
       owner_doc_type: "cnpj",
+      crlv_url: "12345678901/carga/cavalo_crlv_1.pdf",
     },
     cavalo_owner: {
       tipo: "pj",
@@ -434,6 +439,7 @@ function basePayload(overrides = {}) {
         conta: "56789-0",
         tipo: "corrente",
       },
+      owner_doc_url: "12345678901/carga/cavalo_owner_cnpj_1.pdf",
     },
     carretas: [],
     carreta_owners: [],
@@ -497,6 +503,41 @@ describe("integration — /api/candidatura/* (Plan 07-14)", () => {
     // Audit registrado (sem PII em metadata).
     expect(fakeDb.audit).toHaveLength(1);
     expect(fakeDb.audit[0].params[0]).toBe("driver.candidatura.submitted");
+  });
+
+  it("POST /api/candidatura/submit — DC-195: bloqueia 422 quando faltam anexos obrigatorios", async () => {
+    mockRequireDriverSession.mockResolvedValue({
+      accessToken: "tok",
+      user: { id: "33333333-3333-3333-3333-333333333333" },
+    });
+    mockGetDriverProfileByUserId.mockResolvedValue({
+      statusCode: 200,
+      payload: { profile: { document_number: "99988877766", phone: "71999999999" } },
+    });
+
+    // Cadastro COMPLETO, porém sem os storage_paths dos documentos.
+    const dados = basePayload();
+    delete dados.motorista.cnh_url;
+    delete dados.motorista.selfie_cnh_url;
+    delete dados.motorista.comprovante_url;
+    delete dados.cavalo.crlv_url;
+    delete dados.cavalo_owner.owner_doc_url;
+
+    const response = await resolveCandidaturaSubmitResponse(
+      buildRequest({
+        body: { cargaId: "L-195", dados },
+        headers: { "idempotency-key": "key-dc195-noattach", "x-correlation-id": "corr-dc195" },
+      }),
+    );
+
+    expect(response.statusCode).toBe(422);
+    expect(response.payload.error).toBe("DOCUMENTOS_OBRIGATORIOS");
+    const paths = (response.payload.issues || []).map((issue) => issue.path.join("."));
+    expect(paths).toContain("motorista.cnh_url");
+    expect(paths).toContain("cavalo.crlv_url");
+    expect(paths).toContain("cavalo_owner.owner_doc_url");
+    // Nada persistido quando bloqueado.
+    expect(fakeDb.rows).toHaveLength(0);
   });
 
   it("POST /api/candidatura/submit — idempotency: mesma Idempotency-Key retorna 200 replay com mesmo id+protocolo", async () => {

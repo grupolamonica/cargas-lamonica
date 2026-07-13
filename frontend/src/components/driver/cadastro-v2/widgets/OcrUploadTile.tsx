@@ -78,6 +78,13 @@ const DEFAULT_MAX_SIZE_MB = 8;
 // gerado por bot) e o OCR backend nao consegue extrair nada deles.
 const MIN_SIZE_BYTES = 1024;
 
+// DC-195 — trava de qualidade: além de rejeitar lixo (< 1KB), exige um mínimo de
+// resolução/tamanho para o OCR/IA conseguir ler (evita foto borrada/pequena).
+// Imagem: maior lado >= 1000px. Todos: >= 20KB. HEIC não é decodificável no
+// browser → cai só no floor de tamanho.
+const MIN_IMAGE_LONG_SIDE_PX = 1000;
+const MIN_QUALITY_BYTES = 20 * 1024;
+
 // Magic numbers — protege contra arquivos renomeados com extensao mentirosa.
 const MAGIC_NUMBERS: Array<{ mime: RegExp; bytes: number[] }> = [
   { mime: /^image\/jpeg$/i, bytes: [0xff, 0xd8, 0xff] },
@@ -130,6 +137,43 @@ async function validateFileContent(file: File): Promise<string | null> {
   const head = await readFirstBytes(file, expected.bytes.length);
   if (!magicNumberMatches(head, expected.bytes)) {
     return "Esse arquivo tá danificado. Tira outra foto ou escolhe outro PDF.";
+  }
+  return null;
+}
+
+/**
+ * DC-195 — trava de qualidade. Rejeita arquivos de baixa qualidade (borrados/
+ * pequenos demais para o OCR/IA). Retorna null quando OK ou a mensagem de erro.
+ * Para imagens, mede a maior dimensão via createImageBitmap (HEIC não decodifica
+ * no browser → cai só no floor de tamanho).
+ */
+async function getImageLongSide(file: File): Promise<number | null> {
+  try {
+    if (typeof createImageBitmap === "function") {
+      const bmp = await createImageBitmap(file);
+      const longSide = Math.max(bmp.width, bmp.height);
+      bmp.close?.();
+      return longSide;
+    }
+  } catch {
+    /* browser não decodificou (ex.: HEIC) — pula a checagem de dimensão */
+  }
+  return null;
+}
+
+async function validateFileQuality(file: File): Promise<string | null> {
+  const mime = (file.type || "").toLowerCase();
+  const isPdf = mime === "application/pdf";
+  if (file.size < MIN_QUALITY_BYTES) {
+    return isPdf
+      ? "Esse PDF está muito leve e pode estar ilegível. Gere um PDF de melhor qualidade ou tire uma foto nítida."
+      : "Essa imagem está com qualidade muito baixa. Tire outra foto de perto, com boa luz e sem tremer.";
+  }
+  if (mime.startsWith("image/") && mime !== "image/heic" && mime !== "image/heif") {
+    const longSide = await getImageLongSide(file);
+    if (longSide != null && longSide < MIN_IMAGE_LONG_SIDE_PX) {
+      return "Essa foto está pequena demais para o sistema ler. Fotografe o documento de perto, preenchendo a tela.";
+    }
   }
   return null;
 }
@@ -192,6 +236,13 @@ export function OcrUploadTile({
     const contentError = await validateFileContent(file);
     if (contentError) {
       setSizeError(contentError);
+      event.target.value = "";
+      return;
+    }
+    // DC-195 — trava de qualidade (resolução/tamanho mínimos) antes de aceitar.
+    const qualityError = await validateFileQuality(file);
+    if (qualityError) {
+      setSizeError(qualityError);
       event.target.value = "";
       return;
     }
