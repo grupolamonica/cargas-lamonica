@@ -66,9 +66,11 @@ export function getCadastroProblemas(dados, opts = {}) {
     if (isBlank(m.cpf)) add(problemas, "motorista", "incompleto", "Motorista sem CPF.");
     if (isBlank(m.cnh_url)) add(problemas, "motorista", "incompleto", "CNH do motorista não anexada.");
     if (isBlank(m.selfie_cnh_url)) add(problemas, "motorista", "incompleto", "Selfie com a CNH não anexada.");
-    if (isBlank(m.comprovante_url)) {
-      add(problemas, "motorista", "incompleto", "Comprovante de residência do motorista não anexado.");
-    }
+    // NOTA (decisão do operador, 13/07): a falta do COMPROVANTE DE RESIDÊNCIA do
+    // motorista NÃO tira o cadastro da fila de revisão. Os pendentes antigos foram
+    // criados antes de o comprovante virar campo capturado (lacuna de dado, não
+    // cadastro "ruim"): exigi-lo migraria 22 de 26 da fila só por isso. Se um dia
+    // virar obrigatório de verdade, reativar a checagem aqui.
     const validadeCnh = parseDateSafe(m.cnh?.validade);
     if (validadeCnh && validadeCnh < hojeUTC) {
       add(problemas, "motorista", "nao_conforme", "CNH do motorista vencida.");

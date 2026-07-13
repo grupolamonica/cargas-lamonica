@@ -23,15 +23,19 @@ describe("getCadastroProblemas — aba Dados incompletos", () => {
     expect(isCadastroIncompleto({ motorista: motoristaCompleto() }, { hoje: HOJE })).toBe(false);
   });
 
-  it("motorista sem anexos → 3 problemas incompletos", () => {
+  it("motorista sem CNH/selfie → 2 problemas (comprovante NÃO conta)", () => {
     const dados = {
       motorista: motoristaCompleto({ cnh_url: "", selfie_cnh_url: undefined, comprovante_url: null }),
     };
     expect(motivos(dados)).toEqual([
       "CNH do motorista não anexada.",
       "Selfie com a CNH não anexada.",
-      "Comprovante de residência do motorista não anexado.",
     ]);
+  });
+
+  it("motorista só sem comprovante de residência → NÃO migra (decisão do operador)", () => {
+    const dados = { motorista: motoristaCompleto({ comprovante_url: undefined }) };
+    expect(getCadastroProblemas(dados, { hoje: HOJE })).toEqual([]);
   });
 
   it("CNH vencida → não conforme; CNH futura → ok", () => {
