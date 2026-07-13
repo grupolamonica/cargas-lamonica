@@ -1635,61 +1635,74 @@ function AllocCell({ row, enriched, editing, saving, pinning, allocStatus, onSta
           )}
           {row.motoristas && <DriverChecks enriched={enriched} />}
           <VehicleChecks enriched={enriched} hasCavalo={Boolean(row.cavalo)} hasCarreta={Boolean(row.carreta)} />
-          {pinned && (
-            <span title="Fixado nesta carga (motorista/veículo travados)" className="shrink-0 text-amber-500">
+          {/* Slot de largura FIXA para o marcador de estado (fixado / aviso ASPX).
+              Fica reservado mesmo sem marcador, para as placas e os selos A/S/C/R
+              não deslocarem entre linhas com e sem marcador (DC-226). */}
+          <span
+            className="flex h-3 w-3 shrink-0 items-center justify-center text-amber-500"
+            title={pinned ? "Fixado nesta carga (motorista/veículo travados)" : aspxWarning ? "Motorista/veículo já atribuídos no ASPX" : undefined}
+          >
+            {pinned ? (
               <Pin className="h-3 w-3 fill-current" />
-            </span>
-          )}
-          {aspxWarning && !pinned && (
-            <span title="Motorista/veículo já atribuídos no ASPX" className="shrink-0 text-amber-500">
+            ) : aspxWarning ? (
               <AlertTriangle className="h-3 w-3" />
-            </span>
-          )}
+            ) : null}
+          </span>
         </div>
       </div>
-      {/* Ações à direita. O botão de standby ("+N") fica por ÚLTIMO (mais à direita)
-          para alinhar verticalmente entre as linhas — pin/lápis (hover) ficam à sua
-          esquerda e não deslocam a posição do standby. */}
+      {/* Ações à direita em SLOTS de largura FIXA: a presença/ausência do fixar, do
+          editar e do badge de reserva (👤 N) NÃO desloca as placas e os selos das
+          demais linhas — cada controle ocupa um slot de largura constante (DC-226).
+          O badge fica por último (mais à direita), com espaço próprio/reservado. */}
       <div className="flex shrink-0 items-center gap-0.5">
-        {(row.motoristas || pinned) && (
-          <button
-            type="button"
-            title={pinned ? "Desafixar (liberar para mover na fila)" : "Fixar motorista/veículo nesta carga"}
-            aria-label={pinned ? "Desafixar alocação" : "Fixar alocação"}
-            disabled={pinning}
-            onClick={(e) => { e.stopPropagation(); onTogglePin(row.lh, !pinned); }}
-            className={cn(
-              "rounded p-1 transition-opacity hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50",
-              pinned
-                ? "text-amber-500 hover:text-amber-600"
-                : "text-muted-foreground/40 opacity-0 hover:text-foreground focus:opacity-100 group-hover/alloc:opacity-100",
-            )}
-          >
-            {pinning ? <Loader2 className="h-3 w-3 animate-spin" /> : pinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
-          </button>
-        )}
-        {canEditAlloc && (
-          <button
-            type="button"
-            title="Editar alocação na linha"
-            aria-label="Editar alocação"
-            onClick={(e) => { e.stopPropagation(); onStartEdit(row.lh); }}
-            className="rounded p-1 text-muted-foreground/40 opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100 group-hover/alloc:opacity-100"
-          >
-            <Pencil className="h-3 w-3" />
-          </button>
-        )}
-        {canEditAlloc && routeStandbyCount > 0 && onPullStandby && (
-          <button
-            type="button"
-            title={`Puxar um motorista em reserva desta rota (${routeStandbyCount} disponíve${routeStandbyCount === 1 ? "l" : "is"})`}
-            aria-label="Puxar reserva para esta carga"
-            onClick={(e) => { e.stopPropagation(); onPullStandby(row.lh); }}
-            className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[0.6rem] font-semibold text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700 dark:text-amber-400 dark:hover:bg-amber-500/10"
-          >
-            <UserPlus className="h-3 w-3" /> {routeStandbyCount}
-          </button>
-        )}
+        {/* Slot: fixar/desafixar alocação. */}
+        <span className="flex w-6 shrink-0 justify-center">
+          {(row.motoristas || pinned) && (
+            <button
+              type="button"
+              title={pinned ? "Desafixar (liberar para mover na fila)" : "Fixar motorista/veículo nesta carga"}
+              aria-label={pinned ? "Desafixar alocação" : "Fixar alocação"}
+              disabled={pinning}
+              onClick={(e) => { e.stopPropagation(); onTogglePin(row.lh, !pinned); }}
+              className={cn(
+                "rounded p-1 transition-opacity hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50",
+                pinned
+                  ? "text-amber-500 hover:text-amber-600"
+                  : "text-muted-foreground/40 opacity-0 hover:text-foreground focus:opacity-100 group-hover/alloc:opacity-100",
+              )}
+            >
+              {pinning ? <Loader2 className="h-3 w-3 animate-spin" /> : pinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+            </button>
+          )}
+        </span>
+        {/* Slot: editar alocação na linha. */}
+        <span className="flex w-6 shrink-0 justify-center">
+          {canEditAlloc && (
+            <button
+              type="button"
+              title="Editar alocação na linha"
+              aria-label="Editar alocação"
+              onClick={(e) => { e.stopPropagation(); onStartEdit(row.lh); }}
+              className="rounded p-1 text-muted-foreground/40 opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100 group-hover/alloc:opacity-100"
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          )}
+        </span>
+        {/* Slot: puxar reserva (👤 N) — reservado mesmo quando a rota não tem reserva. */}
+        <span className="flex w-10 shrink-0 justify-end">
+          {canEditAlloc && routeStandbyCount > 0 && onPullStandby && (
+            <button
+              type="button"
+              title={`Puxar um motorista em reserva desta rota (${routeStandbyCount} disponíve${routeStandbyCount === 1 ? "l" : "is"})`}
+              aria-label="Puxar reserva para esta carga"
+              onClick={(e) => { e.stopPropagation(); onPullStandby(row.lh); }}
+              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded px-1 py-0.5 text-[0.6rem] font-semibold text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700 dark:text-amber-400 dark:hover:bg-amber-500/10"
+            >
+              <UserPlus className="h-3 w-3" /> {routeStandbyCount}
+            </button>
+          )}
+        </span>
       </div>
     </div>
   );
