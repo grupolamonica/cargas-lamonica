@@ -32,34 +32,43 @@ function normalizeStatusText(value) {
 /**
  * Nível do semáforo de UM item de checklist.
  *
+ * Fonte primária de "dias restantes" = a coluna **Vencimento** da planilha
+ * (dias que o próprio robô/LiraLOG recalcula a cada ~5 min). A coluna
+ * "Data Validade Checklist" NÃO é a expiração real — diverge sistematicamente
+ * do Vencimento (ex.: validade 25/05 "passada" mas Vencimento=+16) — então só
+ * serve de fallback quando não há Vencimento numérico. O Status bruto
+ * ("Reprovado"/"Vencido") sempre força vermelho.
+ *
  * @param {object} p
- * @param {number|null} p.validadeMs - validade em epoch ms (null = sem data)
- * @param {string} p.statusRaw - coluna "Status" da planilha (Aprovado/Reprovado/Vencido)
+ * @param {number|null} [p.vencimentoDias] - dias restantes segundo o robô (negativo = vencido)
+ * @param {number|null} [p.validadeMs] - fallback: validade em epoch ms
+ * @param {string} p.statusRaw - coluna "Status" (Aprovado/Reprovado/Vencido)
  * @param {number} p.nowMs - agora (epoch ms), injetado para testabilidade
  * @param {number} [p.yellowDays=30] - janela do amarelo (dias)
  * @returns {{ level: string, daysToDue: number|null }}
  */
-export function computeChecklistLevel({ validadeMs, statusRaw, nowMs, yellowDays = 30 }) {
+export function computeChecklistLevel({ vencimentoDias, validadeMs, statusRaw, nowMs, yellowDays = 30 }) {
   const s = normalizeStatusText(statusRaw);
   const isProblem = s.includes("reprovad"); // reprovado = problema
   const isExpiredStatus = s.includes("vencid");
   const isApproved = s.includes("aprovad");
 
-  const hasValidade = Number.isFinite(validadeMs);
-  const daysToDue = hasValidade ? Math.floor((validadeMs - nowMs) / DAY_MS) : null;
+  const daysToDue = Number.isFinite(vencimentoDias)
+    ? vencimentoDias
+    : Number.isFinite(validadeMs)
+      ? Math.floor((validadeMs - nowMs) / DAY_MS)
+      : null;
 
-  if (hasValidade) {
-    if (isProblem || isExpiredStatus || daysToDue < 0) {
-      return { level: CHECKLIST_LEVEL.OVERDUE, daysToDue };
-    }
-    if (daysToDue <= yellowDays) {
-      return { level: CHECKLIST_LEVEL.WARNING, daysToDue };
-    }
+  // Status explícito de problema/vencido manda (vermelho).
+  if (isProblem || isExpiredStatus) return { level: CHECKLIST_LEVEL.OVERDUE, daysToDue };
+
+  if (daysToDue != null) {
+    if (daysToDue < 0) return { level: CHECKLIST_LEVEL.OVERDUE, daysToDue };
+    if (daysToDue <= yellowDays) return { level: CHECKLIST_LEVEL.WARNING, daysToDue };
     return { level: CHECKLIST_LEVEL.OK, daysToDue };
   }
 
-  // Sem validade: decide pelo Status bruto.
-  if (isProblem || isExpiredStatus) return { level: CHECKLIST_LEVEL.OVERDUE, daysToDue: null };
+  // Sem dias e sem status de problema: aprovado → verde, senão desconhecido.
   if (isApproved) return { level: CHECKLIST_LEVEL.OK, daysToDue: null };
   return { level: CHECKLIST_LEVEL.UNKNOWN, daysToDue: null };
 }

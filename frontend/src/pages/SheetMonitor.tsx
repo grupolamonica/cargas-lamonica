@@ -2308,7 +2308,8 @@ function VehicleChecklistCard({
                 <span className="font-medium text-foreground">{item.statusRaw || "—"}</span>
                 {item.tipoVeiculo ? <span className="text-muted-foreground"> · {item.tipoVeiculo}</span> : null}
                 <span className="block text-muted-foreground/70">
-                  {item.validade ? `Validade: ${item.validade}` : "Sem validade"}
+                  {checklistSummary(item.level, item.daysToDue)}
+                  {item.dataInclusao ? ` · consultado ${item.dataInclusao.split(" ")[0]}` : ""}
                   {item.proprietario ? ` · ${item.proprietario}` : ""}
                 </span>
               </div>

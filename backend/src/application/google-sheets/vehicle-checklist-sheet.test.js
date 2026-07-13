@@ -32,6 +32,9 @@ describe("parseVehicleChecklistCsv", () => {
     expect(carreta.validadeLabel).toBe("08/05/2026 19:09:39");
     // 08/05/2026 19:09:39 BRT (UTC-3) = 2026-05-08T22:09:39Z
     expect(carreta.validadeMs).toBe(Date.UTC(2026, 4, 8, 19, 9, 39) + 3 * 60 * 60 * 1000);
+    // Coluna Vencimento (dias restantes segundo o robô) parseada como int.
+    expect(carreta.vencimentoDias).toBe(0);
+    expect(cavalo.vencimentoDias).toBeNull(); // célula vazia
   });
 
   it("linhas sem placa são ignoradas", () => {

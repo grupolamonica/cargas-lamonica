@@ -19,12 +19,20 @@ afterEach(() => {
 describe("fetchVehicleChecklist", () => {
   it("indexa a resposta pela placa EXATA da query (com hífen) e casa por placa normalizada", async () => {
     canned.map = new Map([
-      ["MTY0443", [{ tipoVeiculo: "CARRETA 1", statusRaw: "Aprovado", validadeMs: NOW + 60 * DAY, validadeLabel: "30/06/2026 00:00:00" }]],
+      ["MTY0443", [{ tipoVeiculo: "CARRETA 1", statusRaw: "Aprovado", vencimentoDias: 60 }]],
     ]);
 
     const { payload } = await fetchVehicleChecklist({ placas: "MTY-0443", nowMs: NOW });
-    expect(payload.byPlaca["MTY-0443"]).toMatchObject({ found: true, level: "ok" });
-    expect(payload.byPlaca["MTY-0443"].items[0].validade).toBe("30/06/2026 00:00:00");
+    expect(payload.byPlaca["MTY-0443"]).toMatchObject({ found: true, level: "ok", daysToDue: 60 });
+    expect(payload.byPlaca["MTY-0443"].items[0].tipoVeiculo).toBe("CARRETA 1");
+  });
+
+  it("REGRESSÃO: usa o Vencimento do robô, não a data 'Validade' passada", async () => {
+    canned.map = new Map([
+      ["OZI8371", [{ statusRaw: "Aprovado", vencimentoDias: 16, validadeMs: NOW - 49 * DAY }]],
+    ]);
+    const { payload } = await fetchVehicleChecklist({ placas: "OZI-8371", nowMs: NOW });
+    expect(payload.byPlaca["OZI-8371"]).toMatchObject({ level: "warning", daysToDue: 16 });
   });
 
   it("consolida o pior nível e o menor daysToDue entre os itens do veículo", async () => {

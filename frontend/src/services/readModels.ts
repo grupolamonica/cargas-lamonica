@@ -512,7 +512,6 @@ export interface VehicleChecklistItem {
   tipoVeiculo: string | null;
   statusRaw: string | null;
   ultimoStatus: string | null;
-  validade: string | null;
   proprietario: string | null;
   dataInclusao: string | null;
   level: VehicleChecklistLevel;
