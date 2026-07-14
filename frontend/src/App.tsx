@@ -28,6 +28,7 @@ const OperatorDashboard = lazy(() => import("./pages/OperatorDashboard"));
 const Veiculos = lazy(() => import("./pages/Veiculos"));
 const SheetMonitor = lazy(() => import("./pages/SheetMonitor"));
 const OperatorAuditLogs = lazy(() => import("./pages/OperatorAuditLogs"));
+const RiskManagement = lazy(() => import("./pages/RiskManagement"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const RouteFallback = () => (
@@ -110,6 +111,7 @@ const App = () => {
                   <Route path="/veiculos" element={<Veiculos />} />
                   <Route path="/planilha" element={<SheetMonitor />} />
                   <Route path="/auditoria" element={<OperatorAuditLogs />} />
+                  <Route path="/gerenciamento-risco" element={<RiskManagement />} />
                 </Route>
                 <Route path="*" element={<NotFound />} />
               </Routes>
