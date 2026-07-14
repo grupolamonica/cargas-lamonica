@@ -1,19 +1,31 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
+import { buildAuditChanges } from "../../../domain/operator-admin/audit-diff.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 import { NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
 
+// Rótulos pt-BR dos campos editáveis do motorista (DC-184, antes → depois).
+const DRIVER_FIELD_LABELS = {
+  full_name: "Nome", phone: "Telefone", document_number: "CPF",
+  vehicle_profile: "Perfil do veículo", documents_valid: "Documentos válidos",
+  antt_valid: "ANTT válida", tracking_enabled: "Rastreamento",
+  insurance_valid: "Seguro válido", monitoring_capable: "Carga monitorada",
+  operational_blocked: "Bloqueado", allowed_regions: "Regiões permitidas",
+};
+
 export async function updateOperatorDriverProfile({ driverId, operatorId, payload, requestIp, correlationId }) {
   return withPgTransaction(async (client) => {
+    // SELECT * p/ capturar o estado anterior de qualquer campo editável (DC-184).
     const { rows } = await client.query(
-      `SELECT user_id, full_name, document_number, phone FROM public.driver_profiles WHERE user_id = $1 FOR UPDATE`,
+      `SELECT * FROM public.driver_profiles WHERE user_id = $1 FOR UPDATE`,
       [driverId],
     );
 
     if (!rows[0]) throw new NotFoundError("Motorista nao encontrado.");
 
-    const oldCpf = String(rows[0].document_number || "").replace(/\D/g, "");
-    const oldPhone = String(rows[0].phone || "").replace(/\D/g, "");
+    const before = rows[0];
+    const oldCpf = String(before.document_number || "").replace(/\D/g, "");
+    const oldPhone = String(before.phone || "").replace(/\D/g, "");
 
     const updates = [];
     const values = [driverId];
@@ -27,6 +39,17 @@ export async function updateOperatorDriverProfile({ driverId, operatorId, payloa
       operational_blocked: "operational_blocked", allowed_regions: "allowed_regions",
     };
 
+    // Diff só dos campos presentes no payload (update parcial). Array text[] é
+    // comparado como string ordenada p/ o antes/depois ficar legível.
+    // CPF e telefone ficam FORA do antes/depois: são PII e o array vai em
+    // {metadata.changes} sob chaves genéricas (before/after) que o
+    // sanitizeLogPayload não redige. Continuam sinalizados em updatedFields.
+    const PII_FIELDS = new Set(["document_number", "phone"]);
+    const changeBefore = {};
+    const changeAfter = {};
+    const changeFields = [];
+    const asComparable = (v) => (Array.isArray(v) ? [...v].sort().join(", ") : v);
+
     for (const [payloadKey, column] of Object.entries(fieldMap)) {
       if (payload[payloadKey] !== undefined) {
         const isArrayColumn = column === "allowed_regions";
@@ -35,6 +58,12 @@ export async function updateOperatorDriverProfile({ driverId, operatorId, payloa
         updates.push(`${column} = $${paramIndex}${isArrayColumn ? "::text[]" : ""}`);
         values.push(normalizedValue);
         paramIndex++;
+
+        if (!PII_FIELDS.has(payloadKey)) {
+          changeBefore[payloadKey] = asComparable(before[column]);
+          changeAfter[payloadKey] = asComparable(normalizedValue);
+          changeFields.push({ key: payloadKey, label: DRIVER_FIELD_LABELS[payloadKey] || payloadKey });
+        }
       }
     }
 
@@ -58,7 +87,11 @@ export async function updateOperatorDriverProfile({ driverId, operatorId, payloa
       outcome: "success",
       requestIp,
       correlationId,
-      metadata: { updatedFields: Object.keys(payload), previousName: rows[0].full_name },
+      metadata: {
+        updatedFields: Object.keys(payload),
+        previousName: before.full_name,
+        changes: buildAuditChanges(changeBefore, changeAfter, changeFields),
+      },
     });
 
     logStructuredEvent("info", "operator.driver.profile.updated", {

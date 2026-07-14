@@ -1,5 +1,6 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
+import { buildAuditChanges } from "../../../domain/operator-admin/audit-diff.js";
 import { ConflictError, NotFoundError } from "../../../domain/load-claims/errors.js";
 import { cascadeCancelFromCarga } from "../../cargas-casadas/use-cases/cascade-cancel-from-carga.js";
 import { MANUAL_CARGO_STATUSES, assertCargoOwnership, findCargoById } from "./_shared.js";
@@ -77,7 +78,15 @@ export async function toggleOperatorCargoStatus({ cargoId, operatorId, operatorA
       outcome: "success",
       requestIp,
       correlationId,
-      metadata: { previousStatus: cargo.status, nextStatus },
+      metadata: {
+        previousStatus: cargo.status,
+        nextStatus,
+        changes: buildAuditChanges(
+          { status: cargo.status },
+          { status: nextStatus },
+          [{ key: "status", label: "Status" }],
+        ),
+      },
     });
 
     return {

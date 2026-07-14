@@ -1,5 +1,6 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
+import { buildAuditChanges } from "../../../domain/operator-admin/audit-diff.js";
 import { NotFoundError } from "../../../domain/load-claims/errors.js";
 import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
@@ -107,6 +108,24 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
         descricao: finalDescricao,
         pinned,
         cleared: !finalMotorista && !finalCavalo && !finalCarreta && !finalStatus,
+        // DC-184: antes → depois. SEM cavalo/carreta (placas = sensível "plate"
+        // no sanitizeLogPayload; as chaves genéricas before/after não são
+        // redigidas e vazariam no CSV do DC-186).
+        changes: buildAuditChanges(
+          {
+            motorista: sheetRow.alloc_motorista,
+            status: sheetRow.alloc_status,
+            tipo: sheetRow.alloc_tipo,
+            vinculo: sheetRow.alloc_vinculo,
+          },
+          { motorista: finalMotorista, status: finalStatus, tipo: finalTipo, vinculo: finalVinculo },
+          [
+            { key: "motorista", label: "Motorista" },
+            { key: "status", label: "Status" },
+            { key: "tipo", label: "Tipo" },
+            { key: "vinculo", label: "Vínculo" },
+          ],
+        ),
       },
     });
 
