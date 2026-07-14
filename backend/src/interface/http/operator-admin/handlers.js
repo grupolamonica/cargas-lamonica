@@ -1510,8 +1510,31 @@ export async function resolveSheetMonitorEnrichResponse(request) {
     const supabaseClient = createSupabaseAdminClient();
     const enrichment = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
     if (cargoId || lh) {
-      if (cargoId) await enrichment.enrichSystemCargoById(supabaseClient, cargoId, { correlationId });
-      else await enrichment.enrichSheetRowsByLh(supabaseClient, [lh], { correlationId });
+      if (cargoId) {
+        await enrichment.enrichSystemCargoById(supabaseClient, cargoId, { correlationId });
+      } else {
+        // Motorista/veículo EFETIVO enviados no corpo (o que o operador vê na
+        // tela). O nome é PII → vai no corpo, nunca na URL. Com os valores,
+        // enriquece exatamente aquela linha — cobre cargas fora do snapshot
+        // (Nestlé/importadas). Sem corpo, cai no resolvedor por lh (cargas/snapshot).
+        let body;
+        try {
+          body = (await parseJsonBody(request)) || {};
+        } catch {
+          body = {};
+        }
+        const hasValues =
+          body && (body.motorista != null || body.cavalo != null || body.carreta != null);
+        if (hasValues) {
+          await enrichment.enrichSheetRowByLhWithValues(
+            supabaseClient,
+            { lh, motorista: body.motorista, cavalo: body.cavalo, carreta: body.carreta },
+            { correlationId },
+          );
+        } else {
+          await enrichment.enrichSheetRowsByLh(supabaseClient, [lh], { correlationId });
+        }
+      }
       return { statusCode: 200, payload: { enriched: 1, remaining: 0, scoped: true } };
     }
     const result = await enrichment.enrichSheetMonitorRows(supabaseClient, correlationId, { force, forceSessionStart });

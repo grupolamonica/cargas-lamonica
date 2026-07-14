@@ -2446,8 +2446,12 @@ function RowDetailModal({
   const consultItem = useMutation({
     mutationFn: () => {
       if (!row) return Promise.resolve({ enriched: 0, remaining: 0 });
+      // Envia o motorista/veículo EFETIVO exibido (cobre cargas fora do snapshot,
+      // ex.: Nestlé/importadas, cujo lh não é achado pelo resolvedor por snapshot).
       return enrichSheetMonitorRow(
-        row.source === "sistema" && row.cargoId ? { cargoId: row.cargoId } : { lh: row.lh },
+        row.source === "sistema" && row.cargoId
+          ? { cargoId: row.cargoId }
+          : { lh: row.lh, motorista: row.motoristas ?? "", cavalo: row.cavalo ?? "", carreta: row.carreta ?? "" },
       );
     },
     onSuccess: () => {

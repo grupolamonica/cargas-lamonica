@@ -569,6 +569,39 @@ export async function enrichSheetRowsByLh(supabaseClient, lhs, { correlationId =
   }
 }
 
+// DC-230: enriquece UMA carga da planilha com o motorista/veículo EFETIVO
+// FORNECIDO pelo cliente (exatamente o que o operador vê na tela). Independe do
+// snapshot e da fonte da planilha (Shopee/Nestlé/importada): cargas fora do
+// sheet_monitor_snapshot (ex.: Nestlé, cujo lh é namespaced) não eram achadas
+// por enrichSheetRowsByLh e enriqueciam uma linha vazia. Aqui o selo é gravado
+// com os valores passados, chaveado por `lh`. Não lança.
+export async function enrichSheetRowByLhWithValues(
+  supabaseClient,
+  { lh, motorista = "", cavalo = "", carreta = "" },
+  { correlationId = null } = {},
+) {
+  const l = (lh ?? "").toString().trim();
+  if (!l) return;
+  try {
+    await enrichRows(
+      supabaseClient,
+      [{
+        lh: l,
+        cargoId: null,
+        motoristas: (motorista ?? "").toString().trim(),
+        cavalo: (cavalo ?? "").toString().trim(),
+        carreta: (carreta ?? "").toString().trim(),
+      }],
+      correlationId,
+    );
+  } catch (err) {
+    logStructuredEvent("warn", "sheet-monitor-enrich.by-lh-values-failed", {
+      correlationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 // Filtra os candidatos para os que realmente precisam (re)consultar:
 //  - force + forceSessionStart: tudo que ainda NÃO foi processado nesta sessão
 //    (dedup por enriched_at >= início — usado pelo loop incremental do endpoint)
