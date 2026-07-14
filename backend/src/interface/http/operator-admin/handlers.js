@@ -1501,9 +1501,20 @@ export async function resolveSheetMonitorEnrichResponse(request) {
   return withOperatorSession(request, "sheet-monitor-enrich", async ({ correlationId }) => {
     const force = getQueryParam(request, "force") === "true";
     const forceSessionStart = getQueryParam(request, "forceSessionStart") || null;
+    // DC-230: consulta escopada a UM item (linha selecionada) — `lh` para carga da
+    // planilha, `cargoId` para carga do sistema. Reaproveita o mesmo endpoint com
+    // filtro de item único: enriquece só aquela carga (não varre a planilha
+    // inteira). O enrichRows por baixo já invalida o cache dos selos.
+    const lh = (getQueryParam(request, "lh") || "").trim();
+    const cargoId = (getQueryParam(request, "cargoId") || "").trim();
     const supabaseClient = createSupabaseAdminClient();
-    const { enrichSheetMonitorRows } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
-    const result = await enrichSheetMonitorRows(supabaseClient, correlationId, { force, forceSessionStart });
+    const enrichment = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+    if (cargoId || lh) {
+      if (cargoId) await enrichment.enrichSystemCargoById(supabaseClient, cargoId, { correlationId });
+      else await enrichment.enrichSheetRowsByLh(supabaseClient, [lh], { correlationId });
+      return { statusCode: 200, payload: { enriched: 1, remaining: 0, scoped: true } };
+    }
+    const result = await enrichment.enrichSheetMonitorRows(supabaseClient, correlationId, { force, forceSessionStart });
     return { statusCode: 200, payload: result };
   });
 }
