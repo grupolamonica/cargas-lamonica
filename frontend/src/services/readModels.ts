@@ -1138,15 +1138,29 @@ export async function enrichSheetMonitor({ force = false, forceSessionStart }: {
 // varrer a planilha inteira. `lh` p/ carga da planilha; `cargoId` p/ carga do
 // sistema. Reaproveita o mesmo endpoint de enriquecimento com filtro de item.
 export async function enrichSheetMonitorRow(
-  scope: { lh: string } | { cargoId: string },
+  scope:
+    | { lh: string; motorista?: string; cavalo?: string; carreta?: string }
+    | { cargoId: string },
 ): Promise<{ enriched: number; remaining: number; scoped?: boolean }> {
   const accessToken = await getOperatorAccessToken();
   const params = new URLSearchParams();
-  if ("cargoId" in scope && scope.cargoId) params.set("cargoId", scope.cargoId);
-  else if ("lh" in scope && scope.lh) params.set("lh", scope.lh);
+  // Motorista/veículo EFETIVO (o que a tela mostra) vão no CORPO, não na URL —
+  // o nome é PII e o backend enriquece exatamente esses valores, cobrindo cargas
+  // fora do snapshot (Nestlé/importadas). `lh`/`cargoId` (identificador) na URL.
+  let body: { motorista: string; cavalo: string; carreta: string } | undefined;
+  if ("cargoId" in scope && scope.cargoId) {
+    params.set("cargoId", scope.cargoId);
+  } else if ("lh" in scope && scope.lh) {
+    params.set("lh", scope.lh);
+    body = {
+      motorista: scope.motorista ?? "",
+      cavalo: scope.cavalo ?? "",
+      carreta: scope.carreta ?? "",
+    };
+  }
   return requestJson<{ enriched: number; remaining: number; scoped?: boolean }>(
     `/api/operator/sheet-monitor/enrich?${params.toString()}`,
-    { accessToken, method: "POST" },
+    { accessToken, method: "POST", ...(body ? { body } : {}) },
   );
 }
 
