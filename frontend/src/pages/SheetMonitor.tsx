@@ -52,7 +52,6 @@ import { computeShiftMoves, computeSwapMoves } from "@/lib/monitorReorder";
 import {
   assignAspxAllocations,
   createMonitorCargo,
-  enrichSheetMonitor,
   enrichSheetMonitorRow,
   fetchOperatorDrivers,
   fetchOperatorVehicles,
@@ -3228,10 +3227,6 @@ export default function SheetMonitor() {
   const [editingLh, setEditingLh] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
 
-  // Enrich loop state
-  const enrichingRef = useRef(false);
-  const [enrichProgress, setEnrichProgress] = useState<{ done: number; total: number } | null>(null);
-
   const { data: monitorData, error: queryError, isFetching, isLoading } = useQuery({
     queryKey: [...SHEET_MONITOR_QUERY_KEY],
     queryFn: fetchSheetMonitor,
@@ -3765,53 +3760,11 @@ export default function SheetMonitor() {
       // ByCargoId) do backend, então os selos NÃO somem. A verificação é feita
       // uma vez (ao abrir o Monitor) e persistida no banco.
       queryClient.setQueryData([...SHEET_MONITOR_QUERY_KEY], freshData);
-      // Limpa o banner "consulta concluída" de uma re-consulta manual anterior —
-      // senão ele fica pendurado até desmontar a tela.
-      setEnrichProgress(null);
       // Fila operacional usa status da planilha — invalidar para refletir status novo apos sync.
       queryClient.invalidateQueries({ queryKey: ["operator", "public-load-leads"] });
     },
   });
 
-  // ── Enrich loop ──────────────────────────────────────────────────────────────
-  const enrichForceRef = useRef(false);
-  const forceSessionStartRef = useRef<string | null>(null);
-
-  const enrichMutation = useMutation({
-    mutationFn: () => enrichSheetMonitor({
-      force: enrichForceRef.current,
-      forceSessionStart: forceSessionStartRef.current ?? undefined,
-    }),
-    onSuccess: (data) => {
-      setEnrichProgress((p) => ({
-        done: (p?.done ?? 0) + data.enriched,
-        total: p?.total ?? data.enriched + data.remaining,
-      }));
-      if (data.remaining > 0 && enrichingRef.current) {
-        setTimeout(() => enrichMutation.mutate(), 200);
-      } else {
-        enrichingRef.current = false;
-        queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
-      }
-    },
-    onError: () => {
-      enrichingRef.current = false;
-    },
-  });
-
-  const handleStartEnrich = (force = false) => {
-    enrichingRef.current = true;
-    enrichForceRef.current = force;
-    forceSessionStartRef.current = force ? new Date().toISOString() : null;
-    setEnrichProgress(null);
-    enrichMutation.mutate();
-  };
-
-  const handleStopEnrich = () => {
-    enrichingRef.current = false;
-  };
-
-  const isEnriching = enrichMutation.isPending && enrichingRef.current;
   const loading = isLoading && items.length === 0;
   const isRefreshing = (isFetching && !loading) || refreshMutation.isPending;
 
@@ -3891,37 +3844,6 @@ export default function SheetMonitor() {
                 Verifique a migration <code className="font-mono font-bold">sheet_monitor_snapshot</code>.
               </p>
             </div>
-          </div>
-        )}
-
-        {/* ── Enrich progress banner ── */}
-        {isEnriching && enrichProgress && (
-          <div className="admin-panel flex items-center gap-4 border-sky-200 bg-sky-50 p-4 dark:border-sky-500/30 dark:bg-sky-500/10">
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-sky-600 dark:text-sky-400" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-sky-800 dark:text-sky-200">
-                Consultando Angellira / ASPX — {enrichProgress.done} de {enrichProgress.total} linhas
-              </p>
-              <div className="mt-1.5 h-1.5 w-full rounded-full bg-sky-200 dark:bg-sky-500/30">
-                <div
-                  className="h-1.5 rounded-full bg-sky-600 dark:bg-sky-400 transition-all duration-500"
-                  style={{ width: `${Math.min(100, Math.round((enrichProgress.done / enrichProgress.total) * 100))}%` }}
-                />
-              </div>
-            </div>
-            <button type="button" onClick={handleStopEnrich}
-              className="shrink-0 rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-50 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300">
-              Parar
-            </button>
-          </div>
-        )}
-
-        {!isEnriching && enrichProgress && enrichProgress.done > 0 && (
-          <div className="admin-panel flex items-center gap-3 border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-500/30 dark:bg-emerald-500/10">
-            <BadgeCheck className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-            <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">
-              Consulta concluída — {enrichProgress.done} linhas atualizadas no banco.
-            </p>
           </div>
         )}
 
@@ -4009,13 +3931,6 @@ export default function SheetMonitor() {
                 className="inline-flex items-center gap-1.5 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2.5 text-xs font-semibold text-primary hover:bg-primary/10 disabled:opacity-50">
                 <RefreshCw className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")} />
                 {refreshMutation.isPending ? "Buscando planilha..." : "Atualizar planilha"}
-              </button>
-
-              <button type="button" onClick={() => handleStartEnrich(true)} disabled={isEnriching}
-                title="Re-consulta Angellira/ASPX de todas as linhas e atualiza os selos no banco"
-                className="inline-flex items-center gap-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2.5 text-xs font-semibold text-sky-700 hover:bg-sky-500/20 disabled:opacity-50 dark:text-sky-300">
-                <BadgeCheck className={cn("h-3.5 w-3.5", isEnriching && "animate-pulse")} />
-                {isEnriching ? "Consultando..." : "Atualizar consultas"}
               </button>
             </div>
 
