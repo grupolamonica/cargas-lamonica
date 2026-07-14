@@ -536,21 +536,28 @@ export async function enrichSheetRowsByLh(supabaseClient, lhs, { correlationId =
     }
     const baseByLh = new Map(rawRows.filter((r) => r.lh).map((r) => [r.lh, r]));
 
+    // Fonte da verdade do motorista/veículo = tabela `cargas` (efetivo =
+    // alloc_* ?? sheet_*). O snapshot é só o fallback: cargas IMPORTADAS via CSV
+    // têm sheet_lh mas NÃO entram no sheet_monitor_snapshot (que só reflete o sync
+    // da planilha online), então consultá-las pelo snapshot enriquecia uma linha
+    // VAZIA (selo continuava "Consulta pendente"). Ler de `cargas` cobre todas.
     const { data: allocRows } = await supabaseClient
       .from("cargas")
-      .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta")
+      .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, sheet_motorista, sheet_cavalo, sheet_carreta")
       .in("sheet_lh", wanted);
     const allocByLh = Object.fromEntries((allocRows || []).map((r) => [r.sheet_lh, r]));
 
     const rows = wanted.map((lh) => {
       const base = baseByLh.get(lh) || {};
       const a = allocByLh[lh];
+      // "" (vazio explícito do operador) vence via ??: se o operador limpou o
+      // motorista (alloc_motorista === ""), não caímos no sheet_motorista.
       return {
         lh,
         cargoId: null,
-        motoristas: (a?.alloc_motorista ?? base.motoristas ?? "") || "",
-        cavalo: (a?.alloc_cavalo ?? base.cavalo ?? "") || "",
-        carreta: (a?.alloc_carreta ?? base.carreta ?? "") || "",
+        motoristas: (a?.alloc_motorista ?? a?.sheet_motorista ?? base.motoristas ?? "") || "",
+        cavalo: (a?.alloc_cavalo ?? a?.sheet_cavalo ?? base.cavalo ?? "") || "",
+        carreta: (a?.alloc_carreta ?? a?.sheet_carreta ?? base.carreta ?? "") || "",
       };
     });
     await enrichRows(supabaseClient, rows, correlationId);
