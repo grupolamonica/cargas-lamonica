@@ -1686,17 +1686,21 @@ function AllocCell({ row, enriched, cavaloChecklist, carretaChecklist, editing, 
           {row.motoristas && <DriverChecks enriched={enriched} />}
           <VehicleChecks enriched={enriched} hasCavalo={Boolean(row.cavalo)} hasCarreta={Boolean(row.carreta)} />
           <VehicleChecklistIcons cavalo={row.cavalo} carreta={row.carreta} cavaloChecklist={cavaloChecklist} carretaChecklist={carretaChecklist} />
-          {/* Slot de largura FIXA para o marcador de estado (fixado / aviso ASPX).
-              Fica reservado mesmo sem marcador, para as placas e os selos A/S/C/R
-              não deslocarem entre linhas com e sem marcador (DC-226). */}
+          {/* Slot de largura FIXA para o marcador de estado (fixado / atribuído no
+              ASPX). Fica reservado mesmo sem marcador, para as placas e os selos
+              A/S/C/R não deslocarem entre linhas com e sem marcador (DC-226). */}
           <span
-            className="flex h-3 w-3 shrink-0 items-center justify-center text-amber-500"
-            title={pinned ? "Fixado nesta carga (motorista/veículo travados)" : aspxWarning ? "Motorista/veículo já atribuídos no ASPX" : undefined}
+            className="flex h-3 w-3 shrink-0 items-center justify-center"
+            title={pinned ? "Fixado nesta carga (motorista/veículo travados)" : aspxWarning ? "Motorista já atribuído no ASPX" : undefined}
           >
             {pinned ? (
-              <Pin className="h-3 w-3 fill-current" />
+              <Pin className="h-3 w-3 fill-current text-amber-500" />
             ) : aspxWarning ? (
-              <AlertTriangle className="h-3 w-3" />
+              // DC-227: "motorista já atribuído no ASPX" é um estado normal/resolvido
+              // — sinalizado com selo positivo (pessoa com check verde, igual ao KPI
+              // "Com motorista atribuído"), NÃO com o triângulo de alerta. O ⚠ fica
+              // reservado para avisos reais que pedem ação (ex.: rota não cadastrada).
+              <UserCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
             ) : null}
           </span>
         </div>
