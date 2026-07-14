@@ -91,7 +91,10 @@ const EMPTY_ALLOC: Record<string, SheetMonitorAllocation> = {};
 
 // Status operacional canônico da planilha (mesma terminologia, sem os valores
 // com encoding corrompido que aparecem nos dados crus). Ordem = pipeline da viagem.
+// "Disponível" (1º) é a ação de REABRIR: marcar numa carga sem motorista devolve
+// a carga pro painel do motorista (backend força cargas.status = OPEN).
 const OPERATIONAL_STATUS_OPTIONS = [
+  "Disponível",
   "AGUARDANDO CARREGAMENTO",
   "CARREGADO",
   "AGUARDANDO CHEGAR NO CLIENTE",

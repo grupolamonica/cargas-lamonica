@@ -294,4 +294,54 @@ describe("updateMonitorAllocation", () => {
       }),
     ).rejects.toThrow();
   });
+
+  it('status "Disponível" sem motorista reabre a carga pro painel (cargas.status → OPEN)', async () => {
+    const id = createSheetLoadId("LT-DISP-1");
+    await seedCargo({ id, sheet_lh: "LT-DISP-1", status: "BOOKED" }); // fechada pro portal
+    const operator = await seedUser({ email: "op-disp@teste.local" });
+
+    const res = await updateMonitorAllocation({
+      lh: "LT-DISP-1",
+      operatorId: operator.id,
+      payload: { motorista: "", cavalo: "", carreta: "", status: "Disponível" },
+      correlationId: "corr-disp-1",
+    });
+
+    expect(res.statusCode).toBe(200);
+    const { rows } = await query(`SELECT status, alloc_status FROM public.cargas WHERE id = $1`, [id]);
+    expect(rows[0].status).toBe("OPEN"); // voltou pro painel
+    expect(rows[0].alloc_status).toBe("Disponível");
+  });
+
+  it('status "Disponível" COM motorista NÃO reabre (só sem motorista volta pro painel)', async () => {
+    const id = createSheetLoadId("LT-DISP-2");
+    await seedCargo({ id, sheet_lh: "LT-DISP-2", status: "BOOKED" });
+    const operator = await seedUser({ email: "op-disp2@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: "LT-DISP-2",
+      operatorId: operator.id,
+      payload: { motorista: "JOÃO", status: "Disponível" },
+      correlationId: "corr-disp-2",
+    });
+
+    const { rows } = await query(`SELECT status FROM public.cargas WHERE id = $1`, [id]);
+    expect(rows[0].status).toBe("BOOKED"); // com motorista, não reabre
+  });
+
+  it("outro status (não 'Disponível') sem motorista NÃO mexe em cargas.status", async () => {
+    const id = createSheetLoadId("LT-DISP-3");
+    await seedCargo({ id, sheet_lh: "LT-DISP-3", status: "BOOKED" });
+    const operator = await seedUser({ email: "op-disp3@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: "LT-DISP-3",
+      operatorId: operator.id,
+      payload: { motorista: "", status: "AGUARDANDO CARREGAMENTO" },
+      correlationId: "corr-disp-3",
+    });
+
+    const { rows } = await query(`SELECT status FROM public.cargas WHERE id = $1`, [id]);
+    expect(rows[0].status).toBe("BOOKED");
+  });
 });
