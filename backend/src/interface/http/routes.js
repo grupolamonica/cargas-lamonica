@@ -117,6 +117,7 @@ import {
 import { resolveOperatorCadastrosComErroResponse } from "./operator-admin/cadastros-com-erro.handlers.js";
 import { resolveOperatorCadastroBotsHealthResponse } from "./operator-admin/cadastro-bots-health.handlers.js";
 import { resolveOperatorCadastrosIncompletosResponse } from "./operator-admin/cadastros-incompletos.handlers.js";
+import { resolveOperatorGrAlertasResponse } from "./operator-admin/gr.handlers.js";
 
 import {
   resolveDriverLoadFacetsResponse,
@@ -383,6 +384,9 @@ export function registerRoutes(app) {
   // Veículos
   router.get("/api/operator/veiculos", wrap(resolveOperatorVehiclesListReadModelResponse));
   router.post("/api/operator/veiculos/revalidate", wrap(resolveRevalidateAllVehiclesResponse));
+
+  // Gerenciamento de Risco (GR)
+  router.get("/api/operator/gr/alertas", wrap(resolveOperatorGrAlertasResponse));
 
   // Sheet monitor
   router.get("/api/operator/sheet-monitor", wrap(resolveSheetMonitorResponse));
