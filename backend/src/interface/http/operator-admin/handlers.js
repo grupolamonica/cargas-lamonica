@@ -1535,6 +1535,17 @@ export async function resolveSheetMonitorEnrichResponse(request) {
           await enrichment.enrichSheetRowsByLh(supabaseClient, [lh], { correlationId });
         }
       }
+      // DC-230: "Consultar item" também consulta o checklist do veículo (GRIFFI)
+      // junto — invalida o cache do checklist (TTL 60s) para o refetch que o modal
+      // dispara trazer a leitura FRESCA da planilha do robô, não a cacheada.
+      try {
+        const { bustVehicleChecklistCache } = await import(
+          "../../../application/operator-admin/vehicle-checklist-cache.js"
+        );
+        bustVehicleChecklistCache();
+      } catch {
+        /* best-effort: sem bust, o checklist só reflete no fim do TTL */
+      }
       return { statusCode: 200, payload: { enriched: 1, remaining: 0, scoped: true } };
     }
     const result = await enrichment.enrichSheetMonitorRows(supabaseClient, correlationId, { force, forceSessionStart });
