@@ -12,8 +12,8 @@
 // com os sheet_lh que satisfazem essa regra (uma query só, idêntica à do portal).
 //
 // As linhas que apareceriam "Disponível" mas NÃO estão abertas passam a mostrar:
-//   - "Expirada"  → carregamento no passado (relógio de São Paulo)
-//   - "Fechada"   → futura/sem data, porém fechada (não-publicada, privada, etc.)
+//   - "Fechado"   → não aberta pro motorista: carregamento já passou OU futura,
+//                   mas fechada no portal (não-publicada, privada, etc.)
 //
 // NÃO mexe em: linhas com status operacional da planilha (ex.: "AGUARDANDO
 // CARREGAMENTO") nem em linhas com motorista efetivo (badge mostra "Reservado").
@@ -31,9 +31,9 @@ function effectiveDriver(row, allocByLh) {
  * pro motorista". Pura/testável. Retorna a linha (possivelmente com status novo).
  *
  * @param {object} row linha do Monitor (shape da planilha)
- * @param {{ openLhSet: Set<string>|null, allocByLh?: Record<string, any>, now?: {todayIso:string, nowTimeIso:string}|null, reservedByLh?: Record<string, {motorista?:string, cavalo?:string, carreta?:string}> }} ctx
+ * @param {{ openLhSet: Set<string>|null, allocByLh?: Record<string, any>, reservedByLh?: Record<string, {motorista?:string, cavalo?:string, carreta?:string}> }} ctx
  */
-export function applyPlanilhaAvailabilityStatus(row, { openLhSet, allocByLh = {}, now = null, reservedByLh = {} } = {}) {
+export function applyPlanilhaAvailabilityStatus(row, { openLhSet, allocByLh = {}, reservedByLh = {} } = {}) {
   // Sem o conjunto (falha ao ler as cargas abertas) → não aplica a regra, mantém
   // o comportamento atual (melhor não esconder linhas do que quebrar o Monitor).
   if (!openLhSet) return row;
@@ -59,12 +59,8 @@ export function applyPlanilhaAvailabilityStatus(row, { openLhSet, allocByLh = {}
   }
   // Sem motorista + status vazio: SÓ é "Disponível" se estiver aberta pro motorista.
   if (row.lh && openLhSet.has(row.lh)) return row;
-  // Fechada: rotula por data — passada = Expirada; futura/sem data = Fechada.
-  const dateStr = row.data ? String(row.data).slice(0, 10) : null;
-  const timeStr = row.horario ? String(row.horario).slice(0, 5) : null;
-  const isPast =
-    !!now &&
-    !!dateStr &&
-    (dateStr < now.todayIso || (dateStr === now.todayIso && !!timeStr && timeStr < now.nowTimeIso));
-  return { ...row, status: isPast ? "Expirada" : "Fechada", isAvailable: false };
+  // Não aberta pro motorista → "Fechado" (unifica: data de carregamento já passou
+  // OU futura, mas fechada no portal — não-publicada/privada). "Disponível" fica só
+  // para aberta + futura + sem motorista (regra do portal).
+  return { ...row, status: "Fechado", isAvailable: false };
 }

@@ -133,12 +133,15 @@ function resolveSheetStatusStyle(status: string) {
     "Cancelado":   { dot: "bg-red-400",     bg: "bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-200",                 row: "bg-red-500/[0.08] hover:bg-red-500/[0.16] dark:bg-red-500/10 dark:hover:bg-red-500/20",                 label: "Cancelado" },
     "Concluido":   { dot: "bg-green-600",   bg: "bg-green-50 text-green-800 dark:bg-green-500/15 dark:text-green-200",         row: "bg-green-500/[0.08] hover:bg-green-500/[0.16] dark:bg-green-500/10 dark:hover:bg-green-500/20",         label: "Concluido" },
     "RESERVA":     { dot: "bg-amber-500",   bg: "bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-100",        row: "bg-amber-500/[0.10] hover:bg-amber-500/[0.18] dark:bg-amber-500/15 dark:hover:bg-amber-500/25",         label: "Reserva" },
+    "Fechado":     { dot: "bg-slate-400",   bg: "bg-slate-100 text-slate-600 dark:bg-slate-500/20 dark:text-slate-300",       row: "bg-slate-500/[0.06] hover:bg-slate-500/[0.12] dark:bg-slate-500/10 dark:hover:bg-slate-500/20",         label: "Fechado" },
   };
 
   if (exact[trimmed]) return exact[trimmed];
 
   if (!trimmed || /dispon[ií]vel/.test(normalized))
     return { dot: "bg-blue-500",    bg: "bg-blue-50 text-blue-800 dark:bg-blue-500/20 dark:text-blue-100",      row: "bg-blue-500/[0.07] hover:bg-blue-500/[0.15] dark:bg-blue-500/10 dark:hover:bg-blue-500/20",             label: trimmed || "Disponivel" };
+  if (/fechad|expirad/.test(normalized))
+    return { dot: "bg-slate-400",   bg: "bg-slate-100 text-slate-600 dark:bg-slate-500/20 dark:text-slate-300", row: "bg-slate-500/[0.06] hover:bg-slate-500/[0.12] dark:bg-slate-500/10 dark:hover:bg-slate-500/20",         label: trimmed };
   if (/descarregado|entregue/.test(normalized))
     return { dot: "bg-teal-500",    bg: "bg-teal-50 text-teal-800 dark:bg-teal-500/20 dark:text-teal-100",      row: "bg-teal-500/[0.08] hover:bg-teal-500/[0.16] dark:bg-teal-500/10 dark:hover:bg-teal-500/20",             label: trimmed };
   if (/descarregando/.test(normalized))
@@ -233,7 +236,7 @@ function statusStableRank(statusKey: string): number {
   if (/cte\s+enviad/.test(s)) return 10;
   if (/no\s*show/.test(s)) return 11;
   if (/cancel/.test(s)) return 12;
-  if (/expirad/.test(s)) return 13;
+  if (/fechad|expirad/.test(s)) return 13;
   if (/finaliz|conclu/.test(s)) return 14;
   return 90; // desconhecido → fim
 }
