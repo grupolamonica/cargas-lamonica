@@ -1,5 +1,6 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
+import { buildAuditChanges } from "../../../domain/operator-admin/audit-diff.js";
 import { ConflictError, NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
 import {
   normalizeClientName,
@@ -20,12 +21,15 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
     // AL-04: statement_timeout evita que FOR UPDATE bloqueie o pool inteiro
     // se outra transaction segurar o lock indefinidamente.
     await client.query("SET LOCAL statement_timeout = '5000'");
+    // SELECT * (não só id) p/ capturar o estado ANTERIOR (DC-184). `*` é seguro
+    // mesmo em schema sem as colunas estendidas do catálogo — devolve o que existe.
     const { rows } = await client.query(
-      `SELECT id FROM public.route_metrics_cache WHERE id = $1 FOR UPDATE`,
+      `SELECT * FROM public.route_metrics_cache WHERE id = $1 FOR UPDATE`,
       [routeId],
     );
 
     if (!rows[0]) throw new NotFoundError("Rota nao encontrada.");
+    const before = rows[0];
 
     const resolvedMetrics = await resolveRouteMetricsIfNeeded(payload.origem, payload.destino, payload);
 
@@ -175,7 +179,44 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
       outcome: "success",
       requestIp,
       correlationId,
-      metadata: { origem: payload.origem, destino: payload.destino, ativa: payload.ativa, cascadedCargaCount },
+      metadata: {
+        origem: payload.origem,
+        destino: payload.destino,
+        ativa: payload.ativa,
+        cascadedCargaCount,
+        changes: buildAuditChanges(
+          {
+            origem: before.origem,
+            destino: before.destino,
+            perfil: before.perfil_padrao,
+            valor: before.valor_padrao,
+            bonus: before.bonus_padrao,
+            eixos: before.eixos,
+            ativa: before.ativa,
+            observacoes: before.observacoes,
+          },
+          {
+            origem: payload.origem,
+            destino: payload.destino,
+            perfil: perfilPadrao,
+            valor: payload.valor_padrao,
+            bonus: payload.bonus_padrao,
+            eixos,
+            ativa: payload.ativa,
+            observacoes: payload.observacoes,
+          },
+          [
+            { key: "origem", label: "Origem" },
+            { key: "destino", label: "Destino" },
+            { key: "perfil", label: "Perfil" },
+            { key: "valor", label: "Valor" },
+            { key: "bonus", label: "Bônus" },
+            { key: "eixos", label: "Eixos" },
+            { key: "ativa", label: "Ativa" },
+            { key: "observacoes", label: "Observações" },
+          ],
+        ),
+      },
     });
 
     return {

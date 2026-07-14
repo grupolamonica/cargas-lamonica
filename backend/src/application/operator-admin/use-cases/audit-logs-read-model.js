@@ -1,6 +1,12 @@
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { createSupabaseAdminClient } from "../../../infrastructure/supabase/admin-client.js";
 import { buildPaginationMeta } from "../../../domain/operator-admin/route-utils.js";
+import {
+  AUDIT_LOG_CATEGORIES,
+  eventTypesForCategories,
+  resolveEventCategory,
+  resolveEventLabel,
+} from "../../../domain/operator-admin/audit-log-taxonomy.js";
 
 const AUDIT_LOGS_DEFAULT_PAGE_SIZE = 50;
 const AUDIT_LOGS_MAX_PAGE_SIZE = 200;
@@ -70,7 +76,21 @@ function parseAuditLogsQuery(query) {
     ? query.operatorId.trim()
     : null;
 
-  return { page, pageSize, offset: (page - 1) * pageSize, dateFrom, dateToExclusive, operatorId };
+  // DC-185: filtro multiselect por tipo de log. Aceita as chaves de categoria
+  // separadas por vírgula (?categories=cargas,rotas). Traduz para o conjunto de
+  // event_types via taxonomia. Categorias inválidas são ignoradas.
+  const rawCategories = typeof query?.categories === "string"
+    ? query.categories
+    : Array.isArray(query?.categories)
+      ? query.categories.join(",")
+      : "";
+  const categoryKeys = rawCategories
+    .split(",")
+    .map((c) => c.trim())
+    .filter(Boolean);
+  const eventTypes = eventTypesForCategories(categoryKeys);
+
+  return { page, pageSize, offset: (page - 1) * pageSize, dateFrom, dateToExclusive, operatorId, eventTypes };
 }
 
 /**
@@ -79,7 +99,7 @@ function parseAuditLogsQuery(query) {
  * AUDIT Wave 4 (split god module).
  */
 export async function fetchOperatorAuditLogsReadModel({ query, correlationId }) {
-  const { page, pageSize, offset, dateFrom, dateToExclusive, operatorId } = parseAuditLogsQuery(query);
+  const { page, pageSize, offset, dateFrom, dateToExclusive, operatorId, eventTypes } = parseAuditLogsQuery(query);
 
   return withPgClient(async (client) => {
     const whereClauses = [];
@@ -100,6 +120,12 @@ export async function fetchOperatorAuditLogsReadModel({ query, correlationId }) 
       values.push(operatorId);
       whereClauses.push(`actor_user_id = $${index}`);
       index += 1;
+    }
+    if (eventTypes.length > 0) {
+      const placeholders = eventTypes.map((_, i) => `$${index + i}`);
+      whereClauses.push(`event_type IN (${placeholders.join(", ")})`);
+      values.push(...eventTypes);
+      index += eventTypes.length;
     }
 
     const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(" AND ")}` : "";
@@ -142,9 +168,19 @@ export async function fetchOperatorAuditLogsReadModel({ query, correlationId }) 
       payload: {
         items: itemsResult.rows.map((row) => {
           const resolved = row.actor_user_id ? directory.get(row.actor_user_id) : null;
+          const category = resolveEventCategory(row.event_type);
+          const metadata = row.metadata || null;
+          // DC-184: antes → depois. Vive em {metadata.changes}; promovido a
+          // campo de topo p/ a tela renderizar sem cavar o JSON cru.
+          const changes = Array.isArray(metadata?.changes) && metadata.changes.length > 0
+            ? metadata.changes
+            : null;
           return {
             id: row.id,
             eventType: row.event_type,
+            eventLabel: resolveEventLabel(row.event_type),
+            categoryKey: category.key,
+            categoryLabel: category.label,
             severity: row.severity,
             actorUserId: row.actor_user_id,
             actorEmail: resolved?.email || null,
@@ -156,11 +192,14 @@ export async function fetchOperatorAuditLogsReadModel({ query, correlationId }) 
             outcome: row.outcome,
             requestIp: row.request_ip,
             correlationId: row.correlation_id,
-            metadata: row.metadata || null,
+            changes,
+            metadata,
             createdAt: row.created_at,
           };
         }),
         meta: buildPaginationMeta(page, pageSize, totalCount, AUDIT_LOGS_MAX_PAGE_SIZE, correlationId),
+        // DC-185: catálogo de categorias p/ o multiselect (fonte da verdade no backend).
+        categories: AUDIT_LOG_CATEGORIES,
         // Lista completa de operadores do diretório (auth), independente de
         // terem gerado logs no período. Antes vinha de DISTINCT actor_user_id
         // dos próprios audit logs e escondia operadores sem atividade.

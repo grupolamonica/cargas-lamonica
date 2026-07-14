@@ -1,5 +1,6 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
+import { buildAuditChanges } from "../../../domain/operator-admin/audit-diff.js";
 import { NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
 import { syncedCarregamentoLabel } from "../../../domain/cargo-schedule.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
@@ -158,6 +159,44 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
         horario,
         pinned,
         fields: Object.keys(payload).filter((k) => k !== "cargoId"),
+        // DC-184: antes → depois. SEM cavalo/carreta (placas = sensível "plate"
+        // no sanitizeLogPayload; chaves genéricas before/after não são redigidas
+        // e vazariam no CSV do DC-186).
+        changes: buildAuditChanges(
+          {
+            lh: row.lh_manual,
+            motorista: row.alloc_motorista,
+            status: row.alloc_status,
+            tipo: row.alloc_tipo,
+            vinculo: row.alloc_vinculo,
+            origem: row.origem,
+            destino: row.destino,
+            data: fmtDate(row.data),
+            horario: fmtTime(row.horario),
+          },
+          {
+            lh: lhManual,
+            motorista: allocMotorista,
+            status: allocStatus,
+            tipo: allocTipo,
+            vinculo: allocVinculo,
+            origem,
+            destino,
+            data: fmtDate(data),
+            horario: fmtTime(horario),
+          },
+          [
+            { key: "lh", label: "LH" },
+            { key: "motorista", label: "Motorista" },
+            { key: "status", label: "Status" },
+            { key: "tipo", label: "Tipo" },
+            { key: "vinculo", label: "Vínculo" },
+            { key: "origem", label: "Origem" },
+            { key: "destino", label: "Destino" },
+            { key: "data", label: "Data" },
+            { key: "horario", label: "Horário" },
+          ],
+        ),
       },
     });
 

@@ -1,18 +1,20 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
+import { buildAuditChanges } from "../../../domain/operator-admin/audit-diff.js";
 import { NotFoundError } from "../../../domain/load-claims/errors.js";
 import { isMissingClienteLogoColumnError } from "./_shared.js";
 
 export async function updateOperatorCliente({ clienteId, operatorId, payload, requestIp, correlationId }) {
   return withPgTransaction(async (client) => {
     const { rows } = await client.query(
-      `SELECT id FROM public.clientes WHERE id = $1 FOR UPDATE`,
+      `SELECT * FROM public.clientes WHERE id = $1 FOR UPDATE`,
       [clienteId],
     );
 
     if (!rows[0]) {
       throw new NotFoundError("Embarcador nao encontrado.");
     }
+    const before = rows[0];
 
     const values = [
       clienteId, payload.nome, payload.descricao,
@@ -75,7 +77,45 @@ export async function updateOperatorCliente({ clienteId, operatorId, payload, re
       outcome: "success",
       requestIp,
       correlationId,
-      metadata: { nome: payload.nome, hasLogoUrl: Boolean(payload.logo_url) },
+      metadata: {
+        nome: payload.nome,
+        hasLogoUrl: Boolean(payload.logo_url),
+        changes: buildAuditChanges(
+          {
+            nome: before.nome,
+            descricao: before.descricao,
+            forma_pagamento: before.forma_pagamento,
+            prazo_pagamento: before.prazo_pagamento,
+            exige_rastreamento: before.exige_rastreamento,
+            exige_antt: before.exige_antt,
+            exige_seguro: before.exige_seguro,
+            exige_carga_monitorada: before.exige_carga_monitorada,
+            observacoes: before.observacoes,
+          },
+          {
+            nome: payload.nome,
+            descricao: payload.descricao,
+            forma_pagamento: payload.forma_pagamento,
+            prazo_pagamento: payload.prazo_pagamento,
+            exige_rastreamento: payload.exige_rastreamento,
+            exige_antt: payload.exige_antt,
+            exige_seguro: payload.exige_seguro,
+            exige_carga_monitorada: payload.exige_carga_monitorada,
+            observacoes: payload.observacoes,
+          },
+          [
+            { key: "nome", label: "Nome" },
+            { key: "descricao", label: "Descrição" },
+            { key: "forma_pagamento", label: "Forma de pagamento" },
+            { key: "prazo_pagamento", label: "Prazo de pagamento" },
+            { key: "exige_rastreamento", label: "Exige rastreamento" },
+            { key: "exige_antt", label: "Exige ANTT" },
+            { key: "exige_seguro", label: "Exige seguro" },
+            { key: "exige_carga_monitorada", label: "Exige carga monitorada" },
+            { key: "observacoes", label: "Observações" },
+          ],
+        ),
+      },
     });
 
     return {
