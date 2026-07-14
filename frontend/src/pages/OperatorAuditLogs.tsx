@@ -66,27 +66,25 @@ function operatorLabel(log: OperatorAuditLogItem): string {
   return log.actorDisplayName || log.actorEmail || shortenId(log.actorUserId);
 }
 
-/** DC-184: tabela compacta "antes → depois". */
-function ChangeDiff({ changes }: { changes: OperatorAuditLogChange[] }) {
+/**
+ * DC-184: antes → depois exibido DIRETO na linha (sem precisar abrir "Detalhes"),
+ * em linguagem de operador — ex.: "Valor: R$ 1.000,00 → R$ 1.200,00".
+ */
+function InlineChanges({ changes }: { changes: OperatorAuditLogChange[] }) {
   return (
-    <div className="mb-3 space-y-1.5">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-        Alterações
-      </p>
-      <div className="space-y-1.5">
-        {changes.map((change) => (
-          <div key={change.field} className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="min-w-[110px] font-semibold text-foreground">{change.label}</span>
-            <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[11px] text-rose-700 line-through decoration-rose-400/70 dark:bg-rose-500/20 dark:text-rose-200">
-              {formatAuditValue(change.field, change.before)}
-            </span>
-            <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200">
-              {formatAuditValue(change.field, change.after)}
-            </span>
-          </div>
-        ))}
-      </div>
+    <div className="mt-1.5 space-y-1 text-[11px] font-normal">
+      {changes.map((change) => (
+        <div key={change.field} className="flex flex-wrap items-center gap-1.5">
+          <span className="font-medium text-muted-foreground">{change.label}:</span>
+          <span className="rounded bg-rose-50 px-1 text-rose-700 line-through decoration-rose-400/60 dark:bg-rose-500/15 dark:text-rose-200">
+            {formatAuditValue(change.field, change.before)}
+          </span>
+          <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground/70" />
+          <span className="rounded bg-emerald-50 px-1 font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-200">
+            {formatAuditValue(change.field, change.after)}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -94,10 +92,8 @@ function ChangeDiff({ changes }: { changes: OperatorAuditLogChange[] }) {
 function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
   const [expanded, setExpanded] = useState(false);
   const hasChanges = Boolean(log.changes && log.changes.length > 0);
-  const hasMetadata = log.metadata && Object.keys(log.metadata).length > 0;
-  const canExpand = hasChanges || hasMetadata;
-  // Evita mostrar as mudanças duas vezes: o ChangeDiff já renderiza `changes`,
-  // então o JSON cru abaixo omite essa chave (mantém o resto da metadata).
+  // O antes→depois aparece inline na linha; o JSON cru abaixo omite `changes`
+  // (mantém o resto da metadata) para não repetir a informação.
   const metadataForDisplay = useMemo(() => {
     if (!log.metadata) return null;
     if (!hasChanges) return log.metadata;
@@ -112,6 +108,8 @@ function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
     () => (hasChanges ? [] : friendlyMetadataEntries(log.metadata)),
     [hasChanges, log.metadata],
   );
+  // "Detalhes" só vale quando há algo ALÉM do diff inline (contexto ou dados técnicos).
+  const canExpand = contextEntries.length > 0 || hasDisplayMetadata;
   return (
     <>
       <tr className="border-b border-border/60 text-sm transition-colors hover:bg-primary/[0.03]">
@@ -133,11 +131,7 @@ function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
               {severityLabel}
             </span>
           ) : null}
-          {hasChanges ? (
-            <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
-              {log.changes!.length} {log.changes!.length === 1 ? "alteração" : "alterações"}
-            </span>
-          ) : null}
+          {hasChanges ? <InlineChanges changes={log.changes!} /> : null}
         </td>
         <td className="px-4 py-3 align-top text-xs">
           <span className="inline-flex rounded-full border border-border/70 bg-muted/40 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
@@ -183,7 +177,6 @@ function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
       {expanded && canExpand ? (
         <tr className="border-b border-border/60 bg-muted/30">
           <td colSpan={8} className="px-4 py-3">
-            {hasChanges ? <ChangeDiff changes={log.changes!} /> : null}
             {contextEntries.length > 0 ? (
               <div className="mb-3 space-y-1 text-xs">
                 {contextEntries.map((entry) => (

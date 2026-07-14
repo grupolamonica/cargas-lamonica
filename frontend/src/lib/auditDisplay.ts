@@ -84,12 +84,19 @@ export function formatSeverityLabel(severity: string | null | undefined): string
  *  - perfil/veículo → rótulo canônico legível (nunca CARRETA_EXPRESSA cru);
  *  - boolean → Sim/Não; vazio → "(vazio)".
  */
+/** Campos monetários — exibidos como R$ (ex.: valor/bônus da rota). */
+const MONETARY_FIELDS = new Set(["valor", "bonus"]);
+
 export function formatAuditValue(field: string, value: unknown): string {
   if (value === null || value === undefined || value === "") return "(vazio)";
   if (typeof value === "boolean") return value ? "Sim" : "Não";
   if (Array.isArray(value)) return value.length ? value.map((v) => String(v)).join(", ") : "(vazio)";
   const s = String(value);
 
+  if (MONETARY_FIELDS.has(field)) {
+    const n = Number(s);
+    if (Number.isFinite(n)) return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  }
   if (field === "status") {
     const enumLabel = formatCargoStatusLabel(s);
     return enumLabel !== s ? enumLabel : titleCase(s);
