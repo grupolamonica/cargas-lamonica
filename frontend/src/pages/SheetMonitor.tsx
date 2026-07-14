@@ -53,6 +53,7 @@ import {
   assignAspxAllocations,
   createMonitorCargo,
   enrichSheetMonitor,
+  enrichSheetMonitorRow,
   fetchOperatorDrivers,
   fetchOperatorVehicles,
   fetchSheetMonitor,
@@ -2439,6 +2440,25 @@ function RowDetailModal({
     },
   });
 
+  // DC-230: consulta Angellira/ASPX só DESTE item (a linha selecionada), sem
+  // varrer a planilha inteira. Escopo por cargoId (carga do sistema) ou lh
+  // (carga da planilha). Ao concluir, invalida o Monitor p/ atualizar os selos.
+  const consultItem = useMutation({
+    mutationFn: () => {
+      if (!row) return Promise.resolve({ enriched: 0, remaining: 0 });
+      return enrichSheetMonitorRow(
+        row.source === "sistema" && row.cargoId ? { cargoId: row.cargoId } : { lh: row.lh },
+      );
+    },
+    onSuccess: () => {
+      toast.success("Consulta deste item atualizada.");
+      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Não foi possível consultar este item.");
+    },
+  });
+
   // Histórico da carga (eventos: fila, reserva/aprovação, write-back na planilha)
   // — "as mudanças feitas em cada etapa". Por LH; só busca com o modal aberto.
   const historyEvents = useQuery({
@@ -2511,6 +2531,17 @@ function RowDetailModal({
                   {row.tipo}
                 </span>
               )}
+              {/* DC-230: consultar Angellira/ASPX só desta carga (sem varrer a planilha). */}
+              <button
+                type="button"
+                onClick={() => consultItem.mutate()}
+                disabled={consultItem.isPending}
+                title="Consultar Angellira/ASPX apenas desta carga (não varre a planilha inteira)"
+                className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border/80 px-2.5 py-1 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {consultItem.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                {consultItem.isPending ? "Consultando…" : "Consultar item"}
+              </button>
             </div>
             <StatusBadge status={row.status} />
           </DialogHeader>

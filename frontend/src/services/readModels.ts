@@ -1134,6 +1134,22 @@ export async function enrichSheetMonitor({ force = false, forceSessionStart }: {
   );
 }
 
+// DC-230: consulta Angellira/ASPX de UM item só (a linha selecionada), sem
+// varrer a planilha inteira. `lh` p/ carga da planilha; `cargoId` p/ carga do
+// sistema. Reaproveita o mesmo endpoint de enriquecimento com filtro de item.
+export async function enrichSheetMonitorRow(
+  scope: { lh: string } | { cargoId: string },
+): Promise<{ enriched: number; remaining: number; scoped?: boolean }> {
+  const accessToken = await getOperatorAccessToken();
+  const params = new URLSearchParams();
+  if ("cargoId" in scope && scope.cargoId) params.set("cargoId", scope.cargoId);
+  else if ("lh" in scope && scope.lh) params.set("lh", scope.lh);
+  return requestJson<{ enriched: number; remaining: number; scoped?: boolean }>(
+    `/api/operator/sheet-monitor/enrich?${params.toString()}`,
+    { accessToken, method: "POST" },
+  );
+}
+
 export interface SheetMonitorVehicleDetail {
   plate: string;
   source: "db" | "angellira" | "not_found";
