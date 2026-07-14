@@ -10,6 +10,13 @@ import { useAuth } from "@/hooks/useAuth";
 import { getOperatorAccessLevel } from "@/lib/operatorAccess";
 import { downloadCsv, csvTimestamp } from "@/lib/csv";
 import {
+  formatAuditValue,
+  formatOutcomeLabel,
+  formatResourceLabel,
+  formatSeverityLabel,
+  friendlyMetadataEntries,
+} from "@/lib/auditDisplay";
+import {
   fetchOperatorAuditLogs,
   type OperatorAuditLogChange,
   type OperatorAuditLogItem,
@@ -47,20 +54,11 @@ function shortenId(id: string | null | undefined): string {
   return id.length > 8 ? `${id.slice(0, 8)}…` : id;
 }
 
-/** Valor de um campo alterado, legível (DC-184). */
-function formatChangeValue(value: unknown): string {
-  if (value === null || value === undefined || value === "") return "(vazio)";
-  if (typeof value === "boolean") return value ? "Sim" : "Não";
-  if (Array.isArray(value)) return value.length ? value.join(", ") : "(vazio)";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-}
-
-/** Resumo textual das mudanças para o CSV. */
+/** Resumo textual das mudanças para o CSV (valores já humanizados por campo). */
 function changesToText(changes: OperatorAuditLogChange[] | null): string {
   if (!changes || changes.length === 0) return "";
   return changes
-    .map((c) => `${c.label}: ${formatChangeValue(c.before)} → ${formatChangeValue(c.after)}`)
+    .map((c) => `${c.label}: ${formatAuditValue(c.field, c.before)} → ${formatAuditValue(c.field, c.after)}`)
     .join(" | ");
 }
 
@@ -79,12 +77,12 @@ function ChangeDiff({ changes }: { changes: OperatorAuditLogChange[] }) {
         {changes.map((change) => (
           <div key={change.field} className="flex flex-wrap items-center gap-2 text-xs">
             <span className="min-w-[110px] font-semibold text-foreground">{change.label}</span>
-            <span className="rounded bg-rose-100 px-1.5 py-0.5 font-mono text-[11px] text-rose-700 dark:bg-rose-500/20 dark:text-rose-200">
-              {formatChangeValue(change.before)}
+            <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[11px] text-rose-700 line-through decoration-rose-400/70 dark:bg-rose-500/20 dark:text-rose-200">
+              {formatAuditValue(change.field, change.before)}
             </span>
             <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-            <span className="rounded bg-emerald-100 px-1.5 py-0.5 font-mono text-[11px] text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200">
-              {formatChangeValue(change.after)}
+            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200">
+              {formatAuditValue(change.field, change.after)}
             </span>
           </div>
         ))}
@@ -108,6 +106,12 @@ function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
     return rest;
   }, [log.metadata, hasChanges]);
   const hasDisplayMetadata = Boolean(metadataForDisplay && Object.keys(metadataForDisplay).length > 0);
+  const severityLabel = formatSeverityLabel(log.severity);
+  // Contexto amigável (só chaves úteis) p/ eventos sem antes→depois.
+  const contextEntries = useMemo(
+    () => (hasChanges ? [] : friendlyMetadataEntries(log.metadata)),
+    [hasChanges, log.metadata],
+  );
   return (
     <>
       <tr className="border-b border-border/60 text-sm transition-colors hover:bg-primary/[0.03]">
@@ -124,9 +128,9 @@ function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
         </td>
         <td className="px-4 py-3 align-top text-sm font-semibold text-foreground">
           {log.eventLabel || log.eventType}
-          {log.severity && log.severity !== "info" ? (
+          {severityLabel ? (
             <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-800 dark:bg-amber-500/20 dark:text-amber-200">
-              {log.severity}
+              {severityLabel}
             </span>
           ) : null}
           {hasChanges ? (
@@ -141,12 +145,9 @@ function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
           </span>
         </td>
         {/*
-          Bugfix: a coluna RECURSO mostrava textos longos como
-          "pending_driver_documents_audit/abc12345…" cortados sem
-          indicacao visual de truncamento e sem hover-to-full. Aplicamos
-          truncate explicito com max-width e title attribute carregando o
-          valor completo (resourceType + resourceId NAO encurtado). O
-          operador agora pode ler a string inteira no hover.
+          Recurso legível ao operador: mostra só o tipo em pt-BR ("Rota",
+          "Carga", "Motorista"...) — o UUID técnico fica no title (hover) para
+          suporte, sem poluir a tela com código.
         */}
         <td
           className="max-w-[220px] truncate px-4 py-3 align-top text-xs text-muted-foreground"
@@ -156,12 +157,10 @@ function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
               : log.resourceType || ""
           }
         >
-          {log.resourceType && log.resourceId
-            ? `${log.resourceType}/${shortenId(log.resourceId)}`
-            : log.resourceType || "—"}
+          {formatResourceLabel(log.resourceType)}
         </td>
         <td className="px-4 py-3 align-top text-xs text-muted-foreground">
-          {log.outcome || "—"}
+          {formatOutcomeLabel(log.outcome)}
         </td>
         <td className="px-4 py-3 align-top text-xs text-muted-foreground font-mono">
           {log.requestIp || "—"}
@@ -185,10 +184,25 @@ function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
         <tr className="border-b border-border/60 bg-muted/30">
           <td colSpan={8} className="px-4 py-3">
             {hasChanges ? <ChangeDiff changes={log.changes!} /> : null}
+            {contextEntries.length > 0 ? (
+              <div className="mb-3 space-y-1 text-xs">
+                {contextEntries.map((entry) => (
+                  <div key={entry.label} className="flex flex-wrap gap-2">
+                    <span className="min-w-[110px] font-semibold text-foreground">{entry.label}</span>
+                    <span className="text-muted-foreground">{entry.value}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             {hasDisplayMetadata ? (
-              <pre className="max-h-80 overflow-auto rounded-lg border border-border/60 bg-white/80 p-3 text-[11px] leading-relaxed text-foreground dark:bg-muted/40">
-                {JSON.stringify(metadataForDisplay, null, 2)}
-              </pre>
+              <details>
+                <summary className="cursor-pointer select-none text-[11px] font-semibold text-muted-foreground/70 transition-colors hover:text-muted-foreground">
+                  Dados técnicos
+                </summary>
+                <pre className="mt-2 max-h-80 overflow-auto rounded-lg border border-border/60 bg-white/80 p-3 text-[11px] leading-relaxed text-foreground dark:bg-muted/40">
+                  {JSON.stringify(metadataForDisplay, null, 2)}
+                </pre>
+              </details>
             ) : null}
           </td>
         </tr>
@@ -289,10 +303,8 @@ const OperatorAuditLogs = () => {
         log.actorEmail || "",
         log.categoryLabel,
         log.eventLabel || log.eventType,
-        log.resourceType && log.resourceId
-          ? `${log.resourceType}/${log.resourceId}`
-          : log.resourceType || "",
-        log.outcome || "",
+        formatResourceLabel(log.resourceType),
+        formatOutcomeLabel(log.outcome),
         log.requestIp || "",
         changesToText(log.changes),
         log.correlationId || "",
