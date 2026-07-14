@@ -2452,7 +2452,17 @@ function RowDetailModal({
     },
     onSuccess: () => {
       toast.success("Consulta deste item atualizada.");
+      // Selos Angellira/ASPX são eventualmente-consistentes (cache TTL curto +
+      // single-flight no backend). Como o modal fica ABERTO, invalida agora e de
+      // novo com atraso p/ o selo novo aparecer no lugar de "Consulta pendente"
+      // (mesmo padrão da edição de alocação, que fecha o modal e não sofria disso).
       void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
+      // DC-230: "Consultar item" também atualiza o checklist do veículo (semáforo
+      // GRIFFI) — refetch do card do modal (["admin","vehicle-checklist",placas])
+      // e dos ícones de semáforo da linha (["admin","vehicle-checklist-levels"]).
+      void queryClient.invalidateQueries({ queryKey: ["admin", "vehicle-checklist"] });
+      void queryClient.invalidateQueries({ queryKey: ["admin", "vehicle-checklist-levels"] });
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "Não foi possível consultar este item.");
