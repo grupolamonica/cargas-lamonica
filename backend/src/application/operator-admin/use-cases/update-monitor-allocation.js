@@ -134,6 +134,9 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     // baixa em cancelamento — aí quem move é a cascata.
     const effMotorista = (finalMotorista ?? sheetRow.sheet_motorista ?? "").toString().trim();
     const cancelling = Boolean(finalStatus) && /cancel/i.test(finalStatus);
+    // Status "Disponível" numa carga SEM motorista = reabrir pro painel do
+    // motorista (volta pra fila do portal). Só quando não há motorista efetivo.
+    const reopening = Boolean(finalStatus) && /^dispon[ií]vel$/i.test(finalStatus) && !effMotorista;
     if (effMotorista && !cancelling) {
       await client.query(
         `UPDATE public.monitor_reservas SET active = false, updated_at = now()
@@ -151,6 +154,16 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       sheetRow.status === "RESERVED" && sheetRow.reserved_public_lead_id
         ? sheetRow.reserved_public_lead_id
         : null;
+
+    // Reabrir a carga NÃO-reservada quando o operador marca "Disponível" sem
+    // motorista: força cargas.status = OPEN → a carga volta pro painel do
+    // motorista (mesmo gate do portal: OPEN + pública + futura + sem motorista).
+    // A carga RESERVADA é reaberta pelo cancelPublicLoadLead (via reopenLeadId),
+    // que também baixa o lead do portal — evita duplo-booking, então aqui só
+    // tocamos as não-reservadas.
+    if (reopening && !reopenLeadId) {
+      await client.query(`UPDATE public.cargas SET status = 'OPEN', updated_at = now() WHERE id = $1`, [cargoId]);
+    }
 
     return {
       statusCode: 200,
