@@ -1273,9 +1273,22 @@ export interface DriverFlowMetricsResponse {
   };
 }
 
+/** DC-184: um campo alterado (valor anterior → novo). */
+export interface OperatorAuditLogChange {
+  field: string;
+  label: string;
+  before: unknown;
+  after: unknown;
+}
+
 export interface OperatorAuditLogItem {
   id: string;
   eventType: string;
+  /** Rótulo humano do evento (pt-BR), resolvido pela taxonomia do backend. */
+  eventLabel: string;
+  /** Categoria ("tipo de log") — DC-185. */
+  categoryKey: string;
+  categoryLabel: string;
   severity: string | null;
   actorUserId: string | null;
   actorEmail: string | null;
@@ -1287,6 +1300,8 @@ export interface OperatorAuditLogItem {
   outcome: string | null;
   requestIp: string | null;
   correlationId: string | null;
+  /** DC-184: lista de mudanças antes → depois (null quando não houver). */
+  changes: OperatorAuditLogChange[] | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
 }
@@ -1298,30 +1313,49 @@ export interface OperatorAuditOperatorSummary {
   accessLevel: "advanced" | "intermediate" | null;
 }
 
-export async function fetchOperatorAuditLogs(query: { dateFrom?: string; dateTo?: string; operatorId?: string; page?: string; pageSize?: string }) {
+/** DC-185: categoria disponível no filtro multiselect. */
+export interface OperatorAuditCategory {
+  key: string;
+  label: string;
+}
+
+export interface OperatorAuditLogsResponse {
+  items: OperatorAuditLogItem[];
+  meta: {
+    page: number;
+    pageSize: number;
+    totalCount: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    maxPageSize: number;
+    correlationId: string;
+  };
+  operators: OperatorAuditOperatorSummary[];
+  categories: OperatorAuditCategory[];
+}
+
+export async function fetchOperatorAuditLogs(query: {
+  dateFrom?: string;
+  dateTo?: string;
+  operatorId?: string;
+  categories?: string[];
+  page?: string;
+  pageSize?: string;
+}) {
   const accessToken = await getOperatorAccessToken();
   const search = new URLSearchParams();
   if (query.dateFrom) search.set("dateFrom", query.dateFrom);
   if (query.dateTo) search.set("dateTo", query.dateTo);
   if (query.operatorId) search.set("operatorId", query.operatorId);
+  if (query.categories && query.categories.length > 0) {
+    search.set("categories", query.categories.join(","));
+  }
   if (query.page) search.set("page", query.page);
   if (query.pageSize) search.set("pageSize", query.pageSize);
   const qs = search.toString();
   const url = qs ? `/api/operator/audit-logs?${qs}` : "/api/operator/audit-logs";
 
-  return requestJson<{
-    items: OperatorAuditLogItem[];
-    meta: {
-      page: number;
-      pageSize: number;
-      totalCount: number;
-      totalPages: number;
-      hasNextPage: boolean;
-      maxPageSize: number;
-      correlationId: string;
-    };
-    operators: OperatorAuditOperatorSummary[];
-  }>(url, { accessToken });
+  return requestJson<OperatorAuditLogsResponse>(url, { accessToken });
 }
 
 export async function fetchDriverFlowMetrics(query: { dateFrom?: string; dateTo?: string }) {

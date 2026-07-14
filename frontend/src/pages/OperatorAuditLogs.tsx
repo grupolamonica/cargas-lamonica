@@ -1,14 +1,24 @@
 import { useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ClipboardList, Filter } from "lucide-react";
+import { ArrowRight, ClipboardList, Download, Filter, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 
 import AdminPagination from "@/components/AdminPagination";
 import DashboardHeader from "@/components/DashboardHeader";
+import { MultiSelectFilter } from "@/components/operator/MultiSelectFilter";
 import { useAuth } from "@/hooks/useAuth";
 import { getOperatorAccessLevel } from "@/lib/operatorAccess";
-import { fetchOperatorAuditLogs, type OperatorAuditLogItem } from "@/services/readModels";
+import { downloadCsv, csvTimestamp } from "@/lib/csv";
+import {
+  fetchOperatorAuditLogs,
+  type OperatorAuditLogChange,
+  type OperatorAuditLogItem,
+} from "@/services/readModels";
 
 const PAGE_SIZE = 50;
+// Teto de linhas no export CSV — evita puxar histórico ilimitado de uma vez.
+const EXPORT_MAX_ROWS = 5000;
+const EXPORT_PAGE_SIZE = 200;
 
 function todayIso() {
   const now = new Date();
@@ -19,26 +29,6 @@ function daysAgoIso(days: number) {
   const now = new Date();
   now.setDate(now.getDate() - days);
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-}
-
-function formatEventLabel(eventType: string): string {
-  const mapping: Record<string, string> = {
-    "operator.cargo.created": "Carga cadastrada",
-    "operator.cargo.updated": "Carga atualizada",
-    "operator.cargo.duplicated": "Carga duplicada",
-    "operator.cargo.status_toggled": "Carga: status alterado",
-    "operator.cargo.deleted": "Carga excluída",
-    "operator.cliente.created": "Cliente cadastrado",
-    "operator.cliente.updated": "Cliente atualizado",
-    "operator.cliente.deleted": "Cliente excluído",
-    "operator.route.saved": "Rota salva",
-    "operator.route.updated": "Rota atualizada",
-    "operator.driver.profile.updated": "Motorista atualizado",
-    "public-leads.pii.redacted": "PII de lead redigido",
-    "operator.request.denied": "Requisição negada",
-    "system.route_catalog.imported": "Catálogo de rotas importado",
-  };
-  return mapping[eventType] || eventType;
 }
 
 function formatDateTime(iso: string | null | undefined): string {
@@ -57,14 +47,70 @@ function shortenId(id: string | null | undefined): string {
   return id.length > 8 ? `${id.slice(0, 8)}…` : id;
 }
 
+/** Valor de um campo alterado, legível (DC-184). */
+function formatChangeValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "(vazio)";
+  if (typeof value === "boolean") return value ? "Sim" : "Não";
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "(vazio)";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+/** Resumo textual das mudanças para o CSV. */
+function changesToText(changes: OperatorAuditLogChange[] | null): string {
+  if (!changes || changes.length === 0) return "";
+  return changes
+    .map((c) => `${c.label}: ${formatChangeValue(c.before)} → ${formatChangeValue(c.after)}`)
+    .join(" | ");
+}
+
+function operatorLabel(log: OperatorAuditLogItem): string {
+  return log.actorDisplayName || log.actorEmail || shortenId(log.actorUserId);
+}
+
+/** DC-184: tabela compacta "antes → depois". */
+function ChangeDiff({ changes }: { changes: OperatorAuditLogChange[] }) {
+  return (
+    <div className="mb-3 space-y-1.5">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+        Alterações
+      </p>
+      <div className="space-y-1.5">
+        {changes.map((change) => (
+          <div key={change.field} className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="min-w-[110px] font-semibold text-foreground">{change.label}</span>
+            <span className="rounded bg-rose-100 px-1.5 py-0.5 font-mono text-[11px] text-rose-700 dark:bg-rose-500/20 dark:text-rose-200">
+              {formatChangeValue(change.before)}
+            </span>
+            <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+            <span className="rounded bg-emerald-100 px-1.5 py-0.5 font-mono text-[11px] text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200">
+              {formatChangeValue(change.after)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
   const [expanded, setExpanded] = useState(false);
+  const hasChanges = Boolean(log.changes && log.changes.length > 0);
   const hasMetadata = log.metadata && Object.keys(log.metadata).length > 0;
+  const canExpand = hasChanges || hasMetadata;
+  // Evita mostrar as mudanças duas vezes: o ChangeDiff já renderiza `changes`,
+  // então o JSON cru abaixo omite essa chave (mantém o resto da metadata).
+  const metadataForDisplay = useMemo(() => {
+    if (!log.metadata) return null;
+    if (!hasChanges) return log.metadata;
+    const rest: Record<string, unknown> = { ...log.metadata };
+    delete rest.changes;
+    return rest;
+  }, [log.metadata, hasChanges]);
+  const hasDisplayMetadata = Boolean(metadataForDisplay && Object.keys(metadataForDisplay).length > 0);
   return (
     <>
-      <tr
-        className="border-b border-border/60 text-sm transition-colors hover:bg-primary/[0.03]"
-      >
+      <tr className="border-b border-border/60 text-sm transition-colors hover:bg-primary/[0.03]">
         <td className="px-4 py-3 whitespace-nowrap align-top text-xs text-muted-foreground">
           {formatDateTime(log.createdAt)}
         </td>
@@ -77,12 +123,22 @@ function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
           ) : null}
         </td>
         <td className="px-4 py-3 align-top text-sm font-semibold text-foreground">
-          {formatEventLabel(log.eventType)}
+          {log.eventLabel || log.eventType}
           {log.severity && log.severity !== "info" ? (
             <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-800 dark:bg-amber-500/20 dark:text-amber-200">
               {log.severity}
             </span>
           ) : null}
+          {hasChanges ? (
+            <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+              {log.changes!.length} {log.changes!.length === 1 ? "alteração" : "alterações"}
+            </span>
+          ) : null}
+        </td>
+        <td className="px-4 py-3 align-top text-xs">
+          <span className="inline-flex rounded-full border border-border/70 bg-muted/40 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+            {log.categoryLabel}
+          </span>
         </td>
         {/*
           Bugfix: a coluna RECURSO mostrava textos longos como
@@ -111,9 +167,10 @@ function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
           {log.requestIp || "—"}
         </td>
         <td className="px-4 py-3 align-top text-right">
-          {hasMetadata ? (
+          {canExpand ? (
             <button
               type="button"
+              aria-expanded={expanded}
               onClick={() => setExpanded((current) => !current)}
               className="rounded-full border border-border/70 bg-white/80 px-3 py-1 text-xs font-semibold text-foreground transition-colors hover:bg-muted dark:bg-muted/40"
             >
@@ -124,12 +181,15 @@ function OperatorAuditLogRow({ log }: { log: OperatorAuditLogItem }) {
           )}
         </td>
       </tr>
-      {expanded && hasMetadata ? (
+      {expanded && canExpand ? (
         <tr className="border-b border-border/60 bg-muted/30">
-          <td colSpan={7} className="px-4 py-3">
-            <pre className="max-h-80 overflow-auto rounded-lg border border-border/60 bg-white/80 p-3 text-[11px] leading-relaxed text-foreground dark:bg-muted/40">
-              {JSON.stringify(log.metadata, null, 2)}
-            </pre>
+          <td colSpan={8} className="px-4 py-3">
+            {hasChanges ? <ChangeDiff changes={log.changes!} /> : null}
+            {hasDisplayMetadata ? (
+              <pre className="max-h-80 overflow-auto rounded-lg border border-border/60 bg-white/80 p-3 text-[11px] leading-relaxed text-foreground dark:bg-muted/40">
+                {JSON.stringify(metadataForDisplay, null, 2)}
+              </pre>
+            ) : null}
           </td>
         </tr>
       ) : null}
@@ -143,15 +203,18 @@ const OperatorAuditLogs = () => {
   const [dateFrom, setDateFrom] = useState<string>(daysAgoIso(1));
   const [dateTo, setDateTo] = useState<string>(todayIso());
   const [operatorFilter, setOperatorFilter] = useState<string>("");
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [page, setPage] = useState(1);
+  const [isExporting, setIsExporting] = useState(false);
 
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ["operator", "audit-logs", dateFrom, dateTo, operatorFilter, page],
+    queryKey: ["operator", "audit-logs", dateFrom, dateTo, operatorFilter, selectedCategories, page],
     queryFn: () =>
       fetchOperatorAuditLogs({
         dateFrom,
         dateTo,
         operatorId: operatorFilter || undefined,
+        categories: selectedCategories.length ? selectedCategories : undefined,
         page: String(page),
         pageSize: String(PAGE_SIZE),
       }),
@@ -164,6 +227,88 @@ const OperatorAuditLogs = () => {
   const meta = data?.meta;
   const items = useMemo(() => data?.items ?? [], [data?.items]);
   const operators = useMemo(() => data?.operators ?? [], [data?.operators]);
+  const categories = useMemo(() => data?.categories ?? [], [data?.categories]);
+  const categoryOptions = useMemo(
+    () => categories.map((c) => ({ value: c.key, label: c.label })),
+    [categories],
+  );
+
+  // DC-186: exporta TODAS as linhas que batem com os filtros (não só a página
+  // atual), paginando o read-model até o teto. Respeita período/operador/tipo.
+  const handleExport = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    try {
+      const collected: OperatorAuditLogItem[] = [];
+      let exportPage = 1;
+      let totalPages = 1;
+      do {
+        const chunk = await fetchOperatorAuditLogs({
+          dateFrom,
+          dateTo,
+          operatorId: operatorFilter || undefined,
+          categories: selectedCategories.length ? selectedCategories : undefined,
+          page: String(exportPage),
+          pageSize: String(EXPORT_PAGE_SIZE),
+        });
+        collected.push(...chunk.items);
+        totalPages = chunk.meta.totalPages;
+        exportPage += 1;
+      } while (exportPage <= totalPages && collected.length < EXPORT_MAX_ROWS);
+
+      // Dedup por id: paginação por OFFSET num log append-only pode repetir
+      // linhas se novos eventos chegarem entre a busca de uma página e a próxima.
+      const seen = new Set<string>();
+      const unique = collected.filter((log) => {
+        if (seen.has(log.id)) return false;
+        seen.add(log.id);
+        return true;
+      });
+
+      if (unique.length === 0) {
+        toast.info("Nenhum registro no período/filtros para exportar.");
+        return;
+      }
+
+      const truncated = collected.length >= EXPORT_MAX_ROWS && exportPage <= totalPages;
+      const headers = [
+        "Quando",
+        "Operador",
+        "Email",
+        "Categoria",
+        "Ação",
+        "Recurso",
+        "Resultado",
+        "IP",
+        "Alterações",
+        "Correlation ID",
+      ];
+      const rows = unique.map((log) => [
+        formatDateTime(log.createdAt),
+        operatorLabel(log),
+        log.actorEmail || "",
+        log.categoryLabel,
+        log.eventLabel || log.eventType,
+        log.resourceType && log.resourceId
+          ? `${log.resourceType}/${log.resourceId}`
+          : log.resourceType || "",
+        log.outcome || "",
+        log.requestIp || "",
+        changesToText(log.changes),
+        log.correlationId || "",
+      ]);
+
+      downloadCsv(`auditoria-${csvTimestamp()}.csv`, headers, rows);
+      toast.success(
+        `${unique.length} registro${unique.length === 1 ? "" : "s"} exportado${unique.length === 1 ? "" : "s"}.` +
+          (truncated ? ` (limite de ${EXPORT_MAX_ROWS} — refine os filtros)` : ""),
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Falha ao exportar o CSV.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   if (accessLevel !== "advanced") {
     return (
@@ -194,7 +339,7 @@ const OperatorAuditLogs = () => {
                 Atividades dos operadores
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Registro detalhado de ações no painel: criações, edições, exclusões e acessos. Use os filtros para investigar por período ou operador.
+                Registro detalhado de ações no painel: criações, edições, exclusões e acessos. Use os filtros para investigar por período, operador ou tipo de log.
               </p>
             </div>
 
@@ -250,17 +395,42 @@ const OperatorAuditLogs = () => {
                   );
                 })}
               </select>
+              {/* DC-185: filtro multiselect por tipo de log (categoria). */}
+              <MultiSelectFilter
+                label="Tipo de log"
+                options={categoryOptions}
+                selected={selectedCategories}
+                onChange={(next) => {
+                  setSelectedCategories(next);
+                  setPage(1);
+                }}
+                searchPlaceholder="Buscar tipo..."
+                emptyText="Nenhum tipo."
+                className="min-w-[150px] rounded-xl px-3 py-2 text-xs"
+              />
               <button
                 type="button"
                 onClick={() => {
                   setDateFrom(daysAgoIso(1));
                   setDateTo(todayIso());
                   setOperatorFilter("");
+                  setSelectedCategories([]);
                   setPage(1);
                 }}
                 className="rounded-xl border border-border/70 bg-white/80 px-3 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted dark:bg-muted/40"
               >
                 Limpar filtros
+              </button>
+              {/* DC-186: exportar log filtrado para CSV. */}
+              <button
+                type="button"
+                onClick={handleExport}
+                disabled={isExporting}
+                title="Exporta o log filtrado (todas as páginas) para CSV — abre no Excel"
+                className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/50 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-500/20 disabled:opacity-60 dark:bg-emerald-500/15 dark:text-emerald-200"
+              >
+                {isExporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                {isExporting ? "Exportando..." : "Exportar CSV"}
               </button>
             </div>
           </div>
@@ -279,6 +449,7 @@ const OperatorAuditLogs = () => {
                     <th className="px-4 py-3">Quando</th>
                     <th className="px-4 py-3">Operador</th>
                     <th className="px-4 py-3">Ação</th>
+                    <th className="px-4 py-3">Tipo</th>
                     <th className="px-4 py-3">Recurso</th>
                     <th className="px-4 py-3">Resultado</th>
                     <th className="px-4 py-3">IP</th>
@@ -288,13 +459,13 @@ const OperatorAuditLogs = () => {
                 <tbody>
                   {isLoading && !items.length ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                      <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted-foreground">
                         Carregando...
                       </td>
                     </tr>
                   ) : items.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                      <td colSpan={8} className="px-4 py-10 text-center text-sm text-muted-foreground">
                         Nenhum evento encontrado no período.
                       </td>
                     </tr>
