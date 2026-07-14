@@ -87,6 +87,7 @@ import { deleteReserva } from "../../../application/operator-admin/use-cases/del
 import { setMonitorAllocationPin } from "../../../application/operator-admin/use-cases/set-monitor-allocation-pin.js";
 import { listSystemCargasForMonitor } from "../../../application/operator-admin/use-cases/list-system-cargas-monitor.js";
 import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-admin/use-cases/planilha-availability.js";
+import { applySpxOperationalStatus, fetchSpxStatusIndex } from "../../../application/operator-admin/use-cases/spx-operational-status.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 import { attachRouteCodes } from "../../../application/operator-admin/use-cases/route-codes.js";
 import { attachRouteRegistration } from "../../../application/operator-admin/use-cases/attach-route-registration.js";
@@ -802,7 +803,7 @@ function compareMonitorRows(a, b) {
 // Monta a visão UNIFICADA do Monitor: linhas da planilha ∪ cargas do sistema
 // (intercaladas por data), com reservas no fim. Cada linha ganha rowKey/source.
 // Summary recalculado sobre as linhas operacionais quando há cargas do sistema.
-function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh = {}, now = null, reservedByLh = {} }) {
+function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh = {}, now = null, reservedByLh = {}, spxStatusByLh = null }) {
   // A planilha inteira é de um cliente (ex.: Shopee) — anexa o nome a cada linha
   // da planilha. Cargas do sistema já trazem o próprio cliente (cliente_id→nome).
   const sheetClient = getSheetClientName();
@@ -810,10 +811,13 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, o
     const withMeta = r.rowKey ? r : { ...r, rowKey: `sheet:${r.lh}`, source: "planilha" };
     const withClient = { ...withMeta, cliente: withMeta.cliente ?? sheetClient };
     // "Disponível" só para quem está REALMENTE aberto pro motorista (mesma regra
-    // do /motorista). Fechadas passam a "Expirada"/"Fechada" em vez de "Disponível".
+    // do /motorista). Não-abertas passam a "Fechado" em vez de "Disponível".
     return applyPlanilhaAvailabilityStatus(withClient, { openLhSet, allocByLh, now, reservedByLh });
   });
-  const operational = [...sheetRows, ...systemRows].sort(compareMonitorRows);
+  // Status operacional REAL do SPX/Shopee (Torre) sobrepõe o status das cargas
+  // ALOCADAS, casando por LH (== trip_number). Best-effort: sem índice = no-op.
+  const withSpx = (r) => applySpxOperationalStatus(r, { spxStatusByLh, allocByLh });
+  const operational = [...sheetRows.map(withSpx), ...systemRows.map(withSpx)].sort(compareMonitorRows);
   const reservas = reservaRows.map((r) => (r.rowKey ? r : { ...r, rowKey: `reserva:${r.lh}`, source: "reserva" }));
   const items = reservas.length ? [...operational, ...reservas] : operational;
   const summary = systemRows.length ? buildSheetSummary(operational) : baseSummary;
@@ -897,6 +901,20 @@ export async function resolveSheetMonitorResponse(request) {
         message: openErr instanceof Error ? openErr.message : String(openErr),
       });
       // openLhSet permanece null → regra não aplicada (comportamento anterior).
+    }
+
+    // Status operacional real do SPX/Shopee (Torre /api/spx/asp, DC-136): índice
+    // lh→"Status Operacional" p/ sobrepor o status das cargas ALOCADAS por LH.
+    // Best-effort: sem chave/Torre fora → null (o Monitor segue com o status da
+    // planilha/alocação, sem quebrar). fetchSpxStatusIndex já é resiliente.
+    let spxStatusByLh = null;
+    try {
+      spxStatusByLh = await fetchSpxStatusIndex({ daysBack: 30, daysFwd: 15, correlationId });
+    } catch (spxErr) {
+      logStructuredEvent("warn", "sheet-monitor.spx-status-fetch-failed", {
+        correlationId,
+        message: spxErr instanceof Error ? spxErr.message : String(spxErr),
+      });
     }
 
     // Cargas RESERVADAS no sistema por lead da Fila (motorista do portal), por LH —
@@ -1051,7 +1069,7 @@ export async function resolveSheetMonitorResponse(request) {
 
           // Return the freshly-parsed rows immediately — no extra DB read needed.
           // Inclui o enriquecimento JÁ salvo (senão o refresh "apaga" os selos).
-          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now, reservedByLh });
+          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now, reservedByLh, spxStatusByLh });
           await attachRouteCodes(supabaseClient, unified.items, correlationId);
           await attachRouteRegistration(supabaseClient, unified.items, correlationId);
           const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
@@ -1158,6 +1176,7 @@ export async function resolveSheetMonitorResponse(request) {
         allocByLh,
         now,
         reservedByLh,
+        spxStatusByLh,
       });
       await attachRouteCodes(supabaseClient, unified.items, correlationId);
       await attachRouteRegistration(supabaseClient, unified.items, correlationId);
@@ -1181,7 +1200,7 @@ export async function resolveSheetMonitorResponse(request) {
     // No snapshot yet (first use or migration pending). Mesmo sem planilha, as
     // cargas do sistema (+ reservas) devem aparecer no Monitor.
     const { getSheetExportUrl: getUrl } = await import("../../../application/google-sheets/google-sheet-loads.js");
-    const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary });
+    const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary, allocByLh, spxStatusByLh });
     await attachRouteCodes(supabaseClient, unified.items, correlationId);
     await attachRouteRegistration(supabaseClient, unified.items, correlationId);
     const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
