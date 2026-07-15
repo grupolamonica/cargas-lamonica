@@ -89,7 +89,7 @@ import { listSystemCargasForMonitor } from "../../../application/operator-admin/
 import { dedupeSystemRowsByLh } from "../../../application/operator-admin/use-cases/dedupe-monitor-rows.js";
 import { readSheetSnapshotLhSet } from "../../../application/operator-admin/use-cases/read-sheet-snapshot-lhs.js";
 import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-admin/use-cases/planilha-availability.js";
-import { applySpxOperationalStatus, fetchSpxStatusIndex } from "../../../application/operator-admin/use-cases/spx-operational-status.js";
+import { applySpxOperationalStatus } from "../../../application/operator-admin/use-cases/spx-operational-status.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 import { attachRouteCodes } from "../../../application/operator-admin/use-cases/route-codes.js";
 import { attachRouteRegistration } from "../../../application/operator-admin/use-cases/attach-route-registration.js";
@@ -921,20 +921,15 @@ export async function resolveSheetMonitorResponse(request) {
         }
       })(),
 
-      // 3) Status operacional real do SPX/Shopee (Torre /api/spx/asp, DC-136):
-      //    índice lh→"Status Operacional" p/ sobrepor cargas ALOCADAS. EXTERNO e
-      //    tipicamente o mais lento — o maior ganho da paralelização. Best-effort.
-      (async () => {
-        try {
-          return await fetchSpxStatusIndex({ daysBack: 30, daysFwd: 15, correlationId });
-        } catch (spxErr) {
-          logStructuredEvent("warn", "sheet-monitor.spx-status-fetch-failed", {
-            correlationId,
-            message: spxErr instanceof Error ? spxErr.message : String(spxErr),
-          });
-          return null;
-        }
-      })(),
+      // 3) Overlay de status operacional pela Torre (/api/spx/asp, DC-136):
+      //    DESLIGADO. A tradução da Torre TROCA carregamento↔descarga (mapeia o SPX
+      //    "Arrived" — chegou na ORIGEM, esperando CARREGAR — para "AGUARDANDO
+      //    DESCARGA", sem distinguir origem×destino). O status correto vem da
+      //    PLANILHA Shopee (sheet_status), que já traz "AGUARDANDO CARREGAMENTO"
+      //    certo. Então o Monitor NÃO consulta mais a Torre p/ status; usa a
+      //    planilha. spxStatusByLh = null → applySpxOperationalStatus é no-op.
+      //    (Reversível: religar quando a tradução da Torre for corrigida na raiz.)
+      Promise.resolve(null),
 
       // 4) Cargas RESERVADAS por lead da Fila (motorista do portal), por LH — a
       //    planilha dessas linhas está vazia, mas a carga NÃO está fechada: está
