@@ -3341,7 +3341,14 @@ export default function SheetMonitor() {
       const a = allocByLh[row.lh];
       if (!a) return row;
       const motoristas = a.alloc_motorista ?? row.motoristas;
-      const status = a.alloc_status ?? row.status;
+      // alloc_status "" = "sem status (usa a planilha)" — opção do dropdown do
+      // operador. Precisa CAIR pro status da planilha/SPX (row.status), não
+      // sobrepor com vazio. `??` mantinha "" e derrubava o status real p/ vazio →
+      // a linha aparecia como "Reservado" mesmo com status operacional na
+      // planilha (ex.: "AGUARDANDO CHEGAR NO CLIENTE"). `||` só sobrepõe quando o
+      // operador escolheu um status de verdade. (motorista acima usa `??` de
+      // propósito: "" ali é "sem motorista" explícito.)
+      const status = a.alloc_status || row.status;
       return {
         ...row,
         motoristas,
