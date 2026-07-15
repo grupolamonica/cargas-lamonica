@@ -1270,8 +1270,10 @@ function MonitorCargoFields({ form, setForm, statusOptions }: {
       </label>
       <label className="col-span-1 text-xs font-medium text-muted-foreground">Status
         <select className={field} value={form.status} onChange={set("status")}>
-          <option value="">(disponível)</option>
-          {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+          <option value="">(sem status)</option>
+          {statusOptions.map((s) => (
+            <option key={s} value={s}>{s === "Disponível" ? "Disponível (reabrir p/ motorista)" : s}</option>
+          ))}
         </select>
       </label>
       <label className="col-span-2 text-xs font-medium text-muted-foreground">Tipo (ForeCast, Spot…)
@@ -1380,6 +1382,12 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
     const { data, horario } = splitCarregamento(form.carregamento);
     if (form.origem.trim().length < 2 || form.destino.trim().length < 2 || !data || !horario) {
       toast.error("Rota e carregamento (origem, destino, data + hora) são obrigatórios.");
+      return;
+    }
+    // "Disponível" reabre a carga pro painel — só faz sentido SEM motorista. Com
+    // motorista, BLOQUEIA (o operador remove o motorista antes; nunca removemos sozinho).
+    if (/^dispon[ií]vel$/i.test(form.status.trim()) && form.motorista.trim()) {
+      toast.error("Esta carga tem motorista. Remova o motorista antes de deixá-la Disponível.");
       return;
     }
     mutation.mutate({
@@ -2507,6 +2515,14 @@ function RowDetailModal({
   const allocEditable = editable && !pinned;
 
   const doSave = (descricao = "") => {
+    // "Disponível" reabre a carga pro painel — e só faz sentido SEM motorista. Com
+    // motorista, BLOQUEIA: o operador precisa remover o motorista primeiro (regra do
+    // usuário: nunca remover o motorista automaticamente, apenas impedir "Disponível").
+    const savedMotorista = (allocEditable ? allocForm.motorista : (alloc?.alloc_motorista ?? "")).trim();
+    if (/^dispon[ií]vel$/i.test(allocForm.status.trim()) && savedMotorista) {
+      toast.error("Esta carga tem motorista. Remova o motorista antes de deixá-la Disponível.");
+      return;
+    }
     saveAllocation.mutate({
       lh: row.lh,
       // Linha travada: preserva o motorista/veículo atual (alloc override; null
@@ -2703,7 +2719,7 @@ function RowDetailModal({
                       <option value={allocForm.status}>{allocForm.status}</option>
                     )}
                     {OPERATIONAL_STATUS_OPTIONS.map((s) => (
-                      <option key={s} value={s}>{s}</option>
+                      <option key={s} value={s}>{s === "Disponível" ? "Disponível (reabrir p/ motorista)" : s}</option>
                     ))}
                   </select>
                 </div>

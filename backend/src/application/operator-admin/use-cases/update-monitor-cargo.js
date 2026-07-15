@@ -76,20 +76,31 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     const allocMotorista = has("motorista") && !pinned ? normAlloc(payload.motorista) : row.alloc_motorista;
     const allocCavalo = has("cavalo") && !pinned ? normAlloc(payload.cavalo) : row.alloc_cavalo;
     const allocCarreta = has("carreta") && !pinned ? normAlloc(payload.carreta) : row.alloc_carreta;
-    const allocStatus = has("status") ? normAlloc(payload.status) : row.alloc_status;
+    // "Disponível" = AÇÃO DE REABRIR, não um status operacional armazenável:
+    // normaliza p/ null (sem status). O badge "Disponivel" vem da derivação
+    // (OPEN + futura + sem motorista), não de um literal em alloc_status.
+    const wantsAvailable = has("status") && /^dispon[ií]vel$/i.test((payload.status ?? "").toString().trim());
+    const allocStatus = has("status") ? (wantsAvailable ? null : normAlloc(payload.status)) : row.alloc_status;
     const allocTipo = has("tipo") ? normAlloc(payload.tipo) : row.alloc_tipo;
     // Motivo da troca de motorista/veículo (modal "Confirmar troca"): ausente
     // preserva o último motivo.
     const allocDescricao = has("descricao") ? normAlloc(payload.descricao) : row.alloc_descricao;
     const allocVinculo = has("vinculo") ? normAlloc(payload.vinculo) : row.alloc_vinculo;
 
-    // Limpou o motorista de uma carga do sistema RESERVADA (o motorista reservou
-    // pelo portal): a carga deve voltar a ficar ABERTA. Só quando o operador
-    // REALMENTE esvazia o motorista (não em edição de rota/agenda/status) e não
-    // está fixada. Resolvido FORA da transação (cancelPublicLoadLead abre a
-    // própria e trava a mesma linha) — aqui só sinalizamos o lead a cancelar.
+    // Motorista efetivo da carga do sistema = alloc_motorista (não há sheet_* por baixo).
+    const effMotorista = (allocMotorista ?? "").toString().trim();
+    // Reabrir quando o operador marca "Disponível" numa carga SEM motorista efetivo
+    // (regra escolhida: só reabre se já estiver sem motorista — nunca remove o
+    // motorista automaticamente). Força cargas.status = OPEN → volta pro painel.
+    const reopening = wantsAvailable && !effMotorista;
+
+    // Carga RESERVADA (o motorista reservou pelo portal): reabrir cancelando o lead
+    // — quando o operador limpa o motorista OU marca "Disponível" sem motorista.
+    // Resolvido FORA da transação (cancelPublicLoadLead abre a própria e trava a
+    // mesma linha) — aqui só sinalizamos o lead a cancelar.
     const reopenLeadId =
-      has("motorista") && !pinned && !allocMotorista &&
+      !pinned && !effMotorista &&
+      ((has("motorista") && !allocMotorista) || reopening) &&
       row.status === "RESERVED" && row.reserved_public_lead_id
         ? row.reserved_public_lead_id
         : null;
@@ -136,6 +147,14 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
       [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga, allocTipo, carregamento, allocDescricao, allocVinculo],
     );
 
+    // Reabrir a carga NÃO-reservada: "Disponível" sem motorista → força status=OPEN
+    // (volta pro painel do motorista: mesmo gate do portal — OPEN + pública +
+    // futura + sem motorista). A RESERVADA é reaberta pelo cancelPublicLoadLead
+    // (reopenLeadId), que também baixa o lead do portal — evita duplo-booking.
+    if (reopening && !reopenLeadId && row.status !== "OPEN") {
+      await client.query(`UPDATE public.cargas SET status = 'OPEN', updated_at = now() WHERE id = $1`, [cargoId]);
+    }
+
     await insertSecurityAuditEvent(client, {
       eventType: "operator.cargo.monitor_system_updated",
       actorUserId: operatorId,
@@ -158,6 +177,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
         data,
         horario,
         pinned,
+        reopened: reopening,
         fields: Object.keys(payload).filter((k) => k !== "cargoId"),
         // DC-184: antes → depois. SEM cavalo/carreta (placas = sensível "plate"
         // no sanitizeLogPayload; chaves genéricas before/after não são redigidas

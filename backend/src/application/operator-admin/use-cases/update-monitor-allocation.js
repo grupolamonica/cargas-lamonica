@@ -63,7 +63,14 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     const finalMotorista = pinned || !has("motorista") ? (sheetRow.alloc_motorista ?? null) : norm(payload.motorista);
     const finalCavalo = pinned || !has("cavalo") ? (sheetRow.alloc_cavalo ?? null) : norm(payload.cavalo);
     const finalCarreta = pinned || !has("carreta") ? (sheetRow.alloc_carreta ?? null) : norm(payload.carreta);
-    const finalStatus = has("status") ? norm(payload.status) : (sheetRow.alloc_status ?? null);
+    // "Disponível" é a AÇÃO DE REABRIR, não um status operacional armazenável:
+    // normaliza para "" (sem status). O badge "Disponivel" da linha vem da
+    // derivação de disponibilidade (openLhSet: OPEN + pública + futura + sem
+    // motorista), não de um literal em alloc_status. Sem isso o literal
+    // "Disponível" ficava preso em alloc_status e a carga aparecia azul
+    // "Disponivel" mesmo continuando BOOKED e com motorista (enganoso).
+    const wantsAvailable = has("status") && /^dispon[ií]vel$/i.test(norm(payload.status));
+    const finalStatus = has("status") ? (wantsAvailable ? "" : norm(payload.status)) : (sheetRow.alloc_status ?? null);
     const finalTipo = has("tipo") ? norm(payload.tipo) : (sheetRow.alloc_tipo ?? null);
     // Motivo da troca (modal "Confirmar troca"): ausente preserva o último motivo.
     const finalDescricao = has("descricao") ? norm(payload.descricao) : (sheetRow.alloc_descricao ?? null);
@@ -136,7 +143,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     const cancelling = Boolean(finalStatus) && /cancel/i.test(finalStatus);
     // Status "Disponível" numa carga SEM motorista = reabrir pro painel do
     // motorista (volta pra fila do portal). Só quando não há motorista efetivo.
-    const reopening = Boolean(finalStatus) && /^dispon[ií]vel$/i.test(finalStatus) && !effMotorista;
+    const reopening = wantsAvailable && !effMotorista;
     if (effMotorista && !cancelling) {
       await client.query(
         `UPDATE public.monitor_reservas SET active = false, updated_at = now()

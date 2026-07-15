@@ -310,7 +310,10 @@ describe("updateMonitorAllocation", () => {
     expect(res.statusCode).toBe(200);
     const { rows } = await query(`SELECT status, alloc_status FROM public.cargas WHERE id = $1`, [id]);
     expect(rows[0].status).toBe("OPEN"); // voltou pro painel
-    expect(rows[0].alloc_status).toBe("Disponível");
+    // "Disponível" é a AÇÃO de reabrir, não um status operacional armazenável:
+    // alloc_status fica vazio (o badge "Disponivel" vem da derivação OPEN+futura),
+    // senão o literal ficava preso e a linha aparecia "Disponivel" mesmo com motorista.
+    expect(rows[0].alloc_status ?? "").toBe("");
   });
 
   it('status "Disponível" COM motorista NÃO reabre (só sem motorista volta pro painel)', async () => {
