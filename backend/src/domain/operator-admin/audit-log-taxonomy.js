@@ -105,8 +105,6 @@ export const AUDIT_EVENT_CATALOG = {
   "operator.pacote.request.denied": { label: "Requisição de pacote negada", category: "seguranca" },
   "public-leads.pii.redacted": { label: "PII de lead redigida", category: "seguranca" },
   "public-leads.request.rate_limited": { label: "Requisição limitada (rate limit)", category: "seguranca" },
-  "operator.rastreador.credencial_upserted": { label: "Credencial do rastreador salva", category: "seguranca" },
-  "operator.rastreador.credencial_revelada": { label: "Senha do rastreador revelada", category: "seguranca" },
 
   // ── Sistema ─────────────────────────────────────────────────────────────────
   "system.route_catalog.imported": { label: "Catálogo de rotas importado", category: "sistema" },
