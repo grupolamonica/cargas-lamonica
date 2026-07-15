@@ -48,7 +48,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { allocEditPolicy } from "@/lib/monitorEditPolicy";
+import { allocEditPolicy, isSpxTrip } from "@/lib/monitorEditPolicy";
 import { computeShiftMoves, computeSwapMoves } from "@/lib/monitorReorder";
 import {
   assignAspxAllocations,
@@ -652,11 +652,13 @@ function MiniCheck({ letter, found, label }: { letter: string; found: boolean | 
 }
 
 // Selos do MOTORISTA (compactos): A = Angellira, S = cadastro no ASPX.
-function DriverChecks({ enriched }: { enriched: SheetMonitorEnrichedRow | undefined }) {
+// O selo "S" (ASPX) só aparece em cargas do SPX/Shopee (aspxRelevant): Nestlé & cia
+// não vão para o ASPX, então mostrar cadastro no ASPX ali é ruído enganoso.
+function DriverChecks({ enriched, aspxRelevant }: { enriched: SheetMonitorEnrichedRow | undefined; aspxRelevant: boolean }) {
   return (
     <span className="inline-flex shrink-0 items-center gap-0.5">
       <MiniCheck letter="A" found={presenceState(enriched?.angellira_driver_found)} label="Angellira" />
-      <MiniCheck letter="S" found={aspxCadastroState(enriched)} label="ASPX" />
+      {aspxRelevant && <MiniCheck letter="S" found={aspxCadastroState(enriched)} label="ASPX" />}
     </span>
   );
 }
@@ -1706,7 +1708,7 @@ function AllocCell({ row, enriched, cavaloChecklist, carretaChecklist, editing, 
               {row.cavalo}{row.carreta ? ` · ${row.carreta}` : ""}
             </span>
           )}
-          {row.motoristas && <DriverChecks enriched={enriched} />}
+          {row.motoristas && <DriverChecks enriched={enriched} aspxRelevant={isSpxTrip(row.lh)} />}
           <VehicleChecks enriched={enriched} hasCavalo={Boolean(row.cavalo)} hasCarreta={Boolean(row.carreta)} />
           <VehicleChecklistIcons cavalo={row.cavalo} carreta={row.carreta} cavaloChecklist={cavaloChecklist} carretaChecklist={carretaChecklist} />
           {/* Slot de largura FIXA para o marcador de estado (fixado / atribuído no

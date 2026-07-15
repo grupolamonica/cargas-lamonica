@@ -12,9 +12,19 @@
 
 export type AllocEditPolicy = { editable: boolean; aspxWarning: boolean };
 
-export function allocEditPolicy(row: { status: string }): AllocEditPolicy {
+// Uma carga só é relevante para o ASPX (SPX/Shopee) quando é uma viagem REAL do
+// SPX, identificada pelo LH == trip_number "LT…" (mesma regra do backend em
+// assign-aspx-allocations). Cargas Nestlé (LH "B101…"), do sistema e lançamentos
+// manuais (SPOT/PRIORIDADE/…) NÃO vão para o ASPX — portanto não recebem selo nem
+// aviso de "atribuído no ASPX", mesmo tendo status operacional próprio.
+export function isSpxTrip(lh: string | null | undefined): boolean {
+  return String(lh ?? "").trim().toUpperCase().startsWith("LT");
+}
+
+export function allocEditPolicy(row: { status: string; lh?: string | null }): AllocEditPolicy {
   const status = (row.status || "").trim();
   if (!status) return { editable: true, aspxWarning: false }; // disponível / reservado
-  // Status operacional efetivo → editável, com aviso de ASPX.
-  return { editable: true, aspxWarning: true };
+  // Status operacional efetivo → editável. O aviso de ASPX só vale para viagens
+  // reais do SPX (LT…); Nestlé & cia têm status próprio mas não estão no ASPX.
+  return { editable: true, aspxWarning: isSpxTrip(row.lh) };
 }
