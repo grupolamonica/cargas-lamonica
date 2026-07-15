@@ -117,6 +117,14 @@ const SHEET_MONITOR_QUERY_OPTIONS = {
   retryDelay: (attempt: number) => Math.min(1000 * 2 ** attempt, 8000),
 } as const;
 
+// DC-238: o backend já reesincroniza o snapshot da planilha (inclusive a coluna
+// "Status") a cada ~5 min (SHEET_SYNC_INTERVAL_MIN em main.js), mas o cliente só
+// buscava uma vez ao montar → o operador precisava recarregar a página pra ver o
+// status novo. Este intervalo faz o Monitor repuxar sozinho o caminho de LEITURA
+// barato (refresh=false, só lê o snapshot do banco — NÃO reprocessa o CSV da
+// planilha) numa cadência menor que a do sync, mantendo o Status fresco.
+const MONITOR_STATUS_POLL_MS = 2 * 60_000;
+
 // ─── Status styles ────────────────────────────────────────────────────────────
 
 // `row` = tint suave da LINHA inteira do Monitor na mesma cor do badge de status
@@ -3237,6 +3245,11 @@ export default function SheetMonitor() {
     queryKey: [...SHEET_MONITOR_QUERY_KEY],
     queryFn: fetchSheetMonitor,
     ...SHEET_MONITOR_QUERY_OPTIONS,
+    // DC-238: repuxa o Status sozinho (sem reload). Pausa enquanto o operador
+    // edita uma linha inline pra não descartar o rascunho, e não faz polling com
+    // a aba em segundo plano pra economizar egress.
+    refetchInterval: editingLh ? false : MONITOR_STATUS_POLL_MS,
+    refetchIntervalInBackground: false,
   });
 
   const rawItems = monitorData?.items ?? EMPTY_ROWS;
