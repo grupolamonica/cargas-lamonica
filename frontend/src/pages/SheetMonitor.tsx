@@ -2187,16 +2187,17 @@ function SheetMonitorTable({
         <table className="w-full table-fixed text-sm">
           <colgroup>
             {/* Status | LH | Cliente | Rota | Agenda | Motorista/Placa.
-                DC-239: Agenda tinha folga lateral demais e espremia o nome do
-                motorista; estreitamos Agenda (14→8%) e alargamos Motorista
-                (32→38%). Padding lateral também reduzido (Agenda px-1, Motorista
-                px-2) — o nome começa mais à esquerda e a Agenda fica compacta. */}
+                DC-239: colunas ajustadas para tirar folga. A Rota (24%) sobrava
+                muito espaço à direita (texto curto, alinhado à esquerda) → vão
+                grande antes da Agenda; estreitamos Rota (24→18%). Agenda 14→8%
+                (padding px-1) e Motorista 32→44% (padding px-2, nome mais à
+                esquerda e com espaço). */}
             <col className="w-[12%]" />
             <col className="w-[10%]" />
             <col className="w-[8%]" />
-            <col className="w-[24%]" />
+            <col className="w-[18%]" />
             <col className="w-[8%]" />
-            <col className="w-[38%]" />
+            <col className="w-[44%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-border/60 bg-primary/[0.028]">
