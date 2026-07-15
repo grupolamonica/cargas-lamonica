@@ -1698,35 +1698,40 @@ function AllocCell({ row, enriched, cavaloChecklist, carretaChecklist, editing, 
       >
         {/* Linha única: motorista + placa + checks compactos + selos de estado (fixado / ASPX). */}
         <div className="flex items-center gap-1.5">
+          {/* DC-239: nome com largura FIXA → a placa começa sempre no mesmo x
+              (placas alinhadas verticalmente entre as linhas). Trunca c/ tooltip. */}
           {row.motoristas ? (
-            <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground" title={row.motoristas}>{row.motoristas}</span>
+            <span className="w-[46%] shrink-0 truncate text-xs font-medium text-foreground" title={row.motoristas}>{row.motoristas}</span>
           ) : (
-            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/50">Sem motorista</span>
+            <span className="w-[46%] shrink-0 truncate text-xs text-muted-foreground/50">Sem motorista</span>
           )}
-          {row.cavalo && (
-            <span className="max-w-[104px] shrink-0 truncate font-mono text-[0.6rem] text-muted-foreground" title={`${row.cavalo}${row.carreta ? ` · ${row.carreta}` : ""}`}>
-              {row.cavalo}{row.carreta ? ` · ${row.carreta}` : ""}
-            </span>
-          )}
-          {row.motoristas && <DriverChecks enriched={enriched} aspxRelevant={isSpxTrip(row.lh)} />}
-          <VehicleChecks enriched={enriched} hasCavalo={Boolean(row.cavalo)} hasCarreta={Boolean(row.carreta)} />
-          <VehicleChecklistIcons cavalo={row.cavalo} carreta={row.carreta} cavaloChecklist={cavaloChecklist} carretaChecklist={carretaChecklist} />
-          {/* Slot de largura FIXA para o marcador de estado (fixado / atribuído no
-              ASPX). Fica reservado mesmo sem marcador, para as placas e os selos
-              A/S/C/R não deslocarem entre linhas com e sem marcador (DC-226). */}
+          {/* Placa (cavalo · carreta) em SLOT de largura FIXA, sempre presente
+              (vazio sem veículo) → alinhamento vertical das placas. */}
           <span
-            className="flex h-3 w-3 shrink-0 items-center justify-center"
-            title={pinned ? "Fixado nesta carga (motorista/veículo travados)" : aspxWarning ? "Motorista já atribuído no ASPX" : undefined}
+            className="w-[88px] shrink-0 truncate font-mono text-[0.6rem] text-muted-foreground"
+            title={row.cavalo ? `${row.cavalo}${row.carreta ? ` · ${row.carreta}` : ""}` : undefined}
           >
-            {pinned ? (
-              <Pin className="h-3 w-3 fill-current text-amber-500" />
-            ) : aspxWarning ? (
-              // DC-227: "motorista já atribuído no ASPX" é um estado normal/resolvido
-              // — sinalizado com selo positivo (pessoa com check verde, igual ao KPI
-              // "Com motorista atribuído"), NÃO com o triângulo de alerta. O ⚠ fica
-              // reservado para avisos reais que pedem ação (ex.: rota não cadastrada).
-              <UserCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-            ) : null}
+            {row.cavalo ? `${row.cavalo}${row.carreta ? ` · ${row.carreta}` : ""}` : ""}
+          </span>
+          {/* Selos alinhados à direita (ml-auto): posição consistente entre linhas
+              (independe da quantidade de selos) e NÃO deslocam a placa. */}
+          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+            {row.motoristas && <DriverChecks enriched={enriched} aspxRelevant={isSpxTrip(row.lh)} />}
+            <VehicleChecks enriched={enriched} hasCavalo={Boolean(row.cavalo)} hasCarreta={Boolean(row.carreta)} />
+            <VehicleChecklistIcons cavalo={row.cavalo} carreta={row.carreta} cavaloChecklist={cavaloChecklist} carretaChecklist={carretaChecklist} />
+            {/* Slot FIXO do marcador de estado (fixado / atribuído no ASPX) — DC-226. */}
+            <span
+              className="flex h-3 w-3 shrink-0 items-center justify-center"
+              title={pinned ? "Fixado nesta carga (motorista/veículo travados)" : aspxWarning ? "Motorista já atribuído no ASPX" : undefined}
+            >
+              {pinned ? (
+                <Pin className="h-3 w-3 fill-current text-amber-500" />
+              ) : aspxWarning ? (
+                // DC-227: já atribuído no ASPX = estado normal → selo positivo (pessoa+check),
+                // não triângulo de alerta (reservado a avisos que pedem ação).
+                <UserCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+              ) : null}
+            </span>
           </span>
         </div>
       </div>
