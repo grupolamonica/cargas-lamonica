@@ -42,7 +42,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
 
   const result = await withPgTransaction(async (client) => {
     const { rows } = await client.query(
-      `SELECT id, sheet_lh, sheet_motorista, sheet_cavalo, sheet_carreta, sheet_status,
+      `SELECT id, sheet_lh, sheet_source, sheet_motorista, sheet_cavalo, sheet_carreta, sheet_status,
               alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
               alloc_descricao, alloc_vinculo, status, reserved_public_lead_id
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
@@ -185,6 +185,8 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       // Valor EFETIVO (o que o Monitor mostra) = override do operador ?? planilha.
       // Usado no write-back pra refletir na planilha; "" limpa a célula.
       effective: {
+        // Roteia o write-back pra planilha da fonte certa (shopee vs nestle).
+        source: sheetRow.sheet_source ?? null,
         motorista: finalMotorista ?? sheetRow.sheet_motorista ?? "",
         cavalo: finalCavalo ?? sheetRow.sheet_cavalo ?? "",
         carreta: finalCarreta ?? sheetRow.sheet_carreta ?? "",

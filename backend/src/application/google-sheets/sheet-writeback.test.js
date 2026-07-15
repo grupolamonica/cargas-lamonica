@@ -4,21 +4,27 @@ import { isSheetWritebackEnabled, writeAllocationsToSheet } from "./sheet-writeb
 
 const URL_KEY = "GOOGLE_SHEET_WRITEBACK_URL";
 const SECRET_KEY = "GOOGLE_SHEET_WRITEBACK_SECRET";
+const NESTLE_URL_KEY = "GOOGLE_SHEET_NESTLE_WRITEBACK_URL";
+const NESTLE_SECRET_KEY = "GOOGLE_SHEET_NESTLE_WRITEBACK_SECRET";
 const TEST_URL = "https://script.google.com/macros/s/abc/exec";
+const NESTLE_URL = "https://script.google.com/macros/s/nestle/exec";
+const ALL_KEYS = [URL_KEY, SECRET_KEY, NESTLE_URL_KEY, NESTLE_SECRET_KEY];
 
 function jsonResponse(obj, ok = true, status = 200) {
   return { ok, status, text: async () => JSON.stringify(obj) };
 }
 
 describe("sheet-writeback", () => {
-  let prevUrl, prevSecret;
+  let prev;
   beforeEach(() => {
-    prevUrl = process.env[URL_KEY];
-    prevSecret = process.env[SECRET_KEY];
+    prev = Object.fromEntries(ALL_KEYS.map((k) => [k, process.env[k]]));
+    // isola: cada teste liga só as chaves que precisa.
+    for (const k of ALL_KEYS) delete process.env[k];
   });
   afterEach(() => {
-    if (prevUrl === undefined) delete process.env[URL_KEY]; else process.env[URL_KEY] = prevUrl;
-    if (prevSecret === undefined) delete process.env[SECRET_KEY]; else process.env[SECRET_KEY] = prevSecret;
+    for (const k of ALL_KEYS) {
+      if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k];
+    }
     vi.restoreAllMocks();
   });
 
@@ -88,5 +94,76 @@ describe("sheet-writeback", () => {
     const res = await writeAllocationsToSheet([{ lh: "L1", motorista: "A" }], { fetchImpl });
     expect(res.ok).toBe(false);
     expect(res.error).toContain("network down");
+  });
+
+  // ── Roteamento por fonte (shopee vs nestle) ──────────────────────────────
+  it("source=nestle → POST na URL da Nestlé, com o segredo da Nestlé; source NÃO vai no body", async () => {
+    process.env[URL_KEY] = TEST_URL;
+    process.env[SECRET_KEY] = "seg-shopee";
+    process.env[NESTLE_URL_KEY] = NESTLE_URL;
+    process.env[NESTLE_SECRET_KEY] = "seg-nestle";
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true, updated: 1 }));
+    const res = await writeAllocationsToSheet(
+      [{ lh: "B101457376", source: "nestle", motorista: "MARCELO", status: "AGUAR. CARREGAMENTO" }],
+      { fetchImpl },
+    );
+    expect(res).toEqual({ ok: true, updated: 1 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe(NESTLE_URL);
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.secret).toBe("seg-nestle");
+    expect(body.updates[0]).toEqual({ lh: "B101457376", motorista: "MARCELO", cavalo: "", carreta: "", status: "AGUAR. CARREGAMENTO" });
+    expect("source" in body.updates[0]).toBe(false);
+  });
+
+  it("Nestlé SEM URL configurada → no-op p/ nestle (não é erro); shopee no mesmo lote ainda grava", async () => {
+    process.env[URL_KEY] = TEST_URL; // só shopee configurada
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true, updated: 1 }));
+    const res = await writeAllocationsToSheet(
+      [
+        { lh: "LT1", source: "shopee", motorista: "A" },
+        { lh: "B101", source: "nestle", motorista: "B" },
+      ],
+      { fetchImpl },
+    );
+    // só a shopee foi enviada; nestle pulada silenciosamente (sem URL).
+    expect(res.ok).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe(TEST_URL);
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.updates.map((u) => u.lh)).toEqual(["LT1"]);
+  });
+
+  it("lote com fontes misturadas → um POST por fonte, cada um na sua URL", async () => {
+    process.env[URL_KEY] = TEST_URL;
+    process.env[NESTLE_URL_KEY] = NESTLE_URL;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true, updated: 1 }));
+    await writeAllocationsToSheet(
+      [
+        { lh: "LT1", source: "shopee", motorista: "A" },
+        { lh: "B101", source: "nestle", motorista: "B" },
+      ],
+      { fetchImpl },
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const urls = fetchImpl.mock.calls.map((c) => c[0]).sort();
+    expect(urls).toEqual([NESTLE_URL, TEST_URL].sort());
+  });
+
+  it("sem source (legado) → cai na shopee", async () => {
+    process.env[URL_KEY] = TEST_URL;
+    process.env[NESTLE_URL_KEY] = NESTLE_URL;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true, updated: 1 }));
+    await writeAllocationsToSheet([{ lh: "L1", motorista: "A" }], { fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe(TEST_URL);
+  });
+
+  it("isSheetWritebackEnabled('nestle') reflete só a URL da Nestlé", async () => {
+    process.env[URL_KEY] = TEST_URL; // shopee on
+    expect(isSheetWritebackEnabled("nestle")).toBe(false);
+    process.env[NESTLE_URL_KEY] = NESTLE_URL;
+    expect(isSheetWritebackEnabled("nestle")).toBe(true);
+    expect(isSheetWritebackEnabled()).toBe(true); // shopee (padrão)
   });
 });

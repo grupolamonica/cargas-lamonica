@@ -54,7 +54,7 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
             WHERE COALESCE(TRIM(e->>'motoristas'), '') = ''
               AND COALESCE(TRIM(e->>'lh'), '') <> ''
           )
-          SELECT c.sheet_lh AS lh,
+          SELECT c.sheet_lh AS lh, c.sheet_source,
                  c.alloc_motorista, c.alloc_cavalo, c.alloc_carreta,
                  l.horse_plate, l.trailer_plate, l.validation_summary_json
           FROM public.cargas c
@@ -80,7 +80,7 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
     const carreta = (row.alloc_carreta ?? row.trailer_plate ?? "").toString().trim();
     // Nada resolvido para gravar → pula (não faz POST inútil).
     if (!motorista && !cavalo && !carreta) continue;
-    updates.push({ lh: String(row.lh).trim(), motorista, cavalo, carreta });
+    updates.push({ lh: String(row.lh).trim(), source: row.sheet_source ?? null, motorista, cavalo, carreta });
   }
 
   if (updates.length === 0) return { ok: true, reconciled: 0 };
