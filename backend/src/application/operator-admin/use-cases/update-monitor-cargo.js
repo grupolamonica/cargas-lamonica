@@ -1,7 +1,7 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { buildAuditChanges } from "../../../domain/operator-admin/audit-diff.js";
-import { NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
+import { ConflictError, NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
 import { syncedCarregamentoLabel } from "../../../domain/cargo-schedule.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
 
@@ -43,7 +43,7 @@ function normDescarga(v) {
  *
  * @param {{ cargoId: string, operatorId: string, payload: object, requestIp?: string, correlationId?: string }} args
  */
-export async function updateMonitorCargo({ cargoId, operatorId, payload, requestIp, correlationId }) {
+export async function updateMonitorCargo({ cargoId, operatorId, payload, requestIp, correlationId, knownSheetLhs = null }) {
   const has = (k) => Object.prototype.hasOwnProperty.call(payload, k);
   const normAlloc = (v) => {
     const t = (v ?? "").toString().trim();
@@ -111,6 +111,25 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     const data = has("data") ? payload.data : row.data;
     const horario = has("horario") ? payload.horario : row.horario;
     const lhManual = has("lh") ? normAlloc(payload.lh) : row.lh_manual;
+
+    // Código de viagem (lh_manual) ÚNICO: não pode colidir com o LH de OUTRA carga
+    // — sheet_lh (planilha) ou lh_manual (outra carga do sistema) — nem com uma
+    // viagem que só existe no snapshot da planilha (knownSheetLhs, montado pelo
+    // handler). Sem isso a MESMA viagem aparecia duplicada no Monitor. Só valida
+    // quando o LH MUDA p/ um valor novo (re-salvar o mesmo LH não bloqueia edição).
+    if (has("lh") && lhManual && lhManual !== row.lh_manual) {
+      const { rows: dup } = await client.query(
+        `SELECT 1 FROM public.cargas WHERE id <> $1 AND (sheet_lh = $2 OR lh_manual = $2) LIMIT 1`,
+        [cargoId, lhManual],
+      );
+      const inSnapshot = knownSheetLhs instanceof Set && knownSheetLhs.has(lhManual);
+      if (dup.length > 0 || inSnapshot) {
+        throw new ConflictError(
+          `Já existe uma carga com o código de viagem "${lhManual}". Use um código diferente.`,
+          { code: "DUPLICATE_TRIP_CODE" },
+        );
+      }
+    }
     // Descarga (data+hora) → sheet_data_descarga (texto 'YYYY-MM-DD HH:MM').
     const descarga = has("descarga") ? normDescarga(payload.descarga) : row.sheet_data_descarga;
     // Rótulo denormalizado de carregamento: mantém em sincronia com data+horário
