@@ -1708,14 +1708,15 @@ function AllocCell({ row, enriched, cavaloChecklist, carretaChecklist, editing, 
           {/* Placa (cavalo · carreta) em SLOT de largura FIXA, sempre presente
               (vazio sem veículo) → alinhamento vertical das placas. */}
           <span
-            className="w-[88px] shrink-0 truncate font-mono text-[0.6rem] text-muted-foreground"
+            className="w-[116px] shrink-0 truncate font-mono text-[0.6rem] text-muted-foreground"
             title={row.cavalo ? `${row.cavalo}${row.carreta ? ` · ${row.carreta}` : ""}` : undefined}
           >
             {row.cavalo ? `${row.cavalo}${row.carreta ? ` · ${row.carreta}` : ""}` : ""}
           </span>
-          {/* Selos alinhados à direita (ml-auto): posição consistente entre linhas
-              (independe da quantidade de selos) e NÃO deslocam a placa. */}
-          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {/* Selos logo após a placa (sem ml-auto) — vão junto, sem vão grande.
+              Começam num x consistente (nome+placa têm largura fixa) e não
+              deslocam a placa. */}
+          <span className="flex shrink-0 items-center gap-1.5">
             {row.motoristas && <DriverChecks enriched={enriched} aspxRelevant={isSpxTrip(row.lh)} />}
             <VehicleChecks enriched={enriched} hasCavalo={Boolean(row.cavalo)} hasCarreta={Boolean(row.carreta)} />
             <VehicleChecklistIcons cavalo={row.cavalo} carreta={row.carreta} cavaloChecklist={cavaloChecklist} carretaChecklist={carretaChecklist} />
