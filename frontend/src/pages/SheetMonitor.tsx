@@ -1917,8 +1917,9 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
       </td>
 
       {/* Agenda em DUAS linhas: carregamento em cima, descarga embaixo.
-          tabular-nums = dígitos de largura fixa → as datas alinham verticalmente. */}
-      <td className="px-3 py-1.5 align-middle">
+          tabular-nums = dígitos de largura fixa → as datas alinham verticalmente.
+          DC-239: px-1 (folga lateral mínima — a coluna é estreita). */}
+      <td className="px-1 py-1.5 align-middle">
         {row.carregamentoLabel || row.descargaLabel ? (
           <div
             className="text-xs text-foreground tabular-nums"
@@ -1939,8 +1940,9 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
         )}
       </td>
 
-      {/* Motorista + Placa — editável inline (combobox) */}
-      <td className="px-3 py-1.5 align-middle">
+      {/* Motorista + Placa — editável inline (combobox).
+          DC-239: px-2 (nome começa mais à esquerda). */}
+      <td className="px-2 py-1.5 align-middle">
         <AllocCell
           row={row}
           enriched={enriched}
@@ -2186,19 +2188,20 @@ function SheetMonitorTable({
           <colgroup>
             {/* Status | LH | Cliente | Rota | Agenda | Motorista/Placa.
                 DC-239: Agenda tinha folga lateral demais e espremia o nome do
-                motorista; estreitamos Agenda (14→10%) e alargamos Motorista
-                (32→36%) — o nome passa a começar mais à esquerda e trunca menos. */}
+                motorista; estreitamos Agenda (14→8%) e alargamos Motorista
+                (32→38%). Padding lateral também reduzido (Agenda px-1, Motorista
+                px-2) — o nome começa mais à esquerda e a Agenda fica compacta. */}
             <col className="w-[12%]" />
             <col className="w-[10%]" />
             <col className="w-[8%]" />
             <col className="w-[24%]" />
-            <col className="w-[10%]" />
-            <col className="w-[36%]" />
+            <col className="w-[8%]" />
+            <col className="w-[38%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-border/60 bg-primary/[0.028]">
               {(["Status", "LH", "Cliente", "Rota", "Agenda", "Motorista / Placa"] as const).map((label) => (
-                <th key={label} className="px-3 py-2 text-left text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
+                <th key={label} className={`${label === "Agenda" ? "px-1" : label === "Motorista / Placa" ? "px-2" : "px-3"} py-2 text-left text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70`}>
                   {label === "Agenda" ? (
                     <button
                       type="button"
