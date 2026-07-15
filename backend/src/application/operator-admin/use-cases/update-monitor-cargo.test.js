@@ -258,6 +258,72 @@ describe("updateMonitorCargo", () => {
     expect(leadRow.rows[0].status).toBe("CANCELLED");
   });
 
+  it("código de viagem duplicado (colide com sheet_lh de outra carga) → erro", async () => {
+    await seedCargo({ sheet_lh: "LT-DUP-1", status: "OPEN" }); // carga da planilha com esse LH
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    const op = await seedUser({ email: "op-dup1@teste.local" });
+    await expect(
+      updateMonitorCargo({ cargoId: id, operatorId: op.id, payload: { lh: "LT-DUP-1" }, correlationId: "c-dup1" }),
+    ).rejects.toThrow(/código de viagem/i);
+  });
+
+  it("código de viagem duplicado (colide com lh_manual de outra carga do sistema) → erro", async () => {
+    const other = await seedCargo({ sheet_lh: null, origem: "X", destino: "Y", status: "OPEN" });
+    await query(`UPDATE public.cargas SET lh_manual = 'SYS-DUP' WHERE id = $1`, [other.id]);
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    const op = await seedUser({ email: "op-dup2@teste.local" });
+    await expect(
+      updateMonitorCargo({ cargoId: id, operatorId: op.id, payload: { lh: "SYS-DUP" }, correlationId: "c-dup2" }),
+    ).rejects.toThrow(/código de viagem/i);
+  });
+
+  it("código de viagem que existe só no snapshot da planilha (knownSheetLhs) → erro", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    const op = await seedUser({ email: "op-dup3@teste.local" });
+    await expect(
+      updateMonitorCargo({
+        cargoId: id,
+        operatorId: op.id,
+        payload: { lh: "LT-SNAP-ONLY" },
+        correlationId: "c-dup3",
+        knownSheetLhs: new Set(["LT-SNAP-ONLY"]),
+      }),
+    ).rejects.toThrow(/código de viagem/i);
+  });
+
+  it("re-salvar o MESMO código de viagem (inalterado) NÃO bloqueia — mesmo já estando no snapshot", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    await query(`UPDATE public.cargas SET lh_manual = 'LT-KEEP' WHERE id = $1`, [id]);
+    const op = await seedUser({ email: "op-dup4@teste.local" });
+    // A viagem entrou na planilha DEPOIS de lançada (LT-KEEP no snapshot); ainda
+    // assim o operador precisa poder editar a própria carga (LH não mudou).
+    const res = await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { lh: "LT-KEEP", motorista: "Novo" },
+      correlationId: "c-dup4",
+      knownSheetLhs: new Set(["LT-KEEP"]),
+    });
+    expect(res.statusCode).toBe(200);
+    const row = await getCargo(id);
+    expect(row.alloc_motorista).toBe("Novo");
+  });
+
+  it("código de viagem novo e único → grava lh_manual normalmente", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    const op = await seedUser({ email: "op-dup5@teste.local" });
+    const res = await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { lh: "LT-UNICA-123" },
+      correlationId: "c-dup5",
+      knownSheetLhs: new Set(["OUTRO-LH"]),
+    });
+    expect(res.statusCode).toBe(200);
+    const row = await getCargo(id);
+    expect(row.lh_manual).toBe("LT-UNICA-123");
+  });
+
   it("lança NotFound quando o id não existe", async () => {
     const op = await seedUser({ email: "op-404@teste.local" });
     await expect(

@@ -86,6 +86,8 @@ import { updateReserva } from "../../../application/operator-admin/use-cases/upd
 import { deleteReserva } from "../../../application/operator-admin/use-cases/delete-reserva.js";
 import { setMonitorAllocationPin } from "../../../application/operator-admin/use-cases/set-monitor-allocation-pin.js";
 import { listSystemCargasForMonitor } from "../../../application/operator-admin/use-cases/list-system-cargas-monitor.js";
+import { dedupeSystemRowsByLh } from "../../../application/operator-admin/use-cases/dedupe-monitor-rows.js";
+import { readSheetSnapshotLhSet } from "../../../application/operator-admin/use-cases/read-sheet-snapshot-lhs.js";
 import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-admin/use-cases/planilha-availability.js";
 import { applySpxOperationalStatus, fetchSpxStatusIndex } from "../../../application/operator-admin/use-cases/spx-operational-status.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
@@ -814,10 +816,15 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, o
     // do /motorista). Não-abertas passam a "Fechado" em vez de "Disponível".
     return applyPlanilhaAvailabilityStatus(withClient, { openLhSet, allocByLh, now, reservedByLh });
   });
+  // Dedup planilha ∪ sistema por LH: uma carga do SISTEMA (lh_manual) com o MESMO
+  // LH de uma linha da planilha é a MESMA viagem → mostra só a da planilha (fonte
+  // de verdade do SPX) e esconde a duplicata do sistema. Cobre a janela de corrida
+  // (lançou no sistema antes do sync trazer a viagem) e duplicatas já existentes.
+  const { rows: dedupedSystemRows } = dedupeSystemRowsByLh(sheetRows, systemRows);
   // Status operacional REAL do SPX/Shopee (Torre) sobrepõe o status das cargas
   // ALOCADAS, casando por LH (== trip_number). Best-effort: sem índice = no-op.
   const withSpx = (r) => applySpxOperationalStatus(r, { spxStatusByLh, allocByLh });
-  const operational = [...sheetRows.map(withSpx), ...systemRows.map(withSpx)].sort(compareMonitorRows);
+  const operational = [...sheetRows.map(withSpx), ...dedupedSystemRows.map(withSpx)].sort(compareMonitorRows);
   const reservas = reservaRows.map((r) => (r.rowKey ? r : { ...r, rowKey: `reserva:${r.lh}`, source: "reserva" }));
   const items = reservas.length ? [...operational, ...reservas] : operational;
   const summary = systemRows.length ? buildSheetSummary(operational) : baseSummary;
@@ -1392,7 +1399,15 @@ export async function resolveUpdateMonitorCargoResponse(request) {
     },
     async ({ correlationId, requestIp, operatorId }) => {
       const { cargoId, ...fields } = sheetMonitorCargoUpdateBodySchema.parse(await parseJsonBody(request));
-      const result = await updateMonitorCargo({ cargoId, operatorId, payload: fields, requestIp, correlationId });
+      // Unicidade do código de viagem: quando o operador define/edita o LH, monta o
+      // conjunto de LHs da planilha (snapshot) p/ o use-case barrar colisão com uma
+      // viagem que só existe no snapshot (não vira linha em `cargas`). Só lê quando
+      // há LH no payload — é uma ação de salvar (fora do caminho quente do Monitor).
+      const knownSheetLhs =
+        typeof fields.lh === "string" && fields.lh.trim() !== ""
+          ? await readSheetSnapshotLhSet(correlationId)
+          : null;
+      const result = await updateMonitorCargo({ cargoId, operatorId, payload: fields, requestIp, correlationId, knownSheetLhs });
       // Re-enriquece a carga em background (motorista/placa podem ter mudado) p/
       // o selo Angellira/ASPX refletir o novo motorista. Best-effort, com cache.
       const { enrichSystemCargoById } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
