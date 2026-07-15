@@ -842,184 +842,198 @@ export async function resolveSheetMonitorResponse(request) {
     const refresh = getQueryParam(request, "refresh") === "true";
     const emptySummary = { total: 0, available: 0, assigned: 0, withStatus: 0, statuses: {}, tipos: {} };
 
-    // Overlay da ALOCAÇÃO editada no Monitor (cargas.alloc_*), por LH — a decisão
-    // do operador que sobrepõe o que veio da planilha (Fase 0). O frontend aplica
-    // efetivo = alloc_* ?? valor da planilha. Não-fatal se a coluna ainda não existe.
-    let allocByLh = {};
-    try {
-      // Overlay de alocações (decisões persistentes do operador) — pode passar de
-      // 1000; paginar (best-effort) p/ não perder alocações além da linha 1000.
-      const allocRows = await selectAllPaginated(
-        (from, to) =>
-          supabaseClient
-            .from("cargas")
-            .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_pinned, alloc_updated_at")
-            .not("sheet_lh", "is", null)
-            .not("alloc_updated_at", "is", null)
-            .order("sheet_lh", { ascending: true })
-            .range(from, to),
-        { label: "cargas_alloc", correlationId, partialOnError: true },
-      );
-      for (const r of allocRows) {
-        if (r.sheet_lh) allocByLh[r.sheet_lh] = r;
-      }
-    } catch (allocErr) {
-      logStructuredEvent("warn", "sheet-monitor.alloc-read-failed", {
-        correlationId,
-        message: allocErr instanceof Error ? allocErr.message : String(allocErr),
-      });
-    }
-
-    // Conjunto de LHs da planilha ABERTAS pro motorista — MESMA regra do /motorista
-    // (buildDriverLoadFilters): status OPEN, pública, futura, sem motorista efetivo.
-    // Usado p/ o Monitor só marcar "Disponível" quem realmente aparece pro motorista;
-    // as demais linhas "vazias" viram "Expirada"/"Fechada". Relógio de São Paulo
-    // (cargas.data/horario são horário do Brasil). Falha aqui NÃO é fatal: openLhSet
-    // fica null e a regra não é aplicada (Monitor mantém o comportamento anterior).
+    // Relógio de São Paulo (cargas.data/horario são horário do Brasil) — usado
+    // pela regra de "aberta pro motorista" (openLhSet). Calculado uma vez.
     const { dateIso: monitorTodayIso, timeIso: monitorNowTimeIso } = getSaoPauloWallClock();
     const now = { todayIso: monitorTodayIso, nowTimeIso: monitorNowTimeIso };
-    let openLhSet = null;
-    try {
-      const openRows = await withPgClient((client) =>
-        client
-          .query(
-            `SELECT sheet_lh FROM public.cargas
+
+    // COLD START (perf): estas leituras são INDEPENDENTES entre si e antes rodavam
+    // como ~6 awaits SEQUENCIAIS — a latência somava (a consulta ao SPX é externa e
+    // costuma ser a mais lenta, e serializá-la pesava na abertura do Monitor). Agora
+    // rodam em PARALELO. Cada thunk é best-effort e engole o próprio erro, então o
+    // Promise.all NUNCA rejeita por causa deles: uma falha isolada só zera aquele
+    // overlay (comportamento anterior por-bloco preservado), o Monitor serve o resto.
+    const [allocByLh, openLhSet, spxStatusByLh, reservedByLh, reservaRows, systemRows] = await Promise.all([
+      // 1) Overlay da ALOCAÇÃO editada no Monitor (cargas.alloc_*), por LH — a
+      //    decisão do operador que sobrepõe a planilha. Pode passar de 1000 →
+      //    pagina (best-effort) p/ não perder alocações além da linha 1000.
+      (async () => {
+        const map = {};
+        try {
+          const allocRows = await selectAllPaginated(
+            (from, to) =>
+              supabaseClient
+                .from("cargas")
+                .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_pinned, alloc_updated_at")
+                .not("sheet_lh", "is", null)
+                .not("alloc_updated_at", "is", null)
+                .order("sheet_lh", { ascending: true })
+                .range(from, to),
+            { label: "cargas_alloc", correlationId, partialOnError: true },
+          );
+          for (const r of allocRows) {
+            if (r.sheet_lh) map[r.sheet_lh] = r;
+          }
+        } catch (allocErr) {
+          logStructuredEvent("warn", "sheet-monitor.alloc-read-failed", {
+            correlationId,
+            message: allocErr instanceof Error ? allocErr.message : String(allocErr),
+          });
+        }
+        return map;
+      })(),
+
+      // 2) LHs da planilha ABERTAS pro motorista — MESMA regra do /motorista
+      //    (buildDriverLoadFilters): OPEN, pública, futura, sem motorista efetivo.
+      //    Só assim o Monitor marca "Disponível" quem aparece de fato pro motorista;
+      //    as demais "vazias" viram "Expirada"/"Fechada". Falha → null (regra não
+      //    aplicada, comportamento anterior).
+      (async () => {
+        try {
+          const openRows = await withPgClient((client) =>
+            client
+              .query(
+                `SELECT sheet_lh FROM public.cargas
              WHERE status = 'OPEN'
                AND COALESCE(is_template, false) = false
                AND sheet_lh IS NOT NULL
                AND COALESCE(alloc_motorista, sheet_motorista, '') = ''
                AND (data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))
                AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'`,
-            [monitorTodayIso, monitorTodayIso, monitorNowTimeIso],
-          )
-          .then((res) => res.rows),
-      );
-      openLhSet = new Set(openRows.map((r) => r.sheet_lh).filter(Boolean));
-    } catch (openErr) {
-      logStructuredEvent("warn", "sheet-monitor.open-lhs-read-failed", {
-        correlationId,
-        message: openErr instanceof Error ? openErr.message : String(openErr),
-      });
-      // openLhSet permanece null → regra não aplicada (comportamento anterior).
-    }
+                [monitorTodayIso, monitorTodayIso, monitorNowTimeIso],
+              )
+              .then((res) => res.rows),
+          );
+          return new Set(openRows.map((r) => r.sheet_lh).filter(Boolean));
+        } catch (openErr) {
+          logStructuredEvent("warn", "sheet-monitor.open-lhs-read-failed", {
+            correlationId,
+            message: openErr instanceof Error ? openErr.message : String(openErr),
+          });
+          return null;
+        }
+      })(),
 
-    // Status operacional real do SPX/Shopee (Torre /api/spx/asp, DC-136): índice
-    // lh→"Status Operacional" p/ sobrepor o status das cargas ALOCADAS por LH.
-    // Best-effort: sem chave/Torre fora → null (o Monitor segue com o status da
-    // planilha/alocação, sem quebrar). fetchSpxStatusIndex já é resiliente.
-    let spxStatusByLh = null;
-    try {
-      spxStatusByLh = await fetchSpxStatusIndex({ daysBack: 30, daysFwd: 15, correlationId });
-    } catch (spxErr) {
-      logStructuredEvent("warn", "sheet-monitor.spx-status-fetch-failed", {
-        correlationId,
-        message: spxErr instanceof Error ? spxErr.message : String(spxErr),
-      });
-    }
+      // 3) Status operacional real do SPX/Shopee (Torre /api/spx/asp, DC-136):
+      //    índice lh→"Status Operacional" p/ sobrepor cargas ALOCADAS. EXTERNO e
+      //    tipicamente o mais lento — o maior ganho da paralelização. Best-effort.
+      (async () => {
+        try {
+          return await fetchSpxStatusIndex({ daysBack: 30, daysFwd: 15, correlationId });
+        } catch (spxErr) {
+          logStructuredEvent("warn", "sheet-monitor.spx-status-fetch-failed", {
+            correlationId,
+            message: spxErr instanceof Error ? spxErr.message : String(spxErr),
+          });
+          return null;
+        }
+      })(),
 
-    // Cargas RESERVADAS no sistema por lead da Fila (motorista do portal), por LH —
-    // a planilha dessas linhas está vazia (sem motorista/status), mas a carga NÃO
-    // está fechada: está Reservada. O nome vem do lead aprovado (Angellira display
-    // name no summary; fallback telefone). Não-fatal: sem o mapa, essas linhas
-    // voltam a aparecer como "Fechada" (comportamento anterior).
-    let reservedByLh = {};
-    try {
-      const reservedRows = await withPgClient((client) =>
-        client
-          .query(
-            `SELECT c.sheet_lh,
+      // 4) Cargas RESERVADAS por lead da Fila (motorista do portal), por LH — a
+      //    planilha dessas linhas está vazia, mas a carga NÃO está fechada: está
+      //    Reservada (nome do lead aprovado; fallback telefone). Falha → {} (linhas
+      //    voltam a aparecer como "Fechada", comportamento anterior).
+      (async () => {
+        const map = {};
+        try {
+          const reservedRows = await withPgClient((client) =>
+            client
+              .query(
+                `SELECT c.sheet_lh,
                     NULLIF(TRIM(l.validation_summary_json->'driver'->'angelira'->>'displayName'), '') AS nome,
                     l.phone, l.horse_plate, l.trailer_plate
              FROM public.cargas c
              LEFT JOIN public.load_public_leads l ON l.id = c.reserved_public_lead_id
              WHERE c.status = 'RESERVED' AND c.sheet_lh IS NOT NULL`,
-          )
-          .then((res) => res.rows),
-      );
-      for (const r of reservedRows) {
-        if (!r.sheet_lh) continue;
-        reservedByLh[r.sheet_lh] = {
-          motorista: r.nome || (r.phone ? `Reservado (fila) · ${r.phone}` : "Reservado (fila)"),
-          cavalo: r.horse_plate || "",
-          carreta: r.trailer_plate || "",
-        };
-      }
-    } catch (reservedErr) {
-      logStructuredEvent("warn", "sheet-monitor.reserved-lhs-read-failed", {
-        correlationId,
-        message: reservedErr instanceof Error ? reservedErr.message : String(reservedErr),
-      });
-      reservedByLh = {};
-    }
+              )
+              .then((res) => res.rows),
+          );
+          for (const r of reservedRows) {
+            if (!r.sheet_lh) continue;
+            map[r.sheet_lh] = {
+              motorista: r.nome || (r.phone ? `Reservado (fila) · ${r.phone}` : "Reservado (fila)"),
+              cavalo: r.horse_plate || "",
+              carreta: r.trailer_plate || "",
+            };
+          }
+        } catch (reservedErr) {
+          logStructuredEvent("warn", "sheet-monitor.reserved-lhs-read-failed", {
+            correlationId,
+            message: reservedErr instanceof Error ? reservedErr.message : String(reservedErr),
+          });
+        }
+        return map;
+      })(),
 
-    // Motoristas em RESERVA (standby por rota) — linhas que NÃO vêm da planilha
-    // (geradas pela cascata de cancelamento). Injetadas como linhas RESERVA no
-    // Monitor. Não-fatal se a tabela ainda não existe.
-    let reservaRows = [];
-    try {
-      const { data: reservas } = await supabaseClient
-        .from("monitor_reservas")
-        .select("id, motorista, cavalo, carreta, origem, destino, created_at")
-        .eq("active", true)
-        .limit(5000);
-      if (reservas) {
-        reservaRows = reservas.map((r) => ({
-          lh: `reserva:${r.id}`,
-          tipo: "RESERVA",
-          status: "RESERVA",
-          motoristas: r.motorista || "",
-          origem: r.origem || "",
-          destino: r.destino || "",
-          data: null,
-          horario: null,
-          carregamentoLabel: null,
-          descargaLabel: null,
-          valor: undefined,
-          cavalo: r.cavalo || "",
-          carreta: r.carreta || "",
-          checklistCavalo: "",
-          checklistCarreta: "",
-          isAvailable: false,
-          hasDriver: Boolean(r.motorista),
-          reserva: true,
-          reservaId: r.id,
-          // Quando o motorista entrou em standby (created_at da reserva) — usado
-          // pra exibir "standby desde …" e ordenar a fila de standby (mais antigo 1º).
-          standbyAt: r.created_at,
-          // Telefone do motorista (motoristas_historico) — resolvido logo abaixo.
-          telefone: null,
-        }));
-      }
-    } catch (reservaErr) {
-      logStructuredEvent("warn", "sheet-monitor.reservas-read-failed", {
-        correlationId,
-        message: reservaErr instanceof Error ? reservaErr.message : String(reservaErr),
-      });
-    }
+      // 5) Motoristas em RESERVA (standby por rota) — linhas geradas pela cascata de
+      //    cancelamento, injetadas como linhas RESERVA. Chain de 2 passos: busca as
+      //    reservas e resolve o telefone por nome (motoristas_historico, opcional).
+      (async () => {
+        let rows = [];
+        try {
+          const { data: reservas } = await supabaseClient
+            .from("monitor_reservas")
+            .select("id, motorista, cavalo, carreta, origem, destino, created_at")
+            .eq("active", true)
+            .limit(5000);
+          if (reservas) {
+            rows = reservas.map((r) => ({
+              lh: `reserva:${r.id}`,
+              tipo: "RESERVA",
+              status: "RESERVA",
+              motoristas: r.motorista || "",
+              origem: r.origem || "",
+              destino: r.destino || "",
+              data: null,
+              horario: null,
+              carregamentoLabel: null,
+              descargaLabel: null,
+              valor: undefined,
+              cavalo: r.cavalo || "",
+              carreta: r.carreta || "",
+              checklistCavalo: "",
+              checklistCarreta: "",
+              isAvailable: false,
+              hasDriver: Boolean(r.motorista),
+              reserva: true,
+              reservaId: r.id,
+              // Quando o motorista entrou em standby (created_at da reserva).
+              standbyAt: r.created_at,
+              telefone: null,
+            }));
+          }
+        } catch (reservaErr) {
+          logStructuredEvent("warn", "sheet-monitor.reservas-read-failed", {
+            correlationId,
+            message: reservaErr instanceof Error ? reservaErr.message : String(reservaErr),
+          });
+        }
+        // Telefone das reservas por nome (motoristas_historico). Não-fatal.
+        try {
+          const phones = await resolveDriverPhones(rows.map((r) => r.motoristas));
+          for (const r of rows) {
+            r.telefone = phones.get((r.motoristas || "").toLowerCase().trim()) ?? null;
+          }
+        } catch {
+          /* telefone é opcional */
+        }
+        return rows;
+      })(),
 
-    // Telefone das reservas por nome de motorista (opcional — só em
-    // motoristas_historico). Não-fatal: se falhar, telefone fica null.
-    try {
-      const phones = await resolveDriverPhones(reservaRows.map((r) => r.motoristas));
-      for (const r of reservaRows) {
-        r.telefone = phones.get((r.motoristas || "").toLowerCase().trim()) ?? null;
-      }
-    } catch {
-      /* telefone é opcional */
-    }
-
-    // Cargas criadas no SISTEMA (sheet_lh nulo) — entram na visão unificada do
-    // Monitor (planilha ∪ sistema). Não-fatal: se falhar, o Monitor ainda serve
-    // as linhas da planilha.
-    let systemRows = [];
-    try {
-      systemRows = await listSystemCargasForMonitor(supabaseClient);
-    } catch (systemErr) {
-      logStructuredEvent("warn", "sheet-monitor.system-cargas-read-failed", {
-        correlationId,
-        message: systemErr instanceof Error ? systemErr.message : String(systemErr),
-      });
-    }
+      // 6) Cargas criadas no SISTEMA (sheet_lh nulo) — visão unificada planilha ∪
+      //    sistema. Falha → [] (Monitor ainda serve as linhas da planilha).
+      (async () => {
+        try {
+          return await listSystemCargasForMonitor(supabaseClient);
+        } catch (systemErr) {
+          logStructuredEvent("warn", "sheet-monitor.system-cargas-read-failed", {
+            correlationId,
+            message: systemErr instanceof Error ? systemErr.message : String(systemErr),
+          });
+          return [];
+        }
+      })(),
+    ]);
 
     // ----------------------------------------------------------------
     // REFRESH path: operator explicitly asked for a fresh sync.
@@ -1070,9 +1084,13 @@ export async function resolveSheetMonitorResponse(request) {
           // Return the freshly-parsed rows immediately — no extra DB read needed.
           // Inclui o enriquecimento JÁ salvo (senão o refresh "apaga" os selos).
           const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now, reservedByLh, spxStatusByLh });
-          await attachRouteCodes(supabaseClient, unified.items, correlationId);
-          await attachRouteRegistration(supabaseClient, unified.items, correlationId);
-          const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
+          // attachRouteCodes/Registration tocam campos DIFERENTES de cada item
+          // (routeCodigo vs routeRegistered) e cada um faz um scan próprio → paraleliza.
+          const [, , { enrichedByLh, enrichedByCargoId }] = await Promise.all([
+            attachRouteCodes(supabaseClient, unified.items, correlationId),
+            attachRouteRegistration(supabaseClient, unified.items, correlationId),
+            readEnrichedMaps(supabaseClient, correlationId),
+          ]);
           return {
             statusCode: 200,
             payload: {
@@ -1105,33 +1123,41 @@ export async function resolveSheetMonitorResponse(request) {
     // ----------------------------------------------------------------
     // READ path: always from the DB snapshot — never hits Google Sheets.
     // ----------------------------------------------------------------
-    // Lê TODOS os snapshots por-fonte (Shopee id=1 + Nestlé etc.) e mescla.
-    let snapshotRows = null;
-    try {
-      const { data, error } = await supabaseClient
-        .from("sheet_monitor_snapshot")
-        .select("rows_json, summary_json, synced_at, source")
-        .order("id", { ascending: true });
-
-      if (error) {
-        logStructuredEvent("error", "sheet-monitor.snapshot-read-failed", {
-          correlationId,
-          code: error.code,
-          message: error.message,
-        });
-      } else {
-        snapshotRows = data;
-      }
-    } catch (dbError) {
-      logStructuredEvent("error", "sheet-monitor.db-error", {
-        correlationId,
-        message: dbError instanceof Error ? dbError.message : String(dbError),
-      });
-    }
+    // Snapshots por-fonte (Shopee id=1 + Nestlé etc.) e os selos são INDEPENDENTES
+    // → lê ambos em PARALELO (antes: snapshot e depois selos, sequenciais). O selo
+    // (readEnrichedMaps) pode LANÇAR de propósito (não devolve mapa parcial) — nesse
+    // caso o Promise.all rejeita e a resposta vira erro, igual ao comportamento
+    // anterior (o cliente mantém o último estado bom).
+    const [snapshotRows, enrichedMaps] = await Promise.all([
+      (async () => {
+        try {
+          const { data, error } = await supabaseClient
+            .from("sheet_monitor_snapshot")
+            .select("rows_json, summary_json, synced_at, source")
+            .order("id", { ascending: true });
+          if (error) {
+            logStructuredEvent("error", "sheet-monitor.snapshot-read-failed", {
+              correlationId,
+              code: error.code,
+              message: error.message,
+            });
+            return null;
+          }
+          return data;
+        } catch (dbError) {
+          logStructuredEvent("error", "sheet-monitor.db-error", {
+            correlationId,
+            message: dbError instanceof Error ? dbError.message : String(dbError),
+          });
+          return null;
+        }
+      })(),
+      readEnrichedMaps(supabaseClient, correlationId),
+    ]);
 
     if (snapshotRows && snapshotRows.length > 0) {
-      // Enriquecimento salvo: planilha por lh, sistema por cargo_id.
-      const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
+      // Enriquecimento salvo (já lido acima em paralelo): planilha por lh, sistema por cargo_id.
+      const { enrichedByLh, enrichedByCargoId } = enrichedMaps;
 
       // Mescla as linhas de todas as fontes. A Shopee (source nulo/'shopee') fica
       // sem rótulo — o buildUnifiedMonitor aplica getSheetClientName() (byte-idêntico
@@ -1178,8 +1204,10 @@ export async function resolveSheetMonitorResponse(request) {
         reservedByLh,
         spxStatusByLh,
       });
-      await attachRouteCodes(supabaseClient, unified.items, correlationId);
-      await attachRouteRegistration(supabaseClient, unified.items, correlationId);
+      await Promise.all([
+        attachRouteCodes(supabaseClient, unified.items, correlationId),
+        attachRouteRegistration(supabaseClient, unified.items, correlationId),
+      ]);
       return {
         statusCode: 200,
         payload: {
@@ -1201,9 +1229,12 @@ export async function resolveSheetMonitorResponse(request) {
     // cargas do sistema (+ reservas) devem aparecer no Monitor.
     const { getSheetExportUrl: getUrl } = await import("../../../application/google-sheets/google-sheet-loads.js");
     const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary, allocByLh, spxStatusByLh });
-    await attachRouteCodes(supabaseClient, unified.items, correlationId);
-    await attachRouteRegistration(supabaseClient, unified.items, correlationId);
-    const { enrichedByLh, enrichedByCargoId } = await readEnrichedMaps(supabaseClient, correlationId);
+    await Promise.all([
+      attachRouteCodes(supabaseClient, unified.items, correlationId),
+      attachRouteRegistration(supabaseClient, unified.items, correlationId),
+    ]);
+    // Selos já lidos em paralelo com o snapshot acima.
+    const { enrichedByLh, enrichedByCargoId } = enrichedMaps;
     return {
       statusCode: 200,
       payload: {

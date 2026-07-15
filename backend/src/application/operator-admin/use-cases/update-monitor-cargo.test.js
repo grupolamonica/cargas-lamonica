@@ -199,6 +199,65 @@ describe("updateMonitorCargo", () => {
     expect(rows[0].reserved_public_lead_id).toBe(lead.id);
   });
 
+  it("status 'Disponível' sem motorista reabre a carga do sistema pro painel (status → OPEN, alloc_status vazio)", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "BOOKED" }); // fechada pro portal
+    const op = await seedUser({ email: "op-sys-disp@teste.local" });
+
+    await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { motorista: "", cavalo: "", carreta: "", status: "Disponível" },
+      correlationId: "c-sys-disp",
+    });
+
+    const row = await getCargo(id);
+    const { rows } = await query(`SELECT status FROM public.cargas WHERE id = $1`, [id]);
+    expect(rows[0].status).toBe("OPEN"); // voltou pro painel
+    // "Disponível" é a ação de reabrir, não um status operacional armazenável.
+    expect(row.alloc_status ?? "").toBe("");
+  });
+
+  it("status 'Disponível' COM motorista NÃO reabre a carga do sistema", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "BOOKED" });
+    const op = await seedUser({ email: "op-sys-disp2@teste.local" });
+
+    await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { motorista: "João", status: "Disponível" },
+      correlationId: "c-sys-disp2",
+    });
+
+    const { rows } = await query(`SELECT status FROM public.cargas WHERE id = $1`, [id]);
+    expect(rows[0].status).toBe("BOOKED"); // com motorista, não reabre
+  });
+
+  it("status 'Disponível' sem motorista numa carga do sistema RESERVED reabre e cancela o lead", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    const op = await seedUser({ email: "op-sys-disp3@teste.local" });
+    const lead = await seedPublicLead({ load_id: id, status: "APPROVED" });
+    await query(
+      `UPDATE public.cargas SET status = 'RESERVED', reserved_public_lead_id = $2 WHERE id = $1`,
+      [id, lead.id],
+    );
+
+    await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { status: "Disponível" },
+      correlationId: "c-sys-disp3",
+    });
+
+    const { rows } = await query(
+      `SELECT status, reserved_public_lead_id FROM public.cargas WHERE id = $1`,
+      [id],
+    );
+    expect(rows[0].status).toBe("OPEN");
+    expect(rows[0].reserved_public_lead_id).toBeNull();
+    const leadRow = await query(`SELECT status FROM public.load_public_leads WHERE id = $1`, [lead.id]);
+    expect(leadRow.rows[0].status).toBe("CANCELLED");
+  });
+
   it("lança NotFound quando o id não existe", async () => {
     const op = await seedUser({ email: "op-404@teste.local" });
     await expect(
