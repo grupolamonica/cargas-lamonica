@@ -85,8 +85,12 @@ export const NESTLE_HEADER_SCHEMA = {
   // o vínculo vazava para o campo `tipo`, poluindo o filtro de Tipo do Monitor.
   // Sem coluna "tipo" → tipo fica null; o vínculo é lido separadamente.
   tipo: ["tipo"],
-  "data carregamento": ["data carregamento", "chegada prevista"],
-  "data descarga": ["data descarga", "descarga"],
+  // A planilha real da Nestlé usa "COLETA PREVISTA" (carregamento) e "ENTREGA"
+  // (descarga) — não "chegada prevista"/"descarga". Sem estes aliases o
+  // findHeaderRowIndex não achava o cabeçalho e NENHUMA carga Nestlé entrava
+  // no sistema (DC-240).
+  "data carregamento": ["data carregamento", "chegada prevista", "coleta prevista"],
+  "data descarga": ["data descarga", "descarga", "entrega"],
   motoristas: ["motoristas", "motorista"],
   origem: ["origem"],
   destino: ["destino"],
@@ -1112,11 +1116,43 @@ function buildSheetLoadPayload({
   // For EXISTING cargas, preserve what the operator may have manually edited.
   const operatorFields = isExistingLoad
     ? {
-        perfil: existingLoad.perfil || DEFAULT_PROFILE,
-        valor: existingLoad.valor,
-        bonus: existingLoad.bonus,
-        distancia_km: existingLoad.distancia_km,
-        duracao_horas: existingLoad.duracao_horas,
+        // DC-240: preserva o que o operador editou (valor não-nulo), mas faz
+        // BACKFILL do catálogo de rotas quando o campo está VAZIO. Assim, quando
+        // a rota passa a existir (ou é criada) depois, o valor/perfil/métricas são
+        // puxados automaticamente no próximo sync — antes ficavam null pra sempre
+        // porque o sync só preservava o valor existente ("mesmo tendo rota, não
+        // atribuía automático").
+        perfil: normalizeVehicleProfile(
+          pickFirstNonEmptyString(
+            existingLoad.perfil,
+            matchedRouteTemplateDefaults?.perfil,
+            matchedRouteCatalogDefaults?.perfil,
+            DEFAULT_PROFILE,
+          ),
+          DEFAULT_PROFILE,
+        ),
+        valor: pickFirstFiniteNumber(
+          existingLoad.valor,
+          matchedRouteTemplateDefaults?.valor,
+          matchedRouteCatalogDefaults?.valor,
+          matchedBaseRouteValue?.valor,
+          load.valor,
+        ),
+        bonus: pickFirstFiniteNumber(
+          existingLoad.bonus,
+          matchedRouteTemplateDefaults?.bonus,
+          matchedRouteCatalogDefaults?.bonus,
+        ),
+        distancia_km: pickFirstFiniteNumber(
+          existingLoad.distancia_km,
+          matchedRouteTemplateDefaults?.distancia_km,
+          matchedRouteCatalogDefaults?.distancia_km,
+        ),
+        duracao_horas: pickFirstFiniteNumber(
+          existingLoad.duracao_horas,
+          matchedRouteTemplateDefaults?.duracao_horas,
+          matchedRouteCatalogDefaults?.duracao_horas,
+        ),
         // Planilha sem motorista/status → a carga "fechada" volta ao portal:
         //   BOOKED  → OPEN sempre (operador removeu o motorista da planilha).
         //   EXPIRED → OPEN só se a carga voltou a ser futura (trava de "ativa").

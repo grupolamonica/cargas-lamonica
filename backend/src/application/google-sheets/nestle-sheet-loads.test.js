@@ -62,11 +62,11 @@ function nestleHeaderSchema() {
 
 // Supabase mock com cargas em memória filtráveis por sheet_source (emula o
 // escopo por fonte de fetchExistingSheetLoads). O upsert de cargas é registrado.
-function createSupabaseMock({ existingSheetRows = [], clientRows } = {}) {
+function createSupabaseMock({ existingSheetRows = [], clientRows, routeRows = [] } = {}) {
   const calls = [];
   const tableRows = {
     cargas: existingSheetRows,
-    route_metrics_cache: [],
+    route_metrics_cache: routeRows,
     clientes: clientRows ?? [{ id: NESTLE_CLIENT_ID, nome: "Nestlé" }],
     sheet_monitor_snapshot: [],
   };
@@ -363,6 +363,152 @@ describe("nestle sheet source", () => {
       sheet_status: "DESCARREGADO",
       id: createSheetLoadId("NST-0001", "nestle"),
     });
+  });
+
+  // DC-240: a planilha REAL da Nestlé usa "COLETA PREVISTA"/"ENTREGA" (não
+  // "CHEGADA PREVISTA"/"DESCARGA"). Antes o cabeçalho não era detectado e
+  // NENHUMA carga entrava. O fixture legado usava os nomes antigos — este teste
+  // trava o layout real de produção.
+  const NESTLE_REAL_CSV = [
+    ",,,,,,PROGRAMAÇÃO NESTLÉ,,,,,,,,,,",
+    "Nº DE ORDEM,DOCK,COLETA PREVISTA,ENTREGA,VINCULO,PORTAL,MOTORISTA,CAVALO,CARRETA,CONTATO,STATUS,LOCALIZAÇÃO 1,LOCALIZAÇÃO 2,ORIGEM,DESTINO,STATUS TORRE,OCORRENCIA",
+    "NST-REAL-1,D1,05/04/2026 08:00:00,05/04/2026 18:00:00,FROTA,🔴,João,ABC1D23,DEF4G56,71988887777,DESCARREGADO,Patio,Doca,SoC_SP_Cajamar,SoC_BA_Feira de Santana,OK,",
+    "NST-REAL-2,D2,31/12/2099 09:30:00,01/01/2100 14:00:00,PME,,,,,,,,,SoC_SP_Cajamar,SoC_MG_Contagem,,",
+  ].join("\n");
+
+  it("DC-240: detecta o cabeçalho REAL (COLETA PREVISTA/ENTREGA, sem 'tipo') e parseia a data de COLETA PREVISTA", () => {
+    const loads = parseAvailableGoogleSheetLoads(NESTLE_REAL_CSV, {
+      headerSchema: nestleHeaderSchema(),
+    });
+
+    // Só a linha sem motorista/status é "disponível".
+    expect(loads).toHaveLength(1);
+    expect(loads[0]).toMatchObject({
+      lh: "NST-REAL-2",
+      data: "2099-12-31",
+      horario: "09:30:00",
+      carregamentoLabel: "31/12/2099 09:30",
+      origem: "Cajamar / SP",
+      destino: "Contagem / MG",
+    });
+  });
+
+  it("DC-240: carga existente SEM valor recebe o valor da rota (backfill) sem sobrescrever edição do operador", async () => {
+    const existingId = createSheetLoadId("NST-REAL-2", "nestle");
+    const supabaseClient = createSupabaseMock({
+      // Carga já existe, veio sem valor (rota não existia no sync anterior).
+      existingSheetRows: [
+        {
+          id: existingId,
+          sheet_lh: "NST-REAL-2",
+          status: "OPEN",
+          sheet_source: "nestle",
+          sheet_synced_at: "2026-07-01T00:00:00.000Z",
+          perfil: "CARRETA",
+          valor: null,
+          bonus: null,
+          distancia_km: null,
+          duracao_horas: null,
+          cliente_id: NESTLE_CLIENT_ID,
+          is_template: false,
+          created_by: null,
+        },
+      ],
+      // Rota agora cadastrada para o trecho Cajamar → Contagem.
+      routeRows: [
+        {
+          origin_key: null,
+          destination_key: null,
+          origem: "Cajamar / SP",
+          destino: "Contagem / MG",
+          distancia_km: 620,
+          duracao_horas: 9,
+          perfil_padrao: "CARRETA",
+          valor_padrao: 4200,
+          bonus_padrao: 150,
+          ativa: true,
+          updated_at: "2026-07-10T00:00:00.000Z",
+        },
+      ],
+    });
+    const fetchImpl = mockFetch(NESTLE_REAL_CSV);
+
+    await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/nestle.csv",
+      supabaseClient,
+      sheetClientId: NESTLE_CLIENT_ID,
+      source: "nestle",
+      headerSchema: nestleHeaderSchema(),
+    });
+
+    const payload = supabaseClient.calls
+      .filter((c) => c[0] === "upsert" && c[1] === "cargas")
+      .flatMap((c) => c[2])
+      .find((p) => p.sheet_lh === "NST-REAL-2");
+
+    expect(payload).toBeTruthy();
+    // Valor/métricas puxados do catálogo de rotas (antes ficavam null pra sempre).
+    expect(payload.valor).toBe(4200);
+    expect(payload.bonus).toBe(150);
+    expect(payload.distancia_km).toBe(620);
+    expect(payload.duracao_horas).toBe(9);
+  });
+
+  it("DC-240: valor editado pelo operador é PRESERVADO (backfill só preenche o que está vazio)", async () => {
+    const existingId = createSheetLoadId("NST-REAL-2", "nestle");
+    const supabaseClient = createSupabaseMock({
+      existingSheetRows: [
+        {
+          id: existingId,
+          sheet_lh: "NST-REAL-2",
+          status: "OPEN",
+          sheet_source: "nestle",
+          sheet_synced_at: "2026-07-01T00:00:00.000Z",
+          perfil: "CARRETA",
+          valor: 5000, // operador definiu manualmente
+          bonus: null,
+          distancia_km: null,
+          duracao_horas: null,
+          cliente_id: NESTLE_CLIENT_ID,
+          is_template: false,
+          created_by: null,
+        },
+      ],
+      routeRows: [
+        {
+          origin_key: null,
+          destination_key: null,
+          origem: "Cajamar / SP",
+          destino: "Contagem / MG",
+          distancia_km: 620,
+          duracao_horas: 9,
+          perfil_padrao: "CARRETA",
+          valor_padrao: 4200,
+          bonus_padrao: 150,
+          ativa: true,
+          updated_at: "2026-07-10T00:00:00.000Z",
+        },
+      ],
+    });
+    const fetchImpl = mockFetch(NESTLE_REAL_CSV);
+
+    await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/nestle.csv",
+      supabaseClient,
+      sheetClientId: NESTLE_CLIENT_ID,
+      source: "nestle",
+      headerSchema: nestleHeaderSchema(),
+    });
+
+    const payload = supabaseClient.calls
+      .filter((c) => c[0] === "upsert" && c[1] === "cargas")
+      .flatMap((c) => c[2])
+      .find((p) => p.sheet_lh === "NST-REAL-2");
+
+    expect(payload.valor).toBe(5000); // preservado
+    expect(payload.bonus).toBe(150); // vazio → backfill da rota
   });
 
   it("sem pullAllRows (default): NÃO cria carga para linha já alocada, só a disponível", async () => {
