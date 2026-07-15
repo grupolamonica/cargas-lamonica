@@ -1024,13 +1024,26 @@ const ManageCargas = () => {
                               <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${matchedRoute.ativa ? "bg-primary/8 text-primary" : "bg-muted text-muted-foreground"}`}>
                                 {matchedRoute.ativa ? "Catálogo ativo" : "Catálogo inativo"}
                               </span>
+                            ) : !publication.isReady ? (
+                              // DC-240: carga entrou sem rota cadastrada para o trecho — avisa o
+                              // operador (âmbar) para criar a rota; com a rota cadastrada, o valor
+                              // é puxado automaticamente no próximo sync.
+                              <span
+                                className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
+                                title="Nenhuma rota cadastrada para este trecho. Cadastre a rota em Rotas para o valor ser puxado automaticamente."
+                              >
+                                <AlertTriangle className="h-2.5 w-2.5" />
+                                Sem rota cadastrada
+                              </span>
                             ) : (
                               <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">Rota manual</span>
                             )}
                             {cargo.is_template && (
                               <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">Template</span>
                             )}
-                            {!publication.isReady && (
+                            {/* Rota existe mas faltam dados → alerta genérico. Sem rota, o chip
+                                "Sem rota cadastrada" acima já é a causa-raiz (evita redundância). */}
+                            {!publication.isReady && matchedRoute && (
                               <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
                                 <AlertTriangle className="h-2.5 w-2.5" />
                                 {publication.alertSummary || "Dados pendentes"}
