@@ -667,48 +667,6 @@ export async function fetchOperatorVehicles(params: Record<string, string>) {
   });
 }
 
-// ── Gerenciamento de Risco (GR): feed unificado de alertas de vigência/estado ──
-// (motorista + veículo). Contrato do backend: GET /api/operator/gr/alertas (DC-234).
-// O feed NÃO é paginado — vem completo e já ordenado por urgência.
-export type GrAlertaSource = "ANGELLIRA" | "BRK" | "SPX";
-export type GrAlertaType = "EXPIRY" | "STATE";
-export type GrAlertaSeverity = "crit" | "warn";
-
-export interface GrAlertaItem {
-  id: string;
-  entityType: "motorista" | "veiculo";
-  entityId: string;
-  displayName: string | null;
-  document: string | null;
-  plate: string | null;
-  plateRole: string | null;
-  linkedDriver: { name: string | null; cpf: string | null } | null;
-  source: GrAlertaSource;
-  alertType: GrAlertaType;
-  severity: GrAlertaSeverity;
-  daysUntilExpiry: number | null;
-  dueDate: string | null;
-  message: string;
-  checkedAt: string | null;
-}
-
-export interface GrAlertasSummary {
-  drivers: { total: number; ok: number; atencao: number; critico: number; semDado: number };
-  vehicles: { total: number; expiringSoon: number; expired: number };
-  alertas: { total: number; criticos: number; atencao: number };
-}
-
-export interface GrAlertasResponse {
-  items: GrAlertaItem[];
-  summary: GrAlertasSummary;
-  meta: { count: number; correlationId: string | null };
-}
-
-export async function fetchGrAlertas() {
-  const accessToken = await getOperatorAccessToken();
-  return requestJson<GrAlertasResponse>("/api/operator/gr/alertas", { accessToken });
-}
-
 export interface SheetMonitorRow {
   lh: string;
   tipo: string | null;

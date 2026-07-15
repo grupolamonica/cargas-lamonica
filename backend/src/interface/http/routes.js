@@ -117,12 +117,6 @@ import {
 import { resolveOperatorCadastrosComErroResponse } from "./operator-admin/cadastros-com-erro.handlers.js";
 import { resolveOperatorCadastroBotsHealthResponse } from "./operator-admin/cadastro-bots-health.handlers.js";
 import { resolveOperatorCadastrosIncompletosResponse } from "./operator-admin/cadastros-incompletos.handlers.js";
-import {
-  resolveOperatorGrAlertasResponse,
-  resolveListRastreadorCredentialsResponse,
-  resolveUpsertRastreadorCredentialResponse,
-  resolveRevealRastreadorCredentialResponse,
-} from "./operator-admin/gr.handlers.js";
 
 import {
   resolveDriverLoadFacetsResponse,
@@ -389,13 +383,6 @@ export function registerRoutes(app) {
   // Veículos
   router.get("/api/operator/veiculos", wrap(resolveOperatorVehiclesListReadModelResponse));
   router.post("/api/operator/veiculos/revalidate", wrap(resolveRevalidateAllVehiclesResponse));
-
-  // Gerenciamento de Risco (GR)
-  router.get("/api/operator/gr/alertas", wrap(resolveOperatorGrAlertasResponse));
-  // Cofre de credenciais do rastreador (DC-236) — todos nível advanced
-  router.get("/api/operator/gr/rastreador-credenciais", wrap(resolveListRastreadorCredentialsResponse));
-  router.put("/api/operator/gr/rastreador-credenciais", wrap(resolveUpsertRastreadorCredentialResponse));
-  router.post("/api/operator/gr/rastreador-credenciais/revelar", wrap(resolveRevealRastreadorCredentialResponse));
 
   // Sheet monitor
   router.get("/api/operator/sheet-monitor", wrap(resolveSheetMonitorResponse));
