@@ -2174,13 +2174,16 @@ function SheetMonitorTable({
             (LH, rota, agenda) trunca na linha — o LH completo aparece no modal. */}
         <table className="w-full table-fixed text-sm">
           <colgroup>
-            {/* Status | LH | Cliente | Rota | Agenda | Motorista/Placa */}
+            {/* Status | LH | Cliente | Rota | Agenda | Motorista/Placa.
+                DC-239: Agenda tinha folga lateral demais e espremia o nome do
+                motorista; estreitamos Agenda (14→10%) e alargamos Motorista
+                (32→36%) — o nome passa a começar mais à esquerda e trunca menos. */}
             <col className="w-[12%]" />
             <col className="w-[10%]" />
             <col className="w-[8%]" />
             <col className="w-[24%]" />
-            <col className="w-[14%]" />
-            <col className="w-[32%]" />
+            <col className="w-[10%]" />
+            <col className="w-[36%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-border/60 bg-primary/[0.028]">
