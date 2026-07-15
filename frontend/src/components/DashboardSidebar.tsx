@@ -13,7 +13,6 @@ import {
   Moon,
   Route,
   Package,
-  ShieldAlert,
   Sun,
   Truck,
   UsersRound,
@@ -61,7 +60,6 @@ const navigationItems: NavigationItem[] = [
   { icon: History, label: "Hist\u00f3rico fila", path: "/historico-fila" },
   { icon: UsersRound, label: "Motoristas", path: "/motoristas" },
   { icon: Truck, label: "Veículos", path: "/veiculos" },
-  { icon: ShieldAlert, label: "Gerenciamento de Risco", path: "/gerenciamento-risco" },
   { icon: FileSpreadsheet, label: "Monitor", path: "/planilha" },
   { icon: ClipboardList, label: "Auditoria", path: "/auditoria", requiredAccessLevel: "advanced" },
 ];
