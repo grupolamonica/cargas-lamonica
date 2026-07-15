@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   FileSpreadsheet,
   Filter,
   GripVertical,
@@ -2260,11 +2261,62 @@ function routeKeyOf(row: SheetMonitorRowType) {
 
 // ─── Modal helpers ────────────────────────────────────────────────────────────
 
-function ModalSection({ title, children }: { title: string; children: React.ReactNode }) {
+function ModalSection({ title, children, collapsible = false, defaultOpen = true, storageKey }: {
+  title: string;
+  children: React.ReactNode;
+  // DC-237: quando collapsible, o título vira um botão minimizar/expandir. A
+  // preferência persiste em localStorage (storageKey) — vale para todas as
+  // cargas, igual à ordenação da agenda.
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  storageKey?: string;
+}) {
+  const [open, setOpen] = useState(() => {
+    if (!collapsible) return true;
+    if (storageKey && typeof window !== "undefined") {
+      const v = window.localStorage.getItem(storageKey);
+      if (v === "1") return true;
+      if (v === "0") return false;
+    }
+    return defaultOpen;
+  });
+  const toggle = useCallback(() => {
+    setOpen((v) => {
+      const next = !v;
+      if (storageKey) {
+        try { window.localStorage.setItem(storageKey, next ? "1" : "0"); } catch { /* localStorage indisponível */ }
+      }
+      return next;
+    });
+  }, [storageKey]);
+
+  if (!collapsible) {
+    return (
+      <div className="border-b border-border/50 px-6 py-4 last:border-0">
+        <h3 className="mb-3 text-[0.62rem] font-bold uppercase tracking-[0.18em] text-muted-foreground/60">{title}</h3>
+        {children}
+      </div>
+    );
+  }
+
   return (
     <div className="border-b border-border/50 px-6 py-4 last:border-0">
-      <h3 className="mb-3 text-[0.62rem] font-bold uppercase tracking-[0.18em] text-muted-foreground/60">{title}</h3>
-      {children}
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        title={open ? "Minimizar" : "Expandir"}
+        className={cn(
+          "flex w-full items-center justify-between gap-2 text-left transition-colors hover:text-foreground",
+          open && "mb-3",
+        )}
+      >
+        <h3 className="text-[0.62rem] font-bold uppercase tracking-[0.18em] text-muted-foreground/60">{title}</h3>
+        {open
+          ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+          : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />}
+      </button>
+      {open && children}
     </div>
   );
 }
@@ -2587,7 +2639,9 @@ function RowDetailModal({
             )}
 
             {/* ── Histórico (reserva, aprovação, write-back na planilha) ── */}
-            <ModalSection title="Histórico">
+            {/* DC-237: minimizável (a timeline fica longa e empurra as seções de
+                ação); começa aberto e a preferência persiste por operador. */}
+            <ModalSection title="Histórico" collapsible storageKey="lamonica-monitor-hist-open">
               {historyEvents.isLoading ? (
                 <p className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" /> Carregando…
