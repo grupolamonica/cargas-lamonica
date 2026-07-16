@@ -20,10 +20,12 @@ permissions:
 
 jobs:
   rerun-on-failure:
-    # Só re-tenta quando o Deploy falhou e ainda não estourou o teto de 3 attempts.
+    # Só re-tenta quando o Deploy falhou e ainda não estourou o teto de attempts.
+    # Teto 6 (era 3): em janelas de bloqueio de IP mais longas, 3 rolagens de
+    # runner não bastavam (DC-239). Cada re-run sai por um runner novo (IP novo).
     if: >-
       github.event.workflow_run.conclusion == 'failure' &&
-      github.event.workflow_run.run_attempt < 3
+      github.event.workflow_run.run_attempt < 6
     runs-on: ubuntu-latest
     steps:
       - name: Re-run failed deploy jobs (transient VPS SSH timeout)
@@ -31,5 +33,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Deploy run ${{ github.event.workflow_run.id }} falhou (attempt ${{ github.event.workflow_run.run_attempt }}). Aguardando o ban/timeout expirar antes do re-run em runner novo..."
-          sleep 90
+          sleep 180
           gh run rerun ${{ github.event.workflow_run.id }} --failed -R ${{ github.repository }}

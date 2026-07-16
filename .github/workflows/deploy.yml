@@ -164,6 +164,9 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          # timeout = handshake de conexão (default 30s). 60s dá margem quando a
+          # VPS demora a aceitar a conexão do runner (DC-239). command_timeout = script.
+          timeout: 60s
           command_timeout: 15m
           script: |
             set -euo pipefail
