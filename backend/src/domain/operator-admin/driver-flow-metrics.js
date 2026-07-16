@@ -324,6 +324,33 @@ async function queryRecurrence(client, dateFrom, dateTo) {
   };
 }
 
+async function queryCadastros(client, dateFrom, dateTo) {
+  // DC-243 — indicadores do sistema de Cadastro no /painel, escopados pela mesma
+  // janela BRT semi-aberta [from, toExclusive) do resto do endpoint.
+  // Fonte única: public.pending_driver_registrations (tabela de candidatura/cadastro).
+  //  - realizados: cadastros efetivamente feitos no período (created_at), excluindo
+  //    rascunhos ('draft') não submetidos. created_at é a única data confiável
+  //    (reviewed_at é NULL em ~62% dos aprovados e distorcido pelo auto-approve).
+  //  - pendentes: cadastros que entraram na fila de ação do operador no período
+  //    (status='pendente' — mesma fonte do DC-196), por created_at para bater com
+  //    o "no período selecionado" do card.
+  const { rows } = await client.query(
+    `
+      SELECT
+        COUNT(*) FILTER (WHERE created_at >= $1 AND created_at < $2 AND status <> 'draft')::int AS realizados,
+        COUNT(*) FILTER (WHERE created_at >= $1 AND created_at < $2 AND status = 'pendente')::int AS pendentes
+      FROM public.pending_driver_registrations
+    `,
+    [dateFrom, dateTo],
+  );
+
+  const row = rows[0] || {};
+  return {
+    realizados: Number(row.realizados) || 0,
+    pendentes: Number(row.pendentes) || 0,
+  };
+}
+
 export async function fetchDriverFlowMetrics({ query, correlationId }) {
   const window = resolveWindow(query);
 
@@ -334,12 +361,13 @@ export async function fetchDriverFlowMetrics({ query, correlationId }) {
   });
 
   return withPgClient(async (client) => {
-    const [funnel, accessPeaks, validation, recurrence, portalVisits] = await Promise.all([
+    const [funnel, accessPeaks, validation, recurrence, portalVisits, cadastros] = await Promise.all([
       queryFunnel(client, window.dateFrom, window.dateToExclusive),
       queryAccessPeaks(client, window.dateFrom, window.dateToExclusive),
       queryValidationQuality(client, window.dateFrom, window.dateToExclusive),
       queryRecurrence(client, window.dateFrom, window.dateToExclusive),
       queryPortalVisits(client, window.dateFrom, window.dateToExclusive),
+      queryCadastros(client, window.dateFrom, window.dateToExclusive),
     ]);
 
     return {
@@ -354,6 +382,7 @@ export async function fetchDriverFlowMetrics({ query, correlationId }) {
         validation,
         recurrence,
         portalVisits,
+        cadastros,
         meta: {
           correlationId: correlationId || null,
         },
