@@ -869,6 +869,25 @@ export async function descendQueueCascade(input: { sourceLh: string; targetLh: s
 }
 
 /**
+ * Consulta, por viagem SPX ("LT…"), se o motorista informado (o EFETIVO da carga)
+ * é o MESMO que está atribuído àquela viagem no SPX/ASPX. Alimenta o selo "S":
+ *   assignedByLh[lh] === true  → atribuído (verde)
+ *   assignedByLh[lh] === false → não atribuído / motorista diferente / sem motorista (vermelho)
+ *   lh ausente do mapa         → não consultado / não-SPX (cinza)
+ * Cache curto no backend; o front chaveia a query pelos pares (lh, motorista) →
+ * trocar a fila/motorista re-consulta na hora.
+ */
+export async function fetchAspxAssigned(
+  items: Array<{ lh: string; motorista: string }>,
+): Promise<{ assignedByLh: Record<string, boolean>; meta: { correlationId: string } }> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{
+    assignedByLh: Record<string, boolean>;
+    meta: { correlationId: string };
+  }>("/api/operator/sheet-monitor/aspx-assigned", { accessToken, method: "POST", body: { items } });
+}
+
+/**
  * Puxa um motorista em STANDBY (reserva) para uma carga, arrastando a reserva e
  * soltando na linha da carga. Grava a alocação do standby na carga e dá baixa na
  * reserva; se a carga já tinha motorista, esse vira uma nova reserva (swap).
