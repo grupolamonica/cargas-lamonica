@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchSponsorClicks, fetchOperatorOverviewDigest } from "@/services/readModels";
 import {
@@ -23,7 +24,6 @@ import {
   buildOverviewSnapshot,
   type OverviewClaimRow,
   type OverviewCargoRow,
-  type OverviewDashboardSnapshot,
   type OverviewLeadRow,
 } from "@/lib/overviewMetrics";
 import { supabase } from "@/integrations/supabase/client";
@@ -41,18 +41,31 @@ function formatNumber(value: number) {
   });
 }
 
+// DC-241 — Painel reorganizado em abas para reduzir a poluição visual. Nenhum
+// indicador foi removido: todos os cards e blocos existentes foram redistribuídos
+// entre as abas. Os cards de indicador são clicáveis e navegam para a tela
+// detalhada correspondente (dado real), acessível também por teclado.
+const PAINEL_TABS = [
+  { key: "cargas", label: "Cargas" },
+  { key: "candidaturas", label: "Candidaturas & Disputas" },
+  { key: "insights", label: "Cadastro & Insights" },
+] as const;
+type PainelTab = (typeof PAINEL_TABS)[number]["key"];
+
 function KpiCard({
   label,
   value,
   note,
   icon: Icon,
   tone,
+  onClick,
 }: {
   label: string;
   value: string;
   note: string;
   icon: typeof Layers3;
   tone: "primary" | "accent" | "emerald" | "slate";
+  onClick?: () => void;
 }) {
   const toneClasses: Record<typeof tone, string> = {
     primary: "bg-primary/10 text-primary",
@@ -61,8 +74,25 @@ function KpiCard({
     slate: "admin-tint-neutral",
   };
 
+  const clickable = typeof onClick === "function";
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onClick?.();
+    }
+  };
+
   return (
-    <Card className="admin-soft-panel overflow-hidden shadow-[0_22px_52px_-38px_rgba(15,23,42,0.22)]">
+    <Card
+      className={`admin-soft-panel overflow-hidden shadow-[0_22px_52px_-38px_rgba(15,23,42,0.22)] ${
+        clickable
+          ? "cursor-pointer transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+          : ""
+      }`}
+      {...(clickable
+        ? { role: "button", tabIndex: 0, onClick, onKeyDown: handleKeyDown, "aria-label": `${label}: ${value}` }
+        : {})}
+    >
       <CardContent className="p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-3">
@@ -74,6 +104,7 @@ function KpiCard({
           </div>
         </div>
         <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{note}</p>
+        {clickable && <p className="mt-3 text-xs font-semibold text-primary">Ver detalhes &rarr;</p>}
       </CardContent>
     </Card>
   );
@@ -84,14 +115,33 @@ function SignalCard({
   value,
   note,
   icon: Icon,
+  onClick,
 }: {
   label: string;
   value: string;
   note: string;
   icon: typeof Layers3;
+  onClick?: () => void;
 }) {
+  const clickable = typeof onClick === "function";
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onClick?.();
+    }
+  };
+
   return (
-    <div className="admin-card-surface-strong rounded-[24px] border px-4 py-4 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.18)]">
+    <div
+      className={`admin-card-surface-strong rounded-[24px] border px-4 py-4 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.18)] ${
+        clickable
+          ? "cursor-pointer transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+          : ""
+      }`}
+      {...(clickable
+        ? { role: "button", tabIndex: 0, onClick, onKeyDown: handleKeyDown, "aria-label": `${label}: ${value}` }
+        : {})}
+    >
       <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/10 text-primary">
           <Icon className="h-4 w-4" />
@@ -160,6 +210,8 @@ const OVERVIEW_QUERY_KEY = ["operator", "overview-dashboard"] as const;
 
 const Overview = () => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [tab, setTab] = useState<PainelTab>("cargas");
   const channelRef = useRef(`operator-overview-${Math.random().toString(36).slice(2, 8)}`);
   // Realtime is the primary trigger; digest poll (below) is a 5min safety
   // net for missed events. No refetchInterval here — drops a 30s baseline
@@ -252,6 +304,11 @@ const Overview = () => {
     };
   }, [queryClient]);
 
+  // Navegação dos cards → telas detalhadas existentes (dado real).
+  const goToCargas = () => navigate("/cargas");
+  const goToFila = () => navigate("/leads");
+  const goToAprovados = () => navigate("/historico-fila");
+
   return (
     <div>
       <DashboardHeader title="Painel" />
@@ -274,7 +331,7 @@ const Overview = () => {
         </main>
       ) : (
         <main className="space-y-6 p-6 lg:p-8">
-          {/* Hero Banner */}
+          {/* Hero Banner — sempre visível */}
           <section className="relative overflow-hidden rounded-[32px] border border-white/80 bg-[linear-gradient(135deg,hsl(223_56%_12%),hsl(223_55%_22%))] px-6 py-6 text-white shadow-[0_30px_70px_-34px_rgba(15,23,42,0.5)] lg:px-8">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(225_100%_65%/0.2),transparent_34%),radial-gradient(circle_at_bottom_left,hsl(198_100%_57%/0.16),transparent_28%)]" />
             <div className="relative flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
@@ -319,208 +376,247 @@ const Overview = () => {
             </div>
           </section>
 
-          {/* 4 KPI Cards */}
-          <section className="grid gap-4 xl:grid-cols-4">
-            <KpiCard
-              label="Cargas ativas"
-              value={formatNumber(snapshot.hero.activeLoads)}
-              note="Cargas abertas disponíveis para candidatura de motoristas."
-              icon={Layers3}
-              tone="primary"
-            />
-            <KpiCard
-              label="Na fila"
-              value={formatNumber(snapshot.hero.queuedLeads)}
-              note="Cargas sem motorista reservado com motoristas aguardando na fila."
-              icon={MessagesSquare}
-              tone="accent"
-            />
-            <KpiCard
-              label="Sem motorista"
-              value={formatNumber(snapshot.hero.noDriverLoads)}
-              note="Cargas abertas sem nenhum interesse de motorista ainda."
-              icon={UserX}
-              tone="emerald"
-            />
-            <KpiCard
-              label="Disputas ativas"
-              value={formatNumber(snapshot.hero.activeClaims)}
-              note="Candidatos ativos aguardando aprovação ou já reservados em cargas abertas."
-              icon={Swords}
-              tone="slate"
-            />
-          </section>
+          {/* Abas — organizam o painel por área (nada removido) */}
+          <nav className="flex flex-wrap gap-2" aria-label="Áreas do painel">
+            {PAINEL_TABS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => setTab(item.key)}
+                aria-pressed={tab === item.key}
+                className={`h-9 rounded-full px-4 text-sm font-semibold transition-colors ${
+                  tab === item.key
+                    ? "bg-primary text-primary-foreground"
+                    : "admin-card-surface-strong border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
 
-          {/* 5 Signal Cards */}
-          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-            <SignalCard
-              label="Rascunhos pendentes"
-              value={formatNumber(snapshot.hero.draftCount)}
-              note="Cargas criadas mas ainda não publicadas para os motoristas."
-              icon={ClipboardList}
-            />
-            <SignalCard
-              label="Cargas fechadas"
-              value={formatNumber(snapshot.hero.bookedCount)}
-              note="Cargas encerradas com motorista confirmado."
-              icon={CheckCircle2}
-            />
-            <SignalCard
-              label="Aprovados hoje"
-              value={formatNumber(snapshot.hero.approvedToday)}
-              note="Motoristas aprovados pelo operador no dia corrente."
-              icon={CheckCircle2}
-            />
-            <SignalCard
-              label="Aguardando revisão"
-              value={formatNumber(snapshot.hero.pendingApprovals)}
-              note="Candidaturas na fila aguardando aprovação ou rejeição pelo operador."
-              icon={ClipboardList}
-            />
-
-            <SignalCard
-              label="Reservadas (candidatura)"
-              value={formatNumber(snapshot.hero.reservedCount)}
-              note="Cargas com motorista reservado aguardando confirmação de carregamento."
-              icon={Truck}
-            />
-          </section>
-
-          {/* Insight: conversao candidatura \u2192 reserva */}
-          {(() => {
-            const total = snapshot.hero.activeLoads + snapshot.hero.reservedCount;
-            const rate = total > 0 ? Math.round((snapshot.hero.reservedCount / total) * 100) : 0;
-            const hasReserved = snapshot.hero.reservedCount > 0;
-            return (
-              <section className="admin-card-surface-strong rounded-[24px] border px-5 py-4 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.18)]">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/12 text-emerald-700 dark:text-emerald-300">
-                      <Truck className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Insight &mdash; Candidaturas</p>
-                      <p className="mt-0.5 text-sm font-semibold text-foreground">
-                        {hasReserved
-                          ? `${snapshot.hero.reservedCount} carga${snapshot.hero.reservedCount === 1 ? "" : "s"} reservada${snapshot.hero.reservedCount === 1 ? "" : "s"} via candidatura \u2014 ${rate}% das cargas ativas com motorista confirmado`
-                          : "Nenhuma carga reservada via candidatura no momento"}
-                      </p>
-                    </div>
-                  </div>
-                  {hasReserved && (
-                    <div className="ml-13 sm:ml-0 flex items-center gap-2">
-                      <div className="h-2 w-32 overflow-hidden rounded-full bg-muted/40">
-                        <div
-                          className="h-full rounded-full bg-emerald-500 transition-all duration-500"
-                          style={{ width: `${rate}%` }}
-                        />
-                      </div>
-                      <span className="text-sm font-bold text-emerald-700 dark:text-emerald-300">{rate}%</span>
-                    </div>
-                  )}
-                </div>
+          {/* ── Aba: Cargas ─────────────────────────────────────────────── */}
+          {tab === "cargas" && (
+            <>
+              <section className="grid gap-4 xl:grid-cols-4">
+                <KpiCard
+                  label="Cargas ativas"
+                  value={formatNumber(snapshot.hero.activeLoads)}
+                  note="Cargas abertas disponíveis para candidatura de motoristas."
+                  icon={Layers3}
+                  tone="primary"
+                  onClick={goToCargas}
+                />
+                <KpiCard
+                  label="Sem motorista"
+                  value={formatNumber(snapshot.hero.noDriverLoads)}
+                  note="Cargas abertas sem nenhum interesse de motorista ainda."
+                  icon={UserX}
+                  tone="emerald"
+                  onClick={goToCargas}
+                />
+                <SignalCard
+                  label="Rascunhos pendentes"
+                  value={formatNumber(snapshot.hero.draftCount)}
+                  note="Cargas criadas mas ainda não publicadas para os motoristas."
+                  icon={ClipboardList}
+                  onClick={goToCargas}
+                />
+                <SignalCard
+                  label="Cargas fechadas"
+                  value={formatNumber(snapshot.hero.bookedCount)}
+                  note="Cargas encerradas com motorista confirmado."
+                  icon={CheckCircle2}
+                  onClick={goToCargas}
+                />
               </section>
-            );
-          })()}
 
-          <DriverFlowInsights />
-
-          {/* Loads Needing Attention */}
-          <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
-            <CardHeader className="space-y-3">
-              <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
-                Atenção necessária
-              </CardDescription>
-              <CardTitle className="text-2xl tracking-tight text-foreground">
-                Cargas que precisam de acao
-              </CardTitle>
-              <CardDescription className="max-w-2xl text-sm leading-relaxed">
-                Cargas abertas ha mais de 48h sem interesse ou com dados obrigatorios faltando.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <div className="max-h-[368px] overflow-y-auto space-y-3 pr-1">
-                {snapshot.attentionLoads.length > 0 ? (
-                  snapshot.attentionLoads.map((load) => (
-                    <div
-                      key={load.id}
-                      className="admin-card-surface-strong flex flex-col gap-3 rounded-[24px] border px-4 py-4 shadow-[0_18px_38px_-32px_rgba(15,23,42,0.18)] sm:flex-row sm:items-center sm:justify-between"
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/12 text-amber-700">
-                          <AlertTriangle className="h-4 w-4" />
-                        </div>
-                        <div>
-                          <p className="text-sm font-semibold text-foreground">
-                            {load.origem} &rarr; {load.destino}
-                          </p>
-                          <div className="mt-1 flex flex-wrap items-center gap-2">
-                            <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 text-xs dark:border-amber-400/40 dark:bg-amber-500/15 dark:text-amber-200">
-                              {load.status}
-                            </Badge>
-                            <span className="text-xs text-muted-foreground">
-                              Criada ha {formatAgeLabel(load.ageHours)}
-                            </span>
-                            {load.missingFields.length > 0 && (
-                              <span className="text-xs text-red-600">
-                                Faltando: {load.missingFields.map((f) => MISSING_FIELD_LABELS[f] || f).join(", ")}
-                              </span>
-                            )}
+              <section className="grid gap-4 sm:grid-cols-2">
+                <SignalCard
+                  label="Reservadas (candidatura)"
+                  value={formatNumber(snapshot.hero.reservedCount)}
+                  note="Cargas com motorista reservado aguardando confirmação de carregamento."
+                  icon={Truck}
+                  onClick={goToCargas}
+                />
+                {/* Insight: conversao candidatura -> reserva */}
+                {(() => {
+                  const total = snapshot.hero.activeLoads + snapshot.hero.reservedCount;
+                  const rate = total > 0 ? Math.round((snapshot.hero.reservedCount / total) * 100) : 0;
+                  const hasReserved = snapshot.hero.reservedCount > 0;
+                  return (
+                    <div className="admin-card-surface-strong rounded-[24px] border px-5 py-4 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.18)]">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/12 text-emerald-700 dark:text-emerald-300">
+                            <Truck className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Insight &mdash; Candidaturas</p>
+                            <p className="mt-0.5 text-sm font-semibold text-foreground">
+                              {hasReserved
+                                ? `${snapshot.hero.reservedCount} carga${snapshot.hero.reservedCount === 1 ? "" : "s"} reservada${snapshot.hero.reservedCount === 1 ? "" : "s"} via candidatura — ${rate}% das cargas ativas com motorista confirmado`
+                                : "Nenhuma carga reservada via candidatura no momento"}
+                            </p>
                           </div>
                         </div>
+                        {hasReserved && (
+                          <div className="ml-13 sm:ml-0 flex items-center gap-2">
+                            <div className="h-2 w-32 overflow-hidden rounded-full bg-muted/40">
+                              <div
+                                className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                                style={{ width: `${rate}%` }}
+                              />
+                            </div>
+                            <span className="text-sm font-bold text-emerald-700 dark:text-emerald-300">{rate}%</span>
+                          </div>
+                        )}
                       </div>
                     </div>
-                  ))
-                ) : (
-                  <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
-                    Nenhuma carga precisa de atenção neste momento.
+                  );
+                })()}
+              </section>
+
+              {/* Loads Needing Attention */}
+              <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
+                <CardHeader className="space-y-3">
+                  <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
+                    Atenção necessária
+                  </CardDescription>
+                  <CardTitle className="text-2xl tracking-tight text-foreground">
+                    Cargas que precisam de acao
+                  </CardTitle>
+                  <CardDescription className="max-w-2xl text-sm leading-relaxed">
+                    Cargas abertas ha mais de 48h sem interesse ou com dados obrigatorios faltando.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <div className="max-h-[368px] overflow-y-auto space-y-3 pr-1">
+                    {snapshot.attentionLoads.length > 0 ? (
+                      snapshot.attentionLoads.map((load) => (
+                        <div
+                          key={load.id}
+                          className="admin-card-surface-strong flex flex-col gap-3 rounded-[24px] border px-4 py-4 shadow-[0_18px_38px_-32px_rgba(15,23,42,0.18)] sm:flex-row sm:items-center sm:justify-between"
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/12 text-amber-700">
+                              <AlertTriangle className="h-4 w-4" />
+                            </div>
+                            <div>
+                              <p className="text-sm font-semibold text-foreground">
+                                {load.origem} &rarr; {load.destino}
+                              </p>
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 text-xs dark:border-amber-400/40 dark:bg-amber-500/15 dark:text-amber-200">
+                                  {load.status}
+                                </Badge>
+                                <span className="text-xs text-muted-foreground">
+                                  Criada ha {formatAgeLabel(load.ageHours)}
+                                </span>
+                                {load.missingFields.length > 0 && (
+                                  <span className="text-xs text-red-600">
+                                    Faltando: {load.missingFields.map((f) => MISSING_FIELD_LABELS[f] || f).join(", ")}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
+                        Nenhuma carga precisa de atenção neste momento.
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+                </CardContent>
+              </Card>
+            </>
+          )}
 
-          {/* Sponsor Clicks Analytics */}
-          <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
-            <CardHeader className="space-y-3">
-              <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
-                Parceiros
-              </CardDescription>
-              <CardTitle className="text-2xl tracking-tight text-foreground">
-                Cliques em parceiros
-              </CardTitle>
-              <CardDescription className="max-w-2xl text-sm leading-relaxed">
-                Total de cliques em anuncios do carrossel nos ultimos 30 dias.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="pt-0">
-              {sponsorClicksQuery.isLoading ? (
-                <div className="space-y-2">
-                  <Skeleton className="h-10 w-full rounded-2xl" />
-                  <Skeleton className="h-10 w-full rounded-2xl" />
-                </div>
-              ) : sponsorClicksQuery.data?.items && sponsorClicksQuery.data.items.length > 0 ? (
-                <div className="space-y-3">
-                  {sponsorClicksQuery.data.items.map((row) => (
-                    <div
-                      key={row.brand}
-                      className="admin-card-surface-strong flex items-center justify-between rounded-[24px] border px-4 py-3 shadow-[0_18px_38px_-32px_rgba(15,23,42,0.18)]"
-                    >
-                      <p className="text-sm font-semibold text-foreground">{row.brand}</p>
-                      <Badge variant="outline" className="tabular-nums">
-                        {row.clicks.toLocaleString("pt-BR")} clique{row.clicks !== 1 ? "s" : ""}
-                      </Badge>
+          {/* ── Aba: Candidaturas & Disputas ────────────────────────────── */}
+          {tab === "candidaturas" && (
+            <section className="grid gap-4 xl:grid-cols-4">
+              <KpiCard
+                label="Na fila"
+                value={formatNumber(snapshot.hero.queuedLeads)}
+                note="Cargas sem motorista reservado com motoristas aguardando na fila."
+                icon={MessagesSquare}
+                tone="accent"
+                onClick={goToFila}
+              />
+              <KpiCard
+                label="Disputas ativas"
+                value={formatNumber(snapshot.hero.activeClaims)}
+                note="Candidatos ativos aguardando aprovação ou já reservados em cargas abertas."
+                icon={Swords}
+                tone="slate"
+                onClick={goToFila}
+              />
+              <SignalCard
+                label="Aprovados hoje"
+                value={formatNumber(snapshot.hero.approvedToday)}
+                note="Motoristas aprovados pelo operador no dia corrente."
+                icon={CheckCircle2}
+                onClick={goToAprovados}
+              />
+              <SignalCard
+                label="Aguardando revisão"
+                value={formatNumber(snapshot.hero.pendingApprovals)}
+                note="Candidaturas na fila aguardando aprovação ou rejeição pelo operador."
+                icon={ClipboardList}
+                onClick={goToFila}
+              />
+            </section>
+          )}
+
+          {/* ── Aba: Cadastro & Insights ────────────────────────────────── */}
+          {tab === "insights" && (
+            <>
+              <DriverFlowInsights />
+
+              {/* Sponsor Clicks Analytics */}
+              <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
+                <CardHeader className="space-y-3">
+                  <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
+                    Parceiros
+                  </CardDescription>
+                  <CardTitle className="text-2xl tracking-tight text-foreground">
+                    Cliques em parceiros
+                  </CardTitle>
+                  <CardDescription className="max-w-2xl text-sm leading-relaxed">
+                    Total de cliques em anuncios do carrossel nos ultimos 30 dias.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  {sponsorClicksQuery.isLoading ? (
+                    <div className="space-y-2">
+                      <Skeleton className="h-10 w-full rounded-2xl" />
+                      <Skeleton className="h-10 w-full rounded-2xl" />
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
-                  Nenhum clique registrado nos ultimos 30 dias.
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
+                  ) : sponsorClicksQuery.data?.items && sponsorClicksQuery.data.items.length > 0 ? (
+                    <div className="space-y-3">
+                      {sponsorClicksQuery.data.items.map((row) => (
+                        <div
+                          key={row.brand}
+                          className="admin-card-surface-strong flex items-center justify-between rounded-[24px] border px-4 py-3 shadow-[0_18px_38px_-32px_rgba(15,23,42,0.18)]"
+                        >
+                          <p className="text-sm font-semibold text-foreground">{row.brand}</p>
+                          <Badge variant="outline" className="tabular-nums">
+                            {row.clicks.toLocaleString("pt-BR")} clique{row.clicks !== 1 ? "s" : ""}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
+                      Nenhum clique registrado nos ultimos 30 dias.
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </>
+          )}
         </main>
       )}
     </div>
