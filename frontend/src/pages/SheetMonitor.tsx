@@ -2068,19 +2068,15 @@ function SheetMonitorTable({
       if (!targetRow.cargoId) return block();
       return allowSwap();
     }
-    // Carga da planilha alvo: soltar aqui DESCE a fila a partir desta carga
-    // (em qualquer ponto da linha). Indicador de mover, com o sentido do arrasto:
-    // borda de baixo (after) se o destino está abaixo da origem, borda de cima
-    // (before) se está acima.
+    // Carga da planilha alvo: soltar aqui DESCE a fila a partir desta carga — o
+    // motorista ASSUME esta carga (ela e as de baixo descem). O indicador é a
+    // LINHA DE CIMA (before) da carga de destino ("o motorista vai para esta
+    // posição"), independente do sentido do arrasto.
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     if (targetRow.lh === dragging) { setDropTarget(null); return; }
-    const q = getRouteQueue(routeKeyOf(targetRow));
-    const sIdx = q.findIndex((r) => r.lh === dragging);
-    const tIdx = q.findIndex((r) => r.lh === targetRow.lh);
-    const intent: "before" | "after" = sIdx >= 0 && tIdx < sIdx ? "before" : "after";
-    setDropTarget((prev) => (prev && prev.key === targetRow.rowKey && prev.intent === intent ? prev : { key: targetRow.rowKey, intent }));
-  }, [getRouteQueue]);
+    setDropTarget((prev) => (prev && prev.key === targetRow.rowKey && prev.intent === "before" ? prev : { key: targetRow.rowKey, intent: "before" }));
+  }, []);
 
   const handleRowDrop = useCallback((e: React.DragEvent, targetRow: SheetMonitorRowType) => {
     e.preventDefault();
@@ -3940,13 +3936,18 @@ export default function SheetMonitor() {
   //    cargas por rota), que estouraria o payload/lock e não faz sentido remanejar;
   //  - dedup por LH (o snapshot pode repetir a mesma carga).
   const routeQueue = useMemo(() => {
-    const nowKey = monitorNowKeySaoPaulo();
+    // Corta pela DATA (antes de HOJE = histórico), NÃO pelo horário: uma carga de
+    // hoje cujo horário agendado já passou mas que ainda está "aguardando
+    // carregamento" continua ACIONÁVEL (dá pra descer). Cortar por data+hora tirava
+    // essas cargas da fila assim que o relógio passava do horário. Mantém hoje +
+    // futuras (fila pequena); o histórico (semanas) fica de fora do payload/lock.
+    const todayKey = monitorNowKeySaoPaulo().slice(0, 10); // "YYYY-MM-DD" (São Paulo)
     const m = new Map<string, SheetMonitorRowType[]>();
     const seen = new Set<string>();
     for (const r of filteredRows) {
       if (r.reserva || r.source === "sistema" || !r.lh) continue;
       const dt = monitorDtKey(r);
-      if (dt && dt < nowKey) continue; // passada → fora da descida
+      if (dt && dt.slice(0, 10) < todayKey) continue; // antes de HOJE → fora (histórico)
       if (seen.has(r.lh)) continue;    // dedup por LH
       seen.add(r.lh);
       const k = routeKeyOf(r);
