@@ -2598,6 +2598,14 @@ function RowDetailModal({
       toast.error("Esta carga tem motorista. Remova o motorista antes de deixá-la Disponível.");
       return;
     }
+    // Só grava `status` quando o operador REALMENTE mudou. O campo vem
+    // pré-preenchido com o status EFETIVO (alloc_status ?? planilha); reenviá-lo
+    // sem mudança persistia o status da planilha em alloc_status e o "congelava"
+    // — depois a planilha avançava (ex.: CTE ENVIADO) e o override velho mascarava
+    // o valor real (bug do LT0Q7F02AY781). Omitir → o backend preserva o
+    // alloc_status atual (null = segue refletindo a planilha).
+    const initialStatus = alloc?.alloc_status ?? row.status ?? "";
+    const statusChanged = allocForm.status !== initialStatus;
     saveAllocation.mutate({
       lh: row.lh,
       // Linha travada: preserva o motorista/veículo atual (alloc override; null
@@ -2605,7 +2613,7 @@ function RowDetailModal({
       motorista: allocEditable ? allocForm.motorista : (alloc?.alloc_motorista ?? ""),
       cavalo: allocEditable ? allocForm.cavalo : (alloc?.alloc_cavalo ?? ""),
       carreta: allocEditable ? allocForm.carreta : (alloc?.alloc_carreta ?? ""),
-      status: allocForm.status,
+      ...(statusChanged ? { status: allocForm.status } : {}),
       tipo: allocForm.tipo, // tipo é livre (não trava por pinned/status)
       // Vínculo (col H): sempre enviado (prefilled com o valor efetivo) — o
       // backend espelha na planilha; se não mudou, reescreve o mesmo valor.
