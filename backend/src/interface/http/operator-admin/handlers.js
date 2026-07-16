@@ -39,7 +39,7 @@ import {
 } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
-import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorUpdateReservaBodySchema, vehicleChecklistQuerySchema } from "../schemas/operator-schemas.js";
+import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorDescendBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorUpdateReservaBodySchema, vehicleChecklistQuerySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
@@ -78,6 +78,7 @@ import { listDraftRegistrations } from "../../../application/operator-admin/use-
 import { submitDraftAsOperator } from "../../../application/operator-admin/use-cases/submit-draft-as-operator.js";
 import { updateMonitorAllocation } from "../../../application/operator-admin/use-cases/update-monitor-allocation.js";
 import { reassignMonitorAllocations } from "../../../application/operator-admin/use-cases/reassign-monitor-allocations.js";
+import { descendQueueCascade } from "../../../application/operator-admin/use-cases/descend-queue-cascade.js";
 import { assignReservaToCarga } from "../../../application/operator-admin/use-cases/assign-reserva-to-carga.js";
 import { getRouteDriverHistory } from "../../../application/operator-admin/use-cases/route-driver-history.js";
 import { createReserva } from "../../../application/operator-admin/use-cases/create-reserva.js";
@@ -1299,6 +1300,27 @@ export async function resolveReassignMonitorAllocationsResponse(request) {
       if (lhs.length) void enrichSheetRowsByLh(admin, lhs, { correlationId }).catch(() => {});
       for (const cargoId of cargoIds) void enrichSystemCargoById(admin, cargoId, { correlationId }).catch(() => {});
       return result;
+    },
+  );
+}
+
+export async function resolveDescendQueueCascadeResponse(request) {
+  return withOperatorSession(
+    request,
+    "descend-queue-cascade",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { sourceLh, targetLh, orderedLhs } = sheetMonitorDescendBodySchema.parse(await parseJsonBody(request));
+      const result = await descendQueueCascade({ sourceLh, targetLh, orderedLhs, operatorId, requestIp, correlationId });
+      // Re-enriquece TODAS as cargas remanejadas com o motorista/placa EFETIVO, p/
+      // a fila descida não ficar "não consultado". Fire-and-forget (não bloqueia).
+      const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+      const lhs = (result.movedLhs ?? []).filter(Boolean);
+      if (lhs.length) void enrichSheetRowsByLh(createSupabaseAdminClient(), lhs, { correlationId }).catch(() => {});
+      return { statusCode: result.statusCode, payload: result.payload };
     },
   );
 }

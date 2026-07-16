@@ -849,6 +849,26 @@ export async function reassignMonitorAllocations(
 }
 
 /**
+ * Descer a fila (cascata manual): o motorista de `sourceLh` desce uma carga,
+ * empurrando os de baixo; a próxima carga em branco absorve e o que sobra vira
+ * reserva. O front manda só a ORDEM exibida da rota (`orderedLhs`, topo→base, já
+ * respeitando os filtros da tela) + a origem; o backend é AUTORITATIVO: lê
+ * pinned/status/alocação reais e calcula a cascata — carga fixada é pulada (fica
+ * no lugar), nunca bloqueia. `skippedPinned` volta as cargas fixadas mantidas.
+ */
+export async function descendQueueCascade(input: { sourceLh: string; targetLh: string; orderedLhs: string[] }) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{
+    ok: boolean;
+    count: number;
+    reserva: boolean;
+    skippedPinned: string[];
+    moves: Array<{ lh: string; motorista: string; cavalo: string; carreta: string }>;
+    meta: { correlationId: string };
+  }>("/api/operator/sheet-monitor/descend", { accessToken, method: "POST", body: input });
+}
+
+/**
  * Puxa um motorista em STANDBY (reserva) para uma carga, arrastando a reserva e
  * soltando na linha da carga. Grava a alocação do standby na carga e dá baixa na
  * reserva; se a carga já tinha motorista, esse vira uma nova reserva (swap).
