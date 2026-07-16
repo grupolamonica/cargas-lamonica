@@ -57,6 +57,18 @@ export const sheetMonitorReassignBodySchema = z.object({
   })).min(1).max(500),
 }).strict();
 
+/** Body for POST /api/operator/sheet-monitor/descend — descer a fila (manual).
+ *  O front manda só a ORDEM exibida da rota (`orderedLhs`, topo→base, já
+ *  respeitando os filtros da tela), a carga de origem (`sourceLh`) e a de destino
+ *  (`targetLh`, onde foi solto). O backend é AUTORITATIVO: lê pinned/status/alocação
+ *  reais e calcula a cascata — carga fixada nunca é movida (pulada), o que sobra
+ *  vira reserva. */
+export const sheetMonitorDescendBodySchema = z.object({
+  sourceLh: z.string().trim().min(1).max(120),
+  targetLh: z.string().trim().min(1).max(120),
+  orderedLhs: z.array(z.string().trim().min(1).max(120)).min(1).max(3000),
+}).strict();
+
 /** Body for POST /api/operator/sheet-monitor/assign-reserva — puxa um motorista
  *  em standby (monitor_reservas) para uma carga da planilha (arrastar reserva → carga). */
 export const sheetMonitorAssignReservaBodySchema = z.object({

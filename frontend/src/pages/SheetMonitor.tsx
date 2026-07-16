@@ -49,10 +49,10 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { allocEditPolicy, isSpxTrip } from "@/lib/monitorEditPolicy";
-import { computeShiftMoves, computeSwapMoves } from "@/lib/monitorReorder";
 import {
   assignAspxAllocations,
   createMonitorCargo,
+  descendQueueCascade,
   enrichSheetMonitorRow,
   fetchOperatorDrivers,
   fetchOperatorVehicles,
@@ -1662,7 +1662,7 @@ function AllocCell({ row, enriched, cavaloChecklist, carretaChecklist, editing, 
         <button
           type="button"
           aria-label="Arrastar alocação (trocar / mover na fila)"
-          title="Arraste para o corpo de outra carga (trocar) ou para a borda (mover na fila)"
+          title="Arraste para o corpo de outra carga (trocar). Solte na borda de uma carga ABAIXO para descer a fila (empurra os de baixo; o último sobra vira reserva)."
           draggable
           onClick={(e) => e.stopPropagation()}
           onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", row.lh); onDragStartHandle(row.lh); }}
@@ -1992,6 +1992,8 @@ function SheetMonitorTable({
   onSaveInline,
   onTogglePin,
   onReassign,
+  onDescendQueue,
+  getRouteQueue,
   onAssignReserva,
   assigningReservaId,
   standbyCountByRoute,
@@ -2015,6 +2017,8 @@ function SheetMonitorTable({
   onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
   onTogglePin: (lh: string, pinned: boolean) => void;
   onReassign: (moves: Array<{ lh?: string; cargoId?: string; motorista: string; cavalo: string; carreta: string }>) => void;
+  onDescendQueue: (input: { sourceLh: string; targetLh: string; orderedLhs: string[]; pinnedInPath: string[]; aspxInPath: string[] }) => void;
+  getRouteQueue: (routeKey: string) => SheetMonitorRowType[];
   onAssignReserva: (input: { reservaId: string; targetLh: string }) => void;
   assigningReservaId: string | null;
   standbyCountByRoute: Map<string, number>;
@@ -2033,18 +2037,6 @@ function SheetMonitorTable({
 
   const handleDragStartHandle = useCallback((lh: string) => { dragLhRef.current = lh; setDragLh(lh); }, []);
   const handleDragEndHandle = useCallback(() => { dragLhRef.current = null; setDragLh(null); setDropTarget(null); }, []);
-
-  // Zona de soltura: terços maiores nas bordas (mover na fila = descer/subir) e
-  // um miolo menor para trocar. Antes o miolo ocupava 50% e quase todo drop caía
-  // em "trocar"; agora a maior parte da linha é "mover na fila".
-  const intentFromEvent = (e: React.DragEvent): "swap" | "before" | "after" => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const y = e.clientY - rect.top;
-    const h = rect.height || 1;
-    if (y < h * 0.4) return "before";   // metade de cima → insere ACIMA (move na fila)
-    if (y > h * 0.6) return "after";    // metade de baixo → insere ABAIXO (move na fila)
-    return "swap";                      // miolo (20%) → troca
-  };
 
   const handleRowDragOver = useCallback((e: React.DragEvent, targetRow: SheetMonitorRowType) => {
     const dragging = dragLhRef.current;
@@ -2076,13 +2068,19 @@ function SheetMonitorTable({
       if (!targetRow.cargoId) return block();
       return allowSwap();
     }
-    // Carga da planilha alvo: corpo = trocar; borda = descer/subir a fila.
+    // Carga da planilha alvo: soltar aqui DESCE a fila a partir desta carga
+    // (em qualquer ponto da linha). Indicador de mover, com o sentido do arrasto:
+    // borda de baixo (after) se o destino está abaixo da origem, borda de cima
+    // (before) se está acima.
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     if (targetRow.lh === dragging) { setDropTarget(null); return; }
-    const intent = intentFromEvent(e);
+    const q = getRouteQueue(routeKeyOf(targetRow));
+    const sIdx = q.findIndex((r) => r.lh === dragging);
+    const tIdx = q.findIndex((r) => r.lh === targetRow.lh);
+    const intent: "before" | "after" = sIdx >= 0 && tIdx < sIdx ? "before" : "after";
     setDropTarget((prev) => (prev && prev.key === targetRow.rowKey && prev.intent === intent ? prev : { key: targetRow.rowKey, intent }));
-  }, []);
+  }, [getRouteQueue]);
 
   const handleRowDrop = useCallback((e: React.DragEvent, targetRow: SheetMonitorRowType) => {
     e.preventDefault();
@@ -2129,38 +2127,38 @@ function SheetMonitorTable({
       return;
     }
 
-    // ALVO = carga da PLANILHA → reordenação da fila por posição (comportamento atual).
-    const srcIdx = list.findIndex((r) => r.lh === src);
-    const dstIdx = list.findIndex((r) => r.rowKey === targetRow.rowKey);
-    if (srcIdx < 0 || dstIdx < 0) return;
-    const items = list.map((r) => ({ lh: r.lh, alloc: { motorista: r.motoristas || "", cavalo: r.cavalo || "", carreta: r.carreta || "" } }));
-    const intent = intentFromEvent(e);
-    const moves =
-      intent === "swap" ? computeSwapMoves(items, srcIdx, dstIdx)
-        : intent === "before" ? computeShiftMoves(items, srcIdx, dstIdx)
-          : computeShiftMoves(items, srcIdx, dstIdx + 1);
-    if (moves.length === 0) return;
-    // Bloqueia se qualquer linha afetada (alvo ou intermediárias do "descer fila")
-    // for reserva/sistema, fixa, de outra rota ou travada por status (ASPX).
-    const affected = moves.map((m) => list.find((x) => x.lh === m.lh)).filter(Boolean) as SheetMonitorRowType[];
-    if (affected.some((r) => r.reserva || r.source === "sistema")) {
-      toast.error("Linha de reserva ou carga do sistema não entra na reordenação da fila.");
+    // ALVO = carga da PLANILHA → DESCER A FILA "a partir de onde soltei".
+    // Solto em qualquer ponto de qualquer carga (acima OU abaixo) da mesma rota: o
+    // motorista assume a carga de destino e, dali pra baixo, todos descem uma carga;
+    // carga FIXADA/travada é PULADA (fica no lugar), a carga em branco absorve e o
+    // que sobra vira reserva. O backend é AUTORITATIVO (lê pinned/status reais) —
+    // carga fixada NUNCA bloqueia. Usa a fila COMPLETA da rota (respeita os filtros).
+    const queue = getRouteQueue(routeKeyOf(srcRow));
+    const srcQIdx = queue.findIndex((r) => r.lh === src);
+    const tgtQIdx = queue.findIndex((r) => r.lh === targetRow.lh);
+    if (srcQIdx < 0 || srcQIdx === tgtQIdx) return; // origem passada/fora, ou soltou nela mesma
+    if (tgtQIdx < 0) {
+      // Destino fora da fila acionável (carga já passada, afundada no fim).
+      toast.error("Essa carga já passou — a descida vale só para as cargas atuais/futuras.");
       return;
     }
-    if (affected.some((r) => routeKeyOf(r) !== routeKeyOf(srcRow))) {
-      toast.error("Só dá pra arrastar dentro da mesma rota (origem → destino). Para mudar entre rotas, edite manualmente.");
+
+    // Origem precisa poder mover (não fixada/travada). Na prática nem tem alça.
+    if (srcRow.pinned || !allocEditPolicy(srcRow).editable) {
+      toast.error(srcRow.pinned
+        ? "Carga fixada não desce na fila. Desafixe antes."
+        : "Carga travada (já em operação) não desce na fila.");
       return;
     }
-    if (affected.some((r) => r.pinned)) {
-      toast.error("Não dá para reordenar: há carga fixada na fila. Desafixe antes de mover.");
-      return;
-    }
-    if (affected.some((r) => !allocEditPolicy(r).editable)) {
-      toast.error("Não dá para reordenar: há carga travada (já em atribuição no ASPX).");
-      return;
-    }
-    onReassign(moves);
-  }, [onReassign, onAssignReserva]);
+    // Detecção best-effort do que a cascata vai pular/tocar (só p/ o modal avisar);
+    // a verdade é do backend. O ripple vai do DESTINO pra baixo (até a origem, se
+    // subir; até o fim, se descer).
+    const orderedLhs = queue.map((r) => r.lh);
+    const rippleRange = tgtQIdx < srcQIdx ? queue.slice(tgtQIdx, srcQIdx + 1) : queue.slice(tgtQIdx);
+    const pinnedInPath = rippleRange.filter((r) => r.pinned).map((r) => r.lh);
+    const aspxInPath = rippleRange.filter((r) => !r.pinned && r.lh !== src && allocEditPolicy(r).aspxWarning).map((r) => r.lh);
+    onDescendQueue({ sourceLh: src, targetLh: targetRow.lh, orderedLhs, pinnedInPath, aspxInPath });
+  }, [onDescendQueue, getRouteQueue, onAssignReserva, onReassign]);
 
   if (loading) {
     return (
@@ -2279,6 +2277,29 @@ function routeKeyOf(row: SheetMonitorRowType) {
   const d = (row.destino || "").trim();
   if (!o && !d) return "—";
   return `${o || "—"} → ${d || "—"}`;
+}
+
+// ── Ordem da fila do Monitor (compartilhada entre a exibição e a cascata) ───────
+// "Agora" no fuso de São Paulo (BRT), no formato "YYYY-MM-DD HH:MM:SS" — cargas
+// data/horario são horário de parede do Brasil; comparamos sem conversão.
+function monitorNowKeySaoPaulo(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const p = (t: string) => parts.find((x) => x.type === t)?.value ?? "00";
+  return `${p("year")}-${p("month")}-${p("day")} ${p("hour")}:${p("minute")}:${p("second")}`;
+}
+// Normaliza horário p/ "HH:MM:SS" (planilha manda HH:MM:SS, sistema HH:MM).
+function monitorTimeKey(h: string | null | undefined): string {
+  const [hh = "00", mm = "00", ss = "00"] = String(h ?? "").split(":");
+  return `${hh.padStart(2, "0")}:${mm.padStart(2, "0")}:${ss.padStart(2, "0")}`;
+}
+// Chave de data+horário da carga p/ decidir se é PASSADA (afundada) vs acionável —
+// usada pela fila da cascata "descer a fila" (routeQueue) para não remanejar cargas
+// já carregadas. A ORDEM de exibição em si é o sort de `filteredRows` (agendaSortDir).
+function monitorDtKey(r: SheetMonitorRowType): string {
+  return r.data ? `${String(r.data).slice(0, 10)} ${monitorTimeKey(r.horario)}` : "";
 }
 
 
@@ -3446,6 +3467,9 @@ export default function SheetMonitor() {
   const [aspxConfirm, setAspxConfirm] = useState<{ count: number; run: () => void } | null>(null);
   // Troca de motorista/veículo pela edição INLINE → pede o motivo (obrigatório).
   const [inlineReason, setInlineReason] = useState<{ aspxWarning: boolean; run: (reason: string) => void } | null>(null);
+  // Confirmação de "descer a fila" quando há carga fixada (não será alterada) ou
+  // carga "aguardando…" (ASPX) no caminho da descida.
+  const [descendConfirm, setDescendConfirm] = useState<{ pinnedLhs: string[]; aspxCount: number; run: () => void } | null>(null);
   const [aspxAssignOpen, setAspxAssignOpen] = useState(false);
   const [editingSystemRow, setEditingSystemRow] = useState<SheetMonitorRowType | null>(null);
   const [newCargoOpen, setNewCargoOpen] = useState(false);
@@ -3590,6 +3614,53 @@ export default function SheetMonitor() {
       else run();
     },
     [mutateReassign],
+  );
+
+  // ── Descer a fila (cascata) — arrastar o motorista p/ outra carga da fila ───────
+  // O backend é AUTORITATIVO (lê pinned/status reais) e DEVOLVE os moves aplicados.
+  // Aplicamos esses moves DIRETO no cache (fila atualiza na hora, sem refetch pesado
+  // do read model — que era o que deixava lento). Um refresh leve em segundo plano
+  // depois só traz a reserva sintética + os selos re-enriquecidos.
+  const { mutate: mutateDescend, isPending: descending } = useMutation({
+    mutationFn: descendQueueCascade,
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Não foi possível descer a fila.");
+    },
+    onSuccess: (data) => {
+      // Aplica os moves autoritativos do servidor no cache — instantâneo.
+      if (data.moves && data.moves.length > 0) {
+        queryClient.setQueryData<Awaited<ReturnType<typeof fetchSheetMonitor>>>([...SHEET_MONITOR_QUERY_KEY], (old) => {
+          if (!old) return old;
+          const allocByLh = { ...(old.allocByLh ?? {}) };
+          const now = new Date().toISOString();
+          for (const m of data.moves) {
+            const base = allocByLh[m.lh] ?? { sheet_lh: m.lh, alloc_status: null, alloc_tipo: null, alloc_pinned: false, alloc_updated_at: null };
+            allocByLh[m.lh] = { ...base, alloc_motorista: m.motorista, alloc_cavalo: m.cavalo, alloc_carreta: m.carreta, alloc_updated_at: now };
+          }
+          return { ...old, allocByLh };
+        });
+      }
+      const parts: string[] = ["Fila descida"];
+      if (data.reserva) parts.push("o último motorista foi para a reserva");
+      if (data.skippedPinned && data.skippedPinned.length > 0) parts.push("carga(s) fixada(s) mantida(s) no lugar");
+      toast.success(`${parts.join(" — ")}.`);
+      // Refresh leve em segundo plano (reserva sintética + selos) — NÃO bloqueia a
+      // fila, que já refletiu os moves acima. Só um, atrasado.
+      setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 1500);
+    },
+  });
+  const handleDescendQueue = useCallback(
+    (input: { sourceLh: string; targetLh: string; orderedLhs: string[]; pinnedInPath: string[]; aspxInPath: string[] }) => {
+      const run = () => mutateDescend({ sourceLh: input.sourceLh, targetLh: input.targetLh, orderedLhs: input.orderedLhs });
+      // Confirmação só quando há carga FIXADA no caminho (o operador precisa saber
+      // que ela não muda). Sem fixada, desce direto — sem fricção, mais rápido.
+      if (input.pinnedInPath.length > 0) {
+        setDescendConfirm({ pinnedLhs: input.pinnedInPath, aspxCount: input.aspxInPath.length, run });
+      } else {
+        run();
+      }
+    },
+    [mutateDescend],
   );
 
   // ── Puxar um standby (reserva) para uma carga (arrastar reserva → carga) ───────
@@ -3859,6 +3930,33 @@ export default function SheetMonitor() {
     });
   }, [preStatusRows, statusFilter, agendaSortDir]);
 
+  // Fila por rota usada pela cascata "descer a fila" ao arrastar. Derivada de
+  // `filteredRows` (NÃO de `items`): a cascata anda exatamente sobre o que o
+  // operador VÊ — respeita os filtros ativos e cobre a rota inteira (filteredRows é
+  // pré-paginação). Já vem ordenada (compareMonitorQueue). Regras de entrada:
+  //  - só cargas da PLANILHA (com LH): sistema e standby não participam;
+  //  - só a fila ACIONÁVEL (atuais/futuras): cargas PASSADAS (já carregaram, afundam
+  //    no fim) ficam de fora — a planilha guarda todo o histórico (centenas de
+  //    cargas por rota), que estouraria o payload/lock e não faz sentido remanejar;
+  //  - dedup por LH (o snapshot pode repetir a mesma carga).
+  const routeQueue = useMemo(() => {
+    const nowKey = monitorNowKeySaoPaulo();
+    const m = new Map<string, SheetMonitorRowType[]>();
+    const seen = new Set<string>();
+    for (const r of filteredRows) {
+      if (r.reserva || r.source === "sistema" || !r.lh) continue;
+      const dt = monitorDtKey(r);
+      if (dt && dt < nowKey) continue; // passada → fora da descida
+      if (seen.has(r.lh)) continue;    // dedup por LH
+      seen.add(r.lh);
+      const k = routeKeyOf(r);
+      const arr = m.get(k);
+      if (arr) arr.push(r); else m.set(k, [r]);
+    }
+    return m;
+  }, [filteredRows]);
+  const getRouteQueue = useCallback((routeKey: string) => routeQueue.get(routeKey) ?? [], [routeQueue]);
+
   // Alterna um status no filtro multi-seleção a partir dos chips do "Status na
   // planilha" (soma vários). Substitui o antigo dropdown "Todos os status".
   const handleToggleStatus = useCallback(
@@ -4098,13 +4196,15 @@ export default function SheetMonitor() {
                 savingLh={savingLh}
                 pinningLh={pinningLh}
                 loading={loading}
-                reassigning={reassigning}
+                reassigning={reassigning || descending}
                 onSelect={handleSelectRow}
                 onStartEdit={handleStartEdit}
                 onCancelEdit={handleCancelEdit}
                 onSaveInline={handleSaveInline}
                 onTogglePin={handleTogglePin}
                 onReassign={handleReassign}
+                onDescendQueue={handleDescendQueue}
+                getRouteQueue={getRouteQueue}
                 onAssignReserva={handleAssignReserva}
                 assigningReservaId={assigningReservaId}
                 standbyCountByRoute={standbyCountByRoute}
@@ -4164,6 +4264,34 @@ export default function SheetMonitor() {
         aspxWarning={inlineReason?.aspxWarning ?? false}
         onConfirm={(reason) => { inlineReason?.run(reason); setInlineReason(null); }}
         onCancel={() => setInlineReason(null)}
+      />
+
+      {/* ── Confirmação "descer a fila" (carga fixada / ASPX no caminho) ── */}
+      <ConfirmDialog
+        open={descendConfirm !== null}
+        title="Descer a fila?"
+        confirmLabel="Sim, descer a fila"
+        description={descendConfirm ? (
+          <span className="space-y-2 block">
+            <span className="block">
+              O motorista vai descer uma carga e empurrar os de baixo; a próxima carga em branco é preenchida e quem sobra vira reserva.
+            </span>
+            {descendConfirm.pinnedLhs.length > 0 && (
+              <span className="block rounded-lg bg-amber-500/10 px-3 py-2 text-amber-700 dark:text-amber-300">
+                {descendConfirm.pinnedLhs.length === 1 ? "A carga fixada " : "As cargas fixadas "}
+                <span className="font-mono font-semibold">{descendConfirm.pinnedLhs.join(", ")}</span>
+                {descendConfirm.pinnedLhs.length === 1 ? " não será alterada" : " não serão alteradas"} — fica{descendConfirm.pinnedLhs.length === 1 ? "" : "m"} no lugar e a fila desce ao redor dela{descendConfirm.pinnedLhs.length === 1 ? "" : "s"}.
+              </span>
+            )}
+            {descendConfirm.aspxCount > 0 && (
+              <span className="block">
+                {descendConfirm.aspxCount === 1 ? "1 carga já em atribuição no ASPX" : `${descendConfirm.aspxCount} cargas já em atribuição no ASPX`} será(ão) remanejada(s) — depois use "Atribuir no ASPX" para refletir lá.
+              </span>
+            )}
+          </span>
+        ) : ""}
+        onConfirm={() => { descendConfirm?.run(); setDescendConfirm(null); }}
+        onCancel={() => setDescendConfirm(null)}
       />
 
       {/* ── Atribuir no ASPX (preview + confirmação) ── */}
