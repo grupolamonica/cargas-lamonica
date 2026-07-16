@@ -3648,13 +3648,10 @@ export default function SheetMonitor() {
   const handleDescendQueue = useCallback(
     (input: { sourceLh: string; targetLh: string; orderedLhs: string[]; pinnedInPath: string[]; aspxInPath: string[] }) => {
       const run = () => mutateDescend({ sourceLh: input.sourceLh, targetLh: input.targetLh, orderedLhs: input.orderedLhs });
-      // Confirmação só quando há carga FIXADA no caminho (o operador precisa saber
-      // que ela não muda). Sem fixada, desce direto — sem fricção, mais rápido.
-      if (input.pinnedInPath.length > 0) {
-        setDescendConfirm({ pinnedLhs: input.pinnedInPath, aspxCount: input.aspxInPath.length, run });
-      } else {
-        run();
-      }
+      // SEMPRE confirma antes de descer (o operador pediu para perguntar toda vez).
+      // O modal ainda destaca carga fixada no caminho (que não muda) e cargas em
+      // atribuição no ASPX, quando houver.
+      setDescendConfirm({ pinnedLhs: input.pinnedInPath, aspxCount: input.aspxInPath.length, run });
     },
     [mutateDescend],
   );
