@@ -69,6 +69,16 @@ export const sheetMonitorDescendBodySchema = z.object({
   orderedLhs: z.array(z.string().trim().min(1).max(120)).min(1).max(3000),
 }).strict();
 
+/** Body for POST /api/operator/sheet-monitor/aspx-assigned — consulta, por viagem
+ *  SPX ("LT…"), se o motorista informado (efetivo da carga) é o mesmo ATRIBUÍDO
+ *  àquela viagem no SPX/ASPX. Usado pelo selo "S" (verde = atribuído). */
+export const sheetMonitorAspxAssignedBodySchema = z.object({
+  items: z.array(z.object({
+    lh: z.string().trim().min(1).max(120),
+    motorista: z.string().trim().max(180).optional().default(""),
+  })).max(3000),
+}).strict();
+
 /** Body for POST /api/operator/sheet-monitor/assign-reserva — puxa um motorista
  *  em standby (monitor_reservas) para uma carga da planilha (arrastar reserva → carga). */
 export const sheetMonitorAssignReservaBodySchema = z.object({

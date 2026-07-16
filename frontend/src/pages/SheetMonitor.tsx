@@ -55,6 +55,7 @@ import {
   createMonitorCargo,
   descendQueueCascade,
   enrichSheetMonitorRow,
+  fetchAspxAssigned,
   fetchOperatorDrivers,
   fetchOperatorVehicles,
   fetchSheetMonitor,
@@ -90,6 +91,7 @@ const PAGE_SIZE = 50;
 const EMPTY_ROWS: SheetMonitorRowType[] = [];
 const EMPTY_ENRICHED: Record<string, SheetMonitorEnrichedRow> = {};
 const EMPTY_ALLOC: Record<string, SheetMonitorAllocation> = {};
+const EMPTY_ASSIGNED: Record<string, boolean> = {};
 
 // Status operacional canônico da planilha (mesma terminologia, sem os valores
 // com encoding corrompido que aparecem nos dados crus). Ordem = pipeline da viagem.
@@ -538,11 +540,6 @@ function shortAgenda(label: string | null | undefined): string {
 function presenceState(found: boolean | null | undefined): boolean | null {
   return found ?? null;
 }
-// Cadastro no ASPX (motorista): tem CPF/nome no diretório do ASPX. null = não enriquecido.
-function aspxCadastroState(e: SheetMonitorEnrichedRow | undefined): boolean | null {
-  if (!e) return null;
-  return Boolean(e.aspx_cpf || e.aspx_display_name);
-}
 
 // ── Selo por MOTORISTA/PLACA (não por carga) ──────────────────────────────────
 // O selo Angellira/ASPX é do MOTORISTA/VEÍCULO, não da carga. Resolvendo por
@@ -652,14 +649,17 @@ function MiniCheck({ letter, found, label }: { letter: string; found: boolean | 
   );
 }
 
-// Selos do MOTORISTA (compactos): A = Angellira, S = cadastro no ASPX.
+// Selos do MOTORISTA (compactos): A = Angellira, S = atribuição no ASPX.
 // O selo "S" (ASPX) só aparece em cargas do SPX/Shopee (aspxRelevant): Nestlé & cia
-// não vão para o ASPX, então mostrar cadastro no ASPX ali é ruído enganoso.
-function DriverChecks({ enriched, aspxRelevant }: { enriched: SheetMonitorEnrichedRow | undefined; aspxRelevant: boolean }) {
+// não vão para o ASPX, então mostrar ASPX ali é ruído enganoso. `assigned` é a
+// ATRIBUIÇÃO DA VIAGEM (não o cadastro): verde só se o motorista efetivo da carga
+// é o mesmo atribuído àquela viagem no SPX/ASPX; vermelho caso contrário; cinza
+// (null) enquanto não consultado.
+function DriverChecks({ enriched, aspxRelevant, assigned }: { enriched: SheetMonitorEnrichedRow | undefined; aspxRelevant: boolean; assigned: boolean | null }) {
   return (
     <span className="inline-flex shrink-0 items-center gap-0.5">
       <MiniCheck letter="A" found={presenceState(enriched?.angellira_driver_found)} label="Angellira" />
-      {aspxRelevant && <MiniCheck letter="S" found={aspxCadastroState(enriched)} label="ASPX" />}
+      {aspxRelevant && <MiniCheck letter="S" found={assigned} label="Atribuído no ASPX" />}
     </span>
   );
 }
@@ -1557,6 +1557,8 @@ function NewCargoModal({ open, onClose, statusOptions }: { open: boolean; onClos
 type AllocCellProps = {
   row: SheetMonitorRowType;
   enriched: SheetMonitorEnrichedRow | undefined;
+  // Atribuição da VIAGEM no ASPX (selo "S"): true=atribuído, false=não, null=não consultado.
+  aspxAssigned: boolean | null;
   cavaloChecklist?: VehicleChecklistLevelEntry;
   carretaChecklist?: VehicleChecklistLevelEntry;
   editing: boolean;
@@ -1576,7 +1578,7 @@ type AllocCellProps = {
   onPullStandby?: (lh: string) => void;
 };
 
-function AllocCell({ row, enriched, cavaloChecklist, carretaChecklist, editing, saving, pinning, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle, assigningReserva, routeStandbyCount = 0, onPullStandby }: AllocCellProps) {
+function AllocCell({ row, enriched, aspxAssigned, cavaloChecklist, carretaChecklist, editing, saving, pinning, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle, assigningReserva, routeStandbyCount = 0, onPullStandby }: AllocCellProps) {
   // Linha de RESERVA (standby na rota) — exibe o motorista/veículo e um punho de
   // arrasto: o operador puxa o standby para uma carga da MESMA rota (alocar).
   if (row.reserva) {
@@ -1718,7 +1720,7 @@ function AllocCell({ row, enriched, cavaloChecklist, carretaChecklist, editing, 
               Começam num x consistente (nome+placa têm largura fixa) e não
               deslocam a placa. */}
           <span className="flex shrink-0 items-center gap-1.5">
-            {row.motoristas && <DriverChecks enriched={enriched} aspxRelevant={isSpxTrip(row.lh)} />}
+            {row.motoristas && <DriverChecks enriched={enriched} aspxRelevant={isSpxTrip(row.lh)} assigned={aspxAssigned} />}
             <VehicleChecks enriched={enriched} hasCavalo={Boolean(row.cavalo)} hasCarreta={Boolean(row.carreta)} />
             <VehicleChecklistIcons cavalo={row.cavalo} carreta={row.carreta} cavaloChecklist={cavaloChecklist} carretaChecklist={carretaChecklist} />
             {/* Slot FIXO do marcador de estado (fixado / atribuído no ASPX) — DC-226. */}
@@ -1804,6 +1806,7 @@ type RowDropIntent = "swap" | "before" | "after" | null;
 const SheetMonitorRow = memo(function SheetMonitorRow({
   row,
   enriched,
+  aspxAssigned,
   cavaloChecklist,
   carretaChecklist,
   selected,
@@ -1828,6 +1831,9 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
 }: {
   row: SheetMonitorRowType;
   enriched: SheetMonitorEnrichedRow | undefined;
+  // Atribuição da VIAGEM no ASPX (selo "S") — scalar p/ o memo da linha só
+  // invalidar quando ESTA carga muda de estado (não a cada refetch do mapa).
+  aspxAssigned: boolean | null;
   cavaloChecklist?: VehicleChecklistLevelEntry;
   carretaChecklist?: VehicleChecklistLevelEntry;
   selected: boolean;
@@ -1953,6 +1959,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
         <AllocCell
           row={row}
           enriched={enriched}
+          aspxAssigned={aspxAssigned}
           cavaloChecklist={cavaloChecklist}
           carretaChecklist={carretaChecklist}
           editing={editing}
@@ -1979,6 +1986,7 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
 function SheetMonitorTable({
   rows,
   resolveEnriched,
+  resolveAssigned,
   resolveChecklistLevel,
   allocByLh,
   selectedLh,
@@ -2004,6 +2012,7 @@ function SheetMonitorTable({
 }: {
   rows: SheetMonitorRowType[];
   resolveEnriched: (row: SheetMonitorRowType) => SheetMonitorEnrichedRow | undefined;
+  resolveAssigned: (row: SheetMonitorRowType) => boolean | null;
   resolveChecklistLevel: (plate: string | null | undefined) => VehicleChecklistLevelEntry | undefined;
   allocByLh: Record<string, SheetMonitorAllocation>;
   selectedLh: string | null;
@@ -2281,6 +2290,7 @@ function SheetMonitorTable({
                 key={row.rowKey ?? `${row.lh}-${idx}`}
                 row={row}
                 enriched={resolveEnriched(row)}
+                aspxAssigned={resolveAssigned(row)}
                 cavaloChecklist={resolveChecklistLevel(row.cavalo)}
                 carretaChecklist={resolveChecklistLevel(row.carreta)}
                 selected={row.lh === selectedLh}
@@ -3482,6 +3492,53 @@ export default function SheetMonitor() {
   const itemsRef = useRef(items);
   itemsRef.current = items;
 
+  // ── Selo "S" (ASPX): ATRIBUIÇÃO DA VIAGEM ────────────────────────────────────
+  // Verde só se o motorista EFETIVO da carga (já com override otimista aplicado —
+  // por isso deriva de `items`, não de `rawItems`) é o MESMO atribuído àquela
+  // viagem no SPX/ASPX; vermelho caso contrário. A query é chaveada pelos pares
+  // (lh, motorista) das viagens SPX ("LT…"): trocar a fila/motorista muda a chave
+  // e RE-CONSULTA na hora; um polling curto pega troca feita DIRETO no ASPX. Cache
+  // curto no backend evita martelar o sidecar. Cargas não-SPX ficam fora (cinza).
+  const aspxAssignedPairs = useMemo(() => {
+    const pairs: Array<{ lh: string; motorista: string }> = [];
+    for (const it of items) {
+      if (!it?.lh || it.reserva || !isSpxTrip(it.lh)) continue;
+      const motorista = (it.motoristas ?? "").trim();
+      if (!motorista) continue;
+      pairs.push({ lh: it.lh, motorista });
+    }
+    pairs.sort((a, b) => (a.lh < b.lh ? -1 : a.lh > b.lh ? 1 : 0));
+    return pairs;
+  }, [items]);
+  const aspxAssignedKey = useMemo(
+    () => aspxAssignedPairs.map((p) => `${p.lh}|${normNameKey(p.motorista)}`).join(","),
+    [aspxAssignedPairs],
+  );
+  const aspxAssignedQuery = useQuery({
+    queryKey: ["admin", "sheet-monitor", "aspx-assigned", aspxAssignedKey],
+    queryFn: () => fetchAspxAssigned(aspxAssignedPairs),
+    enabled: aspxAssignedPairs.length > 0,
+    staleTime: 15_000,
+    gcTime: 60_000,
+    // Polling curto pega atribuição trocada DIRETO no ASPX (sem mexer no sistema).
+    // Pausa em edição inline e com a aba em segundo plano.
+    refetchInterval: editingLh ? false : 30_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    // Mantém os selos anteriores durante o refetch da nova chave (evita piscar cinza).
+    placeholderData: (prev) => prev,
+  });
+  const assignedByLh = aspxAssignedQuery.data?.assignedByLh ?? EMPTY_ASSIGNED;
+  const resolveAssigned = useCallback(
+    (row: SheetMonitorRowType): boolean | null => {
+      if (!row?.lh || row.reserva || !isSpxTrip(row.lh)) return null;
+      if (!(row.motoristas ?? "").trim()) return null;
+      const v = assignedByLh[row.lh];
+      return typeof v === "boolean" ? v : null; // null = ainda não consultado (cinza)
+    },
+    [assignedByLh],
+  );
+
   // Standbys (reservas ativas) agrupados por rota — de TODA a base (não só da
   // página atual), p/ o botão "puxar standby" listar os candidatos mesmo quando
   // o standby cairia noutra página da paginação.
@@ -4234,6 +4291,7 @@ export default function SheetMonitor() {
               <SheetMonitorTable
                 rows={paginatedRows}
                 resolveEnriched={resolveEnriched}
+                resolveAssigned={resolveAssigned}
                 resolveChecklistLevel={resolveChecklistLevel}
                 allocByLh={allocByLh}
                 selectedLh={selectedRow?.lh ?? null}

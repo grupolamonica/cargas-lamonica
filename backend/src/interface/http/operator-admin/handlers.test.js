@@ -7,11 +7,13 @@ const {
   mockRecordSecurityAuditEvent,
   mockCreateOperatorCargo,
   mockUpdateOperatorCargo,
+  mockBuildAspxAssignedByLh,
 } = vi.hoisted(() => ({
   mockRequireOperatorSession: vi.fn(),
   mockRecordSecurityAuditEvent: vi.fn(),
   mockCreateOperatorCargo: vi.fn(),
   mockUpdateOperatorCargo: vi.fn(),
+  mockBuildAspxAssignedByLh: vi.fn(),
 }));
 
 vi.mock("../../../application/load-claims/auth.js", () => ({
@@ -20,6 +22,10 @@ vi.mock("../../../application/load-claims/auth.js", () => ({
 
 vi.mock("../../../infrastructure/security-audit.js", () => ({
   recordSecurityAuditEvent: mockRecordSecurityAuditEvent,
+}));
+
+vi.mock("../../../application/operator-admin/use-cases/aspx-assigned-map.js", () => ({
+  buildAspxAssignedByLh: mockBuildAspxAssignedByLh,
 }));
 
 vi.mock("../../../application/operator-admin/service.js", () => ({
@@ -39,6 +45,7 @@ vi.mock("../../../application/operator-admin/service.js", () => ({
 }));
 
 import {
+  resolveAspxAssignedResponse,
   resolveCreateOperatorCargoResponse,
   resolveUpdateOperatorCargoResponse,
 } from "./handlers.js";
@@ -195,5 +202,43 @@ describe("operator-admin handlers", () => {
         }),
       }),
     );
+  });
+
+  // Selo "S" (atribuição da viagem no ASPX) — guarda a PERMISSÃO exata: um operador
+  // (advanced/intermediate) tem `operator:read`, então precisa passar (200). Se
+  // alguém trocar por uma permissão inexistente (ex.: "cargos:read"), este teste
+  // falha com 403 — foi exatamente o bug pego na revisão.
+  it("consulta atribuição no ASPX com operador válido e devolve o mapa por lh", async () => {
+    mockBuildAspxAssignedByLh.mockResolvedValue({ LT0Q7G02AY851: true, LT0Q7G02AY852: false });
+
+    const response = await resolveAspxAssignedResponse({
+      body: JSON.stringify({
+        items: [
+          { lh: "LT0Q7G02AY851", motorista: "JOAO" },
+          { lh: "LT0Q7G02AY852", motorista: "MARIA" },
+        ],
+      }),
+      headers: { authorization: "Bearer valid-token" },
+      method: "POST",
+      query: {},
+      url: "/api/operator/sheet-monitor/aspx-assigned",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.assignedByLh).toEqual({ LT0Q7G02AY851: true, LT0Q7G02AY852: false });
+    expect(mockBuildAspxAssignedByLh).toHaveBeenCalledOnce();
+  });
+
+  it("rejeita body inesperado na consulta de atribuição (strict schema)", async () => {
+    const response = await resolveAspxAssignedResponse({
+      body: JSON.stringify({ items: [{ lh: "LT1", motorista: "X" }], injected: "nope" }),
+      headers: { authorization: "Bearer valid-token" },
+      method: "POST",
+      query: {},
+      url: "/api/operator/sheet-monitor/aspx-assigned",
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(mockBuildAspxAssignedByLh).not.toHaveBeenCalled();
   });
 });

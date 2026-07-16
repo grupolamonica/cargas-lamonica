@@ -39,7 +39,7 @@ import {
 } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
-import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorDescendBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorUpdateReservaBodySchema, vehicleChecklistQuerySchema } from "../schemas/operator-schemas.js";
+import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAspxAssignedBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorDescendBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorUpdateReservaBodySchema, vehicleChecklistQuerySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
@@ -79,6 +79,7 @@ import { submitDraftAsOperator } from "../../../application/operator-admin/use-c
 import { updateMonitorAllocation } from "../../../application/operator-admin/use-cases/update-monitor-allocation.js";
 import { reassignMonitorAllocations } from "../../../application/operator-admin/use-cases/reassign-monitor-allocations.js";
 import { descendQueueCascade } from "../../../application/operator-admin/use-cases/descend-queue-cascade.js";
+import { buildAspxAssignedByLh } from "../../../application/operator-admin/use-cases/aspx-assigned-map.js";
 import { assignReservaToCarga } from "../../../application/operator-admin/use-cases/assign-reserva-to-carga.js";
 import { getRouteDriverHistory } from "../../../application/operator-admin/use-cases/route-driver-history.js";
 import { createReserva } from "../../../application/operator-admin/use-cases/create-reserva.js";
@@ -1321,6 +1322,23 @@ export async function resolveDescendQueueCascadeResponse(request) {
       const lhs = (result.movedLhs ?? []).filter(Boolean);
       if (lhs.length) void enrichSheetRowsByLh(createSupabaseAdminClient(), lhs, { correlationId }).catch(() => {});
       return { statusCode: result.statusCode, payload: result.payload };
+    },
+  );
+}
+
+export async function resolveAspxAssignedResponse(request) {
+  return withOperatorSession(
+    request,
+    "sheet-monitor-aspx-assigned",
+    {
+      requiredPermission: "operator:read",
+      forbiddenMessage: "Somente operadores podem consultar o ASPX.",
+    },
+    async ({ correlationId }) => {
+      const { items } = sheetMonitorAspxAssignedBodySchema.parse(await parseJsonBody(request));
+      // Best-effort: sidecar SPX fora do ar → mapa vazio (selo "não consultado").
+      const assignedByLh = await buildAspxAssignedByLh(items, { correlationId }).catch(() => ({}));
+      return { statusCode: 200, payload: { assignedByLh, meta: { correlationId } } };
     },
   );
 }
