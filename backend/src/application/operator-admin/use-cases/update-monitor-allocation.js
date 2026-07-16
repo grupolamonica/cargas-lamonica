@@ -139,7 +139,12 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     // Motorista alocado numa carga NORMAL deixa de estar "em reserva": baixa as
     // reservas ativas desse motorista (senão aparece na carga E no standby). Não
     // baixa em cancelamento — aí quem move é a cascata.
-    const effMotorista = (finalMotorista ?? sheetRow.sheet_motorista ?? "").toString().trim();
+    // Motorista EFETIVO = override real (alloc) OU planilha (`||`): um override
+    // vazio ("") cai pra planilha. Assim NÃO reabrimos (status→OPEN) uma carga que
+    // a planilha ainda escala — senão o portal ofereceria uma carga com motorista
+    // vivo na planilha (duplo-booking). Só reabre quando não há motorista em lugar
+    // nenhum (nem override, nem planilha).
+    const effMotorista = (finalMotorista || sheetRow.sheet_motorista || "").toString().trim();
     const cancelling = Boolean(finalStatus) && /cancel/i.test(finalStatus);
     // Status "Disponível" numa carga SEM motorista = reabrir pro painel do
     // motorista (volta pra fila do portal). Só quando não há motorista efetivo.
@@ -182,15 +187,20 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       },
       resolvedStatus: finalStatus,
       reopenLeadId,
-      // Valor EFETIVO (o que o Monitor mostra) = override do operador ?? planilha.
-      // Usado no write-back pra refletir na planilha; "" limpa a célula.
+      // Valor EFETIVO espelhado na planilha (write-back). Motorista/veículo usam
+      // `||`: um override VAZIO ("" ou null) cai pro valor da planilha em vez de
+      // LIMPAR a célula — assim editar só o status de uma carga (override de
+      // motorista vazio) não apaga o motorista vivo da planilha. Para esvaziar de
+      // verdade um motorista, o caminho é a planilha/cancelamento (a cascata tem
+      // seu próprio write-back que limpa a célula da carga cancelada).
       effective: {
         // Roteia o write-back pra planilha da fonte certa (shopee vs nestle).
         source: sheetRow.sheet_source ?? null,
-        motorista: finalMotorista ?? sheetRow.sheet_motorista ?? "",
-        cavalo: finalCavalo ?? sheetRow.sheet_cavalo ?? "",
-        carreta: finalCarreta ?? sheetRow.sheet_carreta ?? "",
-        // Status (col L) espelhado sempre — efetivo = alloc ?? planilha.
+        motorista: finalMotorista || sheetRow.sheet_motorista || "",
+        cavalo: finalCavalo || sheetRow.sheet_cavalo || "",
+        carreta: finalCarreta || sheetRow.sheet_carreta || "",
+        // Status (col L): finalStatus é sempre o status enviado pelo modal ("" p/
+        // Disponível/limpar a etapa) — espelha direto.
         status: finalStatus ?? sheetRow.sheet_status ?? "",
         // Vínculo (col H) só espelha quando o modal envia o campo (senão o robô
         // não toca H — evita apagar o vínculo de linhas não editadas).

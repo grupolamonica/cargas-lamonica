@@ -19,11 +19,14 @@
 // CARREGAMENTO") nem em linhas com motorista efetivo (badge mostra "Reservado").
 
 /** Motorista efetivo = override do operador (alloc) ?? motorista da planilha.
- *  alloc_motorista "" (não-nulo) é vazio EXPLÍCITO — sobrepõe a planilha. */
+ *  Override VAZIO ("" OU null) = "sem decisão" → cai pra planilha; só um
+ *  alloc_motorista com valor REAL sobrepõe. Assim um override vazio parado não
+ *  faz a linha derivar "Fechado" quando a planilha tem motorista vivo (a Shopee
+ *  re-escala a viagem depois que a alocação foi esvaziada por uma cascata). */
 function effectiveDriver(row, allocByLh) {
   const alloc = allocByLh ? allocByLh[row.lh] : null;
-  const v = alloc && alloc.alloc_motorista != null ? alloc.alloc_motorista : row.motoristas ?? "";
-  return String(v).trim();
+  const override = alloc && alloc.alloc_motorista != null ? String(alloc.alloc_motorista).trim() : "";
+  return override !== "" ? override : String(row.motoristas ?? "").trim();
 }
 
 /**

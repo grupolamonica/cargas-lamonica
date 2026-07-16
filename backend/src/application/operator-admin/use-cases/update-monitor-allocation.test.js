@@ -197,9 +197,12 @@ describe("updateMonitorAllocation", () => {
     const id = await seedSheetCargo();
     const operator = await seedUser({ email: "op-monitor-reopen@teste.local" });
     // Motorista reservou pelo portal: lead APPROVED + carga RESERVED apontando pro lead.
+    // Carga RESERVADA por lead do portal NÃO tem motorista na planilha (a reserva é
+    // do nosso sistema, não do Shopee) — limpa o sheet_motorista do seedSheetCargo
+    // p/ refletir o estado real; senão o motorista da planilha bloquearia a reabertura.
     const lead = await seedPublicLead({ load_id: id, status: "APPROVED" });
     await query(
-      `UPDATE public.cargas SET status = 'RESERVED', reserved_public_lead_id = $2 WHERE id = $1`,
+      `UPDATE public.cargas SET status = 'RESERVED', reserved_public_lead_id = $2, sheet_motorista = NULL WHERE id = $1`,
       [id, lead.id],
     );
 
