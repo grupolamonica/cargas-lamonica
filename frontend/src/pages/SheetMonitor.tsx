@@ -49,6 +49,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { allocEditPolicy, isSpxTrip } from "@/lib/monitorEditPolicy";
+import { computeSwapMoves } from "@/lib/monitorReorder";
 import {
   assignAspxAllocations,
   createMonitorCargo,
@@ -2038,6 +2039,18 @@ function SheetMonitorTable({
   const handleDragStartHandle = useCallback((lh: string) => { dragLhRef.current = lh; setDragLh(lh); }, []);
   const handleDragEndHandle = useCallback(() => { dragLhRef.current = null; setDragLh(null); setDropTarget(null); }, []);
 
+  // Zona de soltura numa carga da PLANILHA: miolo (20% central) = TROCAR (swap,
+  // linha toda pintada, troca só motorista+placa entre as duas cargas); borda
+  // (topo/baixo) = DESCER a fila a partir da carga de destino.
+  const intentFromEvent = (e: React.DragEvent): "swap" | "before" | "after" => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const h = rect.height || 1;
+    if (y < h * 0.4) return "before";
+    if (y > h * 0.6) return "after";
+    return "swap";
+  };
+
   const handleRowDragOver = useCallback((e: React.DragEvent, targetRow: SheetMonitorRowType) => {
     const dragging = dragLhRef.current;
     if (!dragging) return;
@@ -2068,13 +2081,13 @@ function SheetMonitorTable({
       if (!targetRow.cargoId) return block();
       return allowSwap();
     }
-    // Carga da planilha alvo: soltar aqui DESCE a fila a partir desta carga — o
-    // motorista ASSUME esta carga (ela e as de baixo descem). O indicador é a
-    // LINHA DE CIMA (before) da carga de destino ("o motorista vai para esta
-    // posição"), independente do sentido do arrasto.
+    // Carga da planilha alvo: MIOLO = trocar (swap, linha toda pintada); BORDA =
+    // descer a fila a partir desta carga (o motorista ASSUME esta carga; indicador =
+    // LINHA DE CIMA / before).
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     if (targetRow.lh === dragging) { setDropTarget(null); return; }
+    if (intentFromEvent(e) === "swap") return allowSwap();
     setDropTarget((prev) => (prev && prev.key === targetRow.rowKey && prev.intent === "before" ? prev : { key: targetRow.rowKey, intent: "before" }));
   }, []);
 
@@ -2123,12 +2136,46 @@ function SheetMonitorTable({
       return;
     }
 
-    // ALVO = carga da PLANILHA → DESCER A FILA "a partir de onde soltei".
-    // Solto em qualquer ponto de qualquer carga (acima OU abaixo) da mesma rota: o
-    // motorista assume a carga de destino e, dali pra baixo, todos descem uma carga;
-    // carga FIXADA/travada é PULADA (fica no lugar), a carga em branco absorve e o
-    // que sobra vira reserva. O backend é AUTORITATIVO (lê pinned/status reais) —
-    // carga fixada NUNCA bloqueia. Usa a fila COMPLETA da rota (respeita os filtros).
+    // ALVO = carga da PLANILHA. Miolo = TROCAR (swap); borda = DESCER a fila.
+    const intent = intentFromEvent(e);
+
+    // MIOLO = TROCAR (swap): troca só motorista+placa entre as duas cargas (linha
+    // toda pintada). Comportamento clássico do Monitor — preservado ao lado da
+    // descida. Só entre cargas da planilha, mesma rota, não fixadas nem travadas.
+    if (intent === "swap") {
+      const srcIdx = list.findIndex((r) => r.lh === src);
+      const dstIdx = list.findIndex((r) => r.rowKey === targetRow.rowKey);
+      if (srcIdx < 0 || dstIdx < 0) return;
+      const items = list.map((r) => ({ lh: r.lh, alloc: { motorista: r.motoristas || "", cavalo: r.cavalo || "", carreta: r.carreta || "" } }));
+      const moves = computeSwapMoves(items, srcIdx, dstIdx);
+      if (moves.length === 0) return;
+      const affected = moves.map((m) => list.find((x) => x.lh === m.lh)).filter(Boolean) as SheetMonitorRowType[];
+      if (affected.some((r) => r.reserva || r.source === "sistema")) {
+        toast.error("Linha de reserva ou carga do sistema não entra na troca.");
+        return;
+      }
+      if (affected.some((r) => routeKeyOf(r) !== routeKeyOf(srcRow))) {
+        toast.error("Só dá pra trocar dentro da mesma rota (origem → destino).");
+        return;
+      }
+      if (affected.some((r) => r.pinned)) {
+        toast.error("Não dá para trocar: há carga fixada. Desafixe antes.");
+        return;
+      }
+      if (affected.some((r) => !allocEditPolicy(r).editable)) {
+        toast.error("Não dá para trocar: há carga travada (já em atribuição no ASPX).");
+        return;
+      }
+      onReassign(moves);
+      return;
+    }
+
+    // BORDA = DESCER A FILA "a partir de onde soltei".
+    // Solto na borda de qualquer carga (acima OU abaixo) da mesma rota: o motorista
+    // assume a carga de destino e, dali pra baixo, todos descem uma carga; carga
+    // FIXADA/travada é PULADA (fica no lugar), a carga em branco absorve e o que
+    // sobra vira reserva. O backend é AUTORITATIVO (lê pinned/status reais) — carga
+    // fixada NUNCA bloqueia. Usa a fila COMPLETA da rota (respeita os filtros).
     const queue = getRouteQueue(routeKeyOf(srcRow));
     const srcQIdx = queue.findIndex((r) => r.lh === src);
     const tgtQIdx = queue.findIndex((r) => r.lh === targetRow.lh);
