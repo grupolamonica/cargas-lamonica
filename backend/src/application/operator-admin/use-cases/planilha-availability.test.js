@@ -57,9 +57,18 @@ describe("applyPlanilhaAvailabilityStatus", () => {
     expect(r.status).toBe("");
   });
 
-  it("alloc '' (vazio explícito = operador liberou) + não aberta → 'Fechado'", () => {
-    const allocByLh = { "LH-X": { alloc_motorista: "" } }; // sobrepõe motorista da planilha
+  it("alloc '' (override vazio) NÃO esconde o motorista vivo da planilha → 'Reservado'", () => {
+    // Um override vazio parado (ex.: cascata esvaziou e a Shopee re-escalou a viagem)
+    // não pode mais mascarar o motorista da planilha: cai pro efetivo da planilha.
+    const allocByLh = { "LH-X": { alloc_motorista: "" } };
     const r = applyPlanilhaAvailabilityStatus(row({ motoristas: "JOÃO DA PLANILHA", data: "2026-06-20" }), { openLhSet: open, allocByLh, now });
+    expect(r.status).toBe(""); // badge deriva de `motoristas` → Reservado (tem motorista)
+  });
+
+  it("alloc '' + planilha também SEM motorista + não aberta → 'Fechado'", () => {
+    // Sem motorista em lugar nenhum (nem override nem planilha) e não aberta → Fechado.
+    const allocByLh = { "LH-X": { alloc_motorista: "" } };
+    const r = applyPlanilhaAvailabilityStatus(row({ motoristas: "", data: "2026-06-20" }), { openLhSet: open, allocByLh, now });
     expect(r.status).toBe("Fechado");
   });
 

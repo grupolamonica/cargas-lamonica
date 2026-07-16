@@ -2493,10 +2493,12 @@ function RowDetailModal({
   useEffect(() => {
     if (!row) return;
     setAllocForm({
-      motorista: alloc?.alloc_motorista ?? row.motoristas ?? "",
-      cavalo: alloc?.alloc_cavalo ?? row.cavalo ?? "",
-      carreta: alloc?.alloc_carreta ?? row.carreta ?? "",
-      status: alloc?.alloc_status ?? row.status ?? "",
+      // Override vazio ("" OU null) → cai pra planilha (mesma regra da linha): o
+      // modal pré-preenche com o EFETIVO exibido, não com o override vazio.
+      motorista: alloc?.alloc_motorista || row.motoristas || "",
+      cavalo: alloc?.alloc_cavalo || row.cavalo || "",
+      carreta: alloc?.alloc_carreta || row.carreta || "",
+      status: alloc?.alloc_status || row.status || "",
       tipo: alloc?.alloc_tipo ?? (row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "") ?? "",
       vinculo: alloc?.alloc_vinculo ?? row.vinculo ?? "",
     });
@@ -2571,8 +2573,8 @@ function RowDetailModal({
   });
 
   // Checklist do veículo (semáforo) por placa EFETIVA (override do operador ?? planilha).
-  const checklistCavalo = (alloc?.alloc_cavalo ?? row?.cavalo ?? "").trim();
-  const checklistCarreta = (alloc?.alloc_carreta ?? row?.carreta ?? "").trim();
+  const checklistCavalo = (alloc?.alloc_cavalo || row?.cavalo || "").trim();
+  const checklistCarreta = (alloc?.alloc_carreta || row?.carreta || "").trim();
   const checklistPlacas = [checklistCavalo, checklistCarreta].filter(Boolean);
   const vehicleChecklist = useQuery({
     queryKey: ["admin", "vehicle-checklist", checklistCavalo, checklistCarreta],
@@ -2589,11 +2591,21 @@ function RowDetailModal({
   const pinned = Boolean(alloc?.alloc_pinned ?? row.pinned);
   const allocEditable = editable && !pinned;
 
+  // Trocou o motorista/veículo em relação ao EFETIVO (override ?? planilha)?
+  // (mudança só de status/tipo não pede motivo — e não regrava motorista/veículo.)
+  const mvChanged =
+    allocForm.motorista !== (alloc?.alloc_motorista || row.motoristas || "") ||
+    allocForm.cavalo !== (alloc?.alloc_cavalo || row.cavalo || "") ||
+    allocForm.carreta !== (alloc?.alloc_carreta || row.carreta || "");
+
   const doSave = (descricao = "") => {
+    // Motorista EFETIVO (override do operador OU planilha) — usado no guard abaixo.
+    // Considera o motorista da planilha também: não dá pra deixar "Disponível" uma
+    // carga que a planilha ainda escala (o portal a ofereceria = duplo-booking).
+    const savedMotorista = ((allocEditable ? allocForm.motorista : alloc?.alloc_motorista) || row.motoristas || "").trim();
     // "Disponível" reabre a carga pro painel — e só faz sentido SEM motorista. Com
     // motorista, BLOQUEIA: o operador precisa remover o motorista primeiro (regra do
     // usuário: nunca remover o motorista automaticamente, apenas impedir "Disponível").
-    const savedMotorista = (allocEditable ? allocForm.motorista : (alloc?.alloc_motorista ?? "")).trim();
     if (/^dispon[ií]vel$/i.test(allocForm.status.trim()) && savedMotorista) {
       toast.error("Esta carga tem motorista. Remova o motorista antes de deixá-la Disponível.");
       return;
@@ -2608,26 +2620,26 @@ function RowDetailModal({
     const statusChanged = allocForm.status !== initialStatus;
     saveAllocation.mutate({
       lh: row.lh,
-      // Linha travada: preserva o motorista/veículo atual (alloc override; null
-      // = continua refletindo a planilha) e grava só o status.
-      motorista: allocEditable ? allocForm.motorista : (alloc?.alloc_motorista ?? ""),
-      cavalo: allocEditable ? allocForm.cavalo : (alloc?.alloc_cavalo ?? ""),
-      carreta: allocEditable ? allocForm.carreta : (alloc?.alloc_carreta ?? ""),
+      // Status só vai quando o operador REALMENTE mudou (gating do #186 — evita
+      // "congelar" o status da planilha em alloc_status). Motorista/veículo seguem
+      // a mesma ideia logo abaixo (só quando editável E trocado).
       ...(statusChanged ? { status: allocForm.status } : {}),
       tipo: allocForm.tipo, // tipo é livre (não trava por pinned/status)
       // Vínculo (col H): sempre enviado (prefilled com o valor efetivo) — o
       // backend espelha na planilha; se não mudou, reescreve o mesmo valor.
       vinculo: allocForm.vinculo,
+      // Motorista/veículo SÓ vão no payload quando a linha é editável E o operador
+      // REALMENTE trocou (mvChanged). Editar só o status NÃO reenvia o motorista →
+      // o backend preserva o override atual (has()=false). Antes reenviávamos o
+      // valor pré-preenchido (efetivo = planilha), o que "congelava" o motorista da
+      // planilha como override e voltaria a escondê-lo se a Shopee re-escalasse.
+      ...(allocEditable && mvChanged
+        ? { motorista: allocForm.motorista, cavalo: allocForm.cavalo, carreta: allocForm.carreta }
+        : {}),
       // Motivo da troca — só quando o motorista/veículo mudou (o modal exige).
       ...(descricao ? { descricao } : {}),
     });
   };
-
-  // Trocou o motorista/veículo? (mudança só de status/tipo não pede motivo.)
-  const mvChanged =
-    allocForm.motorista !== (alloc?.alloc_motorista ?? row.motoristas ?? "") ||
-    allocForm.cavalo !== (alloc?.alloc_cavalo ?? row.cavalo ?? "") ||
-    allocForm.carreta !== (alloc?.alloc_carreta ?? row.carreta ?? "");
   const requestSave = () => {
     // Trocou m/v → exige o modal "Confirmar troca" com a descrição (motivo).
     if (allocEditable && mvChanged) setConfirmChange(true);
@@ -3379,20 +3391,19 @@ export default function SheetMonitor() {
     return rawItems.map((row) => {
       const a = allocByLh[row.lh];
       if (!a) return row;
-      const motoristas = a.alloc_motorista ?? row.motoristas;
-      // alloc_status "" = "sem status (usa a planilha)" — opção do dropdown do
-      // operador. Precisa CAIR pro status da planilha/SPX (row.status), não
-      // sobrepor com vazio. `??` mantinha "" e derrubava o status real p/ vazio →
-      // a linha aparecia como "Reservado" mesmo com status operacional na
-      // planilha (ex.: "AGUARDANDO CHEGAR NO CLIENTE"). `||` só sobrepõe quando o
-      // operador escolheu um status de verdade. (motorista acima usa `??` de
-      // propósito: "" ali é "sem motorista" explícito.)
+      // Override VAZIO ("" OU null) = "sem decisão" → cai pro valor da planilha
+      // (row.*). Usa `||` (não `??`): um override vazio parado NÃO pode mais ESCONDER
+      // motorista/veículo/status vivos da planilha — a Shopee re-escala/avança a
+      // viagem depois que a alocação foi esvaziada (ex.: cascata de cancelamento).
+      // Só um valor REAL do operador sobrepõe a planilha. (O "" continua sendo o
+      // marcador de "vaga" da cascata NO BACKEND; aqui é só exibição.)
+      const motoristas = a.alloc_motorista || row.motoristas;
       const status = a.alloc_status || row.status;
       return {
         ...row,
         motoristas,
-        cavalo: a.alloc_cavalo ?? row.cavalo,
-        carreta: a.alloc_carreta ?? row.carreta,
+        cavalo: a.alloc_cavalo || row.cavalo,
+        carreta: a.alloc_carreta || row.carreta,
         status,
         tipo: a.alloc_tipo ?? row.tipo,
         pinned: a.alloc_pinned ?? false,
