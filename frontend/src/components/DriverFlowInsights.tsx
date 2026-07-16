@@ -6,6 +6,7 @@ import {
   BadgeCheck,
   CalendarRange,
   CheckCircle2,
+  ClipboardList,
   Clock,
   MessageCircle,
   TrendingUp,
@@ -288,6 +289,49 @@ const DriverFlowInsights = ({ className }: DriverFlowInsightsProps) => {
         </Card>
       ) : data ? (
         <div className="grid gap-4 xl:grid-cols-2">
+          {/* DC-243 \u2014 Indicadores do sistema de Cadastro (no per\u00edodo selecionado) */}
+          <Card className="admin-panel shadow-none xl:col-span-2">
+            <CardContent className="space-y-4 p-5">
+              <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                <ClipboardList className="h-4 w-4 text-primary" />
+                Cadastros no per\u00edodo
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Sistema de cadastro de motorista \u2014 realizados e pendentes de a\u00e7\u00e3o do operador no intervalo selecionado.
+              </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="rounded-2xl border border-emerald-200/70 bg-emerald-50/60 p-4 dark:border-emerald-400/30 dark:bg-emerald-500/10">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-700 dark:text-emerald-200" />
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-800 dark:text-emerald-200">
+                      Cadastros realizados
+                    </p>
+                  </div>
+                  <p className="mt-1 text-3xl font-black text-emerald-700 dark:text-emerald-100">
+                    {formatInt(data.cadastros?.realizados ?? 0)}
+                  </p>
+                  <p className="text-[11px] text-emerald-800/80 dark:text-emerald-200/80">
+                    Criados no per\u00edodo (exclui rascunhos)
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-amber-200/70 bg-amber-50/60 p-4 dark:border-amber-400/30 dark:bg-amber-500/10">
+                  <div className="flex items-center gap-2">
+                    <ClipboardList className="h-4 w-4 text-amber-700 dark:text-amber-200" />
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-800 dark:text-amber-200">
+                      Cadastros pendentes
+                    </p>
+                  </div>
+                  <p className="mt-1 text-3xl font-black text-amber-700 dark:text-amber-100">
+                    {formatInt(data.cadastros?.pendentes ?? 0)}
+                  </p>
+                  <p className="text-[11px] text-amber-800/80 dark:text-amber-200/80">
+                    Aguardando a\u00e7\u00e3o do operador no per\u00edodo
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
           {/* Pico de candidatura (pr\u00e9-registros) */}
           <Card className="admin-panel shadow-none">
             <CardContent className="space-y-4 p-5">

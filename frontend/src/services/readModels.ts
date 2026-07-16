@@ -1258,6 +1258,14 @@ export interface DriverFlowMetricsRecurrence {
   recurringDrivers: number;
 }
 
+/** DC-243: indicadores do sistema de Cadastro no período (pending_driver_registrations). */
+export interface DriverFlowMetricsCadastros {
+  /** cadastros criados no período, excluindo rascunhos (status <> 'draft'). */
+  realizados: number;
+  /** cadastros pendentes de ação do operador que entraram no período (status = 'pendente'). */
+  pendentes: number;
+}
+
 export interface DriverFlowMetricsResponse {
   window: {
     from: string;
@@ -1268,6 +1276,7 @@ export interface DriverFlowMetricsResponse {
   validation: DriverFlowMetricsValidation;
   recurrence: DriverFlowMetricsRecurrence;
   portalVisits: DriverFlowMetricsPortalVisits;
+  cadastros: DriverFlowMetricsCadastros;
   meta: {
     correlationId: string | null;
   };
