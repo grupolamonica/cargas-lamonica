@@ -106,17 +106,6 @@ export function DriverLoadsList({
         routeEstimatedHours: cargo.tempo_estimado_horas,
         fallbackDurationHours: cargo.duracao_horas,
       });
-      // Link de compartilhamento por ROTA: abre /motorista com origem/destino já
-      // aplicados no filtro. Usa as partes canônicas do routeLabel (ASCII, ex.
-      // "SAO PAULO") — o backend filtra por substring das partes do routeLabel,
-      // então valores acentuados de exibição não casariam.
-      const shareOrigem = routeOrigin ?? originRaw?.city ?? "";
-      const shareDestino = routeDestination ?? destinationRaw?.city ?? "";
-      const routeShareHref =
-        shareOrigem && shareDestino
-          ? `/motorista?origem=${encodeURIComponent(shareOrigem)}&destino=${encodeURIComponent(shareDestino)}`
-          : null;
-
       return (
         <LoadCard
           key={cargo.id}
@@ -146,7 +135,6 @@ export function DriverLoadsList({
           routeDistanceLabel={routeDistanceLabel}
           routeDurationLabel={routeDurationLabel}
           detailsHref={`/motorista/cargas/${cargo.id}`}
-          routeShareHref={routeShareHref}
           index={index}
           onInterestDialogOpenChange={onInterestDialogOpenChange}
           pacoteMeta={cargo.pacote_meta ?? null}

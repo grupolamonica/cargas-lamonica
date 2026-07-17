@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -145,6 +145,25 @@ describe("LoadCard — avulsa (legacy regression)", () => {
     expect(screen.getAllByText(/03\/04\/2026 22:30/i)).toHaveLength(2);
     expect(screen.getAllByText(/04\/04\/2026 16:30/i)).toHaveLength(2);
   }, 15000);
+
+  it("compartilha o link da CARGA (detalhe), não o link da rota (DC-264)", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    renderLoadCard(<LoadCard {...baseProps} />);
+
+    // Abre o popover de compartilhar (há triggers responsivos duplicados; o
+    // primeiro basta) e copia o link.
+    fireEvent.click(screen.getAllByRole("button", { name: /compartilhar carga/i })[0]);
+    const copyButton = (await screen.findAllByRole("button", { name: /copiar link/i }))[0];
+    fireEvent.click(copyButton);
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const copied = writeText.mock.calls[0][0] as string;
+    // Deve apontar para o detalhe da carga, nunca para o filtro de rota.
+    expect(copied).toContain("/motorista/cargas/load-123");
+    expect(copied).not.toContain("origem=");
+  });
 });
 
 describe("LoadCard — pacote_meta branch", () => {
