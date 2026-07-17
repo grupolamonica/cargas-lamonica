@@ -15,6 +15,7 @@ import {
 import { toast } from "sonner";
 
 import AdminPagination from "@/components/AdminPagination";
+import { FacetMultiSelect } from "@/components/ListFilters";
 import RouteModal, { type RouteFormData, type RouteTarifaFormRow } from "@/components/RouteModal";
 import DashboardHeader from "@/components/DashboardHeader";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +32,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/useAuth";
 import { confirmAction } from "@/lib/confirm";
 import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
+import { buildRouteFacetOptions, routeKeyOf } from "@/lib/listFilters";
 import { canWriteOperatorRoutes, getOperatorAccessLevel, getOperatorAccessLevelLabel } from "@/lib/operatorAccess";
 import {
   formatRouteCurrency,
@@ -149,6 +151,7 @@ const ManageRoutes = () => {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ativas");
   const [clienteFilter, setClienteFilter] = useState("todos");
+  const [routeFilter, setRouteFilter] = useState<string[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<RouteTrechoGroup | null>(null);
   const [detailGroup, setDetailGroup] = useState<RouteTrechoGroup | null>(null);
@@ -157,7 +160,7 @@ const ManageRoutes = () => {
 
   useEffect(() => {
     setPage(1);
-  }, [deferredSearch, statusFilter, clienteFilter]);
+  }, [deferredSearch, statusFilter, clienteFilter, routeFilter]);
 
   const { data, error, isFetching, isLoading } = useQuery({
     queryKey: [...ROUTES_QUERY_KEY, deferredSearch, statusFilter, clienteFilter],
@@ -196,10 +199,26 @@ const ManageRoutes = () => {
   }, [error]);
 
   const allGroups = useMemo(() => groupRoutesByTrecho(data?.items ?? []), [data?.items]);
+  // Filtro por rota (igual ao Monitor): multi-seleção de trechos, com busca.
+  const routeOptions = useMemo(() => buildRouteFacetOptions(allGroups, (group) => group), [allGroups]);
+  const filteredGroups = useMemo(
+    () => (routeFilter.length ? allGroups.filter((group) => routeFilter.includes(routeKeyOf(group))) : allGroups),
+    [allGroups, routeFilter],
+  );
+  // Se a rota selecionada deixar de existir (ex.: refetch a removeu), solta o
+  // filtro pra não travar numa lista vazia.
+  useEffect(() => {
+    setRouteFilter((prev) => {
+      if (prev.length === 0) return prev;
+      const next = prev.filter((key) => routeOptions.some((option) => option.value === key));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [routeOptions]);
   const totalGroups = allGroups.length;
-  const totalPages = Math.max(Math.ceil(totalGroups / GROUPS_PER_PAGE), 1);
+  const filteredCount = filteredGroups.length;
+  const totalPages = Math.max(Math.ceil(filteredCount / GROUPS_PER_PAGE), 1);
   const currentPage = Math.min(page, totalPages);
-  const pageGroups = allGroups.slice((currentPage - 1) * GROUPS_PER_PAGE, currentPage * GROUPS_PER_PAGE);
+  const pageGroups = filteredGroups.slice((currentPage - 1) * GROUPS_PER_PAGE, currentPage * GROUPS_PER_PAGE);
 
   const operatorAccessLevel = getOperatorAccessLevel(user);
   const canManageRoutes = canWriteOperatorRoutes(user);
@@ -403,6 +422,15 @@ const ManageRoutes = () => {
               ))}
             </select>
 
+            <FacetMultiSelect
+              label="Rotas"
+              options={routeOptions}
+              selected={routeFilter}
+              onChange={setRouteFilter}
+              widthClass="min-w-[180px] max-w-[240px]"
+              searchable
+            />
+
             {canManageRoutes ? (
               <button
                 type="button"
@@ -442,12 +470,16 @@ const ManageRoutes = () => {
               <Skeleton key={`route-loading-${index}`} className="h-[320px] rounded-[28px]" />
             ))}
           </div>
-        ) : totalGroups === 0 ? (
+        ) : filteredCount === 0 ? (
           <section className="admin-panel flex min-h-[260px] flex-col items-center justify-center gap-4 p-10 text-center">
             <Route className="h-14 w-14 text-muted-foreground/35" />
             <div className="space-y-1">
               <p className="text-lg font-bold text-foreground">Nenhuma rota encontrada</p>
-              <p className="text-sm text-muted-foreground">Ajuste os filtros ou cadastre uma nova rota padrão para a operação.</p>
+              <p className="text-sm text-muted-foreground">
+                {totalGroups > 0 && routeFilter.length
+                  ? "Nenhuma rota corresponde ao filtro selecionado."
+                  : "Ajuste os filtros ou cadastre uma nova rota padrão para a operação."}
+              </p>
             </div>
           </section>
         ) : (
@@ -547,9 +579,9 @@ const ManageRoutes = () => {
         <AdminPagination
           page={currentPage}
           totalPages={totalPages}
-          totalCount={totalGroups}
+          totalCount={filteredCount}
           pageSize={GROUPS_PER_PAGE}
-          itemLabel={`rota${totalGroups === 1 ? "" : "s"}`}
+          itemLabel={`rota${filteredCount === 1 ? "" : "s"}`}
           isFetching={isRefreshing}
           onPrevious={() => setPage((prev) => Math.max(prev - 1, 1))}
           onNext={() => setPage((prev) => Math.min(prev + 1, totalPages))}
