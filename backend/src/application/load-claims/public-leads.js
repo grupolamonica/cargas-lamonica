@@ -1676,6 +1676,17 @@ function buildPacoteMeta(row) {
   };
 }
 
+// DC-257: distingue "alocado pelo operador no Monitor" (cargas.alloc_source =
+// 'operator' + motorista em alloc_motorista) de um motorista vindo da planilha
+// (sheet_*). O read model achata as duas origens via COALESCE em
+// load_sheet_motorista; este flag preserva a origem para a Fila marcar
+// "Alocado pelo operador". Requer os SELECTs projetarem alloc_source/alloc_motorista
+// crus (load_alloc_source / load_alloc_motorista); na ausência (query de
+// fallback por schema-drift) degrada para false.
+function deriveAllocatedByOperator(row) {
+  return row.load_alloc_source === "operator" && Boolean(String(row.load_alloc_motorista || "").trim());
+}
+
 /**
  * Resolve o nome do motorista para exibicao na fila do operador.
  * Fallback chain (iter #9):
@@ -1735,6 +1746,7 @@ function groupLeadsForOperator(rows, vinculoMap = new Map()) {
         sheetCavalo: row.load_sheet_cavalo || null,
         sheetCarreta: row.load_sheet_carreta || null,
         sheetStatus: row.load_sheet_status || null,
+        allocatedByOperator: deriveAllocatedByOperator(row),
         clienteId: row.load_cliente_id || null,
         clienteNome: row.load_cliente_nome || null,
         clienteLogoUrl: row.load_cliente_logo_url || null,
@@ -1881,6 +1893,8 @@ async function listOperatorPublicLoadLeadsUncached({ correlationId }) {
               COALESCE(cargas.alloc_cavalo, cargas.sheet_cavalo) AS load_sheet_cavalo,
               COALESCE(cargas.alloc_carreta, cargas.sheet_carreta) AS load_sheet_carreta,
               COALESCE(cargas.alloc_status, cargas.sheet_status) AS load_sheet_status,
+              cargas.alloc_motorista AS load_alloc_motorista,
+              cargas.alloc_source AS load_alloc_source,
               cargas.cliente_id AS load_cliente_id,
               cargas.viagem_id AS load_viagem_id,
               cargas.ordem_viagem AS load_ordem_viagem,
@@ -2038,6 +2052,8 @@ async function listOperatorPublicLoadLeadsUncached({ correlationId }) {
             COALESCE(c.alloc_cavalo, c.sheet_cavalo) AS load_sheet_cavalo,
             COALESCE(c.alloc_carreta, c.sheet_carreta) AS load_sheet_carreta,
             COALESCE(c.alloc_status, c.sheet_status) AS load_sheet_status,
+            c.alloc_motorista AS load_alloc_motorista,
+            c.alloc_source AS load_alloc_source,
             c.cliente_id AS load_cliente_id,
             c.viagem_id AS load_viagem_id,
             c.ordem_viagem AS load_ordem_viagem,
@@ -2105,6 +2121,7 @@ async function listOperatorPublicLoadLeadsUncached({ correlationId }) {
           sheetCavalo: r.load_sheet_cavalo || null,
           sheetCarreta: r.load_sheet_carreta || null,
           sheetStatus: r.load_sheet_status || null,
+          allocatedByOperator: deriveAllocatedByOperator(r),
           clienteId: r.load_cliente_id || null,
           clienteNome: r.load_cliente_nome || null,
           clienteLogoUrl: r.load_cliente_logo_url || null,

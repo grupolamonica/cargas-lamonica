@@ -1034,6 +1034,35 @@ describe.sequential("public load leads", () => {
     expect(avulsa.load.pacoteMeta).toBeNull();
   });
 
+  it("DC-257: carga OPEN sem candidatura entra na fila; alloc do operador marca allocatedByOperator", async () => {
+    // Carga OPEN sem nenhum lead — deve aparecer como group vazio (para o
+    // operador alocar direto).
+    const { id: openId } = await harness.seedLoad();
+    // Carga OPEN alocada pelo operador no Monitor (alloc_* + alloc_source).
+    const { id: allocId } = await harness.seedLoad();
+    await harness.query(
+      "UPDATE public.cargas SET alloc_motorista = $1, alloc_source = 'operator' WHERE id = $2",
+      ["JOAO DA SILVA", allocId],
+    );
+
+    const listing = await service.listOperatorPublicLoadLeads({
+      correlationId: "corr-dc257-empty-groups",
+    });
+    expect(listing.statusCode).toBe(200);
+
+    const open = listing.payload.groups.find((g) => g.load.id === openId);
+    expect(open).toBeDefined();
+    expect(open.leads).toHaveLength(0);
+    expect(open.load.allocatedByOperator).toBe(false);
+
+    const alloc = listing.payload.groups.find((g) => g.load.id === allocId);
+    expect(alloc).toBeDefined();
+    expect(alloc.leads).toHaveLength(0);
+    expect(alloc.load.allocatedByOperator).toBe(true);
+    // COALESCE ainda expõe o nome; o flag é o que distingue a origem (operador).
+    expect(alloc.load.sheetMotorista).toBe("JOAO DA SILVA");
+  });
+
   it("rejects approving a queued lead when the load is no longer open", async () => {
     const { id: loadId } = await harness.seedLoad();
     const operator = await harness.seedOperator();
