@@ -1,19 +1,43 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mocks de infra só para o módulo carregar sem efeito colateral (pool pg / env
-// Angellira). Os testes exercitam apenas as funções PURAS da regra de conjunto.
-vi.mock("../../../../infrastructure/pg/postgres.js", () => ({ withPgClient: vi.fn() }));
-vi.mock("../../../../infrastructure/angellira/angellira-client.js", () => ({
-  lookupAngelliraDriverByCpf: vi.fn(),
-  lookupAngelliraPlate: vi.fn(),
+// Estado controlável dos mocks de infra. As funções PURAS não tocam nada disto;
+// os testes de runRevertNonConformeAutoApproved configuram linhas + respostas.
+const canned = {
+  approvedRows: [],
+  updateParams: [],
+  driver: new Map(),
+  plate: new Map(),
+};
+
+vi.mock("../../../../infrastructure/pg/postgres.js", () => ({
+  withPgClient: async (cb) =>
+    cb({
+      query: async (sql, params) => {
+        const s = String(sql);
+        if (s.includes("SELECT id, dados") && s.includes("status = 'aprovado'")) {
+          return { rows: canned.approvedRows };
+        }
+        if (s.includes("UPDATE public.pending_driver_registrations") && s.includes("status = 'pendente'")) {
+          canned.updateParams.push(params);
+          const ids = params[2];
+          return { rows: ids.map((id) => ({ id })) };
+        }
+        return { rows: [] };
+      },
+    }),
 }));
-vi.mock("../../../../infrastructure/security-audit.js", () => ({ insertSecurityAuditEvent: vi.fn() }));
-vi.mock("../../../../infrastructure/security-log.js", () => ({ logStructuredEvent: vi.fn() }));
+vi.mock("../../../../infrastructure/angellira/angellira-client.js", () => ({
+  lookupAngelliraDriverByCpf: async (cpf) => canned.driver.get(cpf) || { status: "NOT_FOUND" },
+  lookupAngelliraPlate: async (placa) => canned.plate.get(placa) || { status: "NOT_FOUND" },
+}));
+vi.mock("../../../../infrastructure/security-audit.js", () => ({ insertSecurityAuditEvent: async () => {} }));
+vi.mock("../../../../infrastructure/security-log.js", () => ({ logStructuredEvent: () => {} }));
 
 import {
   isAngelliraVigente,
   extractConjuntoPlacas,
   evaluateConjuntoConforme,
+  runRevertNonConformeAutoApproved,
 } from "./auto-approve-vigentes.js";
 
 const TODAY = "2026-07-17";
@@ -105,10 +129,7 @@ describe("evaluateConjuntoConforme", () => {
   });
 
   it("BLOQUEIA quando só o cavalo está conforme e o motorista nem tem cadastro", () => {
-    const v = evaluateConjuntoConforme(
-      { motorista: NAO_CADASTRADO, cavalo: cavalo(VIGENTE), carretas: [] },
-      TODAY,
-    );
+    const v = evaluateConjuntoConforme({ motorista: NAO_CADASTRADO, cavalo: cavalo(VIGENTE), carretas: [] }, TODAY);
     expect(v.conforme).toBe(false);
     expect(v.motivo).toBe("motorista");
   });
@@ -129,11 +150,77 @@ describe("evaluateConjuntoConforme", () => {
   });
 
   it("BLOQUEIA quando o cavalo está indisponível (não decide como conforme)", () => {
-    const v = evaluateConjuntoConforme(
-      { motorista: VIGENTE, cavalo: cavalo(INDISPONIVEL), carretas: [] },
-      TODAY,
-    );
+    const v = evaluateConjuntoConforme({ motorista: VIGENTE, cavalo: cavalo(INDISPONIVEL), carretas: [] }, TODAY);
     expect(v.conforme).toBe(false);
     expect(v.motivo).toBe("cavalo");
+  });
+});
+
+describe("runRevertNonConformeAutoApproved (remediação)", () => {
+  const mkDados = (cpf, cavaloPlaca, carretaPlacas = []) => ({
+    motorista: { cpf },
+    cavalo: cavaloPlaca ? { placa: cavaloPlaca } : undefined,
+    carretas: carretaPlacas.map((p) => ({ placa: p })),
+  });
+
+  beforeEach(() => {
+    canned.approvedRows = [];
+    canned.updateParams = [];
+    canned.driver = new Map();
+    canned.plate = new Map();
+  });
+
+  it("DRY-RUN conta os não-conformes sem gravar", async () => {
+    canned.driver.set("11111111111", VIGENTE);
+    canned.driver.set("22222222222", VIGENTE);
+    canned.plate.set("CAV0001", VIGENTE);
+    canned.plate.set("CAV0002", NAO_CADASTRADO); // cavalo não cadastrado → não conforme
+    canned.approvedRows = [
+      { id: "r1", dados: mkDados("11111111111", "CAV0001") },
+      { id: "r2", dados: mkDados("22222222222", "CAV0002") },
+    ];
+
+    const s = await runRevertNonConformeAutoApproved({ apply: false });
+
+    expect(s.scanned).toBe(2);
+    expect(s.conformes).toBe(1);
+    expect(s.aRevertar).toBe(1);
+    expect(s.reverted).toBe(0);
+    expect(canned.updateParams).toHaveLength(0); // não gravou
+  });
+
+  it("APPLY reverte SÓ os não-conformes, com os ids certos no UPDATE", async () => {
+    canned.driver.set("11111111111", VIGENTE); // r1 conforme
+    canned.driver.set("22222222222", VIGENTE); // r2: cavalo não cadastrado
+    canned.driver.set("33333333333", NAO_CADASTRADO); // r3: motorista não cadastrado
+    canned.plate.set("CAV0001", VIGENTE);
+    canned.plate.set("CAV0002", NAO_CADASTRADO);
+    canned.plate.set("CAV0003", VIGENTE);
+    canned.approvedRows = [
+      { id: "r1", dados: mkDados("11111111111", "CAV0001") },
+      { id: "r2", dados: mkDados("22222222222", "CAV0002") },
+      { id: "r3", dados: mkDados("33333333333", "CAV0003") },
+    ];
+
+    const s = await runRevertNonConformeAutoApproved({ apply: true });
+
+    expect(s.conformes).toBe(1);
+    expect(s.aRevertar).toBe(2);
+    expect(s.reverted).toBe(2);
+    expect(canned.updateParams).toHaveLength(1);
+    expect([...canned.updateParams[0][2]].sort()).toEqual(["r2", "r3"]);
+  });
+
+  it("NÃO reverte quando um componente está indisponível (incerteza)", async () => {
+    canned.driver.set("11111111111", VIGENTE);
+    canned.plate.set("CAV0001", INDISPONIVEL);
+    canned.approvedRows = [{ id: "r1", dados: mkDados("11111111111", "CAV0001") }];
+
+    const s = await runRevertNonConformeAutoApproved({ apply: true });
+
+    expect(s.indisponiveis).toBe(1);
+    expect(s.aRevertar).toBe(0);
+    expect(s.reverted).toBe(0);
+    expect(canned.updateParams).toHaveLength(0);
   });
 });
