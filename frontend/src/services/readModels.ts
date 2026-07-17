@@ -111,6 +111,9 @@ export interface DriverLoadReadModelItem {
   duracao_horas: number | null;
   tempo_estimado_horas: number | null;
   perfil: string;
+  /** Nº de eixos da carga (0/null = não especificado). Enriquecido do catálogo
+   * de rotas quando a carga não define o próprio — alimenta o rótulo do veículo. */
+  eixos: number | null;
   valor: number | null;
   bonus: number | null;
   clienteId: string | null;

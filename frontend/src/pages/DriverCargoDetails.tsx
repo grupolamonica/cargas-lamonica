@@ -200,7 +200,7 @@ async function resolveDriverCargoRouteFallback(cargo: Pick<CargoDetailsRow, "ori
 
   const { data, error } = await publicSupabase
     .from("route_metrics_cache")
-    .select("origin_key, destination_key, distancia_km, duracao_horas, tempo_estimado_horas, perfil_padrao, valor_padrao, bonus_padrao")
+    .select("origin_key, destination_key, distancia_km, duracao_horas, tempo_estimado_horas, perfil_padrao, eixos, valor_padrao, bonus_padrao")
     .in("origin_key", originKeys)
     .in("destination_key", destinationKeys);
 
@@ -537,6 +537,9 @@ const DriverCargoDetails = () => {
           cargo: {
             ...cargoWithClient,
             perfil: publication.perfil || cargoWithClient.perfil,
+            // Eixos: herda do catálogo (mesma tarifa que define o valor) quando a
+            // carga não tem o seu — igual ao read model do portal (DC-258).
+            eixos: cargoWithClient.eixos ?? routeFallback?.eixos ?? null,
             valor: publication.valor,
             bonus: publication.bonus,
             distancia_km: publication.distancia_km,
