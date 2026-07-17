@@ -50,12 +50,6 @@ interface LoadCardProps {
   valorCarga?: number | null;
   bonusValor?: number | null;
   detailsHref?: string;
-  /**
-   * Link de compartilhamento por rota: /motorista?origem=..&destino=.. com o
-   * filtro de rota já aplicado na tela do motorista. Quando presente, é o link
-   * usado no popover de compartilhar (fallback: detailsHref).
-   */
-  routeShareHref?: string | null;
   interestHref?: string;
   carregamentoLabel?: string | null;
   descargaLabel?: string | null;
@@ -102,7 +96,6 @@ const LoadCard = memo(({
   valorCarga,
   bonusValor,
   detailsHref,
-  routeShareHref,
   carregamentoLabel,
   descargaLabel,
   routeDistanceLabel,
@@ -137,7 +130,8 @@ const LoadCard = memo(({
   const clientLogoUrl = clienteLogoUrlCard ?? null;
   const [isInterestDialogOpen, setIsInterestDialogOpen] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
-  const sharePath = routeShareHref ?? detailsHref ?? null;
+  // Compartilhar SEMPRE o link da carga (detalhe), não o link da rota. DC-264.
+  const sharePath = detailsHref ?? null;
   const shareUrl = sharePath ? `${window.location.origin}${sharePath}` : null;
 
   const shareText = useMemo(() => {
@@ -168,13 +162,9 @@ const LoadCard = memo(({
     } else {
       lines.push(`💰 Total: ${pagamento}`);
     }
-    lines.push(
-      "",
-      routeShareHref ? "🔗 Veja as cargas dessa rota e candidate-se:" : "🔗 Detalhes e candidatura:",
-      shareUrl,
-    );
+    lines.push("", "🔗 Detalhes e candidatura:", shareUrl);
     return lines.join("\n");
-  }, [shareUrl, routeShareHref, originLabel, destinationLabel, vehicleLabel, pagamento, clienteNome, valorCarga, bonusValor, loadingLabel, unloadingLabel, kmLabel, routeDurationValue]);
+  }, [shareUrl, originLabel, destinationLabel, vehicleLabel, pagamento, clienteNome, valorCarga, bonusValor, loadingLabel, unloadingLabel, kmLabel, routeDurationValue]);
 
   const renderSharePopover = (trigger: React.ReactNode) => {
     if (!shareUrl) return null;
