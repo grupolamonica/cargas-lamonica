@@ -1,4 +1,5 @@
 import { useDeferredValue, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Dialog,
   DialogContent,
@@ -708,7 +709,14 @@ const RASCUNHOS_QUERY_KEY = ["operator", "cadastros-rascunhos"] as const;
 const Motoristas = () => {
   const queryClient = useQueryClient();
   const permissions = useOperatorPermissions();
-  const [mainTab, setMainTab] = useState<"motoristas" | "pendentes" | "rascunhos">("motoristas");
+  // DC-241: drill-down do Painel abre esta tela já na aba certa via ?tab=
+  // (ex.: card "Cadastros pendentes" → /motoristas?tab=pendentes). Lido só no
+  // mount; a navegação interna por abas segue sendo state local.
+  const [searchParams] = useSearchParams();
+  const [mainTab, setMainTab] = useState<"motoristas" | "pendentes" | "rascunhos">(() => {
+    const requested = searchParams.get("tab");
+    return requested === "pendentes" || requested === "rascunhos" ? requested : "motoristas";
+  });
   const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState("todos");
   const [applicationStatusFilter, setApplicationStatusFilter] = useState("todos");

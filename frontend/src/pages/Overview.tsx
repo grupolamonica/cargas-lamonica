@@ -16,7 +16,17 @@ import {
 import { format } from "date-fns";
 
 import DashboardHeader from "@/components/DashboardHeader";
-import DriverFlowInsights from "@/components/DriverFlowInsights";
+import { useDriverFlowMetrics } from "@/components/driver-flow/useDriverFlowMetrics";
+import {
+  DriverFlowPeriodBar,
+  DriverFlowGate,
+  CadastroDestaqueCard,
+  FunilCard,
+  ValidacaoCard,
+  PicoCandidaturaCard,
+  PicoAcessoCard,
+  RecorrenciaCard,
+} from "@/components/driver-flow/DriverFlowBlocks";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -41,14 +51,16 @@ function formatNumber(value: number) {
   });
 }
 
-// DC-241 — Painel reorganizado em abas para reduzir a poluição visual. Nenhum
-// indicador foi removido: todos os cards e blocos existentes foram redistribuídos
-// entre as abas. Os cards de indicador são clicáveis e navegam para a tela
-// detalhada correspondente (dado real), acessível também por teclado.
+// DC-241 — Painel reorganizado em abas. A aba "Visão geral" é a principal e
+// concentra o essencial: cadastro em destaque (clicável), números-chave ao vivo,
+// gráficos-chave (funil + validação) e a fila de atenção. As demais abas guardam
+// o detalhe. Nenhum indicador foi removido — apenas redistribuído. Cards de
+// indicador navegam para a tela detalhada correspondente (dado real).
 const PAINEL_TABS = [
+  { key: "geral", label: "Visão geral" },
   { key: "cargas", label: "Cargas" },
   { key: "candidaturas", label: "Candidaturas & Disputas" },
-  { key: "insights", label: "Cadastro & Insights" },
+  { key: "insights", label: "Insights" },
 ] as const;
 type PainelTab = (typeof PAINEL_TABS)[number]["key"];
 
@@ -211,7 +223,8 @@ const OVERVIEW_QUERY_KEY = ["operator", "overview-dashboard"] as const;
 const Overview = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [tab, setTab] = useState<PainelTab>("cargas");
+  const [tab, setTab] = useState<PainelTab>("geral");
+  const flow = useDriverFlowMetrics();
   const channelRef = useRef(`operator-overview-${Math.random().toString(36).slice(2, 8)}`);
   // Realtime is the primary trigger; digest poll (below) is a 5min safety
   // net for missed events. No refetchInterval here — drops a 30s baseline
@@ -308,6 +321,62 @@ const Overview = () => {
   const goToCargas = () => navigate("/cargas");
   const goToFila = () => navigate("/leads");
   const goToAprovados = () => navigate("/historico-fila");
+  // Drill-down do cadastro (DC-243): realizados → lista de motoristas;
+  // pendentes → fila de pendentes (a tela lê ?tab e abre na aba certa).
+  const goToMotoristas = () => navigate("/motoristas");
+  const goToPendentes = () => navigate("/motoristas?tab=pendentes");
+
+  const attentionSection = snapshot ? (
+    <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
+      <CardHeader className="space-y-3">
+        <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
+          Atenção necessária
+        </CardDescription>
+        <CardTitle className="text-2xl tracking-tight text-foreground">Cargas que precisam de acao</CardTitle>
+        <CardDescription className="max-w-2xl text-sm leading-relaxed">
+          Cargas abertas ha mais de 48h sem interesse ou com dados obrigatorios faltando.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="max-h-[368px] overflow-y-auto space-y-3 pr-1">
+          {snapshot.attentionLoads.length > 0 ? (
+            snapshot.attentionLoads.map((load) => (
+              <div
+                key={load.id}
+                className="admin-card-surface-strong flex flex-col gap-3 rounded-[24px] border px-4 py-4 shadow-[0_18px_38px_-32px_rgba(15,23,42,0.18)] sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/12 text-amber-700">
+                    <AlertTriangle className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">
+                      {load.origem} &rarr; {load.destino}
+                    </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 text-xs dark:border-amber-400/40 dark:bg-amber-500/15 dark:text-amber-200">
+                        {load.status}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">Criada ha {formatAgeLabel(load.ageHours)}</span>
+                      {load.missingFields.length > 0 && (
+                        <span className="text-xs text-red-600">
+                          Faltando: {load.missingFields.map((f) => MISSING_FIELD_LABELS[f] || f).join(", ")}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
+              Nenhuma carga precisa de atenção neste momento.
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  ) : null;
 
   return (
     <div>
@@ -395,6 +464,69 @@ const Overview = () => {
             ))}
           </nav>
 
+          {/* ── Aba: Visão geral (principal) ────────────────────────────── */}
+          {tab === "geral" && (
+            <>
+              <DriverFlowPeriodBar controller={flow} />
+
+              {/* Cadastro em destaque (no período) — tiles clicáveis (drill-down) */}
+              <DriverFlowGate query={flow.query} skeletons={1}>
+                {(data) => (
+                  <CadastroDestaqueCard data={data} onOpenRealizados={goToMotoristas} onOpenPendentes={goToPendentes} />
+                )}
+              </DriverFlowGate>
+
+              {/* Números-chave · agora (ao vivo, do snapshot) */}
+              <section className="grid gap-4 xl:grid-cols-4">
+                <KpiCard
+                  label="Cargas ativas"
+                  value={formatNumber(snapshot.hero.activeLoads)}
+                  note="Cargas abertas disponíveis para candidatura de motoristas."
+                  icon={Layers3}
+                  tone="primary"
+                  onClick={goToCargas}
+                />
+                <KpiCard
+                  label="Na fila"
+                  value={formatNumber(snapshot.hero.queuedLeads)}
+                  note="Motoristas aguardando na fila de candidatura."
+                  icon={MessagesSquare}
+                  tone="accent"
+                  onClick={goToFila}
+                />
+                <KpiCard
+                  label="Aguardando revisão"
+                  value={formatNumber(snapshot.hero.pendingApprovals)}
+                  note="Candidaturas na fila aguardando ação do operador."
+                  icon={ClipboardList}
+                  tone="slate"
+                  onClick={goToFila}
+                />
+                <KpiCard
+                  label="Sem motorista"
+                  value={formatNumber(snapshot.hero.noDriverLoads)}
+                  note="Cargas abertas sem nenhum interesse de motorista ainda."
+                  icon={UserX}
+                  tone="emerald"
+                  onClick={goToCargas}
+                />
+              </section>
+
+              {/* Gráficos-chave (no período): funil + validação. hideError: o card
+                  de erro já é mostrado pelo gate do cadastro acima (mesma query). */}
+              <DriverFlowGate query={flow.query} skeletons={2} hideError>
+                {(data) => (
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <FunilCard data={data} />
+                    <ValidacaoCard data={data} />
+                  </div>
+                )}
+              </DriverFlowGate>
+
+              {attentionSection}
+            </>
+          )}
+
           {/* ── Aba: Cargas ─────────────────────────────────────────────── */}
           {tab === "cargas" && (
             <>
@@ -476,61 +608,6 @@ const Overview = () => {
                   );
                 })()}
               </section>
-
-              {/* Loads Needing Attention */}
-              <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
-                <CardHeader className="space-y-3">
-                  <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
-                    Atenção necessária
-                  </CardDescription>
-                  <CardTitle className="text-2xl tracking-tight text-foreground">
-                    Cargas que precisam de acao
-                  </CardTitle>
-                  <CardDescription className="max-w-2xl text-sm leading-relaxed">
-                    Cargas abertas ha mais de 48h sem interesse ou com dados obrigatorios faltando.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <div className="max-h-[368px] overflow-y-auto space-y-3 pr-1">
-                    {snapshot.attentionLoads.length > 0 ? (
-                      snapshot.attentionLoads.map((load) => (
-                        <div
-                          key={load.id}
-                          className="admin-card-surface-strong flex flex-col gap-3 rounded-[24px] border px-4 py-4 shadow-[0_18px_38px_-32px_rgba(15,23,42,0.18)] sm:flex-row sm:items-center sm:justify-between"
-                        >
-                          <div className="flex items-start gap-3">
-                            <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/12 text-amber-700">
-                              <AlertTriangle className="h-4 w-4" />
-                            </div>
-                            <div>
-                              <p className="text-sm font-semibold text-foreground">
-                                {load.origem} &rarr; {load.destino}
-                              </p>
-                              <div className="mt-1 flex flex-wrap items-center gap-2">
-                                <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 text-xs dark:border-amber-400/40 dark:bg-amber-500/15 dark:text-amber-200">
-                                  {load.status}
-                                </Badge>
-                                <span className="text-xs text-muted-foreground">
-                                  Criada ha {formatAgeLabel(load.ageHours)}
-                                </span>
-                                {load.missingFields.length > 0 && (
-                                  <span className="text-xs text-red-600">
-                                    Faltando: {load.missingFields.map((f) => MISSING_FIELD_LABELS[f] || f).join(", ")}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/25 px-6 py-10 text-center text-sm text-muted-foreground">
-                        Nenhuma carga precisa de atenção neste momento.
-                      </div>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
             </>
           )}
 
@@ -570,10 +647,20 @@ const Overview = () => {
             </section>
           )}
 
-          {/* ── Aba: Cadastro & Insights ────────────────────────────────── */}
+          {/* ── Aba: Insights (aprofundamento, no período) ──────────────── */}
           {tab === "insights" && (
             <>
-              <DriverFlowInsights />
+              <DriverFlowPeriodBar controller={flow} />
+
+              <DriverFlowGate query={flow.query} skeletons={2}>
+                {(data) => (
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <PicoCandidaturaCard data={data} />
+                    <PicoAcessoCard data={data} />
+                    <RecorrenciaCard data={data} />
+                  </div>
+                )}
+              </DriverFlowGate>
 
               {/* Sponsor Clicks Analytics */}
               <Card className="admin-panel overflow-hidden border-white/80 bg-white/92">
@@ -581,9 +668,7 @@ const Overview = () => {
                   <CardDescription className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/60">
                     Parceiros
                   </CardDescription>
-                  <CardTitle className="text-2xl tracking-tight text-foreground">
-                    Cliques em parceiros
-                  </CardTitle>
+                  <CardTitle className="text-2xl tracking-tight text-foreground">Cliques em parceiros</CardTitle>
                   <CardDescription className="max-w-2xl text-sm leading-relaxed">
                     Total de cliques em anuncios do carrossel nos ultimos 30 dias.
                   </CardDescription>
