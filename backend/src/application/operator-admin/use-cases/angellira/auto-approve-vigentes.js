@@ -84,6 +84,69 @@ export function evaluateConjuntoConforme(components, today) {
   return { conforme: true, motivo: null };
 }
 
+/** Fábrica de lookups Angellira memoizados por execução (não reconsulta o mesmo CPF/placa). */
+function makeAngelliraLookups(correlationId) {
+  const lookupOpts = {
+    correlationId: correlationId || "auto-approve-angellira",
+    sourceEvent: "operator.cadastro.auto_approve_angellira",
+  };
+  const cpfMemo = new Map();
+  const plateMemo = new Map();
+  const lookupCpf = (cpf) => {
+    if (!cpf || cpf.length !== 11) return Promise.resolve({ status: "NOT_FOUND" });
+    if (!cpfMemo.has(cpf)) cpfMemo.set(cpf, lookupAngelliraDriverByCpf(cpf, lookupOpts));
+    return cpfMemo.get(cpf);
+  };
+  const lookupPlate = (placa) => {
+    if (!placa) return Promise.resolve(null);
+    if (!plateMemo.has(placa)) plateMemo.set(placa, lookupAngelliraPlate(placa, lookupOpts));
+    return plateMemo.get(placa);
+  };
+  return { lookupCpf, lookupPlate };
+}
+
+/**
+ * Consulta o CONJUNTO de um cadastro (motorista + cavalo + carretas) no Angellira,
+ * em paralelo, e devolve o veredito. Compartilhado pela aprovação e pela reversão.
+ *  - { circuitOpen: true }            → circuit-breaker aberto (encerrar a leva)
+ *  - { indisponivel: true }           → algum componente UNAVAILABLE (não decidir agora)
+ *  - { verdict: {conforme, motivo} }  → decisão do conjunto
+ */
+async function checkCadastroConjunto(dados, { today, lookupCpf, lookupPlate }) {
+  const cpf = digitsOnly(dados?.motorista?.cpf);
+  const { cavalo: cavaloPlaca, carretas: carretaPlacas } = extractConjuntoPlacas(dados);
+
+  const specs = [{ kind: "motorista", p: lookupCpf(cpf) }];
+  if (cavaloPlaca) specs.push({ kind: "cavalo", p: lookupPlate(cavaloPlaca) });
+  carretaPlacas.forEach((placa, i) => specs.push({ kind: `carreta${i}`, p: lookupPlate(placa) }));
+
+  const settled = await Promise.allSettled(specs.map((s) => s.p));
+
+  let circuitOpen = false;
+  const recByKind = {};
+  settled.forEach((s, idx) => {
+    const { kind } = specs[idx];
+    if (s.status === "fulfilled") {
+      recByKind[kind] = s.value;
+    } else {
+      const msg = String(s.reason?.message || s.reason);
+      if (msg.includes("CIRCUIT_OPEN")) circuitOpen = true;
+      recByKind[kind] = { status: "UNAVAILABLE", error: msg };
+    }
+  });
+  if (circuitOpen) return { circuitOpen: true };
+
+  const components = {
+    motorista: recByKind.motorista,
+    cavalo: cavaloPlaca ? { placa: cavaloPlaca, rec: recByKind.cavalo } : null,
+    carretas: carretaPlacas.map((placa, i) => ({ placa, rec: recByKind[`carreta${i}`] })),
+  };
+  const recs = [components.motorista, components.cavalo?.rec, ...components.carretas.map((c) => c.rec)];
+  if (recs.some((r) => r && r.status === "UNAVAILABLE")) return { indisponivel: true };
+
+  return { verdict: evaluateConjuntoConforme(components, today) };
+}
+
 /** Cria a tabela de settings se não existir (idempotente; espelha analytics_events no bootstrap). */
 export async function ensureAppSettingsTable(client) {
   await client.query(`
@@ -206,24 +269,7 @@ export async function runAutoApproveAngelliraVigentes({
       rows = res.rows;
     });
 
-    // Memo por execução: não reconsulta o mesmo CPF/placa em cadastros distintos
-    // (o cliente Angellira também cacheia 5min; isto coalesce dentro da leva).
-    const lookupOpts = {
-      correlationId: correlationId || "auto-approve-angellira",
-      sourceEvent: "operator.cadastro.auto_approve_angellira",
-    };
-    const cpfMemo = new Map();
-    const plateMemo = new Map();
-    const lookupCpf = (cpf) => {
-      if (!cpf || cpf.length !== 11) return Promise.resolve({ status: "NOT_FOUND" });
-      if (!cpfMemo.has(cpf)) cpfMemo.set(cpf, lookupAngelliraDriverByCpf(cpf, lookupOpts));
-      return cpfMemo.get(cpf);
-    };
-    const lookupPlate = (placa) => {
-      if (!placa) return Promise.resolve(null);
-      if (!plateMemo.has(placa)) plateMemo.set(placa, lookupAngelliraPlate(placa, lookupOpts));
-      return plateMemo.get(placa);
-    };
+    const { lookupCpf, lookupPlate } = makeAngelliraLookups(correlationId);
 
     const conformeIds = [];
     let vigentes = 0; // cadastros com o CONJUNTO todo conforme
@@ -231,60 +277,24 @@ export async function runAutoApproveAngelliraVigentes({
     let indisponiveis = 0; // Angellira indisponível p/ algum componente → reavalia na próxima leva
 
     // 2. Para cada cadastro, consulta o CONJUNTO (motorista + cavalo + carretas)
-    //    em paralelo e só marca p/ aprovar quando TODOS estiverem vigentes.
+    //    e só marca p/ aprovar quando TODOS estiverem vigentes.
     for (const row of rows) {
-      const dados = row.dados || {};
-      const cpf = digitsOnly(dados?.motorista?.cpf);
-      const { cavalo: cavaloPlaca, carretas: carretaPlacas } = extractConjuntoPlacas(dados);
-
-      const specs = [{ kind: "motorista", p: lookupCpf(cpf) }];
-      if (cavaloPlaca) specs.push({ kind: "cavalo", p: lookupPlate(cavaloPlaca) });
-      carretaPlacas.forEach((placa, i) => specs.push({ kind: `carreta${i}`, p: lookupPlate(placa) }));
-
-      const settled = await Promise.allSettled(specs.map((s) => s.p));
-
-      let circuitOpen = false;
-      const recByKind = {};
-      settled.forEach((s, idx) => {
-        const { kind } = specs[idx];
-        if (s.status === "fulfilled") {
-          recByKind[kind] = s.value;
-        } else {
-          const msg = String(s.reason?.message || s.reason);
-          if (msg.includes("CIRCUIT_OPEN")) circuitOpen = true;
-          recByKind[kind] = { status: "UNAVAILABLE", error: msg };
-        }
-      });
-
-      // Circuit-breaker aberto → encerra a leva (não dá pra confiar nas respostas).
-      if (circuitOpen) {
+      const check = await checkCadastroConjunto(row.dados || {}, { today, lookupCpf, lookupPlate });
+      if (check.circuitOpen) {
         logStructuredEvent("warn", "auto-approve-angellira.circuit_open", { correlationId, processed: rows.indexOf(row) });
         break;
       }
-
-      const components = {
-        motorista: recByKind.motorista,
-        cavalo: cavaloPlaca ? { placa: cavaloPlaca, rec: recByKind.cavalo } : null,
-        carretas: carretaPlacas.map((placa, i) => ({ placa, rec: recByKind[`carreta${i}`] })),
-      };
-
-      // Indisponibilidade transitória (Angellira fora) em qualquer componente:
-      // não decide agora — deixa p/ a próxima leva (evita bloquear por falha de rede).
-      const recs = [components.motorista, components.cavalo?.rec, ...components.carretas.map((c) => c.rec)];
-      if (recs.some((r) => r && r.status === "UNAVAILABLE")) {
+      if (check.indisponivel) {
         indisponiveis += 1;
         await sleep(PACING_MS);
         continue;
       }
-
-      const verdict = evaluateConjuntoConforme(components, today);
-      if (verdict.conforme) {
+      if (check.verdict.conforme) {
         vigentes += 1;
         conformeIds.push(row.id);
       } else {
         bloqueados += 1;
       }
-
       await sleep(PACING_MS);
     }
 
@@ -346,6 +356,137 @@ export async function runAutoApproveAngelliraVigentes({
       await persistLastRun(summary);
     }
     logStructuredEvent("info", "auto-approve-angellira.run", { correlationId, ...summary });
+    return summary;
+  } finally {
+    running = false;
+  }
+}
+
+/**
+ * Remediação retroativa: re-checa os cadastros JÁ auto-aprovados (marcador
+ * AUTO_APPROVE_MARKER) e reverte para 'pendente' SÓ aqueles cujo CONJUNTO
+ * (motorista + cavalo + carretas) NÃO está conforme no Angellira — corrige as
+ * aprovações feitas pela regra antiga (que só olhava o motorista).
+ *
+ * Os que continuam conformes permanecem aprovados. Indisponibilidade transitória
+ * do Angellira NÃO reverte (incerteza — reavalia numa próxima execução).
+ * Reutiliza o guard de reentrância `running` para não colidir com o job de aprovação.
+ *
+ * @param {object} opts
+ * @param {boolean} [opts.apply=false]   false = simulação (não grava; só conta o que reverteria)
+ * @param {number}  [opts.limit=1000]    máximo de cadastros re-checados
+ * @param {string|null} [opts.actorUserId=null]
+ * @param {string|null} [opts.correlationId]
+ * @returns {Promise<object>} { skipped?, applied, scanned, conformes, aRevertar, reverted, indisponiveis, durationMs, at }
+ */
+export async function runRevertNonConformeAutoApproved({
+  apply = false,
+  limit = 1000,
+  actorUserId = null,
+  correlationId = null,
+} = {}) {
+  if (running) {
+    return { skipped: true, reason: "already_running" };
+  }
+  running = true;
+  const startedAt = Date.now();
+  const today = todaySaoPaulo();
+  const safeLimit = Math.max(1, Math.min(5000, Number(limit) || 1000));
+
+  try {
+    // 1. Pega os cadastros já auto-aprovados (marcador), com o `dados` completo.
+    let rows = [];
+    await withPgClient(async (client) => {
+      const res = await client.query(
+        `
+        SELECT id, dados
+        FROM public.pending_driver_registrations
+        WHERE status = 'aprovado' AND reviewed_by_id = $1
+        ORDER BY reviewed_at ASC NULLS FIRST
+        LIMIT $2
+        `,
+        [AUTO_APPROVE_MARKER, safeLimit],
+      );
+      rows = res.rows;
+    });
+
+    // 2. Re-checa o conjunto de cada um e separa os que devem voltar p/ pendente.
+    const { lookupCpf, lookupPlate } = makeAngelliraLookups(correlationId || "revert-nonconforme-autoapprove");
+    const revertIds = [];
+    let conformes = 0;
+    let indisponiveis = 0;
+
+    for (const row of rows) {
+      const check = await checkCadastroConjunto(row.dados || {}, { today, lookupCpf, lookupPlate });
+      if (check.circuitOpen) {
+        logStructuredEvent("warn", "revert-nonconforme.circuit_open", { correlationId, processed: rows.indexOf(row) });
+        break;
+      }
+      if (check.indisponivel) {
+        indisponiveis += 1; // incerteza → não reverte
+        await sleep(PACING_MS);
+        continue;
+      }
+      if (check.verdict.conforme) {
+        conformes += 1;
+      } else {
+        revertIds.push(row.id);
+      }
+      await sleep(PACING_MS);
+    }
+
+    // 3. Aplica a reversão (volta p/ pendente, limpa o marcador) só nos não-conformes.
+    let reverted = 0;
+    if (apply && revertIds.length) {
+      await withPgClient(async (client) => {
+        const { rows: updated } = await client.query(
+          `
+          UPDATE public.pending_driver_registrations
+          SET status = 'pendente',
+              reviewed_at = NULL,
+              reviewed_by_id = NULL,
+              observacoes = $2
+          WHERE status = 'aprovado' AND reviewed_by_id = $1 AND id = ANY($3::uuid[])
+          RETURNING id
+          `,
+          [
+            AUTO_APPROVE_MARKER,
+            "Revertido para pendente: conjunto (motorista + cavalo + carretas) nao esta conforme no Angellira (correcao da auto-aprovacao que so olhava o motorista).",
+            revertIds,
+          ],
+        );
+        reverted = updated.length;
+
+        try {
+          await insertSecurityAuditEvent(client, {
+            eventType: "operator.cadastro.auto_approve_reverted_nonconforme",
+            actorUserId,
+            actorRole: actorUserId ? "operator" : "system",
+            resourceType: "pending_driver_registration",
+            resourceId: null,
+            action: "revert-nonconforme-autoapprove",
+            outcome: "success",
+            requestIp: null,
+            correlationId,
+            metadata: { reverted, conformes, scanned: rows.length, indisponiveis, ids: updated.map((r) => r.id) },
+          });
+        } catch (auditErr) {
+          logStructuredEvent("warn", "revert-nonconforme.audit_failed", { correlationId, message: String(auditErr?.message || auditErr) });
+        }
+      });
+    }
+
+    const summary = {
+      at: new Date().toISOString(),
+      applied: Boolean(apply),
+      scanned: rows.length,
+      conformes,
+      aRevertar: revertIds.length,
+      reverted,
+      indisponiveis,
+      durationMs: Date.now() - startedAt,
+    };
+    logStructuredEvent("info", "revert-nonconforme.run", { correlationId, ...summary });
     return summary;
   } finally {
     running = false;
