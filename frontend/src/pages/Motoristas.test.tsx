@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import Motoristas from "@/pages/Motoristas";
@@ -252,9 +253,11 @@ describe("Motoristas", () => {
 
   it("mostra o nome do motorista cadastrado e o fallback seguro do pre-cadastro publico", () => {
     render(
-      <TooltipProvider>
-        <Motoristas />
-      </TooltipProvider>,
+      <MemoryRouter>
+        <TooltipProvider>
+          <Motoristas />
+        </TooltipProvider>
+      </MemoryRouter>,
     );
 
     expect(screen.getAllByText("Motoristas")[0]).toBeInTheDocument();
@@ -266,9 +269,11 @@ describe("Motoristas", () => {
 
   it("renderiza candidaturas dentro das secoes colapsaveis ao expandir", () => {
     render(
-      <TooltipProvider>
-        <Motoristas />
-      </TooltipProvider>,
+      <MemoryRouter>
+        <TooltipProvider>
+          <Motoristas />
+        </TooltipProvider>
+      </MemoryRouter>,
     );
 
     // Candidaturas estao colapsadas por default — expandir secao
@@ -284,9 +289,11 @@ describe("Motoristas", () => {
 
   it("exibe botao de edicao apenas para motoristas cadastrados", () => {
     render(
-      <TooltipProvider>
-        <Motoristas />
-      </TooltipProvider>,
+      <MemoryRouter>
+        <TooltipProvider>
+          <Motoristas />
+        </TooltipProvider>
+      </MemoryRouter>,
     );
 
     const editButtons = screen.getAllByTitle("Editar perfil do motorista");
@@ -295,9 +302,11 @@ describe("Motoristas", () => {
 
   it("abre o modal de edicao ao clicar no botao de editar", () => {
     render(
-      <TooltipProvider>
-        <Motoristas />
-      </TooltipProvider>,
+      <MemoryRouter>
+        <TooltipProvider>
+          <Motoristas />
+        </TooltipProvider>
+      </MemoryRouter>,
     );
 
     const editButton = screen.getByTitle("Editar perfil do motorista");
@@ -310,9 +319,11 @@ describe("Motoristas", () => {
 
   it("chama mutate com os dados corretos ao salvar edicao", () => {
     render(
-      <TooltipProvider>
-        <Motoristas />
-      </TooltipProvider>,
+      <MemoryRouter>
+        <TooltipProvider>
+          <Motoristas />
+        </TooltipProvider>
+      </MemoryRouter>,
     );
 
     const editButton = screen.getByTitle("Editar perfil do motorista");
@@ -337,9 +348,11 @@ describe("Motoristas", () => {
 
   it("fecha o modal ao clicar em cancelar", () => {
     render(
-      <TooltipProvider>
-        <Motoristas />
-      </TooltipProvider>,
+      <MemoryRouter>
+        <TooltipProvider>
+          <Motoristas />
+        </TooltipProvider>
+      </MemoryRouter>,
     );
 
     const editButton = screen.getByTitle("Editar perfil do motorista");
@@ -387,9 +400,11 @@ describe("Motoristas", () => {
     });
 
     render(
-      <TooltipProvider>
-        <Motoristas />
-      </TooltipProvider>,
+      <MemoryRouter>
+        <TooltipProvider>
+          <Motoristas />
+        </TooltipProvider>
+      </MemoryRouter>,
     );
 
     expect(screen.queryByTitle("Editar perfil do motorista")).not.toBeInTheDocument();
