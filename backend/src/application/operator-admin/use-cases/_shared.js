@@ -207,6 +207,11 @@ export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
           tempo_estimado_horas: routeEstimatedHours,
           duracao_horas: durationHours,
           perfil_padrao: profile,
+          // Nº de eixos da tarifa casada — usado para enriquecer o eixo da carga
+          // no read model do portal (buildDriverLoadPublicationState). Sem isto, o
+          // rótulo do veículo no /motorista fica só "Carreta" mesmo quando o
+          // catálogo conhece "Carreta · N eixos".
+          eixos: parseNullableNumber(row.eixos),
           valor_padrao: value,
           bonus_padrao: bonus,
         },
@@ -441,6 +446,9 @@ export function buildDriverLoadPublicationState(row, routeCatalogMetrics, routeL
   const perfil = normalizeOptionalText(row.perfil) ?? routeCatalogMetrics?.perfil_padrao ?? null;
   const valor = parseNullableNumber(row.valor) ?? routeCatalogMetrics?.valor_padrao ?? null;
   const bonus = parseNullableNumber(row.bonus) ?? routeCatalogMetrics?.bonus_padrao ?? null;
+  // Eixos: herda do catálogo (tarifa casada) quando a carga não tem valor próprio,
+  // igual a perfil/valor/bônus. É o que faz o /motorista exibir "Carreta · N eixos".
+  const eixos = parseNullableNumber(row.eixos) ?? routeCatalogMetrics?.eixos ?? null;
   const distanciaKm = parseNullableNumber(row.distancia_km) ?? routeCatalogMetrics?.distancia_km ?? null;
   const duracaoHoras = parseNullableNumber(row.duracao_horas) ?? routeCatalogMetrics?.duracao_horas ?? null;
   const tempoEstimadoHoras =
@@ -462,6 +470,7 @@ export function buildDriverLoadPublicationState(row, routeCatalogMetrics, routeL
     row: {
       ...row,
       perfil: perfil ?? "",
+      eixos,
       valor,
       bonus,
       distancia_km: distanciaKm,
