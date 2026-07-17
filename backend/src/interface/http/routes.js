@@ -16,6 +16,21 @@ import {
   resolveBrkSyncStatusResponse,
 } from "./brk-admin/handlers.js";
 
+import {
+  resolveDriverOpportunitiesResponse,
+  resolveOutreachOptoutAddResponse,
+  resolveOutreachOptoutRemoveResponse,
+  resolveOutreachOverviewResponse,
+  resolveOutreachQueueCancelResponse,
+  resolveOutreachScanResponse,
+  resolveOutreachSettingsUpdateResponse,
+  resolveEvolutionWebhookResponse,
+  resolveWhatsappConnectResponse,
+  resolveWhatsappDisconnectResponse,
+  resolveWhatsappStatusResponse,
+  resolveWhatsappTestResponse,
+} from "./driver-outreach/handlers.js";
+
 import { resolveClientLogoResponse } from "./client-logo.handler.js";
 
 import {
@@ -340,6 +355,25 @@ export function registerRoutes(app) {
   router.patch("/api/operator/motoristas/:driverId", wrap(resolveUpdateOperatorDriverProfileResponse));
   // Cadastro rápido de motorista pelo operador (sem wizard público)
   router.post("/api/operator/motoristas/cadastrar", wrap(resolveOperatorCadastrarMotoristaResponse));
+
+  // Driver outreach — oportunidades de contato detectadas por motorista (Wave A)
+  router.get("/api/operator/driver-opportunities", wrap(resolveDriverOpportunitiesResponse));
+
+  // Driver outreach — tela de controle do envio automático (Wave B/C)
+  router.get("/api/operator/outreach/overview", wrap(resolveOutreachOverviewResponse));
+  router.patch("/api/operator/outreach/settings", wrap(resolveOutreachSettingsUpdateResponse));
+  router.post("/api/operator/outreach/scan", wrap(resolveOutreachScanResponse));
+  router.post("/api/operator/outreach/optout", wrap(resolveOutreachOptoutAddResponse));
+  router.delete("/api/operator/outreach/optout/:driverKey", wrap(resolveOutreachOptoutRemoveResponse));
+  router.post("/api/operator/outreach/queue/:id/cancel", wrap(resolveOutreachQueueCancelResponse));
+
+  // Conexão do WhatsApp (Evolution) — QR, status, logout, envio de teste
+  router.get("/api/operator/outreach/whatsapp/status", wrap(resolveWhatsappStatusResponse));
+  router.post("/api/operator/outreach/whatsapp/connect", wrap(resolveWhatsappConnectResponse));
+  router.post("/api/operator/outreach/whatsapp/disconnect", wrap(resolveWhatsappDisconnectResponse));
+  router.post("/api/operator/outreach/whatsapp/test", wrap(resolveWhatsappTestResponse));
+  // Webhook interno do Evolution (QR/conexão) — sem auth de operador
+  router.post("/api/webhooks/evolution", wrap(resolveEvolutionWebhookResponse));
 
   // Cadastros pendentes de motoristas (rota fixa antes da parametrizada)
   router.get("/api/operator/cadastros/rascunhos", wrap(resolveOperatorListDraftRegistrationsResponse));

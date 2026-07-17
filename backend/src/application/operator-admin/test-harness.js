@@ -109,6 +109,7 @@ const schemaSql = `
     lh_manual text,
     codigo_viagem text,
     version integer NOT NULL DEFAULT 0,
+    booked_at timestamptz,
     created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
@@ -300,6 +301,118 @@ const schemaSql = `
     rows_json    jsonb   NOT NULL DEFAULT '[]'::jsonb,
     summary_json jsonb   NOT NULL DEFAULT '{}'::jsonb,
     synced_at    timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.pending_driver_registrations (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    id_cadastro text,
+    status text NOT NULL DEFAULT 'draft',
+    dados jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.driver_outreach_optout (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    driver_key text NOT NULL,
+    phone text,
+    reason text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    created_by uuid,
+    CONSTRAINT driver_outreach_optout_key_uniq UNIQUE (driver_key)
+  );
+
+  CREATE TABLE public.driver_outreach_log (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    driver_key text NOT NULL,
+    trigger text NOT NULL,
+    channel text NOT NULL DEFAULT 'wa_link',
+    status text NOT NULL DEFAULT 'sent',
+    phone text,
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    correlation_id text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    created_by uuid
+  );
+
+  CREATE TABLE public.pending_driver_outreach (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    driver_key text NOT NULL,
+    trigger text NOT NULL,
+    phone text NOT NULL,
+    message text NOT NULL,
+    status text NOT NULL DEFAULT 'pending',
+    retry_count int NOT NULL DEFAULT 0,
+    next_attempt_at timestamptz,
+    last_error text,
+    correlation_id text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    sent_at timestamptz,
+    metadata jsonb NOT NULL DEFAULT '{}',
+    CONSTRAINT pending_driver_outreach_uniq UNIQUE (driver_key, trigger)
+  );
+
+  CREATE TABLE public.driver_outreach_settings (
+    id smallint PRIMARY KEY DEFAULT 1,
+    enabled boolean NOT NULL DEFAULT false,
+    cold_enabled boolean NOT NULL DEFAULT false,
+    daily_cap int NOT NULL DEFAULT 50,
+    quiet_start_hour int NOT NULL DEFAULT 8,
+    quiet_end_hour int NOT NULL DEFAULT 20,
+    route_need_enabled boolean NOT NULL DEFAULT false,
+    route_need_days_ahead int NOT NULL DEFAULT 3,
+    route_need_wave_size int NOT NULL DEFAULT 5,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    updated_by uuid
+  );
+
+  CREATE TABLE public.whatsapp_messages (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    instance text NOT NULL,
+    direction text NOT NULL,
+    external_id text,
+    phone text NOT NULL,
+    driver_key text,
+    text text NOT NULL DEFAULT '',
+    message_type text NOT NULL DEFAULT 'text',
+    status text NOT NULL DEFAULT 'received',
+    timestamp timestamptz NOT NULL DEFAULT now(),
+    raw jsonb NOT NULL DEFAULT '{}',
+    created_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.operator_notifications (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    kind text NOT NULL,
+    title text NOT NULL,
+    body text NOT NULL DEFAULT '',
+    metadata jsonb NOT NULL DEFAULT '{}',
+    seen boolean NOT NULL DEFAULT false,
+    seen_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.driver_outreach_message_templates (
+    key text PRIMARY KEY,
+    enabled boolean NOT NULL DEFAULT true,
+    template text,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    updated_by uuid
+  );
+
+  CREATE TABLE public.driver_return_interests (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    driver_key text NOT NULL,
+    phone text NOT NULL,
+    nome text,
+    origem text,
+    destino text,
+    rota text,
+    source text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    expires_at timestamptz NOT NULL DEFAULT now() + interval '7 days',
+    matched_at timestamptz,
+    matched_load_id uuid
   );
 `;
 
@@ -768,6 +881,98 @@ export async function seedVehicle(overrides = {}) {
       overrides.source ?? "PUBLIC_LEAD",
       overrides.created_at ?? new Date().toISOString(),
       overrides.updated_at ?? new Date().toISOString(),
+    ],
+  );
+
+  return { id };
+}
+
+export async function seedSheetSnapshot(rows = []) {
+  await query(
+    `INSERT INTO public.sheet_monitor_snapshot (id, rows_json) VALUES (1, $1::jsonb)`,
+    [JSON.stringify(rows)],
+  );
+}
+
+export async function seedPendingRegistration(overrides = {}) {
+  const id = overrides.id ?? crypto.randomUUID();
+
+  await query(
+    `
+      INSERT INTO public.pending_driver_registrations (id, status, dados, created_at)
+      VALUES ($1, $2, $3::jsonb, $4)
+    `,
+    [
+      id,
+      overrides.status ?? "draft",
+      JSON.stringify(overrides.dados ?? {}),
+      overrides.created_at ?? new Date().toISOString(),
+    ],
+  );
+
+  return { id };
+}
+
+export async function seedMotoristaHistorico(overrides = {}) {
+  await query(
+    `INSERT INTO public.motoristas_historico (cpf, nome, telefone) VALUES ($1, $2, $3)`,
+    [overrides.cpf, overrides.nome ?? "Motorista Teste", overrides.telefone ?? null],
+  );
+
+  return { cpf: overrides.cpf };
+}
+
+export async function seedDriverOutreachOptout(overrides = {}) {
+  const id = overrides.id ?? crypto.randomUUID();
+
+  await query(
+    `INSERT INTO public.driver_outreach_optout (id, driver_key, phone, reason) VALUES ($1, $2, $3, $4)`,
+    [id, overrides.driver_key, overrides.phone ?? null, overrides.reason ?? null],
+  );
+
+  return { id };
+}
+
+export async function seedPendingOutreach(overrides = {}) {
+  const id = overrides.id ?? crypto.randomUUID();
+
+  await query(
+    `
+      INSERT INTO public.pending_driver_outreach
+        (id, driver_key, trigger, phone, message, status, retry_count, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `,
+    [
+      id,
+      overrides.driver_key ?? "12345678901",
+      overrides.trigger ?? "lost_registration",
+      overrides.phone ?? "5571988887777",
+      overrides.message ?? "Olá! Mensagem de teste.",
+      overrides.status ?? "pending",
+      overrides.retry_count ?? 0,
+      overrides.created_at ?? new Date().toISOString(),
+    ],
+  );
+
+  return { id };
+}
+
+export async function seedOutreachLog(overrides = {}) {
+  const id = overrides.id ?? crypto.randomUUID();
+
+  await query(
+    `
+      INSERT INTO public.driver_outreach_log (id, driver_key, trigger, channel, status, phone, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `,
+    [
+      id,
+      overrides.driver_key ?? "00000000000",
+      overrides.trigger ?? "churn",
+      overrides.channel ?? "evolution",
+      overrides.status ?? "sent",
+      overrides.phone ?? "5571900000000",
+      overrides.created_at ?? new Date().toISOString(),
     ],
   );
 

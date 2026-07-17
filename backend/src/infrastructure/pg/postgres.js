@@ -58,10 +58,25 @@ export function getPostgresPool() {
 export async function withPgClient(callback) {
   const client = await getPostgresPool().connect();
 
+  // `pool.on('error')` só cobre clients OCIOSOS. Um client CHECKED-OUT (em uso
+  // por um job/handler) cujo socket o pgBouncer derruba emite 'error' direto no
+  // client — sem listener, o Node trata como erro não capturado e MATA o
+  // processo (foi o que derrubou o backend). Anexamos um listener por checkout:
+  // logamos, marcamos e, no release, destruímos o client quebrado em vez de
+  // devolvê-lo ao pool.
+  let clientError = null;
+  const onError = (error) => {
+    clientError = error;
+    console.error("[postgres] checked-out client error (conexão derrubada em uso):", error.message);
+  };
+  client.on("error", onError);
+
   try {
     return await callback(client);
   } finally {
-    client.release();
+    client.removeListener("error", onError);
+    // release(err) com valor truthy descarta o client (não volta ao pool).
+    client.release(clientError || undefined);
   }
 }
 

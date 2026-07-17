@@ -610,6 +610,461 @@ export async function fetchOperatorDrivers(params: Record<string, string>) {
   });
 }
 
+// ─── Driver outreach — oportunidades de contato detectadas por motorista ──────
+
+export type DriverOpportunityTrigger =
+  | "churn"
+  | "lost_registration"
+  | "abandonment"
+  | "return_load"
+  | "preferences";
+
+export interface DriverOpportunity {
+  trigger: DriverOpportunityTrigger;
+  severity: "high" | "medium" | "low";
+  reason: string;
+  message: string | null;
+  whatsappUrl: string | null;
+  data: Record<string, unknown>;
+}
+
+export interface DriverOpportunitiesResult {
+  driver: { cpf: string | null; nome: string | null; phone: string | null };
+  optedOut: boolean;
+  opportunities: DriverOpportunity[];
+  meta: {
+    correlationId: string | null;
+    generatedAt: string;
+    totalLoads: number;
+    lastLoadIso: string | null;
+  };
+}
+
+export async function fetchDriverOpportunities(params: {
+  cpf?: string | null;
+  nome?: string | null;
+  phone?: string | null;
+}) {
+  const accessToken = await getOperatorAccessToken();
+  const search = new URLSearchParams();
+  if (params.cpf) search.set("cpf", params.cpf);
+  if (params.nome) search.set("nome", params.nome);
+  if (params.phone) search.set("phone", params.phone);
+  const query = search.toString();
+
+  return requestJson<DriverOpportunitiesResult>(
+    `/api/operator/driver-opportunities${query ? `?${query}` : ""}`,
+    { accessToken },
+  );
+}
+
+// ─── Driver outreach — tela de controle do envio automático ───────────────────
+
+export interface OutreachSettings {
+  enabled: boolean;
+  coldEnabled: boolean;
+  dailyCap: number;
+  quietStartHour: number;
+  quietEndHour: number;
+  routeNeedEnabled?: boolean;
+  routeNeedDaysAhead?: number;
+  routeNeedWaveSize?: number;
+  updatedAt: string | null;
+}
+
+export interface OutreachQueueItem {
+  id: string;
+  driver_key: string;
+  driver_name: string | null;
+  trigger: string;
+  phone: string;
+  message: string;
+  status: "pending" | "sent" | "failed" | "skipped";
+  retry_count: number;
+  last_error: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+export interface OutreachLogItem {
+  driver_key: string;
+  trigger: string;
+  status: string;
+  created_at: string;
+}
+
+export interface OutreachOptout {
+  driver_key: string;
+  phone: string | null;
+  reason: string | null;
+  created_at: string;
+}
+
+export interface OutreachOverview {
+  settings: OutreachSettings;
+  timing: { pollSeconds: number; scanIntervalMin: number; batchSize: number; scanMaxCandidates: number };
+  evolutionConfigured: boolean;
+  queueStats: { pending: number; sent: number; failed: number; skipped: number };
+  sentLast24h: number;
+  queue: OutreachQueueItem[];
+  log: OutreachLogItem[];
+  optouts: OutreachOptout[];
+}
+
+export async function fetchOutreachOverview() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<OutreachOverview>("/api/operator/outreach/overview", { accessToken });
+}
+
+export async function updateOutreachSettings(patch: Partial<OutreachSettings>) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; settings: OutreachSettings }>("/api/operator/outreach/settings", {
+    method: "PATCH",
+    body: patch,
+    accessToken,
+  });
+}
+
+export async function runOutreachScan() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; enqueued: number; candidates: number; reason?: string }>(
+    "/api/operator/outreach/scan",
+    { method: "POST", accessToken },
+  );
+}
+
+export async function addOutreachOptout(body: { cpf?: string; nome?: string; phone?: string; reason?: string }) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; driverKey: string }>("/api/operator/outreach/optout", {
+    method: "POST",
+    body,
+    accessToken,
+  });
+}
+
+export async function removeOutreachOptout(driverKey: string) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean }>(
+    `/api/operator/outreach/optout/${encodeURIComponent(driverKey)}`,
+    { method: "DELETE", accessToken },
+  );
+}
+
+export async function cancelOutreachQueued(id: string) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean }>(
+    `/api/operator/outreach/queue/${encodeURIComponent(id)}/cancel`,
+    { method: "POST", accessToken },
+  );
+}
+
+export type SendableTrigger = "churn" | "lost_registration" | "abandonment" | "return_load";
+
+export interface OutreachQueueItemDetail {
+  item: {
+    id: string;
+    driverKey: string;
+    trigger: string;
+    phone: string;
+    message: string;
+    status: "pending" | "sent" | "failed" | "skipped";
+    retryCount: number;
+    lastError: string | null;
+    createdAt: string;
+    sentAt: string | null;
+  };
+  driver: { cpf: string | null; nome: string | null; phone: string | null };
+  optedOut: boolean;
+  opportunities: DriverOpportunity[];
+  messagesByTrigger: Record<string, string>;
+  phoneCandidates: string[];
+  angellira: {
+    checked: boolean;
+    status?: string;
+    found?: boolean;
+    validUntil?: string | null;
+    vigente?: boolean;
+    name?: string | null;
+    error?: string;
+  };
+}
+
+export async function fetchOutreachQueueItem(id: string) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<OutreachQueueItemDetail>(
+    `/api/operator/outreach/queue/${encodeURIComponent(id)}`,
+    { accessToken },
+  );
+}
+
+export async function updateOutreachQueueItem(
+  id: string,
+  patch: { trigger?: string; phone?: string; message?: string },
+) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean }>(
+    `/api/operator/outreach/queue/${encodeURIComponent(id)}`,
+    { method: "PATCH", body: patch, accessToken },
+  );
+}
+
+export async function sendOutreachQueueItem(id: string) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; to: string }>(
+    `/api/operator/outreach/queue/${encodeURIComponent(id)}/send`,
+    { method: "POST", accessToken },
+  );
+}
+
+export async function createOutreachManual(body: {
+  cpf?: string;
+  nome?: string;
+  phone: string;
+  trigger: string;
+  message?: string;
+}) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; id: string }>("/api/operator/outreach/queue", {
+    method: "POST",
+    body,
+    accessToken,
+  });
+}
+
+export async function revalidateOutreachQueue() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; checked: number; cancelled: number; kept: number; skippedNoCpf: number }>(
+    "/api/operator/outreach/queue/revalidate",
+    { method: "POST", accessToken },
+  );
+}
+
+// ─── Notificações do operador (sino) ─────────────────────────────────────────
+
+export interface OperatorNotification {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  metadata: Record<string, unknown>;
+  seen: boolean;
+  seen_at: string | null;
+  created_at: string;
+}
+
+export async function fetchOperatorNotifications() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ unseenCount: number; items: OperatorNotification[] }>(
+    "/api/operator/notifications",
+    { accessToken },
+  );
+}
+
+export async function markOperatorNotificationsSeen(input: { ids?: string[]; all?: boolean }) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; updated: number }>("/api/operator/notifications/seen", {
+    method: "POST",
+    body: input,
+    accessToken,
+  });
+}
+
+export async function clearOperatorNotifications(input: { ids?: string[]; all?: boolean }) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; deleted: number }>("/api/operator/notifications/clear", {
+    method: "POST",
+    body: input,
+    accessToken,
+  });
+}
+
+// ─── Chat WhatsApp ───────────────────────────────────────────────────────────
+
+export interface ChatConversation {
+  phone: string;
+  driver_key: string | null;
+  driver_name: string | null;
+  last_text: string;
+  last_direction: "in" | "out" | null;
+  last_ts: string | null;
+  last_type: string | null;
+  unread_count: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  direction: "in" | "out";
+  external_id: string | null;
+  phone: string;
+  driver_key: string | null;
+  text: string;
+  message_type: string;
+  status: string;
+  timestamp: string;
+}
+
+export async function fetchChatConversations(params?: { search?: string; limit?: number }) {
+  const accessToken = await getOperatorAccessToken();
+  const search = new URLSearchParams();
+  if (params?.search) search.set("search", params.search);
+  if (params?.limit) search.set("limit", String(params.limit));
+  const q = search.toString();
+  return requestJson<{ items: ChatConversation[] }>(
+    `/api/operator/chat/conversations${q ? `?${q}` : ""}`,
+    { accessToken },
+  );
+}
+
+export async function fetchChatMessages(phone: string) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ items: ChatMessage[] }>(
+    `/api/operator/chat/messages?phone=${encodeURIComponent(phone)}`,
+    { accessToken },
+  );
+}
+
+export async function sendChatMessage(input: { phone: string; text: string }) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean }>("/api/operator/chat/send", {
+    method: "POST",
+    body: input,
+    accessToken,
+  });
+}
+
+// ─── Envio em massa ──────────────────────────────────────────────────────────
+
+export interface MassRoute {
+  key: string;
+  origem: string;
+  destino: string;
+  driverCount: number;
+}
+
+export interface MassAudiencePreview {
+  total: number;
+  capped: boolean;
+  sample: Array<{ nome: string | null; cpf: string | null; phone: string; rota: string | null }>;
+}
+
+export async function fetchMassRoutes() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ items: MassRoute[] }>("/api/operator/mass-outreach/routes", { accessToken });
+}
+
+export async function previewMassOutreach(input: { audience: "all" | "routes"; routes?: string[] }) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<MassAudiencePreview>("/api/operator/mass-outreach/preview", {
+    method: "POST",
+    body: input,
+    accessToken,
+  });
+}
+
+export async function enqueueMassOutreach(input: {
+  audience: "all" | "routes";
+  routes?: string[];
+  message: string;
+}) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; batchId: string; enqueued: number; total: number; etaMinutes?: number }>(
+    "/api/operator/mass-outreach/enqueue",
+    { method: "POST", body: input, accessToken },
+  );
+}
+
+export async function reconcileRegistrations() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{
+    ok: boolean;
+    started: boolean;
+    candidates: number;
+    alreadyRunning?: boolean;
+  }>(
+    "/api/operator/outreach/reconcile-registrations",
+    { method: "POST", accessToken },
+  );
+}
+
+export interface OutreachMessageTemplate {
+  key: string;
+  label: string;
+  description: string;
+  placeholders: string[];
+  defaultTemplate: string;
+  template: string;
+  enabled: boolean;
+  customized: boolean;
+}
+
+export async function fetchOutreachMessageTemplates() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; templates: OutreachMessageTemplate[] }>(
+    "/api/operator/outreach/message-templates",
+    { method: "GET", accessToken },
+  );
+}
+
+export async function saveOutreachMessageTemplate(input: {
+  key: string;
+  template?: string | null;
+  enabled?: boolean;
+}) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; templates: OutreachMessageTemplate[] }>(
+    "/api/operator/outreach/message-templates",
+    { method: "PATCH", body: input, accessToken },
+  );
+}
+
+export interface WhatsappStatus {
+  configured: boolean;
+  state: string;
+  instance: string | null;
+  error?: string;
+}
+
+export async function fetchWhatsappStatus() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<WhatsappStatus>("/api/operator/outreach/whatsapp/status", { accessToken });
+}
+
+export interface WhatsappConnectResult {
+  instance: string;
+  mode: "qr" | "code";
+  state: string | null;
+  qrBase64: string | null;
+  pairingCode: string | null;
+  qrAvailable?: boolean;
+  pairingAvailable?: boolean;
+}
+
+export async function connectWhatsapp(input?: { number?: string }) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<WhatsappConnectResult>("/api/operator/outreach/whatsapp/connect", {
+    method: "POST",
+    body: input?.number ? { number: input.number } : {},
+    accessToken,
+  });
+}
+
+export async function disconnectWhatsapp() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean }>("/api/operator/outreach/whatsapp/disconnect", {
+    method: "POST",
+    accessToken,
+  });
+}
+
+export async function sendWhatsappTest(body: { phone: string; text?: string }) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; to: string }>("/api/operator/outreach/whatsapp/test", {
+    method: "POST",
+    body,
+    accessToken,
+  });
+}
+
 export interface OperatorVehicleListItem {
   id: string;
   plate: string;

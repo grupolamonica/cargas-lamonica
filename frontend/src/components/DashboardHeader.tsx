@@ -1,5 +1,6 @@
 import { useAuth } from "@/hooks/useAuth";
 import { getOperatorDisplayName, getOperatorInitials } from "@/lib/operatorIdentity";
+import NotificationsBell from "@/components/operator/NotificationsBell";
 
 interface DashboardHeaderProps {
   title: string;
@@ -35,6 +36,8 @@ const DashboardHeader = ({ title, subtitle, actions }: DashboardHeaderProps) => 
 
             <div className="flex shrink-0 items-center gap-3">
               {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
+
+              <NotificationsBell />
 
               <div className="admin-card-surface flex shrink-0 items-center gap-3 rounded-2xl border px-3.5 py-2.5 shadow-[0_12px_28px_-20px_rgba(2,36,131,0.28)] backdrop-blur-xl">
                 <div className="hidden flex-col items-end sm:flex">
