@@ -32,7 +32,8 @@ function formatRelative(iso?: string | null) {
 /**
  * Card da aba "Pendentes": liga/desliga a aprovação automática por vigência no
  * Angellira e permite rodar uma leva sob demanda. A aprovação é leve (só muda o
- * status p/ 'aprovado', reversível). Consulta o Angellira do motorista por CPF.
+ * status p/ 'aprovado', reversível). Consulta o Angellira do CONJUNTO completo
+ * (motorista + cavalo + carretas) e só aprova quando todos estão vigentes.
  */
 export function AutoApproveAngelliraCard() {
   const queryClient = useQueryClient();
@@ -138,8 +139,8 @@ export function AutoApproveAngelliraCard() {
 
             <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
               Aprova (só muda o status para <strong>aprovado</strong>) os cadastros pendentes cujo{" "}
-              <strong>motorista está vigente no Angellira</strong> (Conforme + validade futura). Leve e reversível
-              — não cria login nem perfil.
+              <strong>conjunto completo (motorista + cavalo + carretas) está vigente no Angellira</strong>{" "}
+              (Conforme + validade futura em todos). Leve e reversível — não cria login nem perfil.
             </p>
           </div>
         </div>
@@ -190,7 +191,8 @@ export function AutoApproveAngelliraCard() {
         <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
           <p className="text-sm text-amber-900">
             Isso vai <strong>consultar o Angellira</strong> dos pendentes e <strong>aprovar</strong> (só status) os
-            motoristas vigentes. Roda em segundo plano e pode levar alguns minutos. Continuar?
+            cadastros com o <strong>conjunto completo vigente</strong> (motorista + cavalo + carretas). Roda em
+            segundo plano e pode levar alguns minutos. Continuar?
           </p>
           <div className="mt-3 flex justify-end gap-2">
             <button
