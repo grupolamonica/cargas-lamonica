@@ -1,6 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import {
   AlertTriangle,
   Copy,
@@ -17,6 +16,17 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
 import DashboardHeader from "@/components/DashboardHeader";
+import { CargoDateRangeFilters, FacetMultiSelect } from "@/components/ListFilters";
+import {
+  buildRouteFacetOptions,
+  hasCargoDateFilter,
+  matchesCargoDateRange,
+  normalizeFilterText,
+  routeKeyOf,
+  toCargoDateRange,
+  EMPTY_CARGO_DATE_FILTER,
+  type CargoDateFilterState,
+} from "@/lib/listFilters";
 import {
   fetchAssignableRoutes,
   resolveAssignableRouteForCargo,
@@ -174,22 +184,25 @@ function PaginationControls({
 const OperatorDashboard = () => {
   const [search, setSearch] = useState("");
   const [clienteFilter, setClienteFilter] = useState("");
+  const [routeFilter, setRouteFilter] = useState<string[]>([]);
+  const [dateFilter, setDateFilter] = useState<CargoDateFilterState>(EMPTY_CARGO_DATE_FILTER);
   const [page, setPage] = useState(1);
   const [detailCargo, setDetailCargo] = useState<OperatorDashboardItem | null>(null);
   // Gerador de link por rota (origem/destino → /motorista?origem=..&destino=..).
   const [routeOrigem, setRouteOrigem] = useState("");
   const [routeDestino, setRouteDestino] = useState("");
   const [routeLinkCopied, setRouteLinkCopied] = useState(false);
-  // Debounce de busca para evitar disparar um refetch por keystroke. useDeferredValue
-  // só adia render — não gate fetch. 300ms é o sweet spot para typing humano.
-  const debouncedSearch = useDebouncedValue(search.trim(), 300);
-  const deferredSearch = useDeferredValue(debouncedSearch);
-  const deferredClienteFilter = useDeferredValue(clienteFilter);
-  const hasActiveFilters = deferredSearch.length > 0 || deferredClienteFilter.length > 0;
+  // Busca e filtros são client-side: a lista de cargas abertas ao motorista é
+  // pequena e carregada inteira (igual ao Monitor), então filtrar/paginar em
+  // memória evita refetch por keystroke. useDeferredValue mantém a digitação fluida.
+  const deferredSearch = useDeferredValue(search.trim());
+  const dateRange = useMemo(() => toCargoDateRange(dateFilter), [dateFilter]);
+  const hasActiveFilters =
+    deferredSearch.length > 0 || clienteFilter.length > 0 || routeFilter.length > 0 || hasCargoDateFilter(dateFilter);
 
   useEffect(() => {
     setPage(1);
-  }, [deferredSearch, deferredClienteFilter]);
+  }, [deferredSearch, clienteFilter, routeFilter, dateFilter]);
 
   const {
     data,
@@ -200,15 +213,25 @@ const OperatorDashboard = () => {
     // onlyOpenToDrivers: a tela de Links mostra SOMENTE cargas abertas ao
     // motorista (espelha o portal) — fechadas/reservadas/expiradas/alocadas
     // não aparecem, evitando compartilhar link de carga indisponível.
-    queryKey: ["operator", "dashboard-read-model", "open-to-drivers", deferredSearch, deferredClienteFilter, page],
-    queryFn: () =>
-      fetchOperatorDashboard({
-        page: String(page),
-        pageSize: String(PAGE_SIZE),
-        search: deferredSearch,
-        onlyOpenToDrivers: "true",
-        ...(deferredClienteFilter ? { clienteId: deferredClienteFilter } : {}),
-      }),
+    // Buscamos TODAS as páginas de uma vez (o read model limita pageSize a 24) e
+    // filtramos/paginamos client-side — igual ao Monitor.
+    queryKey: ["operator", "dashboard-read-model", "open-to-drivers-all"],
+    queryFn: async () => {
+      const items: OperatorDashboardItem[] = [];
+      let summary = { activeCount: 0, draftCount: 0, templateCount: 0 };
+      // Trava de segurança: no máximo 40 páginas (960 cargas) por varredura.
+      for (let pageNo = 1; pageNo <= 40; pageNo += 1) {
+        const res = await fetchOperatorDashboard({
+          page: String(pageNo),
+          pageSize: "24",
+          onlyOpenToDrivers: "true",
+        });
+        items.push(...res.items);
+        if (pageNo === 1) summary = res.summary;
+        if (!res.meta?.hasNextPage) break;
+      }
+      return { items, summary };
+    },
     placeholderData: keepPreviousData,
     staleTime: 15_000,
     gcTime: 10 * 60_000,
@@ -319,20 +342,46 @@ const OperatorDashboard = () => {
       };
     });
   }, [cargos, routes]);
+
+  // Filtro por rota (igual ao Monitor): opções = rotas presentes nas cargas abertas.
+  const routeOptions = useMemo(() => buildRouteFacetOptions(cargos, (cargo) => cargo), [cargos]);
+  useEffect(() => {
+    setRouteFilter((prev) => {
+      if (prev.length === 0) return prev;
+      const next = prev.filter((key) => routeOptions.some((option) => option.value === key));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [routeOptions]);
+
+  // Busca (inclui Cód de viagem = sheet_lh), cliente, rota e faixas de data —
+  // tudo client-side sobre o conjunto completo de cargas abertas.
+  const visibleComputed = useMemo(() => {
+    const query = normalizeFilterText(deferredSearch);
+    return cargoComputed.filter(({ cargo, loadingDate }) => {
+      if (clienteFilter && cargo.cliente?.id !== clienteFilter) return false;
+      if (routeFilter.length && !routeFilter.includes(routeKeyOf(cargo))) return false;
+      if (query) {
+        const haystack = normalizeFilterText(
+          [cargo.id, cargo.sheet_lh, cargo.origem, cargo.destino, cargo.perfil, cargo.cliente?.nome, cargo.cliente?.descricao]
+            .filter(Boolean)
+            .join(" "),
+        );
+        if (!haystack.includes(query)) return false;
+      }
+      if (!matchesCargoDateRange(loadingDate, cargo.sheet_data_descarga, dateRange)) return false;
+      return true;
+    });
+  }, [cargoComputed, deferredSearch, clienteFilter, routeFilter, dateRange]);
+
   const summary = data?.summary || {
     activeCount: 0,
     draftCount: 0,
     templateCount: 0,
   };
-  const meta = data?.meta || {
-    page,
-    pageSize: PAGE_SIZE,
-    totalCount: 0,
-    totalPages: 1,
-    hasNextPage: false,
-    maxPageSize: PAGE_SIZE,
-    correlationId: "",
-  };
+  const totalCount = visibleComputed.length;
+  const totalPages = Math.max(Math.ceil(totalCount / PAGE_SIZE), 1);
+  const safePage = Math.min(page, totalPages);
+  const pageComputed = visibleComputed.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
   const loading = isLoading && !cargos.length;
 
   const copyText = async (value: string, successMessage: string) => {
@@ -402,13 +451,13 @@ const OperatorDashboard = () => {
             </div>
           </div>
 
-          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px_auto]">
-            <div className="relative">
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <div className="relative min-w-[240px] flex-1">
               <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Pesquisar por ID, cliente, origem, destino ou perfil..."
+                placeholder="Pesquisar por Cód viagem, ID, cliente, origem, destino ou perfil..."
                 className="h-12 rounded-2xl border-border/80 bg-white/92 pl-11 pr-4"
               />
             </div>
@@ -416,13 +465,27 @@ const OperatorDashboard = () => {
             <select
               value={clienteFilter}
               onChange={(event) => setClienteFilter(event.target.value)}
-              className="h-12 rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10"
+              className="h-12 rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
             >
               <option value="">Todos os clientes</option>
               {clienteOptions.map((c) => (
                 <option key={c.id} value={c.id}>{c.nome}</option>
               ))}
             </select>
+
+            <FacetMultiSelect
+              label="Rotas"
+              options={routeOptions}
+              selected={routeFilter}
+              onChange={setRouteFilter}
+              widthClass="min-w-[180px] max-w-[240px]"
+              searchable
+            />
+
+            <CargoDateRangeFilters
+              value={dateFilter}
+              onChange={(field, next) => setDateFilter((prev) => ({ ...prev, [field]: next }))}
+            />
 
             <Button
               type="button"
@@ -431,6 +494,8 @@ const OperatorDashboard = () => {
               onClick={() => {
                 setSearch("");
                 setClienteFilter("");
+                setRouteFilter([]);
+                setDateFilter(EMPTY_CARGO_DATE_FILTER);
               }}
               disabled={!hasActiveFilters}
             >
@@ -518,7 +583,7 @@ const OperatorDashboard = () => {
 
         {loading ? (
           <LoadingGrid />
-        ) : cargos.length === 0 ? (
+        ) : totalCount === 0 ? (
           <section className="admin-panel flex min-h-[260px] flex-col items-center justify-center gap-4 p-10 text-center">
             <Package className="h-14 w-14 text-muted-foreground/35" />
             <div className="space-y-1">
@@ -526,14 +591,14 @@ const OperatorDashboard = () => {
               <p className="text-sm text-muted-foreground">
                 {hasActiveFilters
                   ? "Ajuste os filtros para encontrar a carga ou o cliente que você quer compartilhar."
-                  : "Ajuste a busca para encontrar a carga ou o cliente que você quer compartilhar."}
+                  : "Nenhuma carga aberta ao motorista no momento."}
               </p>
             </div>
           </section>
         ) : (
           <>
             <section className="grid gap-4 xl:grid-cols-2">
-              {cargoComputed.map(({ cargo, publication, sharePath, shareUrl, isShareReady }) => {
+              {pageComputed.map(({ cargo, publication, sharePath, shareUrl, isShareReady }) => {
                 return (
                   <article
                     key={cargo.id}
@@ -638,13 +703,13 @@ const OperatorDashboard = () => {
             </section>
 
             <PaginationControls
-              page={meta.page}
-              totalPages={meta.totalPages}
-              totalCount={meta.totalCount}
-              pageSize={meta.pageSize}
+              page={safePage}
+              totalPages={totalPages}
+              totalCount={totalCount}
+              pageSize={PAGE_SIZE}
               isFetching={isFetching}
               onPrevious={() => setPage((currentPage) => Math.max(currentPage - 1, 1))}
-              onNext={() => setPage((currentPage) => Math.min(currentPage + 1, meta.totalPages))}
+              onNext={() => setPage((currentPage) => Math.min(currentPage + 1, totalPages))}
             />
           </>
         )}

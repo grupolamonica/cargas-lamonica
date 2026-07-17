@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import ClientLogo from "@/components/ClientLogo";
 import DashboardHeader from "@/components/DashboardHeader";
+import { CargoDateRangeFilters, FacetMultiSelect } from "@/components/ListFilters";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
 import OperatorPacoteLeadCard, { type DriverCandidatura, type PacoteLeadItem } from "@/components/operator/OperatorPacoteLeadCard";
 import { cn } from "@/lib/utils";
@@ -13,6 +14,16 @@ import { resolveVinculoStyle } from "@/lib/vinculo";
 import { confirmAction } from "@/lib/confirm";
 import { useOperatorPermissions } from "@/hooks/useOperatorPermissions";
 import { buildDisplayDateTime, formatFullDateTime, formatScheduleLabel } from "@/lib/dateDisplay";
+import { buildLoadingDateTime } from "@/lib/estimatedTime";
+import {
+  buildRouteFacetOptions,
+  hasCargoDateFilter,
+  matchesCargoDateRange,
+  routeKeyOf,
+  toCargoDateRange,
+  EMPTY_CARGO_DATE_FILTER,
+  type CargoDateFilterState,
+} from "@/lib/listFilters";
 import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { ApiError, approveOperatorLoadLead, cancelOperatorLoadLead, createDirectAllocation, fetchOperatorLoadLeads, revalidateQueuedOperatorLeads, revalidateQueuedOperatorLeadsAspx, type DirectAllocationPayload, type OperatorLeadGroup, type OperatorLeadPacoteMeta, type PublicLeadValidationSummary } from "@/services/loadClaims";
@@ -194,6 +205,8 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   const [loadStatusFilter, setLoadStatusFilter] = useState("todos");
   const [leadStatusFilter, setLeadStatusFilter] = useState("todos");
   const [clienteFilter, setClienteFilter] = useState("");
+  const [routeFilter, setRouteFilter] = useState<string[]>([]);
+  const [dateFilter, setDateFilter] = useState<CargoDateFilterState>(EMPTY_CARGO_DATE_FILTER);
   const [collapsedLoadIds, setCollapsedLoadIds] = useState<string[]>([]);
   const [directAllocLoadId, setDirectAllocLoadId] = useState<string | null>(null);
   const [directAllocLoading, setDirectAllocLoading] = useState(false);
@@ -303,6 +316,16 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   }, [queryClient]);
 
   const groups = data?.groups ?? EMPTY_GROUPS;
+  const dateRange = useMemo(() => toCargoDateRange(dateFilter), [dateFilter]);
+  // Filtro por rota (igual ao Monitor): opções = rotas presentes na fila.
+  const routeOptions = useMemo(() => buildRouteFacetOptions(groups, (group) => group.load), [groups]);
+  useEffect(() => {
+    setRouteFilter((prev) => {
+      if (prev.length === 0) return prev;
+      const next = prev.filter((key) => routeOptions.some((option) => option.value === key));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [routeOptions]);
   const filteredGroups = useMemo(() => {
     return groups
       .map((group) => {
@@ -323,8 +346,26 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
           return null;
         }
 
+        // Filtro por rota (multi-seleção, igual ao Monitor).
+        if (routeFilter.length && !routeFilter.includes(routeKeyOf(group.load))) {
+          return null;
+        }
+
+        // Faixas de data (carregamento/descarga). buildLoadingDateTime normaliza a
+        // data da carga (cargas.data chega como ISO com Z do container UTC) e cai
+        // p/ o rótulo da planilha — mesmo caminho da tela de Links.
+        const carregamentoValue = buildLoadingDateTime(
+          group.load.sheetDataCarregamento,
+          group.load.data,
+          group.load.horario,
+        );
+        if (!matchesCargoDateRange(carregamentoValue, group.load.sheetDataDescarga, dateRange)) {
+          return null;
+        }
+
         const loadText = [
           group.load.id,
+          group.load.sheetLh,
           group.load.origem,
           group.load.destino,
           group.load.perfil,
@@ -383,7 +424,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
         };
       })
       .filter((group): group is OperatorLeadGroup => Boolean(group));
-  }, [groups, deferredSearch, loadStatusFilter, leadStatusFilter, historicoMode, sheetAllocationByLh]);
+  }, [groups, deferredSearch, loadStatusFilter, leadStatusFilter, historicoMode, sheetAllocationByLh, routeFilter, dateRange]);
 
   const filteredByCliente = useMemo(() =>
     clienteFilter
@@ -512,7 +553,12 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   const paginatedItems = renderItems.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const hasActiveFilters =
-    deferredSearch.length > 0 || loadStatusFilter !== "todos" || leadStatusFilter !== "todos" || clienteFilter !== "";
+    deferredSearch.length > 0 ||
+    loadStatusFilter !== "todos" ||
+    leadStatusFilter !== "todos" ||
+    clienteFilter !== "" ||
+    routeFilter.length > 0 ||
+    hasCargoDateFilter(dateFilter);
   const visibleLoadIds = useMemo(() => filteredByCliente.map((group) => group.load.id), [filteredByCliente]);
   const allVisibleGroupsCollapsed =
     visibleLoadIds.length > 0 && visibleLoadIds.every((loadId) => collapsedLoadIds.includes(loadId));
@@ -521,7 +567,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   useEffect(() => {
     knownLoadIdsRef.current = [];
     setPage(1);
-  }, [historicoMode, loadStatusFilter, leadStatusFilter, deferredSearch, clienteFilter]);
+  }, [historicoMode, loadStatusFilter, leadStatusFilter, deferredSearch, clienteFilter, routeFilter, dateFilter]);
 
   useEffect(() => {
     const unseenLoadIds = groups
@@ -836,13 +882,13 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
             </div>
           </div>
 
-          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_200px_200px_200px_auto_auto_auto]">
-            <div className="relative">
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <div className="relative min-w-[240px] flex-1">
               <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Pesquisar por carga, origem, destino, telefone, CPF ou placa..."
+                placeholder="Pesquisar por Cód viagem, carga, origem, destino, telefone, CPF ou placa..."
                 className="h-12 rounded-2xl border-border/80 bg-white/92 pl-11 pr-4"
               />
             </div>
@@ -897,6 +943,20 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
               ))}
             </select>
 
+            <FacetMultiSelect
+              label="Rotas"
+              options={routeOptions}
+              selected={routeFilter}
+              onChange={setRouteFilter}
+              widthClass="min-w-[180px] max-w-[240px]"
+              searchable
+            />
+
+            <CargoDateRangeFilters
+              value={dateFilter}
+              onChange={(field, next) => setDateFilter((prev) => ({ ...prev, [field]: next }))}
+            />
+
             <button
               type="button"
               onClick={() => {
@@ -904,9 +964,11 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                 setLoadStatusFilter("todos");
                 setLeadStatusFilter("todos");
                 setClienteFilter("");
+                setRouteFilter([]);
+                setDateFilter(EMPTY_CARGO_DATE_FILTER);
               }}
               disabled={!hasActiveFilters}
-              className="inline-flex items-center justify-center rounded-2xl border border-border/80 bg-white/92 px-4 text-sm font-semibold text-foreground transition-colors duration-200 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted/40"
+              className="inline-flex h-12 items-center justify-center rounded-2xl border border-border/80 bg-white/92 px-4 text-sm font-semibold text-foreground transition-colors duration-200 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted/40"
             >
               Limpar filtros
             </button>
