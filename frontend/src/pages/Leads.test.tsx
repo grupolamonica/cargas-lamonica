@@ -348,7 +348,7 @@ describe("Leads", () => {
   it("filtra leads por busca, status da carga e status do lead", () => {
     render(<Leads />);
 
-    fireEvent.change(screen.getByPlaceholderText(/Pesquisar por carga, origem, destino, telefone, CPF ou placa/i), {
+    fireEvent.change(screen.getByPlaceholderText(/Pesquisar por/i), {
       target: { value: "Recife" },
     });
 
