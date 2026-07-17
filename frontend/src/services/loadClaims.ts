@@ -152,6 +152,9 @@ export interface OperatorLeadGroup {
     sheetCavalo: string | null;
     sheetCarreta: string | null;
     sheetStatus?: string | null;
+    /** DC-257: true quando o motorista foi alocado pelo operador via Monitor
+     * (cargas.alloc_source='operator'), distinto de motorista vindo da planilha. */
+    allocatedByOperator?: boolean;
     clienteId?: string | null;
     clienteNome?: string | null;
     clienteLogoUrl?: string | null;
