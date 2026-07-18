@@ -256,6 +256,34 @@ services:
     expose:
       - "8001"
 
+  # ── Coletor Nestlé (Galileu TMS → nestle_ofertas/nestle_embarques) ────────
+  # Worker em loop (run_coleta.py): coleta ofertas/embarques da Nestlé no
+  # Galileo e grava nas tabelas nestle_*. Alimenta a fonte Nestlé da tela
+  # Programação (equivalente às viagens SPX da Shopee). Não expõe HTTP.
+  # Lê SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY + GALILEU_URL/USER/PASSWORD do backend.env.
+  galileu-bot:
+    build:
+      context: ./bots/galileu
+      dockerfile: Dockerfile
+    image: lamonica-galileu-bot:latest
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+    env_file:
+      - backend.env
+    environment:
+      # Cadência da coleta (segundos); mínimo efetivo 15s (guard no run_coleta).
+      NESTLE_COLETA_INTERVAL_SEC: ${NESTLE_COLETA_INTERVAL_SEC:-120}
+      PYTHONUNBUFFERED: "1"
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # ── SPX bot (sidecar FastAPI :8766) ──────────────────────────────────────
   # Cadastra motorista no portal SPX (Shopee Express) via API privada.
   # Cookies SSO vêm de aspx_credentials.cookies_json no Supabase (renovados
