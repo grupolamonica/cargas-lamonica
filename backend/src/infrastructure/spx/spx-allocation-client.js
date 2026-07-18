@@ -24,6 +24,12 @@ export function aspxAgencyId() {
 export function isAspxWriteEnabled() {
   return (process.env.SPX_ALLOC_WRITE_ENABLED || "").trim() === "true";
 }
+/** Kill switch do ACEITE real de viagens no ASPX. Off por padrão. Separado do de
+ *  alocação porque aceitar compromete a carga com a agência (impacto SLA/financeiro)
+ *  — libera independente do envio de motorista. */
+export function isAspxAcceptWriteEnabled() {
+  return (process.env.SPX_ACCEPT_WRITE_ENABLED || "").trim() === "true";
+}
 
 export class SpxSidecarUnavailable extends Error {
   constructor(message) {
@@ -136,6 +142,58 @@ export async function fetchTripIndex({ daysBack = 45, daysForward = 30 } = {}, o
 }
 
 /**
+ * Viagens de um tab (query_type) direto do portal SPX, via sidecar
+ * (/spx/trips/snapshot, com_veiculo=0 → traz TODAS, com ou sem veículo). Base da
+ * tela Programação (consulta DIRETA ao ASPX, sem passar pela API da Torre).
+ *
+ * Cada viagem já vem normalizada pelo sidecar (_norm_trip): trip_number, origem,
+ * destino (station_name), carregamento_ts/descarga_ts (epoch), driver_name,
+ * vehicle_type, cavalo, carreta, acceptance_status, trip_status, trip_status_name.
+ *
+ * Janela de data (days_back/days_forward) só faz sentido no Planejado(1); Aceito(2)
+ * ignora e Concluído(3) rejeita os params na API SPX — por isso o caller passa
+ * janela só p/ o tab 1.
+ *
+ * @returns {Promise<{ trips: object[], truncated: boolean, total: number }>}
+ */
+// Cache curto por querystring — o portal SPX só atualiza ~a cada 10min, então
+// um TTL de 30s deixa a tela "fresca ao acessar" sem raspar o portal a cada
+// poll/foco/montagem (o Concluído sozinho pagina ~7x). force=true ignora o cache.
+const _tripCache = new Map();
+function tripCacheTtlMs() {
+  const s = Number(process.env.SPX_PROGRAMACAO_CACHE_SECONDS);
+  return (Number.isFinite(s) && s >= 0 ? s : 30) * 1000;
+}
+
+export async function fetchSpxTripsByTab(queryType, { daysBack = 0, daysForward = 0, maxPages = 25, force = false } = {}, opts = {}) {
+  const station = aspxStationId();
+  const params = new URLSearchParams({
+    query_type: String(queryType),
+    station_id: String(station),
+    com_veiculo: "0",
+    max_pages: String(maxPages),
+  });
+  if (daysBack > 0) params.set("days_back", String(daysBack));
+  if (daysForward > 0) params.set("days_forward", String(daysForward));
+  const qs = params.toString();
+
+  if (!force) {
+    const cached = _tripCache.get(qs);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+  }
+
+  const data = await sidecarFetch(`/spx/trips/snapshot?${qs}`, { method: "GET" }, { timeoutMs: 30000, ...opts });
+  const value = {
+    trips: Array.isArray(data?.trips) ? data.trips : [],
+    truncated: Boolean(data?.truncated),
+    total: typeof data?.total === "number" ? data.total : null,
+  };
+  const ttl = tripCacheTtlMs();
+  if (ttl > 0) _tripCache.set(qs, { value, expiresAt: Date.now() + ttl });
+  return value;
+}
+
+/**
  * Aloca motorista+veículo numa viagem. dryRun=true (default) → sidecar só monta o
  * body, não envia ao ASPX.
  * @param {{tripId:number, driverIds:number[], vehiclePlates:string[], dryRun?:boolean}} args
@@ -150,6 +208,28 @@ export async function assignTrip({ tripId, driverIds, vehiclePlates, dryRun = tr
         trip_id: tripId,
         driver_ids: driverIds,
         vehicle_plates: vehiclePlates,
+        station_id: aspxStationId(),
+        dry_run: dryRun,
+      }),
+    },
+    { ...opts, timeoutMs: 20000 },
+  );
+}
+
+/**
+ * Aceita/reserva uma viagem para a agência (→ POST /api/line_haul/agency/trip/accept).
+ * Passo ANTERIOR ao assign: acceptance_status 0→1 move a viagem para o pool
+ * atribuível. dryRun=true (default) → o sidecar só monta o body, não toca o ASPX.
+ * @param {{tripId:number, dryRun?:boolean}} args
+ */
+export async function acceptTrip({ tripId, dryRun = true }, opts = {}) {
+  return sidecarFetch(
+    "/spx/trips/accept",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        trip_id: tripId,
         station_id: aspxStationId(),
         dry_run: dryRun,
       }),

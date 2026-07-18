@@ -2,6 +2,18 @@ import { useEffect, useState } from "react";
 import { Loader2, Plus, Trash2, X } from "lucide-react";
 import { VEHICLE_PROFILE_OPTIONS, normalizeVehicleProfile, EIXOS_OPTIONS } from "@/lib/vehicleProfiles";
 import { CitySelector } from "@/components/CitySelector";
+import { type AssignableRouteOption } from "@/lib/assignableRoutes";
+
+// Uma tarifa = combinação (perfil + eixos) com valor/bônus próprios. `key` é
+// só um id local pra renderização/edição das linhas (não vai pro backend).
+export interface RouteTarifaFormRow {
+  key: string;
+  perfil: string;
+  eixos: number;
+  valor: string;
+  bonus: string;
+  bonus_exigencias: string;
+}
 
 // Uma tarifa = combinação (perfil + eixos) com valor/bônus próprios. `key` é
 // só um id local pra renderização/edição das linhas (não vai pro backend).
@@ -36,6 +48,10 @@ interface RouteModalProps {
   initialData?: RouteFormData | null;
   supportsCatalogFields: boolean;
   clientes: ClienteOption[];
+  // Opcional: quando passado, mostra um seletor "copiar de rota já cadastrada"
+  // que preenche distância/tempo/tarifa a partir de uma rota existente (mantém o
+  // trecho atual). Usado na remediação de cargas importadas sem rota.
+  existingRoutes?: AssignableRouteOption[];
 }
 
 function makeTarifaRow(overrides: Partial<RouteTarifaFormRow> = {}): RouteTarifaFormRow {
@@ -69,9 +85,31 @@ const RouteModal = ({
   initialData,
   supportsCatalogFields,
   clientes,
+  existingRoutes,
 }: RouteModalProps) => {
   const [form, setForm] = useState<RouteFormData>(emptyForm);
   const [saving, setSaving] = useState(false);
+
+  // Copia métricas/tarifa de uma rota já cadastrada; PRESERVA o trecho atual
+  // (origem/destino da carga) — só agiliza o preenchimento de valor/distância.
+  const applyExistingRoute = (routeId: string) => {
+    const r = existingRoutes?.find((route) => route.id === routeId);
+    if (!r) return;
+    const tempo = r.tempo_estimado_horas ?? r.duracao_horas;
+    setForm((current) => ({
+      ...current,
+      distancia_km: r.distancia_km != null ? String(r.distancia_km) : current.distancia_km,
+      tempo_estimado_horas: tempo != null ? String(tempo) : current.tempo_estimado_horas,
+      tarifas: [
+        makeTarifaRow({
+          perfil: normalizeVehicleProfile(r.perfil_padrao ?? "CARRETA"),
+          eixos: r.eixos ?? 0,
+          valor: r.valor_padrao != null ? String(r.valor_padrao) : "",
+          bonus: r.bonus_padrao != null ? String(r.bonus_padrao) : "",
+        }),
+      ],
+    }));
+  };
 
   useEffect(() => {
     if (!open) {
@@ -177,6 +215,32 @@ const RouteModal = ({
           {!supportsCatalogFields ? (
             <div className="rounded-2xl border border-amber-300/45 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               Valor padrão, bônus e perfil sugerido dependem da migration nova da tabela de rotas.
+            </div>
+          ) : null}
+
+          {existingRoutes && existingRoutes.length > 0 ? (
+            <div className="rounded-2xl border border-border/70 bg-secondary/40 px-4 py-3">
+              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
+                Copiar de rota já cadastrada (opcional)
+              </label>
+              <select
+                defaultValue=""
+                onChange={(event) => {
+                  if (event.target.value) applyExistingRoute(event.target.value);
+                }}
+                className={`${inputClass} cursor-pointer`}
+              >
+                <option value="">Selecione uma rota para copiar valor/tarifa…</option>
+                {existingRoutes.map((route) => (
+                  <option key={route.id} value={route.id}>
+                    {route.origem} → {route.destino}
+                    {route.valor_padrao != null ? ` · R$ ${route.valor_padrao}` : ""}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Mantém o trecho da carga e copia distância, tempo e tarifa da rota escolhida.
+              </p>
             </div>
           ) : null}
 

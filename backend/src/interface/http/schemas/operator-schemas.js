@@ -150,6 +150,34 @@ export const sheetMonitorAspxAssignBodySchema = z.object({
   dryRun: z.boolean().optional().default(false),
 }).strict();
 
+/** Body for POST /api/operator/sheet-monitor/aspx-accept — aceita (reserva) viagens
+ *  line_haul no ASPX (passo anterior ao assign). Aceita por trip_id direto e/ou por
+ *  LH (trip_number LT…, resolvido p/ trip_id no servidor). Ao menos um dos dois é
+ *  obrigatório. dryRun força simulação mesmo com o kill switch ligado. */
+export const sheetMonitorAspxAcceptBodySchema = z.object({
+  tripIds: z.array(z.number().int().positive()).max(300).optional(),
+  lhs: z.array(z.string().trim().min(1).max(120)).max(300).optional(),
+  dryRun: z.boolean().optional().default(false),
+}).strict().refine((v) => (v.tripIds?.length ?? 0) + (v.lhs?.length ?? 0) > 0, {
+  message: "Informe ao menos uma viagem em tripIds ou lhs.",
+});
+
+/** Body for POST /api/operator/programacao/launch — lança uma carga do sistema a
+ *  partir de uma viagem SPX (tela Programação). O LH vira sheet_lh (dedup pelo
+ *  índice único). data/origem/destino vêm da viagem; horario/perfil têm default. */
+export const programacaoLaunchBodySchema = z.object({
+  lh: z.string().trim().min(1).max(120),
+  origem: z.string().trim().min(2).max(180),
+  destino: z.string().trim().min(2).max(180),
+  // Opcional: sem data, a carga entra "a confirmar" (agenda definida depois).
+  data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  horario: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
+  dataDescarga: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  horarioDescarga: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
+  nome: z.string().trim().max(180).optional(),
+  perfil: z.string().trim().max(60).optional(),
+}).strict();
+
 /** Query params for PII redaction POST */
 export const piiRedactionQuerySchema = z.object({
   retentionDays: z.coerce.number().int().min(1).max(365).optional(),

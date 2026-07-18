@@ -106,6 +106,12 @@ import {
   resolveUpdateMonitorCargoResponse,
   resolvePreviewAspxAllocationResponse,
   resolveAssignAspxAllocationsResponse,
+  resolveAcceptAspxTripsResponse,
+  resolveOperatorProgramacaoResponse,
+  resolveLaunchCargoFromTripResponse,
+  resolveAutoLaunchSpotsResponse,
+  resolveGetProgramacaoSettingsResponse,
+  resolveUpdateProgramacaoSettingsResponse,
   resolveToggleOperatorCargoStatusResponse,
   resolveUpdateOperatorCargoResponse,
   resolveUpdateOperatorClienteResponse,
@@ -481,6 +487,14 @@ export function registerRoutes(app) {
   router.patch("/api/operator/sheet-monitor/cargo", wrap(resolveUpdateMonitorCargoResponse));
   router.post("/api/operator/sheet-monitor/aspx-preview", wrap(resolvePreviewAspxAllocationResponse));
   router.post("/api/operator/sheet-monitor/aspx-assign", wrap(resolveAssignAspxAllocationsResponse));
+  router.post("/api/operator/sheet-monitor/aspx-accept", wrap(resolveAcceptAspxTripsResponse));
+
+  // Programação (DC-136) — viagens SPX/Shopee ao vivo por status + lançar carga no portal.
+  router.get("/api/operator/programacao", wrap(resolveOperatorProgramacaoResponse));
+  router.post("/api/operator/programacao/launch", wrap(resolveLaunchCargoFromTripResponse));
+  router.post("/api/operator/programacao/auto-launch", wrap(resolveAutoLaunchSpotsResponse));
+  router.get("/api/operator/programacao/settings", wrap(resolveGetProgramacaoSettingsResponse));
+  router.patch("/api/operator/programacao/settings", wrap(resolveUpdateProgramacaoSettingsResponse));
 
   // PII Redaction
   router.post("/api/operator/pii-redaction", wrap(resolveRedactPublicLeadPiiResponse));

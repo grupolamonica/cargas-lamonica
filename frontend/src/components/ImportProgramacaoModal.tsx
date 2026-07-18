@@ -1,17 +1,26 @@
 import { useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Copy, Download, FileUp, Loader2, RefreshCw, Upload, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Download, FileUp, Loader2, RefreshCw, Upload, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { formatCargoStatusLabel } from "@/lib/cargoStatus";
 import {
+  createOperatorCliente,
   importOperatorCargas,
   type ImportCargasResponse,
 } from "@/services/operatorAdmin";
+import ClienteModal from "@/components/ClienteModal";
+import { type ClienteFormData, mapClienteFormToPayload } from "@/lib/clientes";
 
 interface ImportProgramacaoModalProps {
   open: boolean;
   onClose: () => void;
-  onImported: () => void | Promise<void>;
+  // Recebe o resultado validado (com as linhas) p/ o chamador tratar cargas sem
+  // rota/cliente após a importação.
+  onImported: (result: ImportCargasResponse) => void | Promise<void>;
+  // Clientes já cadastrados (p/ o seletor "usar existente" nas linhas rejeitadas
+  // por cliente não encontrado). Após cadastrar um novo, o chamador atualiza a lista.
+  clientes?: { id: string; nome: string }[];
+  onClientesChanged?: () => void | Promise<void>;
 }
 
 // Modelo do CSV oferecido para download (mesmas colunas aceitas pelo backend).
@@ -46,7 +55,7 @@ function buildTemplateCsv() {
   return `${bom}${lines.join("\r\n")}\r\n`;
 }
 
-const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacaoModalProps) => {
+const ImportProgramacaoModal = ({ open, onClose, onImported, clientes = [], onClientesChanged }: ImportProgramacaoModalProps) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [csvText, setCsvText] = useState<string>("");
   const [fileName, setFileName] = useState<string>("");
@@ -54,6 +63,9 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
   const [headerError, setHeaderError] = useState<string | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  // Remediação de cliente não cadastrado (linhas rejeitadas).
+  const [clienteModalOpen, setClienteModalOpen] = useState(false);
+  const [clienteModalNome, setClienteModalNome] = useState("");
 
   if (!open) return null;
 
@@ -131,7 +143,9 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
         `Programação importada: ${parts.length > 0 ? parts.join(", ") : "nenhuma carga"}` +
           (ignored.length > 0 ? ` — ${ignored.join(", ")}.` : "."),
       );
-      await onImported();
+      // preview (dry-run) carrega as linhas com route_registered/cliente — o sync
+      // não cria rotas, então esses flags seguem válidos pós-importação.
+      await onImported(preview);
       resetState();
       onClose();
     } catch (error) {
@@ -141,11 +155,70 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
     }
   };
 
+  // Revalida (dry-run) o CSV atual — após resolver cliente(s).
+  const revalidate = async (csv: string) => {
+    setCsvText(csv);
+    setIsValidating(true);
+    try {
+      const response = await importOperatorCargas(csv, true);
+      if (!response.ok && response.headerError) {
+        setHeaderError(response.headerError);
+        setPreview(null);
+      } else {
+        setHeaderError(null);
+        setPreview(response);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Falha ao revalidar o CSV.");
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  // Troca o cliente de uma linha do CSV (por COD. CARGA) — "usar cliente já
+  // cadastrado" (corrige typo). CLIENTE é a 8ª coluna (índice 7).
+  const substituteClientInCsv = (csv: string, codCarga: string, newName: string) => {
+    const lines = csv.split(/\r?\n/);
+    if (!lines.length) return csv;
+    const semi = (lines[0].match(/;/g) || []).length;
+    const comma = (lines[0].match(/,/g) || []).length;
+    const delimiter = semi >= comma ? ";" : ",";
+    const CLIENTE_COL = 7;
+    return lines
+      .map((line, idx) => {
+        if (idx === 0 || !line.trim()) return line;
+        const cols = line.split(delimiter);
+        if ((cols[0] || "").trim() !== codCarga) return line;
+        while (cols.length <= CLIENTE_COL) cols.push("");
+        cols[CLIENTE_COL] = newName;
+        return cols.join(delimiter);
+      })
+      .join("\n");
+  };
+
+  // Cadastra o cliente novo (modal completo) e revalida.
+  const handleCreateCliente = async (data: ClienteFormData) => {
+    try {
+      await createOperatorCliente(mapClienteFormToPayload(data));
+      toast.success("Cliente cadastrado.");
+      setClienteModalOpen(false);
+      await onClientesChanged?.();
+      if (csvText) await revalidate(csvText);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Falha ao cadastrar o cliente.");
+    }
+  };
+
+  const isClienteNotFound = (row: ImportCargasResponse["rows"][number]) =>
+    !row.ok && Array.isArray(row.errors) && row.errors.some((e) => /cliente não encontrado/i.test(e));
+
   const summary = preview?.summary;
   const routesNotRegistered = preview?.rows.filter((r) => r.ok && r.preview.route_registered === false).length ?? 0;
+  const clientesNotFound = preview?.rows.filter((r) => isClienteNotFound(r)).length ?? 0;
   const canImport = Boolean(summary && summary.importable > 0) && !isImporting && !isValidating;
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={handleClose}>
       <div className="absolute inset-0 bg-foreground/40 backdrop-blur-sm" />
       <div
@@ -249,6 +322,11 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
                   {routesNotRegistered} sem rota cadastrada
                 </span>
               ) : null}
+              {clientesNotFound > 0 ? (
+                <span className="rounded-full bg-red-100 px-3 py-1 font-medium text-red-700 dark:bg-red-500/15 dark:text-red-300">
+                  {clientesNotFound} sem cliente cadastrado
+                </span>
+              ) : null}
             </div>
           ) : null}
 
@@ -301,11 +379,43 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
                       <td className="whitespace-nowrap px-3 py-2">{formatCargoStatusLabel(row.preview.status)}</td>
                       <td className="px-3 py-2">
                         {!row.ok ? (
-                          <ul className="space-y-0.5 text-xs text-red-600 dark:text-red-400">
-                            {row.errors.map((message, index) => (
-                              <li key={index}>• {message}</li>
-                            ))}
-                          </ul>
+                          <div className="space-y-1.5">
+                            <ul className="space-y-0.5 text-xs text-red-600 dark:text-red-400">
+                              {row.errors.map((message, index) => (
+                                <li key={index}>• {message}</li>
+                              ))}
+                            </ul>
+                            {isClienteNotFound(row) ? (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setClienteModalNome(row.preview.cliente_nome ?? "");
+                                    setClienteModalOpen(true);
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/15"
+                                >
+                                  <UserPlus className="h-3.5 w-3.5" /> Cadastrar “{row.preview.cliente_nome}”
+                                </button>
+                                <select
+                                  defaultValue=""
+                                  onChange={(event) => {
+                                    if (event.target.value) {
+                                      void revalidate(substituteClientInCsv(csvText, row.preview.cod_carga ?? "", event.target.value));
+                                    }
+                                  }}
+                                  className="rounded-lg border border-border/70 bg-background px-2 py-1 text-[11px] text-foreground"
+                                >
+                                  <option value="">Usar cliente já cadastrado…</option>
+                                  {clientes.map((cliente) => (
+                                    <option key={cliente.id} value={cliente.nome}>
+                                      {cliente.nome}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ) : null}
+                          </div>
                         ) : row.action === "skip" ? (
                           <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
                             <Copy className="h-4 w-4" /> Pulada{row.reason ? ` — ${row.reason}` : ""}
@@ -349,6 +459,16 @@ const ImportProgramacaoModal = ({ open, onClose, onImported }: ImportProgramacao
         </div>
       </div>
     </div>
+
+    {/* Cadastro de cliente novo (modal completo) para linhas rejeitadas por
+        cliente não encontrado. Prefill do nome com o valor do CSV. */}
+    <ClienteModal
+      open={clienteModalOpen}
+      onClose={() => setClienteModalOpen(false)}
+      onSave={handleCreateCliente}
+      initialNome={clienteModalNome}
+    />
+    </>
   );
 };
 

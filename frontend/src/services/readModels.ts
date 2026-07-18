@@ -1616,6 +1616,188 @@ export async function assignAspxAllocations(input: { lhs: string[]; dryRun?: boo
   });
 }
 
+/* ─────────────────────────── Programação (DC-136) ─────────────────────────── */
+
+export type ProgramacaoTab = "planejado" | "aceito" | "concluido";
+
+export interface ProgramacaoRow {
+  lh: string;
+  nome: string;
+  statusRaw: string;
+  statusOperacional: string;
+  motorista: string;
+  veiculo: string;
+  placa: string;
+  origem: string;
+  destino: string;
+  origemRaw: string;
+  destinoRaw: string;
+  origemCidadeUf: string;
+  destinoCidadeUf: string;
+  data: string | null;
+  horario: string | null;
+  /** Epoch (segundos, UTC) do carregamento — instante absoluto p/ decidir atraso sem fuso. */
+  carregamentoTs: number | null;
+  dataDescarga: string | null;
+  horarioDescarga: string | null;
+  tab: ProgramacaoTab;
+  cliente: string;
+  /** Origem da linha: "spx-direct" (Shopee) ou "nestle-galileu" (Nestlé). */
+  source?: string;
+  /** Nestlé: CONTRATO | ADICIONAL | LEILAO (classificação da oferta). */
+  tipo?: string | null;
+  isLinehaul: boolean;
+  acceptanceStatus: number | null;
+  podeAceitar: boolean;
+  aguardandoMotorista: boolean;
+  jaLancada: boolean;
+  expirada: boolean;
+}
+
+export interface ProgramacaoClient {
+  id: string;
+  nome: string;
+  source: string;
+}
+
+export interface ProgramacaoOverview {
+  ok: boolean;
+  configured: boolean;
+  acceptWriteEnabled: boolean;
+  clientes: ProgramacaoClient[];
+  byTab: Record<ProgramacaoTab, number>;
+  summary: {
+    planejado: number;
+    aceito: number;
+    concluido: number;
+    total: number;
+    podeAceitar: number;
+    aguardandoMotorista: number;
+    jaLancadas: number;
+  };
+  warnings: string[];
+  rows: ProgramacaoRow[];
+  meta: { correlationId: string; fetchedAt: string };
+}
+
+/**
+ * Viagens SPX/Shopee ao vivo (API DC-136 da Torre), agrupadas por status
+ * (Planejado/Aceito/Concluído). Read-only. 503 quando a integração não está
+ * configurada no backend (o chamador trata via ApiError.status).
+ */
+export async function fetchProgramacao(params: { force?: boolean; tabs?: string } = {}): Promise<ProgramacaoOverview> {
+  const accessToken = await getOperatorAccessToken();
+  // force → ?refresh=1 (bypassa o cache do proxy; busca ao vivo no portal SPX).
+  // tabs → busca só as abas pedidas (lazy: Concluído só quando abre).
+  const q = new URLSearchParams();
+  if (params.force) q.set("refresh", "1");
+  if (params.tabs) q.set("tabs", params.tabs);
+  const qs = q.toString();
+  return requestJson<ProgramacaoOverview>(`/api/operator/programacao${qs ? `?${qs}` : ""}`, { accessToken });
+}
+
+export interface AutoLaunchResult {
+  ok: boolean;
+  candidates: number;
+  routed: number;
+  launched: number;
+  already: number;
+  errors: number;
+  deferred: number;
+}
+
+/**
+ * DC-201 — dispara o auto-lançamento dos spots Planejado que já têm rota cadastrada
+ * (o mesmo do cron). Usado logo após cadastrar uma rota p/ lançar as viagens dessa
+ * rota na hora, sem esperar o ciclo. Idempotente; NÃO aceita no SPX.
+ */
+export async function runAutoLaunchSpots(): Promise<AutoLaunchResult> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<AutoLaunchResult>("/api/operator/programacao/auto-launch", {
+    accessToken,
+    method: "POST",
+  });
+}
+
+export interface ProgramacaoSettings {
+  spotAutolaunchEnabled: boolean;
+  updatedAt: string | null;
+}
+
+/** DC-201 — lê o estado do lançamento automático de spots com rota (liga/desliga). */
+export async function getProgramacaoSettings(): Promise<ProgramacaoSettings> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<ProgramacaoSettings>("/api/operator/programacao/settings", { accessToken });
+}
+
+/** DC-201 — liga/desliga o lançamento automático (scanner passa a pular/retomar). */
+export async function setSpotAutolaunchEnabled(enabled: boolean): Promise<ProgramacaoSettings> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<ProgramacaoSettings>("/api/operator/programacao/settings", {
+    accessToken,
+    method: "PATCH",
+    body: { spotAutolaunchEnabled: enabled },
+  });
+}
+
+export interface AspxAcceptResult {
+  ok: boolean;
+  writeEnabled: boolean;
+  dryRun: boolean;
+  summary: { accepted: number; dryRun: number; skipped: number; error: number };
+  results: Array<{ key: string; tripId: number | null; state: "accepted" | "dry_run" | "skipped" | "error"; reason?: string }>;
+  meta: { correlationId: string };
+}
+
+/**
+ * Aceita (reserva) viagens SPX no ASPX pelo LH (trip_number). Reusa o endpoint de
+ * accept do Monitor. Envio real só com SPX_ACCEPT_WRITE_ENABLED=true no backend;
+ * senão roda dry_run (state "dry_run"). HTTP 200 pode conter itens skipped/error —
+ * inspecionar results[].state.
+ */
+export async function acceptSpxTrips(lhs: string[], dryRun = false): Promise<AspxAcceptResult> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<AspxAcceptResult>("/api/operator/sheet-monitor/aspx-accept", {
+    accessToken,
+    method: "POST",
+    body: { lhs, dryRun },
+  });
+}
+
+export interface LaunchCargoResult {
+  ok: boolean;
+  alreadyExists: boolean;
+  /** true quando a carga entrou sem agenda definida ("a confirmar"). */
+  aConfirmar?: boolean;
+  id: string;
+  cargo: { id: string; status?: string };
+  clienteId?: string | null;
+  meta: { correlationId: string };
+}
+
+/**
+ * Lança uma carga do sistema a partir de uma viagem (SPX/Nestlé). Idempotente por LH.
+ * Sem `data` (carregamento) a carga entra como "a confirmar" (agenda definida depois).
+ */
+export async function launchCargoFromTrip(input: {
+  lh: string;
+  origem: string;
+  destino: string;
+  data?: string;
+  horario?: string;
+  dataDescarga?: string;
+  horarioDescarga?: string;
+  nome?: string;
+  perfil?: string;
+}): Promise<LaunchCargoResult> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<LaunchCargoResult>("/api/operator/programacao/launch", {
+    accessToken,
+    method: "POST",
+    body: input,
+  });
+}
+
 export async function enrichSheetMonitor({ force = false, forceSessionStart }: { force?: boolean; forceSessionStart?: string } = {}): Promise<{
   enriched: number;
   remaining: number;

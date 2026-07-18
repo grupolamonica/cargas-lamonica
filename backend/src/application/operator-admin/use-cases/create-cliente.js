@@ -2,6 +2,11 @@ import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { isMissingClienteLogoColumnError } from "./_shared.js";
 
+// NOTA: as colunas legadas `rastreamento`/`antt` (texto "Obrigatorio"/null) foram
+// removidas do INSERT. Elas eram write-only — nada no backend as LÊ (a leitura usa
+// exige_rastreamento/exige_antt). Escrevê-las quebrava o cadastro em bancos que não
+// as têm (drift entre ambientes). Onde ainda existem, ficam com o default/null (sem
+// impacto, pois ninguém as consome).
 export async function createOperatorCliente({ operatorId, payload, requestIp, correlationId }) {
   return withPgTransaction(async (client) => {
     const values = [
@@ -11,8 +16,6 @@ export async function createOperatorCliente({ operatorId, payload, requestIp, co
       payload.exige_seguro, payload.exige_carga_monitorada, payload.reputacao_pagamento_rapido,
       payload.reputacao_bom_pagador, payload.reputacao_liberacao_rapida,
       payload.reputacao_carga_organizada, payload.reputacao_boa_comunicacao,
-      payload.exige_rastreamento ? "Obrigatorio" : null,
-      payload.exige_antt ? "Obrigatorio" : null,
       payload.observacoes,
     ];
     const warnings = [];
@@ -26,27 +29,28 @@ export async function createOperatorCliente({ operatorId, payload, requestIp, co
             forma_pagamento, prazo_pagamento,
             exige_rastreamento, exige_antt, exige_seguro, exige_carga_monitorada,
             reputacao_pagamento_rapido, reputacao_bom_pagador, reputacao_liberacao_rapida,
-            reputacao_carga_organizada, reputacao_boa_comunicacao, rastreamento, antt, observacoes
+            reputacao_carga_organizada, reputacao_boa_comunicacao, observacoes
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         `,
         values,
       );
     } catch (error) {
       if (!isMissingClienteLogoColumnError(error)) throw error;
-      // Fallback: columns logo_url/logo_url_card/logo_url_proximas not yet in DB
+      // Fallback: colunas logo_url/logo_url_card/logo_url_proximas (e custom_*) ainda
+      // não presentes no schema — insere sem elas.
       await client.query(
         `
           INSERT INTO public.clientes (
             nome, descricao, forma_pagamento, prazo_pagamento,
             exige_rastreamento, exige_antt, exige_seguro, exige_carga_monitorada,
             reputacao_pagamento_rapido, reputacao_bom_pagador, reputacao_liberacao_rapida,
-            reputacao_carga_organizada, reputacao_boa_comunicacao, rastreamento, antt, observacoes
+            reputacao_carga_organizada, reputacao_boa_comunicacao, observacoes
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         `,
         [values[0], values[1], values[7], values[8], values[9], values[10], values[11], values[12],
-         values[13], values[14], values[15], values[16], values[17], values[18], values[19], values[20]],
+         values[13], values[14], values[15], values[16], values[17], values[18]],
       );
       warnings.push("Client logo column is not available in the current database schema.");
     }

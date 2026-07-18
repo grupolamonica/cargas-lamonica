@@ -70,6 +70,22 @@ describe("mapSystemCargoToMonitorRow", () => {
     expect(comMot.isAvailable).toBe(false);
   });
 
+  it("carga LANÇADA (lh_manual, sem sheet_lh) fica 'Disponível' o dia todo, mesmo com a hora de carregamento passada", () => {
+    const now = { todayIso: "2026-06-30", nowTimeIso: "12:00" };
+    // HOJE, mas hora já passada (06:00 < 12:00). Espelha a exceção do buildDriverLoadFilters.
+    const base = { id: "x", origem: "A", destino: "B", status: "OPEN", alloc_motorista: null, alloc_status: null, driver_visibility: "PUBLIC", data: "2026-06-30", horario: "06:00:00" };
+    // Lançada (lh_manual, sheet_lh nulo) → visível pro motorista o dia todo → "Disponível" ("").
+    const lancada = mapSystemCargoToMonitorRow({ ...base, lh_manual: "LT-LAUNCH-1" }, {}, now);
+    expect(lancada.status).toBe("");
+    expect(lancada.isAvailable).toBe(true);
+    // Sistema SEM lh_manual (mesma data/hora) → regra minuto-a-minuto → "Em aberto".
+    expect(mapSystemCargoToMonitorRow({ ...base }, {}, now).status).toBe("Em aberto");
+    // Com sheet_lh (planilha) NÃO ganha o dia inteiro (STD confiável) → "Em aberto".
+    expect(mapSystemCargoToMonitorRow({ ...base, lh_manual: "LT-X", sheet_lh: "SHEET-1" }, {}, now).status).toBe("Em aberto");
+    // Dia ANTERIOR continua fora, mesmo lançada (o relaxamento é só nível de dia).
+    expect(mapSystemCargoToMonitorRow({ ...base, data: "2026-06-29", lh_manual: "LT-2" }, {}, now).status).toBe("Em aberto");
+  });
+
   it("resolve o cliente da carga via clientesById (id→nome); null sem id/match", () => {
     const base = { id: "x", origem: "A", destino: "B", data: "2026-06-25", horario: "08:00:00" };
     expect(mapSystemCargoToMonitorRow({ ...base, cliente_id: "c1" }, { c1: "Mercado Livre" }).cliente).toBe("Mercado Livre");

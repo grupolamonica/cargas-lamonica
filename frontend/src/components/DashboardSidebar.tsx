@@ -2,6 +2,7 @@ import { memo } from "react";
 import {
   Bell,
   Building2,
+  CalendarClock,
   ChevronLeft,
   ChevronRight,
   ClipboardList,
@@ -54,6 +55,7 @@ const navigationItems: NavigationItem[] = [
   { icon: LayoutDashboard, label: "Painel", path: "/painel" },
   { icon: Building2, label: "Clientes", path: "/clientes" },
   { icon: Package, label: "Cargas", path: "/cargas" },
+  { icon: CalendarClock, label: "Programação", path: "/programacao" },
   { icon: Package, label: "Pacotes", path: "/pacotes" },
   { icon: Route, label: "Rotas", path: "/rotas" },
   { icon: Link2, label: "Links", path: "/operador" },

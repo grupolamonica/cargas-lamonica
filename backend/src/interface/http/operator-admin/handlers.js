@@ -39,7 +39,7 @@ import {
 } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
-import { dashboardQuerySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAspxAssignedBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorDescendBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorUpdateReservaBodySchema, vehicleChecklistQuerySchema } from "../schemas/operator-schemas.js";
+import { dashboardQuerySchema, programacaoLaunchBodySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAcceptBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAspxAssignedBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorDescendBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorUpdateReservaBodySchema, vehicleChecklistQuerySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
@@ -99,6 +99,14 @@ import { updateMonitorCargo } from "../../../application/operator-admin/use-case
 import { buildSheetSummary, getSheetClientName } from "../../../application/google-sheets/google-sheet-loads.js";
 import { previewAspxAllocation } from "../../../application/operator-admin/use-cases/preview-aspx-allocation.js";
 import { assignAspxAllocations } from "../../../application/operator-admin/use-cases/assign-aspx-allocations.js";
+import { acceptAspxTrips } from "../../../application/operator-admin/use-cases/accept-aspx-trips.js";
+import { getProgramacao } from "../../../application/operator-admin/use-cases/get-programacao.js";
+import { launchCargoFromTrip } from "../../../application/operator-admin/use-cases/launch-cargo-from-trip.js";
+import { autoLaunchRoutedSpots } from "../../../application/operator-admin/use-cases/auto-launch-routed-spots.js";
+import {
+  getProgramacaoSettings,
+  updateProgramacaoSettings,
+} from "../../../application/operator-admin/use-cases/programacao-settings.js";
 import { DOC_TIPOS, listAvailableMigratedDocs, readLocalProdDocAsDataUri } from "../../../application/operator-admin/use-cases/migrated-docs/prod-docs-share.js";
 import { candidaturaSubmitSchema } from "../schemas/candidatura-schemas.js";
 import { DRAFT_FILE_BUCKET } from "../../../application/candidatura/use-cases/upload-draft-file.js";
@@ -1492,6 +1500,113 @@ export async function resolveAssignAspxAllocationsResponse(request) {
     async ({ correlationId, requestIp, operatorId }) => {
       const { lhs, dryRun } = sheetMonitorAspxAssignBodySchema.parse(await parseJsonBody(request));
       return assignAspxAllocations({ lhs, dryRun, operatorId, requestIp, correlationId });
+    },
+  );
+}
+
+export async function resolveAcceptAspxTripsResponse(request) {
+  return withOperatorSession(
+    request,
+    "accept-aspx-trips",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem aceitar cargas no ASPX.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { tripIds, lhs, dryRun } = sheetMonitorAspxAcceptBodySchema.parse(await parseJsonBody(request));
+      return acceptAspxTrips({ tripIds, lhs, dryRun, operatorId, requestIp, correlationId });
+    },
+  );
+}
+
+// Tela Programação (DC-136) — viagens SPX/Shopee ao vivo, por status (Planejado/
+// Aceito/Concluído). Read-only: uma sessão de operador válida basta. A janela de
+// datas usa o default documentado da API da Torre (45 dias atrás / 15 à frente) —
+// não é controlável pelo cliente, o que mantém o cache do proxy limitado a 3 chaves
+// (uma por tab) e evita amplificação de chamadas ao upstream.
+export async function resolveOperatorProgramacaoResponse(request) {
+  return withOperatorSession(request, "read-operator-programacao", async ({ correlationId }) => {
+    // ?refresh=1 (botão "Atualizar") ignora o cache do proxy → busca ao vivo no SPX.
+    const force = getQueryParam(request, "refresh") === "1";
+    // ?tabs=planejado,aceito — lazy load (Concluído só quando a aba abre). Ausente = todas.
+    const tabsParam = getQueryParam(request, "tabs");
+    const tabs = tabsParam
+      ? tabsParam.split(",").map((t) => t.trim().toLowerCase()).filter((t) => ["planejado", "aceito", "concluido"].includes(t))
+      : null;
+    return getProgramacao({ correlationId, force, tabs });
+  });
+}
+
+// Lança uma carga do sistema a partir de uma viagem SPX (mesma permissão de escrita
+// de cargas). Idempotente por sheet_lh.
+export async function resolveLaunchCargoFromTripResponse(request) {
+  return withOperatorSession(
+    request,
+    "launch-cargo-from-trip",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem lançar cargas.",
+    },
+    async ({ correlationId, operatorId }) => {
+      const body = programacaoLaunchBodySchema.parse(await parseJsonBody(request));
+      return launchCargoFromTrip({ ...body, operatorId, correlationId });
+    },
+  );
+}
+
+// DC-201 — dispara o auto-lançamento dos spots Planejado que já têm rota cadastrada
+// (mesma automação do cron). "Rodar agora" manual, sem aceitar no SPX. Idempotente.
+export async function resolveAutoLaunchSpotsResponse(request) {
+  return withOperatorSession(
+    request,
+    "auto-launch-routed-spots",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem lançar cargas.",
+    },
+    async ({ correlationId }) => {
+      const result = await autoLaunchRoutedSpots({ correlationId });
+      return { statusCode: result.ok ? 200 : 503, payload: { ...result, meta: { correlationId } } };
+    },
+  );
+}
+
+// DC-201 — settings da Programação (hoje: toggle do auto-lançamento de spots com
+// rota). GET = qualquer operador logado; PATCH exige cargos:write (mesma permissão
+// de lançar carga, pois liga/desliga a publicação automática no portal).
+export async function resolveGetProgramacaoSettingsResponse(request) {
+  return withOperatorSession(request, "programacao-settings-get", async ({ correlationId }) => {
+    const settings = await getProgramacaoSettings();
+    return { statusCode: 200, payload: { ...settings, meta: { correlationId } } };
+  });
+}
+
+export async function resolveUpdateProgramacaoSettingsResponse(request) {
+  return withOperatorSession(
+    request,
+    "programacao-settings-update",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage:
+        "Somente operadores com acesso intermediario ou avancado podem alterar a Programação.",
+    },
+    async ({ correlationId, operatorId }) => {
+      const body = request.body || {};
+      if (typeof body.spotAutolaunchEnabled !== "boolean") {
+        return {
+          statusCode: 400,
+          payload: {
+            error: "INVALID_BODY",
+            message: "spotAutolaunchEnabled (boolean) é obrigatório.",
+            meta: { correlationId },
+          },
+        };
+      }
+      const settings = await updateProgramacaoSettings({
+        patch: { spotAutolaunchEnabled: body.spotAutolaunchEnabled },
+        operatorId: operatorId ?? null,
+      });
+      return { statusCode: 200, payload: { ...settings, meta: { correlationId } } };
     },
   );
 }

@@ -96,6 +96,7 @@ const schemaSql = `
     viagem_id uuid REFERENCES public.cargas_casadas(id) ON DELETE SET NULL,
     ordem_viagem integer,
     sheet_lh text,
+    lh_manual text,
     sheet_data_carregamento text,
     sheet_data_descarga text,
     sheet_motorista text,
