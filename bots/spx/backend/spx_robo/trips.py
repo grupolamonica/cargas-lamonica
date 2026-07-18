@@ -20,6 +20,11 @@ from typing import Any
 from .client import SPXClient
 
 _TRIPS_PATH = "/api/line_haul/agency/trip/list"
+# Aba "Concluído": endpoint SEPARADO. NÃO usa query_type/sta — usa janela `mtime`
+# (epoch,epoch = intervalo de modificação). O trip/list com query_type=3 devolve
+# erro de parâmetro (131103001); o portal usa este /history/list. Verificado ao
+# vivo no portal SPX em 2026-07-14 (mesmo shape de viagem de /trip/list).
+_HISTORY_PATH = "/api/line_haul/agency/trip/history/list"
 _DETAIL_PATH = "/api/line_haul/agency/trip/detail"
 _ACCEPT_PATH = "/api/line_haul/agency/trip/accept"
 # Endpoint REAL de atribuição (capturado/verificado ao vivo 2026-06-22 — alocou Welves
@@ -67,6 +72,34 @@ def list_trips(
     return client.get_json(_TRIPS_PATH, params=params) or {}
 
 
+def list_trips_history(
+    client: SPXClient,
+    *,
+    page: int = 1,
+    count: int = 200,
+    mtime: tuple[int, int] | None = None,
+    agency_current_station_id: int | None = None,
+) -> dict:
+    """Uma pagina do trip/history/list — a aba **Concluído** (viagens finalizadas:
+    Completed/Cancelled). NAO usa query_type/sta; usa a janela `mtime` (epoch,epoch
+    = intervalo de modificacao). Mesmo shape de viagem do trip/list (trip_station,
+    trip_status, acceptance_status, driver_name)."""
+    sid = _station_id(agency_current_station_id)
+    if not sid:
+        raise ValueError(
+            "agency_current_station_id obrigatorio — defina SPX_LINEHAUL_STATION_ID "
+            "ou passe station_id (sem ele a SPX retorna 0 viagens)."
+        )
+    params: dict[str, Any] = {
+        "pageno": page,
+        "count": count,
+        "agency_current_station_id": sid,
+    }
+    if mtime:
+        params["mtime"] = f"{int(mtime[0])},{int(mtime[1])}"
+    return client.get_json(_HISTORY_PATH, params=params) or {}
+
+
 def _norm_trip(t: dict) -> dict:
     """Projeta a viagem crua da SPX nos campos que o poller da Torre consome."""
     stations = t.get("trip_station") or []
@@ -80,6 +113,10 @@ def _norm_trip(t: dict) -> dict:
         "origem": origem.get("station_name"),
         "destino": destino.get("station_name"),
         "std": origem.get("std") or origem.get("sta"),
+        # Datas p/ a tela Programação (epoch seg): carregamento = STD da origem;
+        # descarga = STA (chegada programada) da última estação. 0 → None.
+        "carregamento_ts": (origem.get("std") or origem.get("sta")) or None,
+        "descarga_ts": (destino.get("sta") or destino.get("std")) or None,
         "driver_name": t.get("driver_name") or "",
         "vehicle_type": t.get("vehicle_type_name") or "",
         "cavalo": plates[0] if len(plates) > 0 else "",
@@ -112,14 +149,25 @@ def snapshot(
     out: list[dict] = []
     page = 1
     truncated = False
+    # history/list (Concluído) limita o page size (retcode 131103027 acima de ~100);
+    # trip/list aceita 200.
+    page_size = 100 if query_type == 3 else 200
     while page <= max_pages:
-        data = list_trips(
-            client, page=page, count=200, query_type=query_type,
-            agency_current_station_id=agency_current_station_id, sta=sta,
-        )
+        if query_type == 3:
+            # Concluído: endpoint separado (history/list) com janela `mtime`.
+            # Reutiliza `sta` como o intervalo mtime (o caller já monta a janela).
+            data = list_trips_history(
+                client, page=page, count=page_size, mtime=sta,
+                agency_current_station_id=agency_current_station_id,
+            )
+        else:
+            data = list_trips(
+                client, page=page, count=page_size, query_type=query_type,
+                agency_current_station_id=agency_current_station_id, sta=sta,
+            )
         lst = (data or {}).get("list") or (data or {}).get("items") or []
         out.extend(lst)
-        if len(lst) < 200:
+        if len(lst) < page_size:
             break
         page += 1
         if page > max_pages:
