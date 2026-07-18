@@ -910,6 +910,7 @@ export default function Outreach() {
   const [manualOpen, setManualOpen] = useState(false);
   const [massOpen, setMassOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"chat" | "automacao">("chat");
+  const [confirmEnableOpen, setConfirmEnableOpen] = useState(false);
 
   // Filtros da Fila (multiselect). Padrão: oculta "Pulados".
   const [statusSel, setStatusSel] = useState<string[]>(DEFAULT_STATUS_SEL);
@@ -1036,7 +1037,15 @@ export default function Outreach() {
                 <p className="font-medium">Envio automático</p>
                 <p className="text-sm text-muted-foreground">Liga/desliga o disparo automático. Desligado: nada é enviado (o operador ainda envia manual pelo modal do motorista).</p>
               </div>
-              <Toggle checked={form.enabled} onChange={(v) => setForm({ ...form, enabled: v })} />
+              <Toggle
+                checked={form.enabled}
+                onChange={(v) => {
+                  // Ligar exige confirmação explícita (passa a disparar WhatsApp);
+                  // desligar é a direção segura e aplica na hora.
+                  if (v) setConfirmEnableOpen(true);
+                  else setForm({ ...form, enabled: false });
+                }}
+              />
             </div>
 
             <div className="flex items-center justify-between gap-4">
@@ -1258,6 +1267,29 @@ export default function Outreach() {
         />
         <ManualInsertModal open={manualOpen} onClose={() => setManualOpen(false)} onCreated={invalidate} />
         <MassOutreachModal open={massOpen} onClose={() => setMassOpen(false)} onEnqueued={invalidate} />
+
+        {/* Confirmação de ativação do envio automático */}
+        <Dialog open={confirmEnableOpen} onOpenChange={(o) => { if (!o) setConfirmEnableOpen(false); }}>
+          <DialogContent className="max-w-md rounded-3xl">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-amber-500" /> Ativar envio automático?
+              </DialogTitle>
+              <DialogDescription>
+                Ao ligar, o sistema passa a <strong>disparar mensagens de WhatsApp para os motoristas</strong> conforme as regras configuradas (limite diário, janela de horário e gatilhos). Confirme apenas se tem certeza de que deseja iniciar os disparos automáticos. Você ainda precisará clicar em <strong>Salvar</strong> para aplicar.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-2 flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setConfirmEnableOpen(false)}>Cancelar</Button>
+              <Button
+                className="gap-2"
+                onClick={() => { setForm({ ...form, enabled: true }); setConfirmEnableOpen(false); }}
+              >
+                <Power className="h-4 w-4" /> Ativar
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Opt-out */}
         <Section title="Não perturbe (opt-out)" collapsible defaultOpen={false}>
