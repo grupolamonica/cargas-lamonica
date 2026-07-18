@@ -17,13 +17,30 @@ import {
 } from "./brk-admin/handlers.js";
 
 import {
+  resolveChatConversationsResponse,
+  resolveChatMessagesResponse,
+  resolveChatSendResponse,
   resolveDriverOpportunitiesResponse,
+  resolveMassEnqueueResponse,
+  resolveMassPreviewResponse,
+  resolveMassRoutesResponse,
+  resolveMessageTemplatesListResponse,
+  resolveMessageTemplateUpdateResponse,
+  resolveOperatorNotificationsClearResponse,
+  resolveOperatorNotificationsListResponse,
+  resolveOperatorNotificationsSeenResponse,
   resolveOutreachOptoutAddResponse,
   resolveOutreachOptoutRemoveResponse,
   resolveOutreachOverviewResponse,
   resolveOutreachQueueCancelResponse,
+  resolveOutreachQueueCreateResponse,
+  resolveOutreachQueueItemResponse,
+  resolveOutreachQueueRevalidateResponse,
+  resolveOutreachQueueSendResponse,
+  resolveOutreachQueueUpdateResponse,
   resolveOutreachScanResponse,
   resolveOutreachSettingsUpdateResponse,
+  resolveReconcileRegistrationsResponse,
   resolveEvolutionWebhookResponse,
   resolveWhatsappConnectResponse,
   resolveWhatsappDisconnectResponse,
@@ -365,7 +382,34 @@ export function registerRoutes(app) {
   router.post("/api/operator/outreach/scan", wrap(resolveOutreachScanResponse));
   router.post("/api/operator/outreach/optout", wrap(resolveOutreachOptoutAddResponse));
   router.delete("/api/operator/outreach/optout/:driverKey", wrap(resolveOutreachOptoutRemoveResponse));
+
+  // Driver outreach — fila de envio (rotas fixas ANTES das parametrizadas)
+  router.post("/api/operator/outreach/queue", wrap(resolveOutreachQueueCreateResponse));
+  router.post("/api/operator/outreach/queue/revalidate", wrap(resolveOutreachQueueRevalidateResponse));
+  router.get("/api/operator/outreach/queue/:id", wrap(resolveOutreachQueueItemResponse));
+  router.patch("/api/operator/outreach/queue/:id", wrap(resolveOutreachQueueUpdateResponse));
+  router.post("/api/operator/outreach/queue/:id/send", wrap(resolveOutreachQueueSendResponse));
   router.post("/api/operator/outreach/queue/:id/cancel", wrap(resolveOutreachQueueCancelResponse));
+
+  // Driver outreach — central de mensagens editáveis (templates) + reconciliação
+  router.get("/api/operator/outreach/message-templates", wrap(resolveMessageTemplatesListResponse));
+  router.patch("/api/operator/outreach/message-templates", wrap(resolveMessageTemplateUpdateResponse));
+  router.post("/api/operator/outreach/reconcile-registrations", wrap(resolveReconcileRegistrationsResponse));
+
+  // Driver outreach — notificações do operador (sino do header)
+  router.get("/api/operator/notifications", wrap(resolveOperatorNotificationsListResponse));
+  router.post("/api/operator/notifications/seen", wrap(resolveOperatorNotificationsSeenResponse));
+  router.post("/api/operator/notifications/clear", wrap(resolveOperatorNotificationsClearResponse));
+
+  // Driver outreach — chat com motoristas (WhatsApp)
+  router.get("/api/operator/chat/conversations", wrap(resolveChatConversationsResponse));
+  router.get("/api/operator/chat/messages", wrap(resolveChatMessagesResponse));
+  router.post("/api/operator/chat/send", wrap(resolveChatSendResponse));
+
+  // Driver outreach — disparo em massa (por rota / todos)
+  router.get("/api/operator/mass-outreach/routes", wrap(resolveMassRoutesResponse));
+  router.post("/api/operator/mass-outreach/preview", wrap(resolveMassPreviewResponse));
+  router.post("/api/operator/mass-outreach/enqueue", wrap(resolveMassEnqueueResponse));
 
   // Conexão do WhatsApp (Evolution) — QR, status, logout, envio de teste
   router.get("/api/operator/outreach/whatsapp/status", wrap(resolveWhatsappStatusResponse));
