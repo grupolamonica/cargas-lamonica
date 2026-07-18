@@ -34,6 +34,8 @@ interface ClienteModalProps {
   onClose: () => void;
   onSave: (data: ClienteFormData) => void;
   initialData?: Cliente | null;
+  // Pré-preenche o nome ao CADASTRAR um novo cliente (sem virar modo edição).
+  initialNome?: string;
 }
 
 const requirementOptions = [
@@ -56,7 +58,7 @@ type ReputationKey = (typeof reputationOptions)[number]["key"];
 
 const DEFAULT_ICON = "Star";
 
-const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps) => {
+const ClienteModal = ({ open, onClose, onSave, initialData, initialNome }: ClienteModalProps) => {
   const [form, setForm] = useState<ClienteFormData>(createEmptyClienteForm);
   const shouldShowLogoCleanupWarning = shouldProxyClientLogoUrl(form.logo_url);
 
@@ -66,8 +68,10 @@ const ClienteModal = ({ open, onClose, onSave, initialData }: ClienteModalProps)
   const [newExigIcon, setNewExigIcon] = useState(DEFAULT_ICON);
 
   useEffect(() => {
-    setForm(mapClienteToFormData(initialData));
-  }, [initialData, open]);
+    if (initialData) setForm(mapClienteToFormData(initialData));
+    else if (initialNome) setForm({ ...createEmptyClienteForm(), nome: initialNome });
+    else setForm(createEmptyClienteForm());
+  }, [initialData, initialNome, open]);
 
   if (!open) {
     return null;
