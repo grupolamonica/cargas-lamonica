@@ -236,7 +236,7 @@ jobs:
             # os sidecars com build-context (spx-bot, angelira-bot, etc.) ficavam
             # presos numa imagem antiga a cada deploy — ex.: o keep-alive do spx-bot
             # nunca subia. O layer cache mantém os inalterados rápidos.
-            docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.domain.yml -f docker-compose.deploy.yml build aspx-renewal spx-bot angelira-bot unificada-bot cadastro-ocr
+            docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.domain.yml -f docker-compose.deploy.yml build aspx-renewal spx-bot angelira-bot unificada-bot cadastro-ocr galileu-bot
 
             # Bring up with pinned images (includes HTTPS Traefik routers via domain.yml)
             docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.domain.yml -f docker-compose.deploy.yml up -d --remove-orphans
