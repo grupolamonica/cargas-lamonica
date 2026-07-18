@@ -480,6 +480,48 @@ async function bootstrap() {
     console.info("[driver-outreach] worker desabilitado (DRIVER_OUTREACH_DISABLE_WORKER=true)");
   }
 
+  // 4d. DC-201 / Epic DC-183 — auto-lançamento de spots com rota cadastrada.
+  //     Varre as viagens SPX Planejado e lança sozinho (sem intervenção do
+  //     operador) as que já têm tabela de preço (rota) — elas aparecem no portal
+  //     do motorista automaticamente. NÃO aceita no SPX (aceite segue manual).
+  //     LIGADO por padrão (é o core da feature): a carga só fica visível ao
+  //     motorista quando a rota já existe, e o launch é idempotente + com teto por
+  //     ciclo, então o risco é baixo. Kill-switch: SPOT_AUTOLAUNCH_ENABLED=false.
+  //     Intervalo em SPOT_AUTOLAUNCH_INTERVAL_MIN (default 5min). Também exposto
+  //     como POST /api/operator/programacao/auto-launch ("rodar agora").
+  if (process.env.SPOT_AUTOLAUNCH_ENABLED !== "false") {
+    const intervalMin = Math.max(1, Number(process.env.SPOT_AUTOLAUNCH_INTERVAL_MIN || 5));
+    let autoLaunching = false;
+    setInterval(async () => {
+      if (autoLaunching) return;
+      autoLaunching = true;
+      try {
+        // Toggle em runtime pela tela do operador (tabela programacao_settings).
+        // Desligado → pula o ciclo sem lançar (o timer segue vivo p/ religar na hora).
+        const { isSpotAutolaunchEnabled } = await import(
+          "./application/operator-admin/use-cases/programacao-settings.js"
+        );
+        if (!(await isSpotAutolaunchEnabled())) return;
+        const { autoLaunchRoutedSpots } = await import(
+          "./application/operator-admin/use-cases/auto-launch-routed-spots.js"
+        );
+        const r = await autoLaunchRoutedSpots({ correlationId: "spot-autolaunch" });
+        if (r.launched || r.errors || r.deferred) {
+          console.info(
+            `[spot-autolaunch] lançados=${r.launched} (rota=${r.routed}, candidatos=${r.candidates}, já=${r.already}, erros=${r.errors}, adiados=${r.deferred})`,
+          );
+        }
+      } catch (err) {
+        console.error("[spot-autolaunch] erro:", err?.message);
+      } finally {
+        autoLaunching = false;
+      }
+    }, intervalMin * 60 * 1000);
+    console.info(`[spot-autolaunch] timer ativo (intervalo ${intervalMin}min; liga/desliga pela tela do operador — programacao_settings)`);
+  } else {
+    console.info("[spot-autolaunch] desabilitado via kill-switch (SPOT_AUTOLAUNCH_ENABLED=false)");
+  }
+
   // 5. Iniciar HTTP server
   const server = app.listen(PORT, () => {
     console.log(`[lamonica-backend] Servidor ouvindo em http://localhost:${PORT}`);

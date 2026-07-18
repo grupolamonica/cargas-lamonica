@@ -717,6 +717,38 @@ describe("operator-admin service", () => {
     expect(response.payload.items[0]).toMatchObject({ status: "OPEN", driver_visibility: "PUBLIC" });
   });
 
+  it("carga LANÇADA (lh_manual, sem sheet_lh) de HOJE com hora passada continua no portal; carga de planilha some", async () => {
+    // "Hoje" no relógio de São Paulo (mesmo usado pelo read model). Hora "00:00:00"
+    // é passada em qualquer momento do dia (salvo o instante exato da meia-noite).
+    const { getSaoPauloWallClock } = await import("../../domain/sao-paulo-time.js");
+    const today = getSaoPauloWallClock().dateIso;
+    const cliente = await seedCliente({ nome: "Cliente Programacao" });
+
+    // Lançada pela Programação (sheet_lh nulo + lh_manual), HOJE 00:00 → deve APARECER.
+    const lancada = await seedCargo({
+      cliente_id: cliente.id, origem: "Criciuma Verdinho / SC", destino: "Betim / MG",
+      status: "OPEN", driver_visibility: "PUBLIC", data: today, horario: "00:00:00", sheet_lh: null,
+    });
+    await query("UPDATE public.cargas SET lh_manual = $1 WHERE id = $2", ["LT-LAUNCH-TODAY", lancada.id]);
+
+    // Carga de planilha (sheet_lh preenchido), HOJE 00:00 → deve SUMIR (expira minuto-a-minuto).
+    await seedCargo({
+      cliente_id: cliente.id, origem: "Recife / PE", destino: "Salvador / BA",
+      status: "OPEN", driver_visibility: "PUBLIC", data: today, horario: "00:00:00", sheet_lh: "SHEET-TODAY",
+    });
+
+    const response = await service.fetchDriverLoadsReadModel({
+      query: { page: "1", pageSize: "50" },
+      correlationId: "corr-launch-today",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const ids = response.payload.items.map((i) => i.id);
+    expect(ids).toContain(lancada.id); // lançada de hoje segue visível apesar da hora passada
+    const origins = response.payload.items.map((i) => String(i.origem || i.routeLabel || ""));
+    expect(origins.some((o) => o.toUpperCase().includes("RECIFE"))).toBe(false); // planilha de hoje some
+  });
+
   it("aplica filtros server-side no read model do motorista", async () => {
     const cliente = await seedCliente({ nome: "Cliente Portal" });
 

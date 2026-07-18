@@ -75,8 +75,14 @@ export function mapSystemCargoToMonitorRow(c, clientesById = {}, now = null) {
   const opStatus = (c.alloc_status || "").trim();
   const lifecycle = (c.status || "").trim().toUpperCase();
   const isPublic = (c.driver_visibility || "PUBLIC").toString().toUpperCase() === "PUBLIC";
+  // Carga lançada/manual do sistema (sheet_lh NULL + lh_manual) fica disponível o
+  // dia inteiro (data >= hoje), igual à exceção do buildDriverLoadFilters — senão
+  // o Monitor mostraria "Em aberto" numa carga que o motorista já enxerga.
+  const isLaunched = !!(c.lh_manual && String(c.lh_manual).trim())
+    && !(c.sheet_lh && String(c.sheet_lh).trim());
   const isFuture = !now || !dataStr || dataStr > now.todayIso
-    || (dataStr === now.todayIso && (!horaStr || horaStr >= now.nowTimeIso));
+    || (dataStr === now.todayIso && (!horaStr || horaStr >= now.nowTimeIso))
+    || (isLaunched && dataStr >= now.todayIso);
   const openToDriver = lifecycle === "OPEN" && isPublic && motoristas === "" && isFuture;
   let status = opStatus;
   if (!opStatus) {

@@ -59,8 +59,10 @@ export async function fetchOperatorDashboardReadModel({ query, correlationId }) 
       values.push(nowTimeIso);
       const nowTimeIndex = index;
       index += 1;
+      // Exceção: carga lançada/manual do sistema (sheet_lh NULL + lh_manual) fica
+      // visível o dia inteiro (data >= hoje), igual ao buildDriverLoadFilters.
       clauses.push(
-        `(cargas.data IS NULL OR cargas.data > $${todayGtIndex} OR (cargas.data = $${todayEqIndex} AND (cargas.horario IS NULL OR cargas.horario >= $${nowTimeIndex})))`,
+        `(cargas.data IS NULL OR cargas.data > $${todayGtIndex} OR (cargas.data = $${todayEqIndex} AND (cargas.horario IS NULL OR cargas.horario >= $${nowTimeIndex})) OR (cargas.sheet_lh IS NULL AND cargas.lh_manual IS NOT NULL AND cargas.data >= $${todayEqIndex}))`,
       );
     } else {
       if (status && status !== "todos") {
@@ -426,8 +428,10 @@ export async function fetchDriverLoadFacets({ correlationId }) {
     // aparecem no listing. Parameterizado pq pg-mem nao suporta CURRENT_DATE.
     // "Agora" no fuso de Sao Paulo (container roda em UTC; data/horario sao BRT).
     const { dateIso: todayIso, timeIso: nowTimeIso } = getSaoPauloWallClock();
+    // Exceção: carga lançada/manual do sistema (sheet_lh NULL + lh_manual) fica
+    // visível o dia inteiro (data >= hoje), igual ao buildDriverLoadFilters.
     const notExpiredSql =
-      "(data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))";
+      "(data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)) OR (sheet_lh IS NULL AND lh_manual IS NOT NULL AND data >= $2))";
 
     const buildFacetWhereSql = (includeDriverVisibilityFilter) =>
       includeDriverVisibilityFilter

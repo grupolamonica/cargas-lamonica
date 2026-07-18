@@ -108,6 +108,7 @@ const schemaSql = `
     recurrence_parent_id uuid,
     lh_manual text,
     codigo_viagem text,
+    agenda_a_confirmar boolean NOT NULL DEFAULT false,
     version integer NOT NULL DEFAULT 0,
     booked_at timestamptz,
     created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
@@ -116,6 +117,12 @@ const schemaSql = `
   );
 
   CREATE UNIQUE INDEX ux_cargas_codigo_viagem ON public.cargas (codigo_viagem);
+
+  CREATE TABLE public.nestle_ofertas (
+    codprogcoleta text PRIMARY KEY,
+    codembarque text,
+    grupos_id text
+  );
 
   CREATE TABLE public.monitor_reservas (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -672,6 +672,18 @@ export async function findSheetClientId(client) {
   return rows[0]?.id ?? null;
 }
 
+// Resolve o id de um cliente pelo nome exato (case-insensitive). Usado p/ lançar
+// cargas de fontes não-Shopee (ex.: Nestlé/Projeto Galileu).
+export async function findClientIdByName(client, name) {
+  const targetName = String(name ?? "").trim();
+  if (!targetName) return null;
+  const { rows } = await client.query(
+    "SELECT id FROM public.clientes WHERE LOWER(nome) = LOWER($1) LIMIT 1",
+    [targetName],
+  );
+  return rows[0]?.id ?? null;
+}
+
 export async function findCargoById(client, cargoId, { lock = false } = {}) {
   const suffix = lock ? "FOR UPDATE" : "";
   const { rows } = await client.query(
@@ -931,9 +943,18 @@ export function buildDriverLoadFilters(query, {
   // O "agora" tem que ser o relógio de Sao Paulo: o container roda em UTC e
   // cargas.data/horario são horário local do Brasil. Misturar fusos (data UTC +
   // hora local) escondia cargas de hoje até ~3h cedo e o dia todo após 21h BRT.
+  //
+  // Exceção (2026-07-14): cargas LANÇADAS/manuais do sistema (não-planilha:
+  // sheet_lh NULL + lh_manual preenchido, ex.: lançamento pela tela Programação)
+  // ficam visíveis o DIA INTEIRO (data >= hoje), ignorando a hora. A hora de
+  // carregamento vinda do SPX (STD) é nominal — o operador está ofertando a carga
+  // e o painel Programação já remove viagens de dias anteriores (data < hoje);
+  // sem esta exceção, uma carga lançada hoje cuja hora nominal já passou sumiria
+  // do portal no mesmo instante do lançamento. Cargas de planilha (sheet_lh
+  // preenchido) mantêm a expiração minuto-a-minuto (STD confiável).
   const { dateIso: todayIso, timeIso: nowTimeIso } = getSaoPauloWallClock();
   clauses.push(
-    `(cargas.data IS NULL OR cargas.data > $${index} OR (cargas.data = $${index + 1} AND (cargas.horario IS NULL OR cargas.horario >= $${index + 2})))`,
+    `(cargas.data IS NULL OR cargas.data > $${index} OR (cargas.data = $${index + 1} AND (cargas.horario IS NULL OR cargas.horario >= $${index + 2})) OR (cargas.sheet_lh IS NULL AND cargas.lh_manual IS NOT NULL AND cargas.data >= $${index + 1}))`,
   );
   values.push(todayIso, todayIso, nowTimeIso);
   index += 3;
