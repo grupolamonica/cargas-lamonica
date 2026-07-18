@@ -395,8 +395,25 @@ export async function resolveWhatsappTestResponse(request) {
  * POST /api/webhooks/evolution — recebe eventos do Evolution (QR, conexão).
  * SEM autenticação de operador: é um webhook interno chamado pelo gateway.
  * Cacheia o QR (QRCODE_UPDATED) para a tela buscar; limpa ao conectar.
+ *
+ * Autenticação por segredo compartilhado: quando EVOLUTION_WEBHOOK_SECRET está
+ * definido no env, só aceita chamadas com `?secret=` (a EVOLUTION_WEBHOOK_URL
+ * configurada no Evolution deve incluí-lo) ou header `x-webhook-secret`. O
+ * endpoint é público via Traefik e tem efeitos reais (persiste chat, dispara
+ * fluxo de reserva) — sem o segredo, qualquer um poderia forjar eventos.
+ * Env ausente mantém o comportamento anterior (compatibilidade; módulo OFF).
  */
 export async function resolveEvolutionWebhookResponse(request) {
+  const requiredSecret = (process.env.EVOLUTION_WEBHOOK_SECRET || "").trim();
+  if (requiredSecret) {
+    const provided = String(
+      (request.query || {}).secret || (request.headers || {})["x-webhook-secret"] || "",
+    );
+    if (provided !== requiredSecret) {
+      console.warn("[evolution.webhook] rejeitado: secret ausente/incorreto");
+      return { statusCode: 401, payload: { error: "UNAUTHORIZED" } };
+    }
+  }
   try {
     const body = (await parseJsonBody(request)) || {};
     const event = String(body.event || body.type || "").toLowerCase().replace(/_/g, ".");
