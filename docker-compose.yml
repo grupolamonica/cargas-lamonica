@@ -339,12 +339,53 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── Evolution API (gateway WhatsApp p/ driver-outreach) — OPT-IN ─────────
+  # Só sobe com: docker compose --profile outreach up -d evolution-api
+  # Interno (sem Traefik). Requer EVOLUTION_API_TOKEN no backend.env e um
+  # pareamento único via QR. STORE_*=false → zero persistência de mensagens.
+  evolution-api:
+    image: atendai/evolution-api:latest
+    container_name: lamonica-evolution-api
+    restart: unless-stopped
+    profiles: ["outreach"]
+    networks:
+      - lamonica-net
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_TOKEN:-}
+      SERVER_URL: http://evolution-api:8080
+      DATABASE_ENABLED: "false"
+      STORE_MESSAGES: "false"
+      STORE_MESSAGE_UP: "false"
+      STORE_CONTACTS: "false"
+      STORE_CHATS: "false"
+      LOG_LEVEL: ERROR
+      DEL_INSTANCE: "false"
+    volumes:
+      - evolution_data:/evolution/instances
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 0.75
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 # ── Volumes ───────────────────────────────────────────────────────────────
 volumes:
   cadastro_anexos:
     name: lamonica_cadastro_anexos
   spx_pw_profile:
     name: lamonica_spx_pw_profile
+  evolution_data:
+    name: lamonica_evolution_data
 
 # ── Networks ──────────────────────────────────────────────────────────────
 networks:

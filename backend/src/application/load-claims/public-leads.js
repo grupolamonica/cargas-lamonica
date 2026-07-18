@@ -27,6 +27,7 @@ import { syncedCarregamentoLabel } from "../../domain/cargo-schedule.js";
 import { lookupAspxDriverByCpf } from "../../infrastructure/aspx/aspx-directory.js";
 import { loadDriverVinculoMap, normalizeDriverNameKey } from "../google-sheets/driver-vinculos.js";
 import { writeAllocationsToSheet, isSheetWritebackEnabled } from "../google-sheets/sheet-writeback.js";
+import { enqueueReservationNotification } from "../driver-outreach/reservation-notify.js";
 const DEFAULT_PUBLIC_LEAD_PRE_REGISTRATION_MAX_ATTEMPTS = 6;
 const DEFAULT_PUBLIC_LEAD_PRE_REGISTRATION_WINDOW_SECONDS = 600;
 const DEFAULT_PUBLIC_LEAD_WHATSAPP_QUEUE_MAX_ATTEMPTS = 8;
@@ -2351,6 +2352,9 @@ export async function approvePublicLoadLead({ loadId, leadId, operatorId, correl
           origem,
           destino,
           perfil,
+          eixos,
+          valor,
+          bonus,
           data,
           horario,
           reserved_at,
@@ -2495,6 +2499,43 @@ export async function approvePublicLoadLead({ loadId, leadId, operatorId, correl
       next_load_status: reservedLoad?.status || null,
       recurrence_child_id: recurrenceChildId,
     });
+
+    // Notificação automática de reserva ao motorista (driver-outreach).
+    // Resolve o nome via motoristas_historico (best-effort) e enfileira em
+    // pending_driver_outreach — o worker de outreach entrega via Evolution.
+    // Falha silenciosa: reserva NÃO deve reverter por causa de outreach.
+    if (reservedLoad && leadRow?.cpf && leadRow?.phone) {
+      try {
+        const { rows: nameRows } = await client.query(
+          `SELECT nome FROM public.motoristas_historico WHERE cpf = $1 LIMIT 1`,
+          [leadRow.cpf],
+        );
+        await enqueueReservationNotification(client, {
+          cpf: leadRow.cpf,
+          nome: nameRows[0]?.nome || null,
+          phone: leadRow.phone,
+          leadId,
+          load: {
+            origem: reservedLoad.origem,
+            destino: reservedLoad.destino,
+            dateIso: reservedLoad.data ? toIsoDate(reservedLoad.data) : null,
+            horario: reservedLoad.horario,
+            perfil: reservedLoad.perfil,
+            eixos: reservedLoad.eixos ?? null,
+            valor: reservedLoad.valor ?? null,
+            bonus: reservedLoad.bonus ?? null,
+          },
+          correlationId: resolvedCorrelationId,
+        });
+      } catch (notifyErr) {
+        logLoadClaimEvent("warn", "load-public-leads.approve.notify-failed", {
+          correlation_id: resolvedCorrelationId,
+          load_id: loadId,
+          lead_id: leadId,
+          error: notifyErr?.message,
+        });
+      }
+    }
 
     return {
       statusCode: 200,

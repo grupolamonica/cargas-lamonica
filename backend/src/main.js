@@ -367,6 +367,119 @@ async function bootstrap() {
     console.info("[auto-approve-angellira] desabilitado (AUTO_APPROVE_ANGELLIRA_JOB=false)");
   }
 
+  // 4d. Driver-outreach — worker + scanner SEMPRE iniciados; ficam no-op quando
+  //     o envio está desligado nas settings do banco (controladas pela tela do
+  //     operador). Assim liga/desliga sem redeploy. Escape hatch:
+  //     DRIVER_OUTREACH_DISABLE_WORKER=true não inicia os jobs. Envio real ainda
+  //     exige Evolution pareado (QR); frios exigem cold_enabled nas settings.
+  if (process.env.DRIVER_OUTREACH_DISABLE_WORKER !== "true") {
+    const { getOutreachConfig } = await import("./application/driver-outreach/config.js");
+    const outreachCfg = await getOutreachConfig(null); // timing (poll/scan) vem do env
+
+    // Carrega os overrides das mensagens no boot + refresh periódico (pega
+    // edições feitas em outra réplica dentro de ~2min; a mesma réplica já
+    // atualiza na hora ao salvar via PATCH).
+    try {
+      const { refreshMessageTemplateCache } = await import(
+        "./application/driver-outreach/message-templates.js"
+      );
+      await refreshMessageTemplateCache();
+      setInterval(() => refreshMessageTemplateCache().catch(() => {}), 2 * 60 * 1000);
+    } catch (err) {
+      console.error("[message-templates] refresh inicial falhou:", err?.message);
+    }
+
+    let outreachSending = false;
+    setInterval(async () => {
+      if (outreachSending) return;
+      outreachSending = true;
+      try {
+        const { processOutreachQueue } = await import("./application/driver-outreach/outreach-worker.js");
+        await processOutreachQueue();
+      } catch (err) {
+        console.error("[driver-outreach-worker] erro:", err?.message);
+      } finally {
+        outreachSending = false;
+      }
+    }, Math.max(10, outreachCfg.pollSeconds) * 1000);
+
+    let outreachScanning = false;
+    setInterval(async () => {
+      if (outreachScanning) return;
+      outreachScanning = true;
+      try {
+        const { scanAndEnqueueOutreach } = await import("./application/driver-outreach/scan-and-enqueue.js");
+        const r = await scanAndEnqueueOutreach();
+        if (r.enqueued) console.info(`[driver-outreach-scan] ${r.enqueued} oportunidade(s) enfileirada(s)`);
+      } catch (err) {
+        console.error("[driver-outreach-scan] erro:", err?.message);
+      } finally {
+        outreachScanning = false;
+      }
+    }, Math.max(5, outreachCfg.scanIntervalMin) * 60 * 1000);
+
+    // Job de expiração de reservas (2h sem confirmação → volta OPEN + notifica).
+    let expiringReservations = false;
+    setInterval(async () => {
+      if (expiringReservations) return;
+      expiringReservations = true;
+      try {
+        const { expireStaleReservations } = await import(
+          "./application/driver-outreach/reservation-flow.js"
+        );
+        const r = await expireStaleReservations();
+        if (r.expired) console.info(`[reservation-timeout] ${r.expired} reserva(s) expirada(s)`);
+      } catch (err) {
+        console.error("[reservation-timeout] erro:", err?.message);
+      } finally {
+        expiringReservations = false;
+      }
+    }, 60 * 1000);
+
+    // Match de interesse de retorno: varre cargas OPEN recentes e avisa
+    // motoristas que tinham registrado interesse na rota. Idempotente.
+    let matchingInterests = false;
+    setInterval(async () => {
+      if (matchingInterests) return;
+      matchingInterests = true;
+      try {
+        const { runReturnInterestSweep } = await import(
+          "./application/driver-outreach/return-interest.js"
+        );
+        const r = await runReturnInterestSweep();
+        if (r.total) console.info(`[return-interest-match] ${r.total} motorista(s) avisado(s)`);
+      } catch (err) {
+        console.error("[return-interest-match] erro:", err?.message);
+      } finally {
+        matchingInterests = false;
+      }
+    }, 5 * 60 * 1000);
+
+    // Chamado automático de cargas órfãs (route-need): varre cargas OPEN sem
+    // candidatura carregando em breve e chama motoristas da rota (ondas de 5).
+    // Só age se route_need_enabled nas settings.
+    let scanningRouteNeeds = false;
+    setInterval(async () => {
+      if (scanningRouteNeeds) return;
+      scanningRouteNeeds = true;
+      try {
+        const { scanAndEnqueueRouteNeeds } = await import(
+          "./application/driver-outreach/route-need.js"
+        );
+        const r = await scanAndEnqueueRouteNeeds();
+        if (r.enqueued) console.info(`[route-need] ${r.enqueued} motorista(s) chamado(s) para ${r.cargas} carga(s)`);
+      } catch (err) {
+        console.error("[route-need] erro:", err?.message);
+      } finally {
+        scanningRouteNeeds = false;
+      }
+    }, 20 * 60 * 1000);
+
+    console.info("[driver-outreach] worker + scanner + reservation-timeout + return-interest-match + route-need iniciados (envio controlado pela tela do operador)");
+  } else {
+    console.info("[driver-outreach] worker desabilitado (DRIVER_OUTREACH_DISABLE_WORKER=true)");
+  }
+
   // 5. Iniciar HTTP server
   const server = app.listen(PORT, () => {
     console.log(`[lamonica-backend] Servidor ouvindo em http://localhost:${PORT}`);

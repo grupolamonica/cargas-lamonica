@@ -10,6 +10,7 @@ import {
 import { parseDateStringAsLocal } from "@/lib/dateDisplay";
 import { cn } from "@/lib/utils";
 import TorreRankingCard from "@/components/operator/TorreRankingCard";
+import DriverOpportunitiesPanel from "@/components/operator/DriverOpportunitiesPanel";
 import type { PublicLeadValidationSummary, PublicLeadValidationPlate } from "@/services/loadClaims";
 
 export interface DriverDetailModalData {
@@ -46,6 +47,8 @@ interface DriverDetailModalProps {
   onOpenChange: (open: boolean) => void;
   data: DriverDetailModalData | null;
   hideValidation?: boolean;
+  /** Exibe a seção "Oportunidades de contato" (painel do operador). */
+  showOpportunities?: boolean;
 }
 
 function getLookupBadgeClasses(status: string) {
@@ -82,7 +85,7 @@ function DetailRow({ label, value }: { label: string; value: string | null | und
   );
 }
 
-export default function DriverDetailModal({ open, onOpenChange, data, hideValidation = false }: DriverDetailModalProps) {
+export default function DriverDetailModal({ open, onOpenChange, data, hideValidation = false, showOpportunities = false }: DriverDetailModalProps) {
   const driverName = data?.angelliraDetails?.name || data?.name || "Motorista";
 
   return (
@@ -132,6 +135,16 @@ export default function DriverDetailModal({ open, onOpenChange, data, hideValida
               ) : null}
             </div>
           </section>
+
+          {/* Oportunidades de contato detectadas (Wave A driver-outreach) */}
+          {showOpportunities ? (
+            <DriverOpportunitiesPanel
+              cpf={data.cpf}
+              nome={data.name}
+              phone={data.phone}
+              enabled={open}
+            />
+          ) : null}
 
           {/* Ranking Torre de Controle — posição + métricas por CPF */}
           {data.cpf && data.cpf.replace(/\D/g, "").length === 11 ? (

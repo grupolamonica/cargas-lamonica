@@ -2248,6 +2248,7 @@ const Motoristas = () => {
         onOpenChange={(open) => { if (!open) setDetailDriver(null); }}
         data={detailDriver}
         hideValidation
+        showOpportunities
       />
           </>
         )}

@@ -20,6 +20,7 @@ const ManageRoutes = lazy(() => import("./pages/ManageRoutes"));
 const Leads = lazy(() => import("./pages/Leads"));
 const HistoricoFila = lazy(() => import("./pages/HistoricoFila"));
 const Motoristas = lazy(() => import("./pages/Motoristas"));
+const Outreach = lazy(() => import("./pages/Outreach"));
 const AdminLogin = lazy(() => import("./pages/AdminLogin"));
 const DriverPortal = lazy(() => import("./pages/DriverPortal"));
 const DriverCargoDetails = lazy(() => import("./pages/DriverCargoDetails"));
@@ -107,6 +108,7 @@ const App = () => {
                   <Route path="/leads" element={<Leads />} />
                   <Route path="/historico-fila" element={<HistoricoFila />} />
                   <Route path="/motoristas" element={<Motoristas />} />
+                  <Route path="/outreach" element={<Outreach />} />
                   <Route path="/veiculos" element={<Veiculos />} />
                   <Route path="/planilha" element={<SheetMonitor />} />
                   <Route path="/auditoria" element={<OperatorAuditLogs />} />
