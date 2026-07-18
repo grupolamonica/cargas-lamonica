@@ -357,11 +357,24 @@ services:
     environment:
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_TOKEN:-}
       SERVER_URL: http://evolution-api:8080
-      DATABASE_ENABLED: "false"
-      STORE_MESSAGES: "false"
-      STORE_MESSAGE_UP: "false"
-      STORE_CONTACTS: "false"
-      STORE_CHATS: "false"
+      # Evolution v2 EXIGE banco (o DATABASE_ENABLED do v1 não existe mais).
+      # Postgres DEDICADO e isolado (não o Supabase da aplicação). A instância/
+      # sessão é persistida (o pareamento por QR sobrevive a restart); mensagens/
+      # contatos/chats NÃO são guardados no Evolution (privacidade — o app tem a
+      # própria whatsapp_messages e o webhook entrega os eventos independente disso).
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:${EVOLUTION_DB_PASSWORD:-}@evolution-postgres:5432/evolution?schema=public
+      DATABASE_CONNECTION_CLIENT_NAME: lamonica_evolution
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
+      DATABASE_SAVE_MESSAGE_UPDATE: "false"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_LABELS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+      # Cache local (sem Redis) — suficiente para instância única.
+      CACHE_REDIS_ENABLED: "false"
+      CACHE_LOCAL_ENABLED: "true"
       LOG_LEVEL: ERROR
       DEL_INSTANCE: "false"
     volumes:
@@ -381,6 +394,39 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    depends_on:
+      evolution-postgres:
+        condition: service_healthy
+
+  # ── Postgres dedicado do Evolution API v2 (OPT-IN) ───────────────────────
+  # v2 exige banco. Isolado do Supabase da aplicação; interno, SEM portas
+  # expostas — só o evolution-api acessa na lamonica-net. Só sobe com o
+  # profile outreach. Requer EVOLUTION_DB_PASSWORD no .env da raiz.
+  evolution-postgres:
+    image: postgres:16-alpine
+    container_name: lamonica-evolution-postgres
+    restart: unless-stopped
+    profiles: ["outreach"]
+    networks:
+      - lamonica-net
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${EVOLUTION_DB_PASSWORD:-}
+      POSTGRES_DB: evolution
+    volumes:
+      - evolution_pg_data:/var/lib/postgresql/data
+    mem_limit: 256m
+    mem_reservation: 64m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 # ── Volumes ───────────────────────────────────────────────────────────────
 volumes:
@@ -390,6 +436,8 @@ volumes:
     name: lamonica_spx_pw_profile
   evolution_data:
     name: lamonica_evolution_data
+  evolution_pg_data:
+    name: lamonica_evolution_pg_data
 
 # ── Networks ──────────────────────────────────────────────────────────────
 networks:
