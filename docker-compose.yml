@@ -344,9 +344,11 @@ services:
   # Interno (sem Traefik). Requer EVOLUTION_API_TOKEN no backend.env e um
   # pareamento único via QR. STORE_*=false → zero persistência de mensagens.
   evolution-api:
-    # Versão PINADA (não usar :latest): evita pular de major sem querer e
-    # torna o deploy reprodutível. v2.2.3 = última estável v2 no Docker Hub.
-    image: atendai/evolution-api:v2.2.3
+    # Versão PINADA (não usar :latest) e org ATUAL do projeto: a org antiga
+    # (atendai/) restringiu os pulls públicos — registry devolve 401 até com
+    # token anônimo (foi o "pull access denied" na VPS). A imagem oficial
+    # vive em evoapicloud/ agora; v2.3.7 = última estável verificada.
+    image: evoapicloud/evolution-api:v2.3.7
     container_name: lamonica-evolution-api
     restart: unless-stopped
     profiles: ["outreach"]
