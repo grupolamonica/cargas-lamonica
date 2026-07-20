@@ -169,6 +169,9 @@ export default function Programacao() {
   // Filtros multiselect (mesmo padrão de Cliente/Rotas/Status): valores "sim"/"nao".
   const [fLancado, setFLancado] = useState<string[]>([]);
   const [fAceito, setFAceito] = useState<string[]>([]);
+  // Paginação: renderiza a lista em páginas p/ manter a tela leve (sem despejar
+  // centenas de linhas no DOM de uma vez).
+  const [page, setPage] = useState(1);
   const [carregDe, setCarregDe] = useState("");
   const [carregAte, setCarregAte] = useState("");
   const [descargaDe, setDescargaDe] = useState("");
@@ -581,6 +584,19 @@ export default function Programacao() {
     });
   }, [filteredAll, tab, agendaSortDir]);
 
+  // Paginação da aba atual — mantém a tela leve renderizando só a página visível.
+  const PAGE_SIZE = 50;
+  const totalPages = Math.max(1, Math.ceil(visibleRows.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pagedRows = useMemo(
+    () => visibleRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [visibleRows, safePage],
+  );
+  // Volta p/ a 1ª página quando muda a aba, a ordenação ou qualquer filtro.
+  useEffect(() => {
+    setPage(1);
+  }, [tab, agendaSortDir, search, fCliente, fRota, fStatus, carregDe, carregAte, descargaDe, descargaAte, fLancado, fAceito]);
+
   const hasActiveFilters =
     search.trim().length > 0 ||
     fCliente.length + fRota.length + fStatus.length + fLancado.length + fAceito.length > 0 ||
@@ -782,7 +798,7 @@ export default function Programacao() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/50">
-                {visibleRows.map((r, i) => (
+                {pagedRows.map((r, i) => (
                   <tr key={`${r.tab}:${r.lh}`} className={cn("align-top transition hover:bg-primary/[0.03]", i % 2 === 1 && "bg-muted/20")}>
                     <td className="px-3 py-2.5">
                       <div className="font-medium text-foreground">{r.cliente || "—"}</div>
@@ -843,6 +859,32 @@ export default function Programacao() {
                 ))}
               </tbody>
             </table>
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between gap-3 border-t border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                <span className="tabular-nums">
+                  {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, visibleRows.length)} de {visibleRows.length}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={safePage <= 1}
+                    className="rounded-lg border border-border bg-background px-2.5 py-1 font-semibold transition hover:bg-muted disabled:opacity-40"
+                  >
+                    Anterior
+                  </button>
+                  <span className="px-1 tabular-nums">{safePage}/{totalPages}</span>
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={safePage >= totalPages}
+                    className="rounded-lg border border-border bg-background px-2.5 py-1 font-semibold transition hover:bg-muted disabled:opacity-40"
+                  >
+                    Próxima
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>

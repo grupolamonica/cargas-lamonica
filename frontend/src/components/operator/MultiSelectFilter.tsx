@@ -61,7 +61,7 @@ export function MultiSelectFilter({
           type="button"
           aria-expanded={open}
           className={cn(
-            "flex min-w-[150px] items-center justify-between gap-2 rounded-2xl border bg-white/92 px-4 py-3 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10",
+            "flex min-w-[150px] items-center justify-between gap-2 rounded-2xl border bg-card px-4 py-3 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10",
             count > 0 ? "border-primary/40" : "border-border/80",
             className,
           )}
