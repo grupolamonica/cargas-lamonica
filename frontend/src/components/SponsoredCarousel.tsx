@@ -75,7 +75,7 @@ const SLIDES: Slide[] = [
   },
 ];
 
-const AUTOPLAY_DELAY = 4000;
+const AUTOPLAY_DELAY = 10000;
 
 export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
   const [emblaRef, emblaApi] = useEmblaCarousel({ loop: true });
