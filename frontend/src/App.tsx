@@ -1,5 +1,9 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, useState } from "react";
 import { ThemeProvider } from "next-themes";
+// lazyWithRetry: recupera de chunk stale pós-deploy / falha de rede móvel no
+// import() dinâmico (DC-265), recarregando a página uma vez em vez de cair no
+// ErrorBoundary ("recarregue a página"). Aliased como `lazy` — uso idêntico.
+import { lazyWithRetry as lazy } from "@/lib/lazyWithRetry";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
