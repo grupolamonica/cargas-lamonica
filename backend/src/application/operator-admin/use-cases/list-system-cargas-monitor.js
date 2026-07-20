@@ -10,7 +10,7 @@
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 
 const SELECT_COLS =
-  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_pinned, status, driver_visibility, lh_manual, cliente_id";
+  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_pinned, rodopar_status, status, driver_visibility, lh_manual, cliente_id";
 
 /** DATE do Postgres pode chegar como '2026-06-25' ou ISO '2026-06-25T00:00:00.000Z'.
  *  Fatiar os 10 primeiros chars dá a data de parede correta (igual ao fix do
@@ -117,6 +117,7 @@ export function mapSystemCargoToMonitorRow(c, clientesById = {}, now = null) {
     source: "sistema",
     cargoId: c.id,
     pinned: c.alloc_pinned === true,
+    rodoparStatus: Number(c.rodopar_status ?? 0),
     lifecycleStatus: c.status || null,
     // datetime-local p/ os inputs do modal de edição (carregamento = data+hora canônicos)
     cargaAt: dataStr ? `${dataStr}T${horaStr || "00:00"}` : null,

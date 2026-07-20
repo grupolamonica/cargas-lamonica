@@ -39,7 +39,7 @@ import {
 } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
-import { dashboardQuerySchema, programacaoLaunchBodySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAcceptBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAspxAssignedBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorDescendBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorUpdateReservaBodySchema, vehicleChecklistQuerySchema } from "../schemas/operator-schemas.js";
+import { dashboardQuerySchema, programacaoLaunchBodySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAcceptBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAspxAssignedBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorDescendBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorRodoparBodySchema, sheetMonitorUpdateReservaBodySchema, vehicleChecklistQuerySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
@@ -87,6 +87,7 @@ import { resolveDriverPhones } from "../../../application/operator-admin/use-cas
 import { updateReserva } from "../../../application/operator-admin/use-cases/update-reserva.js";
 import { deleteReserva } from "../../../application/operator-admin/use-cases/delete-reserva.js";
 import { setMonitorAllocationPin } from "../../../application/operator-admin/use-cases/set-monitor-allocation-pin.js";
+import { setMonitorRodoparStatus } from "../../../application/operator-admin/use-cases/set-monitor-rodopar-status.js";
 import { listSystemCargasForMonitor } from "../../../application/operator-admin/use-cases/list-system-cargas-monitor.js";
 import { dedupeSystemRowsByLh } from "../../../application/operator-admin/use-cases/dedupe-monitor-rows.js";
 import { readSheetSnapshotLhSet } from "../../../application/operator-admin/use-cases/read-sheet-snapshot-lhs.js";
@@ -881,9 +882,12 @@ export async function resolveSheetMonitorResponse(request) {
             (from, to) =>
               supabaseClient
                 .from("cargas")
-                .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_pinned, alloc_updated_at")
+                .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_pinned, alloc_updated_at, rodopar_status")
                 .not("sheet_lh", "is", null)
-                .not("alloc_updated_at", "is", null)
+                // Overlay do operador: alocação editada (alloc_updated_at) OU Check Rodopar
+                // marcado (rodopar_status > 0, DC-260). O merge de alloc_* no front só usa
+                // os valores presentes, então incluir linhas só-rodopar não altera a alocação.
+                .or("alloc_updated_at.not.is.null,rodopar_status.gt.0")
                 .order("sheet_lh", { ascending: true })
                 .range(from, to),
             { label: "cargas_alloc", correlationId, partialOnError: true },
@@ -1471,6 +1475,21 @@ export async function resolveSetMonitorAllocationPinResponse(request) {
     async ({ correlationId, requestIp, operatorId }) => {
       const { lh, pinned } = sheetMonitorPinBodySchema.parse(await parseJsonBody(request));
       return setMonitorAllocationPin({ lh, pinned, operatorId, requestIp, correlationId });
+    },
+  );
+}
+
+export async function resolveSetMonitorRodoparStatusResponse(request) {
+  return withOperatorSession(
+    request,
+    "set-monitor-rodopar-status",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { lh, cargoId, status } = sheetMonitorRodoparBodySchema.parse(await parseJsonBody(request));
+      return setMonitorRodoparStatus({ lh, cargoId, status, operatorId, requestIp, correlationId });
     },
   );
 }

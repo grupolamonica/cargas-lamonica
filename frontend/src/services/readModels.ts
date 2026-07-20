@@ -1167,6 +1167,10 @@ export interface SheetMonitorRow {
   // Efetivo (vem do override alloc_pinned, mesclado no front). Carga fixa = o
   // motorista/veículo é intocável (arrasto, edição e cascata).
   pinned?: boolean;
+  // Check Rodopar (DC-260): 0=não lançado (vermelho), 1=lançado (preto),
+  // 2=lançado incorreto/incompleto (azul). Sheet: vem do overlay allocByLh;
+  // sistema: vem direto da linha. Mesclado no front (efetivo).
+  rodoparStatus?: number;
   // Linha sintética de RESERVA (motorista em standby na rota; não vem da
   // planilha, não tem LH real). Arrastável p/ puxar o motorista pra uma carga.
   reserva?: boolean;
@@ -1246,6 +1250,7 @@ export interface SheetMonitorAllocation {
   alloc_vinculo: string | null;
   alloc_pinned: boolean | null;
   alloc_updated_at: string | null;
+  rodopar_status?: number | null;
 }
 
 export async function fetchSheetMonitor({ refresh = false }: { refresh?: boolean } = {}) {
@@ -1452,6 +1457,19 @@ export async function setMonitorAllocationPin(input: { lh: string; pinned: boole
     pinned: boolean;
     meta: { correlationId: string };
   }>("/api/operator/sheet-monitor/pin", { accessToken, method: "POST", body: input });
+}
+
+/** Check Rodopar (DC-260): grava o status por carga (0/1/2). Aceita `lh` (planilha)
+ *  OU `cargoId` (sistema). */
+export async function setMonitorRodoparStatus(input: { lh?: string; cargoId?: string; status: number }) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{
+    ok: boolean;
+    cargoId: string;
+    lh: string | null;
+    rodoparStatus: number;
+    meta: { correlationId: string };
+  }>("/api/operator/sheet-monitor/rodopar", { accessToken, method: "POST", body: input });
 }
 
 /** Campos editáveis de uma carga do SISTEMA no grid do Monitor. Parcial: só os
