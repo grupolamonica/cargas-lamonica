@@ -64,6 +64,28 @@ import {
 const OVERVIEW_KEY = ["operator", "outreach", "overview"];
 const WHATSAPP_KEY = ["operator", "outreach", "whatsapp"];
 
+// Sub-módulo Repom (cadastro de motorista via WhatsApp) — em construção,
+// incremental. Enquanto OFF, a aba não aparece e nada muda. Ligar só quando
+// as fases (entidade central, motor de fluxo, agente, editor visual) estiverem prontas.
+const REPOM_TAB_ENABLED = false;
+
+/**
+ * Casca da aba "Cadastro (Repom)". Placeholder — a fundação (entidade central por
+ * CPF + motor de fluxo) está sendo construída por fases. Atrás de REPOM_TAB_ENABLED.
+ */
+function RepomCadastroTab() {
+  return (
+    <div className="rounded-xl border border-border/60 bg-background p-6">
+      <p className="font-medium">Cadastro de Motoristas (Repom)</p>
+      <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+        Módulo em construção — cadastro conduzido por WhatsApp com agente de IA, editor visual de
+        fluxos e entidade central de motorista por CPF (compartilhada com o wizard web; aprovado vai
+        para o Módulo Motoristas). Será ligado por etapas.
+      </p>
+    </div>
+  );
+}
+
 // Preset conservador anti-ban: cap baixo, gatilhos frios e chamado automático
 // desligados, janela comercial 8h–20h. NÃO mexe no liga/desliga do envio (isso
 // é decisão à parte, com confirmação). Só preenche o form — o operador revisa e
@@ -928,7 +950,7 @@ export default function Outreach() {
   const [queueDetailId, setQueueDetailId] = useState<string | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
   const [massOpen, setMassOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"chat" | "automacao">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "automacao" | "cadastro">("chat");
   const [confirmEnableOpen, setConfirmEnableOpen] = useState(false);
 
   // Filtros da Fila (multiselect). Padrão: oculta "Pulados".
@@ -1041,10 +1063,23 @@ export default function Outreach() {
           >
             Automação
           </button>
+          {REPOM_TAB_ENABLED ? (
+            <button
+              type="button"
+              onClick={() => setActiveTab("cadastro")}
+              className={cn(
+                "rounded-lg px-3 py-1.5 text-xs font-semibold transition",
+                activeTab === "cadastro" ? "bg-background text-foreground shadow" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Cadastro (Repom)
+            </button>
+          ) : null}
         </div>
 
         {activeTab === "chat" ? <ChatPanel /> : null}
         {activeTab === "automacao" ? <WhatsappCard /> : null}
+        {activeTab === "cadastro" ? <RepomCadastroTab /> : null}
 
         {activeTab === "automacao" ? (
           <>
