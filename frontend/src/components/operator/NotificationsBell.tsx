@@ -16,6 +16,7 @@ const NOTIFICATIONS_KEY = ["operator", "notifications"];
 
 const KIND_LABEL: Record<string, string> = {
   reservation_timeout: "Reserva expirou",
+  reservation_undelivered: "Motorista não avisado (WhatsApp)",
   driver_reply_accept: "Motorista aceitou",
   driver_reply_reject: "Motorista recusou",
   driver_reply_unresolved: "Resposta sem número identificado",
@@ -31,6 +32,7 @@ const KIND_LABEL: Record<string, string> = {
 
 const KIND_TINT: Record<string, string> = {
   reservation_timeout: "bg-amber-500",
+  reservation_undelivered: "bg-orange-500",
   driver_reply_accept: "bg-emerald-500",
   driver_reply_reject: "bg-red-500",
   driver_reply_unresolved: "bg-sky-500",

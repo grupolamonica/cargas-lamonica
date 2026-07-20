@@ -39,6 +39,15 @@ async function seedApprovedReservation({
   return { loadId, leadId, cpf, phone };
 }
 
+// Simula que a oferta de reserva FOI entregue (worker marcou 'sent').
+async function seedSentReservationOffer({ leadId, cpf = "12345678901", phone = "5571900001111" }) {
+  await query(
+    `INSERT INTO public.pending_driver_outreach (driver_key, trigger, phone, message, status, sent_at)
+     VALUES ($1, $2, $3, $4, 'sent', now())`,
+    [String(cpf).replace(/\D/g, ""), `reservation:${leadId}`, phone, "oferta"],
+  );
+}
+
 describe("parseAcceptanceIntent", () => {
   it("detecta aceite em palavras-chave e emojis", () => {
     expect(parseAcceptanceIntent("Sim, aceito!")).toBe("accept");
@@ -140,13 +149,15 @@ describe("expireStaleReservations", () => {
     await closeTestDatabase();
   });
 
-  it("reverte reservas com >2h e cria operator_notification", async () => {
+  it("reverte reserva AVISADA (>2h) como 'sem resposta' (reservation_timeout)", async () => {
     const oldTs = new Date(Date.now() - (RESERVATION_ACCEPTANCE_WINDOW_MS + 60_000)).toISOString();
     const { loadId } = await seedApprovedReservation({
       loadId: "cccccccc-cccc-cccc-cccc-cccccccccc01",
       leadId: "dddddddd-dddd-dddd-dddd-dddddddddd01",
       approvedAt: oldTs,
     });
+    // Motorista FOI avisado (oferta entregue) → expira como "sem resposta".
+    await seedSentReservationOffer({ leadId: "dddddddd-dddd-dddd-dddd-dddddddddd01" });
     // outra reserva recente (não deve expirar)
     await seedApprovedReservation({
       loadId: "cccccccc-cccc-cccc-cccc-cccccccccc02",
@@ -162,6 +173,30 @@ describe("expireStaleReservations", () => {
       `SELECT kind FROM public.operator_notifications WHERE kind = 'reservation_timeout'`,
     );
     expect(notif.length).toBe(1);
+  });
+
+  it("reserva NÃO avisada (oferta não entregue) expira como 'não avisado' (reservation_undelivered)", async () => {
+    const oldTs = new Date(Date.now() - (RESERVATION_ACCEPTANCE_WINDOW_MS + 60_000)).toISOString();
+    const { loadId } = await seedApprovedReservation({
+      loadId: "cccccccc-cccc-cccc-cccc-cccccccccc04",
+      leadId: "dddddddd-dddd-dddd-dddd-dddddddddd04",
+      approvedAt: oldTs,
+    });
+    // NÃO semeia oferta 'sent' (WhatsApp fora → nunca entregue).
+    const r = await expireStaleReservations();
+    expect(r.expired).toBe(1);
+    // A carga volta pra fila do mesmo jeito (não fica presa em RESERVED).
+    const { rows } = await query(`SELECT status FROM public.cargas WHERE id = $1`, [loadId]);
+    expect(rows[0].status).toBe("OPEN");
+    // Mas o aviso ao operador é honesto — não é "sem resposta".
+    const { rows: undel } = await query(
+      `SELECT kind FROM public.operator_notifications WHERE kind = 'reservation_undelivered'`,
+    );
+    expect(undel.length).toBe(1);
+    const { rows: timeout } = await query(
+      `SELECT kind FROM public.operator_notifications WHERE kind = 'reservation_timeout'`,
+    );
+    expect(timeout.length).toBe(0);
   });
 
   it("confirmReservation também respeita o estado RESERVED (dedupe/idempotência)", async () => {
