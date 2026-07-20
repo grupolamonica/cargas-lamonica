@@ -944,17 +944,16 @@ export function buildDriverLoadFilters(query, {
   // cargas.data/horario são horário local do Brasil. Misturar fusos (data UTC +
   // hora local) escondia cargas de hoje até ~3h cedo e o dia todo após 21h BRT.
   //
-  // Exceção (2026-07-14): cargas LANÇADAS/manuais do sistema (não-planilha:
-  // sheet_lh NULL + lh_manual preenchido, ex.: lançamento pela tela Programação)
-  // ficam visíveis o DIA INTEIRO (data >= hoje), ignorando a hora. A hora de
-  // carregamento vinda do SPX (STD) é nominal — o operador está ofertando a carga
-  // e o painel Programação já remove viagens de dias anteriores (data < hoje);
-  // sem esta exceção, uma carga lançada hoje cuja hora nominal já passou sumiria
-  // do portal no mesmo instante do lançamento. Cargas de planilha (sheet_lh
-  // preenchido) mantêm a expiração minuto-a-minuto (STD confiável).
+  // DC-271 (2026-07-20): removida a exceção que mantinha cargas LANÇADAS/manuais
+  // (sheet_lh NULL + lh_manual, ex.: lançadas pela Programação) visíveis o DIA
+  // INTEIRO ignorando a hora. Agora TODAS as cargas — planilha e lançadas —
+  // expiram minuto-a-minuto no carregamento (data+horario). Motivo: cargas com o
+  // horário de carregamento já vencido continuavam no portal o dia todo (relato
+  // dos motoristas). Trade-off: uma carga lançada cuja hora nominal já passou some
+  // do portal — decisão do produto (reverte a exceção do DC-201).
   const { dateIso: todayIso, timeIso: nowTimeIso } = getSaoPauloWallClock();
   clauses.push(
-    `(cargas.data IS NULL OR cargas.data > $${index} OR (cargas.data = $${index + 1} AND (cargas.horario IS NULL OR cargas.horario >= $${index + 2})) OR (cargas.sheet_lh IS NULL AND cargas.lh_manual IS NOT NULL AND cargas.data >= $${index + 1}))`,
+    `(cargas.data IS NULL OR cargas.data > $${index} OR (cargas.data = $${index + 1} AND (cargas.horario IS NULL OR cargas.horario >= $${index + 2})))`,
   );
   values.push(todayIso, todayIso, nowTimeIso);
   index += 3;

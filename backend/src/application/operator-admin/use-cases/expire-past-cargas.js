@@ -6,11 +6,11 @@
 // motorista") — o filtro de runtime (buildDriverLoadFilters) já as esconde do portal,
 // mas o status só transita quando este job roda.
 //
-// A condição de "passado" espelha EXATAMENTE buildDriverLoadFilters, INCLUSIVE a
-// exceção de carga LANÇADA (sheet_lh NULL + lh_manual + data >= hoje fica visível o
-// dia todo) — senão expiraríamos uma carga que o motorista ainda enxerga. Preserva:
-// templates, cargas com motorista atribuído (pipeline) e recorrentes (o motor de
-// recorrência as avança; expirar quebraria a cadeia).
+// A condição de "passado" espelha EXATAMENTE buildDriverLoadFilters. DC-271: a
+// exceção da carga LANÇADA (visível o dia todo) foi REMOVIDA — cargas lançadas
+// expiram no carregamento como as da planilha. Preserva: templates, cargas com
+// motorista atribuído (pipeline) e recorrentes (o motor de recorrência as avança;
+// expirar quebraria a cadeia).
 
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
@@ -32,16 +32,16 @@ export async function expirePastCargas({ deps = {} } = {}) {
           AND COALESCE(is_template, false) = false
           AND COALESCE(is_recurring, false) = false
           AND (
-            -- OPEN: passada (dia anterior OU hoje-hora-vencida), respeitando a exceção
-            -- da carga lançada (visível o dia todo) e o guard de motorista (haul ativo).
+            -- OPEN: passada (dia anterior OU hoje-hora-vencida). DC-271: SEM a
+            -- exceção da carga lançada ("o dia todo") — cargas lançadas expiram no
+            -- carregamento como as da planilha. Guard de motorista (haul ativo) mantido.
             (status = 'OPEN'
               AND (data < $1 OR (data = $1 AND horario IS NOT NULL AND horario < $2))
-              AND NOT (sheet_lh IS NULL AND lh_manual IS NOT NULL AND data >= $1)
               AND COALESCE(alloc_motorista, sheet_motorista, '') = '')
             OR
             -- DRAFT: rascunho de DIA PASSADO (nunca publicado → não é haul ativo, sem
-            -- exceção de lançada nem guard de motorista; sheet_motorista é só dado
-            -- sincronizado). Rascunhos de hoje/futuros são preservados.
+            -- guard de motorista; sheet_motorista é só dado sincronizado). Rascunhos
+            -- de hoje/futuros são preservados.
             (status = 'DRAFT' AND data < $1)
           )`,
       [hoje, agora],
