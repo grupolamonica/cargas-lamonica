@@ -147,6 +147,13 @@ function normalizeRow(t, tab) {
 
 const NESTLE_FINAIS = new Set(["CANCELADO", "DECLINADA", "RECUSA LEILAO", "EXPIRADA", "FINALIZADO"]);
 
+// Status "mortos" da oferta Nestlé: leilão recusado, expirada, cancelada ou declinada.
+// Não são ação da Programação e não têm motorista/embarque — o Galileo devolve milhares
+// delas no histórico e entopem a tela (sem motorista), além de poderem sobrepor a oferta
+// ATIVA do mesmo grupo no DISTINCT ON. Filtradas fora do read model. FINALIZADO NÃO entra
+// aqui: é viagem concluída de verdade (com motorista) e continua indo p/ a aba Concluído.
+const NESTLE_STATUS_MORTOS = ["RECUSA LEILAO", "EXPIRADA", "CANCELADO", "CANCELADO PELA CENTRAL", "DECLINADA"];
+
 // datetime ISO naive do Galileo (wall-clock BRT, ex.: '2026-07-20T08:00:00') →
 // { data:'YYYY-MM-DD', horario:'HH:MM', ts: epoch segundos (interpretando como BRT) }.
 function parseBrtIso(iso) {
@@ -242,8 +249,10 @@ async function defaultFetchNestleOfertas() {
                 e.entrega_dtahrfim  AS emb_entrega_fim
            FROM public.nestle_ofertas o
            LEFT JOIN public.nestle_embarques e ON e.codembarque = o.codembarque
+          WHERE COALESCE(UPPER(TRIM(o.descrstatprogcoleta)), '') <> ALL($1::text[])
           ORDER BY COALESCE(o.grupos_id, o.codprogcoleta), o.dtahrprevatual DESC NULLS LAST
           LIMIT 3000`,
+        [NESTLE_STATUS_MORTOS],
       );
       return rows;
     } catch (err) {
