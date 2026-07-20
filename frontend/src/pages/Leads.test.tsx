@@ -261,6 +261,59 @@ describe("Leads", () => {
     expect(screen.queryByText("Carga pacote-leg")).not.toBeInTheDocument();
   });
 
+  it("DC-272: filtra a fila por presença de candidatura (com/sem)", () => {
+    mockUseQuery.mockReturnValue({
+      data: {
+        groups: [
+          {
+            load: {
+              id: "com-lead", status: "OPEN", origem: "Curitiba / PR", destino: "Joinville / SC",
+              perfil: "CARRETA", data: "2026-04-07", horario: "08:00:00", reservedPublicLeadId: null,
+            },
+            queueCount: 1, totalLeads: 1,
+            leads: [
+              {
+                id: "lead-x", status: "QUEUED", cpf: "11122233344", phone: "71988887777",
+                horsePlate: "AAA1A11", trailerPlate: "BBB2B22", trailerPlate2: "",
+                vehicleType: "CARRETA", preRegisteredAt: "2026-04-07T10:00:00.000Z",
+                queuedAt: "2026-04-07T10:01:00.000Z", whatsappClickedAt: null,
+                approvedAt: null, approvedBy: null, queuePosition: 1, validation: null,
+                whatsappUrl: "https://wa.me/5571988887777",
+              },
+            ],
+          },
+          {
+            load: {
+              id: "sem-lead", status: "OPEN", origem: "Manaus / AM", destino: "Belém / PA",
+              perfil: "CARRETA", data: "2026-04-08", horario: "09:00:00", reservedPublicLeadId: null,
+            },
+            queueCount: 0, totalLeads: 0, leads: [],
+          },
+        ],
+      },
+      isLoading: false,
+      isFetching: false,
+    });
+
+    render(<Leads />);
+
+    // Padrão "Com e sem candidatura": as duas cargas aparecem.
+    expect(screen.getByText("Curitiba / PR -> Joinville / SC")).toBeInTheDocument();
+    expect(screen.getByText("Carga sem-lead")).toBeInTheDocument();
+
+    const filtro = screen.getByTitle("Filtrar cargas por presença de candidatura");
+
+    // "Só com candidatura": esconde a carga OPEN vazia (DC-257).
+    fireEvent.change(filtro, { target: { value: "com" } });
+    expect(screen.getByText("Curitiba / PR -> Joinville / SC")).toBeInTheDocument();
+    expect(screen.queryByText("Carga sem-lead")).not.toBeInTheDocument();
+
+    // "Só sem candidatura": mostra apenas a carga OPEN vazia; esconde a que tem fila.
+    fireEvent.change(filtro, { target: { value: "sem" } });
+    expect(screen.queryByText("Curitiba / PR -> Joinville / SC")).not.toBeInTheDocument();
+    expect(screen.getByText("Carga sem-lead")).toBeInTheDocument();
+  });
+
   it("renderiza a fila real e aprova a reserva do motorista selecionado", async () => {
     render(<Leads />);
 

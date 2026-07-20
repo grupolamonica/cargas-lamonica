@@ -204,6 +204,8 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   const [search, setSearch] = useState("");
   const [loadStatusFilter, setLoadStatusFilter] = useState("todos");
   const [leadStatusFilter, setLeadStatusFilter] = useState("todos");
+  // DC-272: filtro por presença de candidatura — "todas" | "com" | "sem".
+  const [candidaturaFilter, setCandidaturaFilter] = useState<"todas" | "com" | "sem">("todas");
   const [clienteFilter, setClienteFilter] = useState("");
   const [routeFilter, setRouteFilter] = useState<string[]>([]);
   const [dateFilter, setDateFilter] = useState<CargoDateFilterState>(EMPTY_CARGO_DATE_FILTER);
@@ -422,11 +424,19 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
             !historicoMode &&
             leadStatusFilter === "todos" &&
             loadMatchesSearch &&
-            !isMultiStopPacote;
+            !isMultiStopPacote &&
+            // DC-272: "só com candidatura" esconde as cargas OPEN vazias.
+            candidaturaFilter !== "com";
           if (!showEmptyOpen) {
             return null;
           }
           return { ...group, leads: [], queueCount: 0, totalLeads: 0 };
+        }
+
+        // DC-272: "só sem candidatura" mostra apenas as cargas OPEN vazias (acima);
+        // a partir daqui a carga TEM candidatura(s), então sai do recorte.
+        if (candidaturaFilter === "sem") {
+          return null;
         }
 
         // Hide when all leads were filtered out by active search/status filter.
@@ -442,7 +452,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
         };
       })
       .filter((group): group is OperatorLeadGroup => Boolean(group));
-  }, [groups, deferredSearch, loadStatusFilter, leadStatusFilter, historicoMode, sheetAllocationByLh, routeFilter, dateRange]);
+  }, [groups, deferredSearch, loadStatusFilter, leadStatusFilter, candidaturaFilter, historicoMode, sheetAllocationByLh, routeFilter, dateRange]);
 
   const filteredByCliente = useMemo(() =>
     clienteFilter
@@ -574,6 +584,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     deferredSearch.length > 0 ||
     loadStatusFilter !== "todos" ||
     leadStatusFilter !== "todos" ||
+    candidaturaFilter !== "todas" ||
     clienteFilter !== "" ||
     routeFilter.length > 0 ||
     hasCargoDateFilter(dateFilter);
@@ -585,7 +596,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   useEffect(() => {
     knownLoadIdsRef.current = [];
     setPage(1);
-  }, [historicoMode, loadStatusFilter, leadStatusFilter, deferredSearch, clienteFilter, routeFilter, dateFilter]);
+  }, [historicoMode, loadStatusFilter, leadStatusFilter, candidaturaFilter, deferredSearch, clienteFilter, routeFilter, dateFilter]);
 
   useEffect(() => {
     const unseenLoadIds = groups
@@ -951,6 +962,17 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
             </select>
 
             <select
+              value={candidaturaFilter}
+              onChange={(event) => setCandidaturaFilter(event.target.value as "todas" | "com" | "sem")}
+              className="h-12 rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
+              title="Filtrar cargas por presença de candidatura"
+            >
+              <option value="todas">Com e sem candidatura</option>
+              <option value="com">Só com candidatura</option>
+              <option value="sem">Só sem candidatura</option>
+            </select>
+
+            <select
               value={clienteFilter}
               onChange={(event) => setClienteFilter(event.target.value)}
               className="h-12 rounded-2xl border border-border/80 bg-white/92 px-4 text-sm text-foreground outline-none transition-all duration-200 focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
@@ -981,6 +1003,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                 setSearch("");
                 setLoadStatusFilter("todos");
                 setLeadStatusFilter("todos");
+                setCandidaturaFilter("todas");
                 setClienteFilter("");
                 setRouteFilter([]);
                 setDateFilter(EMPTY_CARGO_DATE_FILTER);
