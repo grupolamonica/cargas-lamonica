@@ -214,6 +214,53 @@ describe("Leads", () => {
     mockApproveOperatorLoadLead.mockResolvedValue({});
   });
 
+  it("DC-257: mostra cargas OPEN sem candidatura e selo 'Alocado pelo operador'", () => {
+    mockUseQuery.mockReturnValue({
+      data: {
+        groups: [
+          {
+            load: {
+              id: "open-empty", status: "OPEN", origem: "Salvador / BA", destino: "Campinas / SP",
+              perfil: "CARRETA", data: "2026-04-07", horario: "08:00:00", reservedPublicLeadId: null,
+            },
+            queueCount: 0, totalLeads: 0, leads: [],
+          },
+          {
+            load: {
+              id: "open-alloc", status: "OPEN", origem: "Recife / PE", destino: "Natal / RN",
+              perfil: "CARRETA", data: "2026-04-08", horario: "09:00:00", reservedPublicLeadId: null,
+              sheetMotorista: "JOAO DA SILVA", allocatedByOperator: true,
+            },
+            queueCount: 0, totalLeads: 0, leads: [],
+          },
+          {
+            // Perna de uma viagem casada (multi-parada) sem candidatura — NÃO deve
+            // aparecer fragmentada como carga avulsa.
+            load: {
+              id: "pacote-leg", status: "OPEN", origem: "Ilhéus / BA", destino: "Vitória / ES",
+              perfil: "CARRETA", data: "2026-04-09", horario: "07:00:00", reservedPublicLeadId: null,
+              viagemId: "viagem-1", pacoteMeta: { id: "viagem-1", status: "publicado", valorTotal: 9000, version: 1, totalCargas: 2, ordemPropria: 1 },
+            },
+            queueCount: 0, totalLeads: 0, leads: [],
+          },
+        ],
+      },
+      isLoading: false,
+      isFetching: false,
+    });
+
+    render(<Leads />);
+
+    // Antes eram escondidas (guard leads.length===0). Agora as duas cargas OPEN
+    // avulsas sem candidatura aparecem na Fila.
+    expect(screen.getByText("Carga open-empty")).toBeInTheDocument();
+    expect(screen.getByText("Carga open-alloc")).toBeInTheDocument();
+    // Selo do requisito 2 na carga alocada pelo operador no Monitor.
+    expect(screen.getByText(/Alocado pelo operador/i)).toBeInTheDocument();
+    // Perna de viagem casada sem candidatura NÃO é exibida como card avulso.
+    expect(screen.queryByText("Carga pacote-leg")).not.toBeInTheDocument();
+  });
+
   it("renderiza a fila real e aprova a reserva do motorista selecionado", async () => {
     render(<Leads />);
 

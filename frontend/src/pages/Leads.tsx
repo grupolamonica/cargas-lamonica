@@ -406,9 +406,27 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
           return leadText.includes(deferredSearch);
         });
 
-        // Hide groups with no drivers at all.
+        // Cargas SEM candidatura: por padrão escondidas. Exceção DC-257 — carga
+        // OPEN na Fila (não histórico) aparece para o operador alocar direto,
+        // desde que não haja filtro de lead específico ativo e a busca por texto
+        // da carga case. Assim cargas abertas sem candidatura ficam disponíveis.
         if (group.leads.length === 0) {
-          return null;
+          // Viagem casada (pacote multi-parada) sem candidatura NÃO é exibida como
+          // carga avulsa: sem leads ela cairia no branch {kind:'carga'} e apareceria
+          // fragmentada (1 card por perna) com "Alocar" por perna, furando o
+          // claim atômico do pacote. Mantém escondida (comportamento anterior).
+          const isMultiStopPacote =
+            Boolean(group.load.viagemId) && (group.load.pacoteMeta?.totalCargas ?? 1) > 1;
+          const showEmptyOpen =
+            group.load.status === "OPEN" &&
+            !historicoMode &&
+            leadStatusFilter === "todos" &&
+            loadMatchesSearch &&
+            !isMultiStopPacote;
+          if (!showEmptyOpen) {
+            return null;
+          }
+          return { ...group, leads: [], queueCount: 0, totalLeads: 0 };
         }
 
         // Hide when all leads were filtered out by active search/status filter.
@@ -1236,6 +1254,15 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                       <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[0.6rem] font-semibold text-muted-foreground">
                         {group.queueCount} na fila
                       </span>
+                      {group.load.allocatedByOperator ? (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[0.6rem] font-bold uppercase tracking-[0.1em] text-blue-700 dark:border-blue-400/40 dark:bg-blue-500/15 dark:text-blue-200"
+                          title="Motorista alocado pelo operador na tela de Monitor"
+                        >
+                          <UserPlus className="h-3 w-3" />
+                          Alocado pelo operador
+                        </span>
+                      ) : null}
                     </div>
 
                     {/* Linha 2: rota com logo do cliente */}
@@ -1454,6 +1481,21 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                               </tr>
                             );
                           })}
+                          {group.leads.length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="px-4 py-8 text-center">
+                                <div className="flex flex-col items-center gap-2 text-sm text-muted-foreground">
+                                  <UserPlus className="h-6 w-6 text-muted-foreground/50" />
+                                  <p className="font-medium text-foreground">Nenhuma candidatura ainda</p>
+                                  <p className="text-xs">
+                                    {group.load.allocatedByOperator
+                                      ? "Motorista já alocado pelo operador na tela de Monitor."
+                                      : "Carga aberta sem candidatura — aloque um motorista direto pelo botão acima."}
+                                  </p>
+                                </div>
+                              </td>
+                            </tr>
+                          ) : null}
                         </tbody>
                       </table>
                     </div>
