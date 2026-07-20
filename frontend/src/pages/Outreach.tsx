@@ -15,6 +15,7 @@ import {
   QrCode,
   RefreshCw,
   Send,
+  ShieldCheck,
   Smartphone,
   Snowflake,
   Trash2,
@@ -62,6 +63,18 @@ import {
 
 const OVERVIEW_KEY = ["operator", "outreach", "overview"];
 const WHATSAPP_KEY = ["operator", "outreach", "whatsapp"];
+
+// Preset conservador anti-ban: cap baixo, gatilhos frios e chamado automático
+// desligados, janela comercial 8h–20h. NÃO mexe no liga/desliga do envio (isso
+// é decisão à parte, com confirmação). Só preenche o form — o operador revisa e
+// clica em Salvar.
+const CONSERVATIVE_PRESET: Partial<OutreachSettings> = {
+  dailyCap: 10,
+  coldEnabled: false,
+  quietStartHour: 8,
+  quietEndHour: 20,
+  routeNeedEnabled: false,
+};
 
 const TRIGGER_LABELS: Record<string, string> = {
   churn: "Recuperação",
@@ -1122,9 +1135,22 @@ export default function Outreach() {
               <p className="text-xs text-muted-foreground">
                 {data.settings.updatedAt ? `Última alteração: ${fmtDateTime(data.settings.updatedAt)}` : "Configuração padrão"} · janela {form.quietStartHour}h–{form.quietEndHour}h BRT
               </p>
-              <Button onClick={() => saveMut.mutate(form)} disabled={!dirty || saveMut.isPending} className="gap-2">
-                {saveMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Salvar
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setForm({ ...form, ...CONSERVATIVE_PRESET });
+                    toast.success("Preset conservador aplicado. Revise e clique em Salvar.");
+                  }}
+                  className="gap-1.5"
+                  title="Cap 10/dia · gatilhos frios e chamado automático OFF · janela 8h–20h. Preenche o formulário; você ainda precisa clicar em Salvar."
+                >
+                  <ShieldCheck className="h-4 w-4" /> Conservador
+                </Button>
+                <Button onClick={() => saveMut.mutate(form)} disabled={!dirty || saveMut.isPending} className="gap-2">
+                  {saveMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Salvar
+                </Button>
+              </div>
             </div>
 
             <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-4">
