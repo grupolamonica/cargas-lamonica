@@ -633,11 +633,14 @@ export async function startReconcileRegistrationsInBackground() {
 
 // ─── Conexão do WhatsApp (Evolution) ──────────────────────────────────────────
 
-/** Status da conexão do número WhatsApp. */
-export async function getWhatsappStatus() {
+/**
+ * Status da conexão do número WhatsApp. `instance` opcional: omitido → número
+ * de Cargas (comportamento original); informado → outra instância (ex.: Repom).
+ */
+export async function getWhatsappStatus({ instance } = {}) {
   if (!isEvolutionConfigured()) return { configured: false, state: "not_configured", instance: null };
   try {
-    const s = await getWhatsappConnectionState();
+    const s = await getWhatsappConnectionState({ instance });
     return { configured: true, ...s };
   } catch (err) {
     return { configured: true, state: "error", error: err instanceof Error ? err.message : String(err) };
@@ -647,18 +650,19 @@ export async function getWhatsappStatus() {
 /**
  * Inicia o pareamento. Sem `number` → modo QR (base64 p/ escanear). Com `number`
  * → modo código (pairingCode de 8 caracteres p/ digitar no WhatsApp, sem câmera).
+ * `instance` opcional (default = número de Cargas).
  */
-export async function connectWhatsapp({ number } = {}) {
+export async function connectWhatsapp({ number, instance } = {}) {
   if (!isEvolutionConfigured()) {
     throw new ValidationError("Gateway WhatsApp não configurado (EVOLUTION_API_TOKEN ausente).");
   }
-  return connectWhatsappInstance({ number });
+  return connectWhatsappInstance({ number, instance });
 }
 
-/** Desconecta o número atual (logout da instância). */
-export async function disconnectWhatsapp() {
+/** Desconecta o número atual (logout da instância; default = Cargas). */
+export async function disconnectWhatsapp({ instance } = {}) {
   if (!isEvolutionConfigured()) throw new ValidationError("Gateway WhatsApp não configurado.");
-  return logoutWhatsappInstance();
+  return logoutWhatsappInstance({ instance });
 }
 
 /** Envia uma mensagem de teste para validar a conexão. */

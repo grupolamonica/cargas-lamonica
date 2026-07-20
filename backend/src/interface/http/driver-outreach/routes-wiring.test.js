@@ -57,6 +57,10 @@ describe("driver-outreach — wiring completo das rotas", () => {
     "GET /api/operator/outreach/overview",
     "PATCH /api/operator/outreach/settings",
     "POST /api/webhooks/evolution",
+    // WhatsApp do Repom (número dedicado ao cadastro — Fase 2b)
+    "GET /api/operator/repom/whatsapp/status",
+    "POST /api/operator/repom/whatsapp/connect",
+    "POST /api/operator/repom/whatsapp/disconnect",
   ];
 
   for (const route of expected) {
