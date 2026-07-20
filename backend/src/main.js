@@ -522,6 +522,33 @@ async function bootstrap() {
     console.info("[spot-autolaunch] desabilitado via kill-switch (SPOT_AUTOLAUNCH_ENABLED=false)");
   }
 
+  // 4e. Expiração de cargas passadas (OPEN → EXPIRED). Sem isso, cargas cujo
+  //     carregamento já venceu ficam OPEN no painel do operador (poluindo "ativas"
+  //     e criando a impressão de "cargas que não aparecem para o motorista"), embora
+  //     o filtro de runtime já as esconda do portal. Respeita a exceção de carga
+  //     lançada (visível o dia todo). Kill-switch: EXPIRE_PAST_CARGAS_ENABLED=false.
+  //     Intervalo: EXPIRE_PAST_CARGAS_INTERVAL_MIN (default 15min).
+  if (process.env.EXPIRE_PAST_CARGAS_ENABLED !== "false") {
+    const intervalMin = Math.max(1, Number(process.env.EXPIRE_PAST_CARGAS_INTERVAL_MIN || 15));
+    let expiringCargas = false;
+    setInterval(async () => {
+      if (expiringCargas) return;
+      expiringCargas = true;
+      try {
+        const { expirePastCargas } = await import(
+          "./application/operator-admin/use-cases/expire-past-cargas.js"
+        );
+        const r = await expirePastCargas();
+        if (r.expired) console.info(`[expire-past-cargas] ${r.expired} carga(s) OPEN → EXPIRED`);
+      } catch (err) {
+        console.error("[expire-past-cargas] erro:", err?.message);
+      } finally {
+        expiringCargas = false;
+      }
+    }, intervalMin * 60 * 1000);
+    console.info(`[expire-past-cargas] timer ativo (intervalo ${intervalMin}min)`);
+  }
+
   // 5. Iniciar HTTP server
   const server = app.listen(PORT, () => {
     console.log(`[lamonica-backend] Servidor ouvindo em http://localhost:${PORT}`);
