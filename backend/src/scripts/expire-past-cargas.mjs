@@ -64,8 +64,13 @@ async function main() {
       AND data IS NOT NULL
       AND (data < $1
         OR (data = $2 AND horario IS NOT NULL AND horario < $3))
+      -- Exceção da carga lançada (Programação): sheet_lh NULL + lh_manual + data >= hoje
+      -- fica visível o dia todo no portal — NÃO expira enquanto o motorista a vê.
+      AND NOT (sheet_lh IS NULL AND lh_manual IS NOT NULL AND data >= $1)
       AND COALESCE(is_template, false) = false
       AND COALESCE(alloc_motorista, sheet_motorista, '') = ''
+      -- Recorrentes são avançadas pelo motor de recorrência (expirar quebraria a cadeia).
+      AND COALESCE(is_recurring, false) = false
     ORDER BY data, horario
     ${limit ? `LIMIT ${limit}` : ""}
   `;
