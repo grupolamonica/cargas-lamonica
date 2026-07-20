@@ -172,12 +172,32 @@ async function reopenLoadAndCancelLead(client, { leadId, loadId, reason, correla
       WHERE id = $1 AND status IN ('RESERVED', 'BOOKED')`,
     [loadId],
   );
+  // DC-262: "expirou (2h sem resposta)" só é honesto se o motorista FOI avisado.
+  // Quando a oferta de reserva NÃO chegou (WhatsApp fora → envio falhou), não
+  // dizemos "sem resposta" — sinalizamos ao operador que o motorista não pôde ser
+  // avisado. A carga volta pra fila do mesmo jeito (não fica presa em RESERVED).
+  const notif =
+    reason === "timeout"
+      ? {
+          kind: "reservation_timeout",
+          title: "Reserva expirou (2h sem resposta)",
+          body: "A carga voltou automaticamente para a fila (OPEN).",
+        }
+      : reason === "undelivered"
+        ? {
+            kind: "reservation_undelivered",
+            title: "Reserva devolvida (motorista não avisado)",
+            body: "Não foi possível avisar o motorista pelo WhatsApp (conexão fora). A carga voltou para a fila (OPEN).",
+          }
+        : {
+            kind: "driver_reply_reject",
+            title: "Motorista recusou a carga",
+            body: "A carga voltou para a fila (OPEN).",
+          };
   await insertNotification(client, {
-    kind: reason === "timeout" ? "reservation_timeout" : "driver_reply_reject",
-    title: reason === "timeout" ? "Reserva expirou (2h sem resposta)" : "Motorista recusou a carga",
-    body: reason === "timeout"
-      ? "A carga voltou automaticamente para a fila (OPEN)."
-      : "A carga voltou para a fila (OPEN).",
+    kind: notif.kind,
+    title: notif.title,
+    body: notif.body,
     metadata: {
       lead_id: leadId,
       load_id: loadId,
@@ -266,10 +286,20 @@ export async function expireStaleReservations({ now = new Date() } = {}) {
       [cutoff],
     );
     for (const r of rows) {
+      // Motorista avisado? = a oferta de reserva dele foi marcada 'sent'. Checagem
+      // separada e parametrizada (sem concat/cast no SQL → compat. pg-mem), com o
+      // MESMO formato de trigger que reservation-notify.js gera.
+      const { rows: sent } = await client.query(
+        `SELECT 1 FROM public.pending_driver_outreach
+          WHERE trigger = $1 AND status = 'sent' LIMIT 1`,
+        [`reservation:${r.lead_id}`.slice(0, 64)],
+      );
+      // Avisado (entregue) → "sem resposta". Não avisado (oferta falhou / WhatsApp
+      // fora) → devolve com aviso honesto, sem fingir que o motorista ignorou.
       await reopenLoadAndCancelLead(client, {
         leadId: r.lead_id,
         loadId: r.load_id,
-        reason: "timeout",
+        reason: sent.length > 0 ? "timeout" : "undelivered",
       });
     }
     return { expired: rows.length };
