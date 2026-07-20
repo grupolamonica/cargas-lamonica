@@ -20,6 +20,9 @@ const DEFAULT_FAILURE_THRESHOLD = 3;
 const DEFAULT_COOLDOWN_MS = 60_000;
 const DEFAULT_EVOLUTION_URL = "http://evolution-api:8080";
 const DEFAULT_EVOLUTION_INSTANCE = "lamonica";
+// Instância dedicada ao cadastro de motorista (Repom) — número separado do de
+// Cargas. Multi-instância do Evolution (mesmo servidor, nomes diferentes).
+const DEFAULT_REPOM_INSTANCE = "lamonica-repom";
 
 // Estado interno do circuito (process-local). Reset em sucesso; abre apos
 // `DEFAULT_FAILURE_THRESHOLD` falhas consecutivas; cooldown `DEFAULT_COOLDOWN_MS`.
@@ -127,6 +130,21 @@ export function getEvolutionInstance() {
   return process.env.EVOLUTION_API_INSTANCE?.trim() || DEFAULT_EVOLUTION_INSTANCE;
 }
 
+/** Instância dedicada ao cadastro Repom (número separado do de Cargas). */
+export function getRepomInstance() {
+  return process.env.EVOLUTION_REPOM_INSTANCE?.trim() || DEFAULT_REPOM_INSTANCE;
+}
+
+/**
+ * Resolve a instância-alvo de uma operação: a informada (ex.: a do Repom) ou,
+ * por PADRÃO, a de Cargas. Assim toda chamada existente (que não passa instância)
+ * segue idêntica — a base do multi-instância retrocompatível.
+ */
+export function resolveInstance(instance) {
+  const trimmed = typeof instance === "string" ? instance.trim() : "";
+  return trimmed || getEvolutionInstance();
+}
+
 export function getTimeoutMs() {
   return parsePositiveIntegerEnv("EVOLUTION_API_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
 }
@@ -227,7 +245,7 @@ async function fetchWithTimeout(url, options = {}) {
  * @throws {MissingConfigError} EVOLUTION_API_TOKEN nao configurado
  * @throws {Error} falha de transporte (rede / 4xx/5xx Evolution)
  */
-export async function sendWhatsappText({ to, text, correlationId, delayMs } = {}) {
+export async function sendWhatsappText({ to, text, correlationId, delayMs, instance } = {}) {
   if (isCircuitOpen()) {
     throw new EvolutionCircuitOpenError();
   }
@@ -257,7 +275,8 @@ export async function sendWhatsappText({ to, text, correlationId, delayMs } = {}
 
   // Acessa token apos checks de input (preserva ordem de erros consistente).
   const token = getEvolutionToken();
-  const url = `${getEvolutionUrl()}/message/sendText/${getEvolutionInstance()}`;
+  const inst = resolveInstance(instance);
+  const url = `${getEvolutionUrl()}/message/sendText/${inst}`;
 
   const startedAt = Date.now();
 
@@ -299,7 +318,7 @@ export async function sendWhatsappText({ to, text, correlationId, delayMs } = {}
         "../../application/driver-outreach/whatsapp-messages.js"
       );
       await saveWhatsappMessageStandalone({
-        instance: getEvolutionInstance(),
+        instance: inst,
         direction: "out",
         externalId: null,
         phone: normalizedTo,
@@ -365,8 +384,8 @@ async function evolutionRequest(method, path, body) {
 }
 
 /** Estado da conexão: 'open' | 'connecting' | 'close' | 'not_created' | 'unknown'. */
-export async function getWhatsappConnectionState() {
-  const instance = getEvolutionInstance();
+export async function getWhatsappConnectionState({ instance: reqInstance } = {}) {
+  const instance = resolveInstance(reqInstance);
   const r = await evolutionRequest("GET", `/instance/connectionState/${instance}`);
   if (r.status === 404) return { instance, state: "not_created" };
   if (!r.ok) throw new Error(`EVOLUTION_HTTP_${r.status}`);
@@ -427,8 +446,8 @@ async function setInstanceWebhook(instance) {
  * @param {object} [args]
  * @param {string} [args.number] - telefone do número a parear (ativa o modo código)
  */
-export async function connectWhatsappInstance({ number } = {}) {
-  const instance = getEvolutionInstance();
+export async function connectWhatsappInstance({ number, instance: reqInstance } = {}) {
+  const instance = resolveInstance(reqInstance);
   clearInstanceQr(instance);
   const digits = String(number || "").replace(/\D/g, "");
 
@@ -456,7 +475,7 @@ export async function connectWhatsappInstance({ number } = {}) {
   if (digits) {
     // Com um QR já em andamento o Evolution devolve o QR, não um pairingCode.
     // Reiniciamos o socket (logout) e então connect?number gera o código.
-    await logoutWhatsappInstance().catch(() => {});
+    await logoutWhatsappInstance({ instance }).catch(() => {});
     await new Promise((res) => setTimeout(res, 1500));
     const path = `/instance/connect/${instance}?number=${encodeURIComponent(digits)}`;
     let cr = await evolutionRequest("GET", path);
@@ -490,8 +509,8 @@ export async function connectWhatsappInstance({ number } = {}) {
 }
 
 /** Logout (desassocia o número atual da instância). */
-export async function logoutWhatsappInstance() {
-  const instance = getEvolutionInstance();
+export async function logoutWhatsappInstance({ instance: reqInstance } = {}) {
+  const instance = resolveInstance(reqInstance);
   const r = await evolutionRequest("DELETE", `/instance/logout/${instance}`);
   if (!r.ok && r.status !== 404) throw new Error(`EVOLUTION_HTTP_${r.status}`);
   return { ok: true, instance };
