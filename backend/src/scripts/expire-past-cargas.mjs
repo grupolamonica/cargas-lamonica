@@ -65,11 +65,11 @@ async function main() {
       -- Recorrentes são avançadas pelo motor de recorrência (expirar quebraria a cadeia).
       AND COALESCE(is_recurring, false) = false
       AND (
-        -- OPEN: passada, respeitando a exceção da carga lançada (visível o dia todo) e
-        -- o guard de motorista (haul ativo em pipeline).
+        -- OPEN: passada. DC-271: SEM a exceção da carga lançada ("o dia todo") —
+        -- expiram no carregamento como as da planilha. Guard de motorista (haul
+        -- ativo em pipeline) mantido.
         (status = 'OPEN'
           AND (data < $1 OR (data = $2 AND horario IS NOT NULL AND horario < $3))
-          AND NOT (sheet_lh IS NULL AND lh_manual IS NOT NULL AND data >= $1)
           AND COALESCE(alloc_motorista, sheet_motorista, '') = '')
         OR
         -- DRAFT: rascunho de dia passado (nunca publicado → não é haul; sem exceção de
