@@ -16,15 +16,19 @@
 // comum (re-clique) é coberto; cliques concorrentes de operadores distintos podem,
 // em tese, gerar 2 cargas (sem outage, sem violação de índice).
 //
-// A carga nasce OPEN/PUBLIC mas SEM valor/rota do catálogo — então ela aparece p/
-// o operador (Cargas/Monitor) e só entra no portal do motorista depois de
-// enriquecida (carga sem valor não fica "ready" no portal). Não seta sheet_synced_at
-// (não é carga do sync online da planilha) — o lifecycle do sync não a toca.
+// A carga nasce OPEN/PUBLIC e já JÁ recebe valor/distância/duração/bônus do catálogo
+// de rotas (route_metrics_cache) na criação — denormalizados NA carga p/ ela ser
+// self-contained e ficar "ready" no portal. Isso é necessário porque o portal do
+// motorista roda como `anon` e route_metrics_cache é operator-only por RLS: se a carga
+// não trouxer as métricas, o portal não consegue lê-las e a carga fica "em preparação".
+// Se a rota ainda não está cadastrada, nasce sem valor (fica "em preparação" até o
+// operador cadastrar a rota — e um novo lançamento/self-heal preenche). Não seta
+// sheet_synced_at (não é carga do sync online da planilha) — o lifecycle do sync não a toca.
 
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { ValidationError } from "../../../domain/load-claims/errors.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
-import { findClientIdByName, findSheetClientId } from "./_shared.js";
+import { findClientIdByName, findSheetClientId, fetchRouteCatalogMetricsByLoadId } from "./_shared.js";
 
 /**
  * @param {{
@@ -80,6 +84,21 @@ export async function launchCargoFromTrip({
       : null;
 
   return run(async (client) => {
+    // Métricas da rota (valor/bônus/distância/duração) do catálogo — resolvidas
+    // server-side (bypassa a RLS operator-only de route_metrics_cache) e persistidas
+    // NA carga p/ o portal (anon) conseguir lê-las. Sem rota cadastrada → tudo null
+    // (carga fica "em preparação" até a rota existir + um novo lançamento).
+    const routeMetrics =
+      (
+        await fetchRouteCatalogMetricsByLoadId(client, [
+          { id: lhTrim, origem: origemTrim, destino: destinoTrim, perfil: perfilValue },
+        ])
+      ).get(lhTrim) || null;
+    const valorValue = routeMetrics?.valor_padrao ?? null;
+    const bonusValue = routeMetrics?.bonus_padrao ?? null;
+    const distanciaValue = routeMetrics?.distancia_km ?? null;
+    const duracaoValue = routeMetrics?.duracao_horas ?? null;
+
     // Dedup: o LH pode já existir como carga da planilha (sheet_lh, sync online) OU
     // como carga já lançada aqui (lh_manual). Em ambos os casos devolve a existente.
     const existing = await client.query(
@@ -103,12 +122,16 @@ export async function launchCargoFromTrip({
         await client.query(
           `UPDATE public.cargas
               SET origem = $1, destino = $2,
+                  valor = COALESCE(valor, $7),
+                  bonus = COALESCE(bonus, $8),
+                  distancia_km = COALESCE(distancia_km, $9),
+                  duracao_horas = COALESCE(duracao_horas, $10),
                   sheet_data_carregamento = CASE WHEN $6::boolean THEN sheet_data_carregamento ELSE $3 END,
                   sheet_data_descarga = COALESCE($4, sheet_data_descarga),
                   agenda_a_confirmar = CASE WHEN $6::boolean THEN agenda_a_confirmar ELSE false END,
                   updated_at = now()
             WHERE id = $5`,
-          [origemTrim, destinoTrim, carregamentoLabel, descargaValue, ex.id, aConfirmar],
+          [origemTrim, destinoTrim, carregamentoLabel, descargaValue, ex.id, aConfirmar, valorValue, bonusValue, distanciaValue, duracaoValue],
         );
         updated = true;
       }
@@ -156,10 +179,10 @@ export async function launchCargoFromTrip({
       `INSERT INTO public.cargas
          (cliente_id, data, horario, origem, destino, perfil, status, is_template,
           driver_visibility, lh_manual, sheet_data_carregamento, sheet_data_descarga,
-          agenda_a_confirmar, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', false, 'PUBLIC', $7, $8, $9, $10, $11)
+          agenda_a_confirmar, created_by, valor, bonus, distancia_km, duracao_horas)
+       VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', false, 'PUBLIC', $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING id`,
-      [clienteId, dataValue, horarioValue, origemTrim, destinoTrim, perfilValue, lhTrim, carregamentoLabel, descargaValue, aConfirmar, operatorId],
+      [clienteId, dataValue, horarioValue, origemTrim, destinoTrim, perfilValue, lhTrim, carregamentoLabel, descargaValue, aConfirmar, operatorId, valorValue, bonusValue, distanciaValue, duracaoValue],
     );
 
     return {
