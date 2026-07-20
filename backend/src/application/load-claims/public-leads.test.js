@@ -1063,6 +1063,41 @@ describe.sequential("public load leads", () => {
     expect(alloc.load.sheetMotorista).toBe("JOAO DA SILVA");
   });
 
+  it("DC-273: alocação direta reserva a carga (sem coluna 'source', trailer '' no lugar de null)", async () => {
+    // Regressão dos 2 bugs que davam 500 em prod no createDirectLeadAllocation:
+    //   (1) INSERT gravava coluna `source` inexistente em load_public_leads;
+    //   (2) passava null em trailer_plate/trailer_plate_2 (colunas NOT NULL).
+    // Sem trailerPlate, exercita o default "" da placa de carreta.
+    const { id: loadId } = await harness.seedLoad();
+    const operator = await harness.seedOperator();
+
+    const result = await service.createDirectLeadAllocation({
+      loadId,
+      payload: buildPayload({ cpf: "111.222.333-44", horsePlate: "TST1D23", trailerPlate: "", trailerPlate2: "" }),
+      operatorId: operator.id,
+      correlationId: "corr-dc273-direct-alloc",
+    });
+
+    expect(result.statusCode).toBe(201);
+    expect(result.payload.ok).toBe(true);
+    expect(result.payload.lead.status).toBe(PUBLIC_LEAD_STATUS.APPROVED);
+
+    const { rows } = await harness.query(
+      "SELECT status, reserved_public_lead_id FROM public.cargas WHERE id = $1",
+      [loadId],
+    );
+    expect(rows[0].status).toBe(LOAD_STATUS.RESERVED);
+    expect(rows[0].reserved_public_lead_id).toBe(result.payload.lead.id);
+
+    // trailer_plate/trailer_plate_2 gravados como "" (não null) — não viola NOT NULL.
+    const { rows: leadRows } = await harness.query(
+      "SELECT trailer_plate, trailer_plate_2 FROM public.load_public_leads WHERE id = $1",
+      [result.payload.lead.id],
+    );
+    expect(leadRows[0].trailer_plate).toBe("");
+    expect(leadRows[0].trailer_plate_2).toBe("");
+  });
+
   it("rejects approving a queued lead when the load is no longer open", async () => {
     const { id: loadId } = await harness.seedLoad();
     const operator = await harness.seedOperator();
