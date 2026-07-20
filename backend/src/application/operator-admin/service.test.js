@@ -249,6 +249,51 @@ describe("operator-admin service", () => {
     });
   });
 
+  it("DC-265: escopa as cargas disponiveis por cliente (query.clienteId) usando a mesma definicao do portal", async () => {
+    const clienteA = await seedCliente({ nome: "Cliente A DC265" });
+    const clienteB = await seedCliente({ nome: "Cliente B DC265" });
+
+    await seedCargo({
+      cliente_id: clienteA.id,
+      origem: "Salvador / BA",
+      destino: "Simoes Filho / BA",
+      perfil: "CARRETA",
+      status: "OPEN",
+      is_template: false,
+      data: "2099-05-01",
+      driver_visibility: "PUBLIC",
+      valor: 7000,
+    });
+    await seedCargo({
+      cliente_id: clienteB.id,
+      origem: "Feira de Santana / BA",
+      destino: "Simoes Filho / BA",
+      perfil: "CARRETA",
+      status: "OPEN",
+      is_template: false,
+      data: "2099-05-02",
+      driver_visibility: "PUBLIC",
+      valor: 7000,
+    });
+
+    // Com clienteId: só as cargas do cliente A (tela /motorista/cliente).
+    const scoped = await service.fetchDriverLoadsReadModel({
+      query: { page: "1", pageSize: "10", clienteId: clienteA.id },
+      correlationId: "corr-driver-cliente-scope",
+    });
+    expect(scoped.statusCode).toBe(200);
+    expect(scoped.payload.items).toHaveLength(1);
+    expect(scoped.payload.items[0]).toMatchObject({ origem: "Salvador / BA", clienteId: clienteA.id });
+
+    // Sem clienteId: as duas aparecem — prova que é o filtro que escopa, e que
+    // ambas passam nos demais critérios de disponibilidade.
+    const all = await service.fetchDriverLoadsReadModel({
+      query: { page: "1", pageSize: "10" },
+      correlationId: "corr-driver-cliente-noscope",
+    });
+    expect(all.payload.items).toHaveLength(2);
+  });
+
   it("oculta cargas com motorista alocado na planilha (sheet_motorista preenchido), mas mantem cargas com sheet_status de pipeline aberto", async () => {
     const cliente = await seedCliente({ nome: "Cliente Sheet Lock Motorista" });
 

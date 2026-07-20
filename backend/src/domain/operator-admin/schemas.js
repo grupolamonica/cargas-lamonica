@@ -284,6 +284,9 @@ export function parseDriverLoadsQuery(query = {}) {
     perfil: typeof query.perfil === "string" ? query.perfil.trim() : "",
     dateFrom: typeof query.dateFrom === "string" ? query.dateFrom.trim() : "",
     dateTo: typeof query.dateTo === "string" ? query.dateTo.trim() : "",
+    // DC-265: escopa as cargas disponíveis ao motorista por cliente (tela
+    // /motorista/cliente) usando a MESMA definição de "disponível" do portal.
+    clienteId: typeof query.clienteId === "string" ? query.clienteId.trim() : "",
   };
 }
 
