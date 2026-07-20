@@ -235,16 +235,26 @@ function getDriverLoadsCacheTtlMs() {
 
 function driverLoadsCacheKey(query = {}) {
   // Normaliza só os campos que mudam o resultado. Ordena p/ estabilidade.
+  // DC-270: filtros multiselect chegam como array (param repetido) OU string;
+  // serializa ordenado p/ a chave ser estável independente da ordem de seleção.
   const q = query || {};
+  const arrKey = (v) =>
+    (Array.isArray(v) ? v : v == null || v === "" ? [] : [v])
+      .map((x) => String(x).trim().toLowerCase())
+      .sort()
+      .join("|");
   return JSON.stringify({
     page: String(q.page ?? ""),
     pageSize: String(q.pageSize ?? ""),
     search: String(q.search ?? "").trim().toLowerCase(),
     status: String(q.status ?? "").trim().toLowerCase(),
     driverVisibility: String(q.driverVisibility ?? "").trim().toLowerCase(),
-    clienteId: String(q.clienteId ?? "").trim(),
-    origem: String(q.origem ?? "").trim().toLowerCase(),
-    destino: String(q.destino ?? "").trim().toLowerCase(),
+    clienteId: arrKey(q.clienteId),
+    origem: arrKey(q.origem),
+    destino: arrKey(q.destino),
+    perfil: arrKey(q.perfil),
+    dateFrom: String(q.dateFrom ?? "").trim(),
+    dateTo: String(q.dateTo ?? "").trim(),
   });
 }
 
@@ -371,6 +381,8 @@ async function fetchDriverLoadsReadModelUncached({ query, correlationId }) {
     // vira "SAO JOSE DO RIO PRETO"), e filtrar pelo nome cru que aparece na carga
     // (ex.: planilha Nestlé "FEIRA DE SANTANA - BA") não achava. Casar os dois é
     // robusto: acha tanto pelo nome do facet (rótulo) quanto pelo nome cru.
+    // DC-270: origem/destino viraram multiselect (arrays). A carga passa se casar
+    // QUALQUER origem selecionada (e idem destino). Array vazio = sem filtro.
     const { origem: origemFilter, destino: destinoFilter } = parsedQuery;
     const matchesCity = (query, labelPart, rawValue) => {
       const q = query.trim().toUpperCase();
@@ -378,10 +390,15 @@ async function fetchDriverLoadsReadModelUncached({ query, correlationId }) {
       const inRaw = String(rawValue ?? "").trim().toUpperCase().includes(q);
       return inLabel || inRaw;
     };
+    const matchesAnyCity = (queries, labelPart, rawValue) =>
+      queries.length === 0 || queries.some((q) => matchesCity(q, labelPart, rawValue));
+    // DC-265/DC-270: filtro por cliente em memória (evita cast uuid[] no pg-mem).
+    const clienteIds = parsedQuery.clienteIds ?? [];
     const filteredRows = publishableRows.filter((row) => {
       const [labelOrigin, labelDestino] = (row.routeLabel ?? "").split(" X ");
-      if (origemFilter && !matchesCity(origemFilter, labelOrigin, row.origem)) return false;
-      if (destinoFilter && !matchesCity(destinoFilter, labelDestino, row.destino)) return false;
+      if (!matchesAnyCity(origemFilter, labelOrigin, row.origem)) return false;
+      if (!matchesAnyCity(destinoFilter, labelDestino, row.destino)) return false;
+      if (clienteIds.length && !clienteIds.includes(row.clienteId)) return false;
       return true;
     });
 
@@ -461,6 +478,9 @@ export async function fetchDriverLoadFacets({ correlationId }) {
     const origemSet = new Set();
     const destinoSet = new Set();
     const perfilSet = new Set();
+    // DC-270: facet de CLIENTE (id → nome) = clientes que têm carga aberta agora,
+    // consistente com origem/destino/perfil (derivados só das cargas visíveis).
+    const clienteMap = new Map();
 
     publishableRows.forEach((row) => {
       if (row.routeLabel) {
@@ -469,6 +489,9 @@ export async function fetchDriverLoadFacets({ correlationId }) {
         if (destino?.trim()) destinoSet.add(destino.trim());
       }
       if (normalizeOptionalText(row.perfil)) perfilSet.add(row.perfil);
+      if (row.clienteId && normalizeOptionalText(row.clienteNome)) {
+        clienteMap.set(row.clienteId, row.clienteNome.trim());
+      }
     });
 
     return {
@@ -477,6 +500,9 @@ export async function fetchDriverLoadFacets({ correlationId }) {
         origemOptions: Array.from(origemSet).sort((a, b) => a.localeCompare(b, "pt-BR")),
         destinoOptions: Array.from(destinoSet).sort((a, b) => a.localeCompare(b, "pt-BR")),
         perfilOptions: Array.from(perfilSet).sort((a, b) => a.localeCompare(b, "pt-BR")),
+        clienteOptions: Array.from(clienteMap.entries())
+          .map(([id, nome]) => ({ id, nome }))
+          .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
         meta: { correlationId },
       },
     };

@@ -1023,18 +1023,15 @@ export function buildDriverLoadFilters(query, {
     clauses.push(`(${locationClauses.join(" OR ")})`);
   };
 
-  if (parsedQuery.perfil) {
-    clauses.push(`cargas.perfil = $${index}`);
+  // DC-270: perfil virou multiselect (array). ANY($n) = casa qualquer selecionado.
+  if (parsedQuery.perfil?.length) {
+    clauses.push(`cargas.perfil = ANY($${index}::text[])`);
     values.push(parsedQuery.perfil);
     index += 1;
   }
-  if (parsedQuery.clienteId) {
-    // DC-265: escopo por cliente (tela /motorista/cliente) — reaproveita todas as
-    // demais cláusulas de "disponível ao motorista" (OPEN, não-alocada, futura…).
-    clauses.push(`cargas.cliente_id = $${index}::uuid`);
-    values.push(parsedQuery.clienteId);
-    index += 1;
-  }
+  // DC-265/DC-270: o filtro por cliente (clienteIds) é aplicado EM MEMÓRIA no
+  // read model (junto de origem/destino), não em SQL — evita o cast uuid[] que o
+  // pg-mem não suporta e mantém a contagem/paginação corretas.
   if (parsedQuery.dateFrom) {
     clauses.push(`cargas.data >= $${index}`);
     values.push(parsedQuery.dateFrom);

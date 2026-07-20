@@ -294,6 +294,42 @@ describe("operator-admin service", () => {
     expect(all.payload.items).toHaveLength(2);
   });
 
+  it("DC-270: filtros multiselect (perfil[], clienteId[]) casam QUALQUER selecionado", async () => {
+    const clA = await seedCliente({ nome: "Cli A DC270" });
+    const clB = await seedCliente({ nome: "Cli B DC270" });
+    const clC = await seedCliente({ nome: "Cli C DC270" });
+    const base = { status: "OPEN", is_template: false, data: "2099-06-01", driver_visibility: "PUBLIC", valor: 7000 };
+    await seedCargo({ ...base, cliente_id: clA.id, origem: "Salvador / BA", destino: "Recife / PE", perfil: "CARRETA" });
+    await seedCargo({ ...base, cliente_id: clB.id, origem: "Ilheus / BA", destino: "Natal / RN", perfil: "TRUCK" });
+    await seedCargo({ ...base, cliente_id: clC.id, origem: "Vitoria / ES", destino: "Recife / PE", perfil: "CARRETA" });
+
+    // clienteId multiselect [A, B] → só cargas de A e B (não C).
+    const porCliente = await service.fetchDriverLoadsReadModel({
+      query: { page: "1", pageSize: "10", clienteId: [clA.id, clB.id] },
+      correlationId: "corr-dc270-cliente",
+    });
+    const clientesRetornados = new Set(porCliente.payload.items.map((i) => i.clienteId));
+    expect(clientesRetornados).toEqual(new Set([clA.id, clB.id]));
+
+    // perfil multiselect [CARRETA] → só as 2 CARRETA (A e C).
+    const porPerfil = await service.fetchDriverLoadsReadModel({
+      query: { page: "1", pageSize: "10", perfil: ["CARRETA"] },
+      correlationId: "corr-dc270-perfil",
+    });
+    expect(porPerfil.payload.items).toHaveLength(2);
+    expect(porPerfil.payload.items.every((i) => i.perfil === "CARRETA")).toBe(true);
+  });
+
+  it("DC-270: facets retornam clienteOptions (clientes com carga aberta)", async () => {
+    const cliente = await seedCliente({ nome: "Embarcador Facet" });
+    await seedCargo({
+      cliente_id: cliente.id, origem: "Salvador / BA", destino: "Recife / PE", perfil: "CARRETA",
+      status: "OPEN", is_template: false, data: "2099-06-02", driver_visibility: "PUBLIC", valor: 7000,
+    });
+    const facets = await service.fetchDriverLoadFacets({ correlationId: "corr-dc270-facets" });
+    expect(facets.payload.clienteOptions).toContainEqual({ id: cliente.id, nome: "Embarcador Facet" });
+  });
+
   it("oculta cargas com motorista alocado na planilha (sheet_motorista preenchido), mas mantem cargas com sheet_status de pipeline aberto", async () => {
     const cliente = await seedCliente({ nome: "Cliente Sheet Lock Motorista" });
 
