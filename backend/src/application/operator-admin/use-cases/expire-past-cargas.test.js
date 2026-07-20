@@ -53,4 +53,27 @@ describe("expirePastCargas", () => {
     expect(await statusOf(recurring.id)).toBe("OPEN");
     expect(await statusOf(withDriver.id)).toBe("OPEN");
   });
+
+  it("expira DRAFT de dia passado (mesmo com motorista), preserva DRAFT de hoje/futuro/recorrente/template", async () => {
+    const hoje = getSaoPauloWallClock().dateIso;
+
+    const draftPast = await seedCargo({ cliente_id: clienteId, data: "2020-02-01", horario: "08:00", status: "DRAFT" });
+    // DRAFT passado COM sheet_motorista → expira (rascunho não é haul ativo)
+    const draftPastDriver = await seedCargo({ cliente_id: clienteId, data: "2020-02-02", horario: "08:00", status: "DRAFT" });
+    await query("UPDATE public.cargas SET sheet_motorista = 'FULANO' WHERE id = $1", [draftPastDriver.id]);
+    const draftToday = await seedCargo({ cliente_id: clienteId, data: hoje, horario: "00:01", status: "DRAFT" });
+    const draftFuture = await seedCargo({ cliente_id: clienteId, data: "2999-01-01", horario: "08:00", status: "DRAFT" });
+    const draftRecurring = await seedCargo({ cliente_id: clienteId, data: "2020-02-03", horario: "08:00", status: "DRAFT", is_recurring: true });
+    const draftTemplate = await seedCargo({ cliente_id: clienteId, data: "2020-02-04", horario: "08:00", status: "DRAFT", is_template: true });
+
+    const r = await expirePastCargas({ deps });
+
+    expect(r.expired).toBe(2); // draftPast + draftPastDriver
+    expect(await statusOf(draftPast.id)).toBe("EXPIRED");
+    expect(await statusOf(draftPastDriver.id)).toBe("EXPIRED");
+    expect(await statusOf(draftToday.id)).toBe("DRAFT");
+    expect(await statusOf(draftFuture.id)).toBe("DRAFT");
+    expect(await statusOf(draftRecurring.id)).toBe("DRAFT");
+    expect(await statusOf(draftTemplate.id)).toBe("DRAFT");
+  });
 });
