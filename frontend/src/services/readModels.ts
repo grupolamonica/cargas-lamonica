@@ -378,8 +378,18 @@ export interface OperatorDriverListItem {
   applications: OperatorDriverApplicationItem[];
 }
 
-export async function fetchDriverLoads(params: Record<string, string>) {
-  const query = new URLSearchParams(params).toString();
+// DC-270: aceita valores array (filtros multiselect) → serializa como param
+// repetido (?origem=a&origem=b). Valor único (string) segue funcionando.
+export async function fetchDriverLoads(params: Record<string, string | string[]>) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (Array.isArray(value)) {
+      for (const item of value) if (item) search.append(key, item);
+    } else if (value != null && value !== "") {
+      search.append(key, value);
+    }
+  }
+  const query = search.toString();
   return requestJson<{
     items: DriverLoadReadModelItem[];
     summary: {
@@ -451,6 +461,7 @@ export async function fetchDriverLoadFacets() {
     origemOptions: string[];
     destinoOptions: string[];
     perfilOptions: string[];
+    clienteOptions: { id: string; nome: string }[];
     meta: {
       correlationId: string;
     };

@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { format, parseISO } from "date-fns";
 import {
   BellRing,
+  Building2,
   CalendarIcon,
+  Check,
   ChevronDown,
   Compass,
   MapPin,
@@ -58,18 +60,17 @@ import { useToast } from "@/components/ui/use-toast";
 import { DriverLoadsList } from "@/components/driver/DriverLoadsList";
 import {
   useDriverLoads,
-  getFilterLabel,
   buildPeriodLabel,
   toDateInputValue,
   toMobileDateLabel,
   toFilterDateLabel,
   splitLocation,
   formatCityDisplay,
+  type FilterOption,
 } from "@/hooks/useDriverLoads";
 import { useLeadNotifications } from "@/hooks/useLeadNotifications";
 import { useDriverGeolocation } from "@/hooks/useDriverGeolocation";
 import { getOriginCoords, haversineKm } from "@/lib/cityCoordinates";
-import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 import { DriverAlert } from "@/components/driver/ui/DriverAlert";
 import lamonicaLogo from "@/assets/lamonica-logo-white.png";
 import { SponsoredCarousel } from "@/components/SponsoredCarousel";
@@ -151,17 +152,86 @@ const NotificationTriggerButton = ({
   </button>
 );
 
+// DC-270: resumo de uma seleção multiselect para os chips/labels de filtro.
+// Vazio → allLabel; 1 → o rótulo da opção; N → "N selecionados".
+const summarizeFilter = (selected: string[], options: FilterOption[], allLabel: string) => {
+  if (selected.length === 0) return allLabel;
+  if (selected.length === 1) {
+    return options.find((option) => option.value === selected[0])?.label ?? selected[0];
+  }
+  return `${selected.length} selecionados`;
+};
+
+interface MultiToggleListProps {
+  options: FilterOption[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  emptyLabel: string;
+}
+
+// DC-270: lista de opções multi-seleção (checkbox) que substitui os <select>
+// single-value dos filtros do portal. Mantém a estilização premium dos popovers
+// existentes (não usa o MultiSelectFilter do operador, cujo dropdown portalado
+// não herdaria o `driver-theme`).
+const MultiToggleList = ({ options, selected, onChange, emptyLabel }: MultiToggleListProps) => {
+  const selectedSet = new Set(selected);
+  const toggle = (value: string) => {
+    const next = new Set(selectedSet);
+    if (next.has(value)) next.delete(value);
+    else next.add(value);
+    onChange([...next]);
+  };
+
+  if (options.length === 0) {
+    return <p className="mt-3 px-1 py-2 text-sm text-muted-foreground">{emptyLabel}</p>;
+  }
+
+  return (
+    <div className="mt-3 max-h-64 space-y-1 overflow-y-auto pr-0.5">
+      {options.map((option) => {
+        const isSelected = selectedSet.has(option.value);
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => toggle(option.value)}
+            aria-pressed={isSelected}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition",
+              isSelected
+                ? "border-primary/50 bg-primary/10 text-foreground"
+                : "border-transparent text-foreground hover:bg-muted/60",
+            )}
+          >
+            <span
+              className={cn(
+                "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                isSelected ? "border-primary bg-primary text-primary-foreground" : "border-border",
+              )}
+            >
+              {isSelected && <Check className="h-3 w-3" />}
+            </span>
+            <span className="truncate">{option.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
 const DriverPortal = () => {
   const {
     origemFilter, setOrigemFilter,
     destinoFilter, setDestinoFilter,
     perfilFilter, setPerfilFilter,
+    clienteFilter, setClienteFilter,
     page,
     dateFrom, setDateFrom,
     dateTo, setDateTo,
     mobileOrigemDraft, setMobileOrigemDraft,
     mobileDestinoDraft, setMobileDestinoDraft,
     mobilePerfilDraft, setMobilePerfilDraft,
+    mobileClienteDraft, setMobileClienteDraft,
     mobileDateFromDraft, setMobileDateFromDraft,
     mobileDateToDraft, setMobileDateToDraft,
     cargas,
@@ -176,6 +246,7 @@ const DriverPortal = () => {
     origemOptions,
     destinoOptions,
     perfis,
+    clienteOptions,
     activeFilterCount,
     hasActiveFilters,
     activeFilterSummaryItems,
@@ -237,9 +308,10 @@ const DriverPortal = () => {
   // quando setShowStickyBar/scroll dispara render do root.
   const openNotifications = useCallback(() => setIsNotificationsOpen(true), []);
   const openFaq = useCallback(() => setIsFaqOpen(true), []);
-  const clearOrigemFilter = useCallback(() => setOrigemFilter(""), [setOrigemFilter]);
-  const clearDestinoFilter = useCallback(() => setDestinoFilter(""), [setDestinoFilter]);
-  const clearPerfilFilter = useCallback(() => setPerfilFilter(""), [setPerfilFilter]);
+  const clearOrigemFilter = useCallback(() => setOrigemFilter([]), [setOrigemFilter]);
+  const clearDestinoFilter = useCallback(() => setDestinoFilter([]), [setDestinoFilter]);
+  const clearPerfilFilter = useCallback(() => setPerfilFilter([]), [setPerfilFilter]);
+  const clearClienteFilter = useCallback(() => setClienteFilter([]), [setClienteFilter]);
 
   const handleExistingClaimFlow = (ctx: {
     cargaId: string;
@@ -963,8 +1035,8 @@ const DriverPortal = () => {
               <PopoverTrigger asChild>
                 <FilterChip
                   label="Coleta"
-                  value={getFilterLabel(origemFilter, origemOptions, "Todas")}
-                  active={Boolean(origemFilter)}
+                  value={summarizeFilter(origemFilter, origemOptions, "Todas")}
+                  active={origemFilter.length > 0}
                   icon={<MapPin className="h-3.5 w-3.5" />}
                 />
               </PopoverTrigger>
@@ -972,18 +1044,12 @@ const DriverPortal = () => {
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Local de coleta
                 </p>
-                <select
-                  value={origemFilter}
-                  onChange={(event) => setOrigemFilter(event.target.value)}
-                  className="mt-3 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm text-foreground outline-none"
-                >
-                  <option value="">Todas as origens</option>
-                  {origemOptions.map((option) => (
-                    <option key={`origem-${option.label}`} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                <MultiToggleList
+                  options={origemOptions}
+                  selected={origemFilter}
+                  onChange={setOrigemFilter}
+                  emptyLabel="Nenhuma origem disponível"
+                />
                 <button
                   type="button"
                   onClick={clearOrigemFilter}
@@ -998,8 +1064,8 @@ const DriverPortal = () => {
               <PopoverTrigger asChild>
                 <FilterChip
                   label="Entrega"
-                  value={getFilterLabel(destinoFilter, destinoOptions, "Todos")}
-                  active={Boolean(destinoFilter)}
+                  value={summarizeFilter(destinoFilter, destinoOptions, "Todos")}
+                  active={destinoFilter.length > 0}
                   icon={<Compass className="h-3.5 w-3.5" />}
                 />
               </PopoverTrigger>
@@ -1007,18 +1073,12 @@ const DriverPortal = () => {
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Local de entrega
                 </p>
-                <select
-                  value={destinoFilter}
-                  onChange={(event) => setDestinoFilter(event.target.value)}
-                  className="mt-3 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm text-foreground outline-none"
-                >
-                  <option value="">Todos os destinos</option>
-                  {destinoOptions.map((option) => (
-                    <option key={`destino-${option.label}`} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                <MultiToggleList
+                  options={destinoOptions}
+                  selected={destinoFilter}
+                  onChange={setDestinoFilter}
+                  emptyLabel="Nenhum destino disponível"
+                />
                 <button
                   type="button"
                   onClick={clearDestinoFilter}
@@ -1033,8 +1093,8 @@ const DriverPortal = () => {
               <PopoverTrigger asChild>
                 <FilterChip
                   label="Veículo"
-                  value={perfilFilter ? formatVehicleProfileLabel(perfilFilter) : "Todos"}
-                  active={Boolean(perfilFilter)}
+                  value={summarizeFilter(perfilFilter, perfis, "Todos")}
+                  active={perfilFilter.length > 0}
                   icon={<Truck className="h-3.5 w-3.5" />}
                 />
               </PopoverTrigger>
@@ -1042,24 +1102,47 @@ const DriverPortal = () => {
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Filtrar veículo
                 </p>
-                <select
-                  value={perfilFilter}
-                  onChange={(event) => setPerfilFilter(event.target.value)}
-                  className="mt-3 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm text-foreground outline-none"
-                >
-                  <option value="">Todos os perfis</option>
-                  {perfis.map((perfil) => (
-                    <option key={perfil.value} value={perfil.value}>
-                      {perfil.label}
-                    </option>
-                  ))}
-                </select>
+                <MultiToggleList
+                  options={perfis}
+                  selected={perfilFilter}
+                  onChange={setPerfilFilter}
+                  emptyLabel="Nenhum veículo disponível"
+                />
                 <button
                   type="button"
                   onClick={clearPerfilFilter}
                   className="mt-3 text-sm font-semibold text-primary"
                 >
                   Limpar veículo
+                </button>
+              </PopoverContent>
+            </Popover>
+
+            <Popover>
+              <PopoverTrigger asChild>
+                <FilterChip
+                  label="Cliente"
+                  value={summarizeFilter(clienteFilter, clienteOptions, "Todos")}
+                  active={clienteFilter.length > 0}
+                  icon={<Building2 className="h-3.5 w-3.5" />}
+                />
+              </PopoverTrigger>
+              <PopoverContent className="driver-theme w-80 rounded-2xl border-border/40 premium-shadow" align="start" side="bottom">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Filtrar cliente
+                </p>
+                <MultiToggleList
+                  options={clienteOptions}
+                  selected={clienteFilter}
+                  onChange={setClienteFilter}
+                  emptyLabel="Nenhum cliente disponível"
+                />
+                <button
+                  type="button"
+                  onClick={clearClienteFilter}
+                  className="mt-3 text-sm font-semibold text-primary"
+                >
+                  Limpar cliente
                 </button>
               </PopoverContent>
             </Popover>
@@ -1242,59 +1325,53 @@ const DriverPortal = () => {
 
             <div className="overflow-y-auto px-4 pb-3">
               <div className="space-y-4">
-                <label className="block">
+                <div className="block">
                   <span className="mb-2 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
                     Coleta
                   </span>
-                  <select
-                    value={mobileOrigemDraft}
-                    onChange={(event) => setMobileOrigemDraft(event.target.value)}
-                    className="h-12 w-full rounded-2xl border border-input bg-background px-4 text-base font-semibold text-foreground outline-none"
-                  >
-                    <option value="">Todas as origens</option>
-                    {origemOptions.map((option) => (
-                      <option key={`origem-drawer-${option.label}`} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                  <MultiToggleList
+                    options={origemOptions}
+                    selected={mobileOrigemDraft}
+                    onChange={setMobileOrigemDraft}
+                    emptyLabel="Nenhuma origem disponível"
+                  />
+                </div>
 
-                <label className="block">
+                <div className="block">
                   <span className="mb-2 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
                     Entrega
                   </span>
-                  <select
-                    value={mobileDestinoDraft}
-                    onChange={(event) => setMobileDestinoDraft(event.target.value)}
-                    className="h-12 w-full rounded-2xl border border-input bg-background px-4 text-base font-semibold text-foreground outline-none"
-                  >
-                    <option value="">Todos os destinos</option>
-                    {destinoOptions.map((option) => (
-                      <option key={`destino-drawer-${option.label}`} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                  <MultiToggleList
+                    options={destinoOptions}
+                    selected={mobileDestinoDraft}
+                    onChange={setMobileDestinoDraft}
+                    emptyLabel="Nenhum destino disponível"
+                  />
+                </div>
 
-                <label className="block">
+                <div className="block">
                   <span className="mb-2 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
                     Veículo
                   </span>
-                  <select
-                    value={mobilePerfilDraft}
-                    onChange={(event) => setMobilePerfilDraft(event.target.value)}
-                    className="h-12 w-full rounded-2xl border border-input bg-background px-4 text-base font-semibold text-foreground outline-none"
-                  >
-                    <option value="">Todos os perfis</option>
-                    {perfis.map((perfil) => (
-                      <option key={`perfil-drawer-${perfil.value}`} value={perfil.value}>
-                        {perfil.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                  <MultiToggleList
+                    options={perfis}
+                    selected={mobilePerfilDraft}
+                    onChange={setMobilePerfilDraft}
+                    emptyLabel="Nenhum veículo disponível"
+                  />
+                </div>
+
+                <div className="block">
+                  <span className="mb-2 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                    Cliente
+                  </span>
+                  <MultiToggleList
+                    options={clienteOptions}
+                    selected={mobileClienteDraft}
+                    onChange={setMobileClienteDraft}
+                    emptyLabel="Nenhum cliente disponível"
+                  />
+                </div>
 
                 <div className="rounded-2xl border border-border/50 bg-card p-3">
                   <span className="mb-3 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
@@ -1411,7 +1488,7 @@ const DriverPortal = () => {
               </p>
             ) : null}
 
-            <div className="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]">
+            <div className="mt-4 grid gap-3 lg:grid-cols-3 xl:grid-cols-5">
               <Popover>
                 <PopoverTrigger asChild>
                   <button
@@ -1424,7 +1501,7 @@ const DriverPortal = () => {
                     <span className="min-w-0 flex-1">
                       <span className="block text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground/80">Coleta</span>
                       <span className="mt-0.5 block truncate text-[15px] font-bold text-foreground">
-                        {getFilterLabel(origemFilter, origemOptions, "Todas as origens")}
+                        {summarizeFilter(origemFilter, origemOptions, "Todas as origens")}
                       </span>
                     </span>
                     <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-hover:text-primary/60" />
@@ -1432,18 +1509,12 @@ const DriverPortal = () => {
                 </PopoverTrigger>
                 <PopoverContent className="driver-theme w-[300px] rounded-[28px] border-border/45 bg-background/95 p-4 premium-shadow backdrop-blur-xl" align="start" side="bottom">
                   <p className="text-sm font-semibold text-foreground">Local de coleta</p>
-                  <select
-                    value={origemFilter}
-                    onChange={(event) => setOrigemFilter(event.target.value)}
-                    className="mt-3 h-11 w-full rounded-2xl border border-input bg-background px-3 text-sm font-medium text-foreground outline-none"
-                  >
-                    <option value="">Todas as origens</option>
-                    {origemOptions.map((option) => (
-                      <option key={`desktop-popover-origem-${option.label}`} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+                  <MultiToggleList
+                    options={origemOptions}
+                    selected={origemFilter}
+                    onChange={setOrigemFilter}
+                    emptyLabel="Nenhuma origem disponível"
+                  />
                   <button
                     type="button"
                     onClick={clearOrigemFilter}
@@ -1466,7 +1537,7 @@ const DriverPortal = () => {
                     <span className="min-w-0 flex-1">
                       <span className="block text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground/80">Entrega</span>
                       <span className="mt-0.5 block truncate text-[15px] font-bold text-foreground">
-                        {getFilterLabel(destinoFilter, destinoOptions, "Todos os destinos")}
+                        {summarizeFilter(destinoFilter, destinoOptions, "Todos os destinos")}
                       </span>
                     </span>
                     <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-hover:text-primary/60" />
@@ -1474,18 +1545,12 @@ const DriverPortal = () => {
                 </PopoverTrigger>
                 <PopoverContent className="driver-theme w-[300px] rounded-[28px] border-border/45 bg-background/95 p-4 premium-shadow backdrop-blur-xl" align="start" side="bottom">
                   <p className="text-sm font-semibold text-foreground">Local de entrega</p>
-                  <select
-                    value={destinoFilter}
-                    onChange={(event) => setDestinoFilter(event.target.value)}
-                    className="mt-3 h-11 w-full rounded-2xl border border-input bg-background px-3 text-sm font-medium text-foreground outline-none"
-                  >
-                    <option value="">Todos os destinos</option>
-                    {destinoOptions.map((option) => (
-                      <option key={`desktop-popover-destino-${option.label}`} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+                  <MultiToggleList
+                    options={destinoOptions}
+                    selected={destinoFilter}
+                    onChange={setDestinoFilter}
+                    emptyLabel="Nenhum destino disponível"
+                  />
                   <button
                     type="button"
                     onClick={clearDestinoFilter}
@@ -1508,7 +1573,7 @@ const DriverPortal = () => {
                     <span className="min-w-0 flex-1">
                       <span className="block text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground/80">Veículo</span>
                       <span className="mt-0.5 block truncate text-[15px] font-bold text-foreground">
-                        {perfilFilter ? formatVehicleProfileLabel(perfilFilter) : "Todos os perfis"}
+                        {summarizeFilter(perfilFilter, perfis, "Todos os perfis")}
                       </span>
                     </span>
                     <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-hover:text-primary/60" />
@@ -1516,24 +1581,54 @@ const DriverPortal = () => {
                 </PopoverTrigger>
                 <PopoverContent className="driver-theme w-[300px] rounded-[28px] border-border/45 bg-background/95 p-4 premium-shadow backdrop-blur-xl" align="start" side="bottom">
                   <p className="text-sm font-semibold text-foreground">Tipo de veículo</p>
-                  <select
-                    value={perfilFilter}
-                    onChange={(event) => setPerfilFilter(event.target.value)}
-                    className="mt-3 h-11 w-full rounded-2xl border border-input bg-background px-3 text-sm font-medium text-foreground outline-none"
-                  >
-                    <option value="">Todos os perfis</option>
-                    {perfis.map((perfil) => (
-                      <option key={`desktop-popover-perfil-${perfil.value}`} value={perfil.value}>
-                        {perfil.label}
-                      </option>
-                    ))}
-                  </select>
+                  <MultiToggleList
+                    options={perfis}
+                    selected={perfilFilter}
+                    onChange={setPerfilFilter}
+                    emptyLabel="Nenhum veículo disponível"
+                  />
                   <button
                     type="button"
                     onClick={clearPerfilFilter}
                     className="mt-3 text-sm font-semibold text-primary"
                   >
                     Limpar veículo
+                  </button>
+                </PopoverContent>
+              </Popover>
+
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="group flex h-[62px] w-full items-center gap-3 rounded-[22px] border border-border/60 bg-secondary/60 px-4 text-left transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/18 hover:bg-white focus:outline-none focus:ring-2 focus:ring-primary/15"
+                  >
+                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-primary shadow-[0_8px_18px_-12px_hsl(210_100%_45%/0.65)]">
+                      <Building2 className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground/80">Cliente</span>
+                      <span className="mt-0.5 block truncate text-[15px] font-bold text-foreground">
+                        {summarizeFilter(clienteFilter, clienteOptions, "Todos os clientes")}
+                      </span>
+                    </span>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform duration-200 group-hover:text-primary/60" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className="driver-theme w-[300px] rounded-[28px] border-border/45 bg-background/95 p-4 premium-shadow backdrop-blur-xl" align="start" side="bottom">
+                  <p className="text-sm font-semibold text-foreground">Cliente</p>
+                  <MultiToggleList
+                    options={clienteOptions}
+                    selected={clienteFilter}
+                    onChange={setClienteFilter}
+                    emptyLabel="Nenhum cliente disponível"
+                  />
+                  <button
+                    type="button"
+                    onClick={clearClienteFilter}
+                    className="mt-3 text-sm font-semibold text-primary"
+                  >
+                    Limpar cliente
                   </button>
                 </PopoverContent>
               </Popover>
@@ -1759,7 +1854,7 @@ const DriverPortal = () => {
               <div className="absolute inset-0 h-2.5 w-2.5 rounded-full bg-accent opacity-50 animate-ping" />
             </div>
             <span className="text-sm font-bold text-foreground">
-              {getFilterLabel(origemFilter, origemOptions, "Todas")}
+              {summarizeFilter(origemFilter, origemOptions, "Todas")}
             </span>
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <div className="h-px w-8 bg-border" />
@@ -1767,7 +1862,7 @@ const DriverPortal = () => {
               <div className="h-px w-8 bg-border" />
             </div>
             <span className="text-sm font-bold text-foreground">
-              {getFilterLabel(destinoFilter, destinoOptions, "Todos")}
+              {summarizeFilter(destinoFilter, destinoOptions, "Todos")}
             </span>
           </div>
         </div>

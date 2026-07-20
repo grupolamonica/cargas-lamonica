@@ -161,25 +161,37 @@ export const buildAvailableLoadsLabel = (count: number) =>
 export function useDriverLoads() {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
-  const [origemFilter, setOrigemFilter] = useState(searchParams.get("origem") || "");
-  const [destinoFilter, setDestinoFilter] = useState(searchParams.get("destino") || "");
-  const [perfilFilter, setPerfilFilter] = useState(searchParams.get("perfil") || "");
+  // DC-270: filtros multiselect (arrays). Deep-link via params repetidos
+  // (?origem=a&origem=b). Data/período seguem single. Cliente é novo.
+  const [origemFilter, setOrigemFilter] = useState<string[]>(() => searchParams.getAll("origem"));
+  const [destinoFilter, setDestinoFilter] = useState<string[]>(() => searchParams.getAll("destino"));
+  const [perfilFilter, setPerfilFilter] = useState<string[]>(() => searchParams.getAll("perfil"));
+  const [clienteFilter, setClienteFilter] = useState<string[]>(() => searchParams.getAll("clienteId"));
   const [page, setPage] = useState(1);
   const [dateFrom, setDateFrom] = useState<Date | undefined>();
   const [dateTo, setDateTo] = useState<Date | undefined>();
-  const [mobileOrigemDraft, setMobileOrigemDraft] = useState(searchParams.get("origem") || "");
-  const [mobileDestinoDraft, setMobileDestinoDraft] = useState(searchParams.get("destino") || "");
-  const [mobilePerfilDraft, setMobilePerfilDraft] = useState(searchParams.get("perfil") || "");
+  const [mobileOrigemDraft, setMobileOrigemDraft] = useState<string[]>(() => searchParams.getAll("origem"));
+  const [mobileDestinoDraft, setMobileDestinoDraft] = useState<string[]>(() => searchParams.getAll("destino"));
+  const [mobilePerfilDraft, setMobilePerfilDraft] = useState<string[]>(() => searchParams.getAll("perfil"));
+  const [mobileClienteDraft, setMobileClienteDraft] = useState<string[]>(() => searchParams.getAll("clienteId"));
   const [mobileDateFromDraft, setMobileDateFromDraft] = useState<Date | undefined>();
   const [mobileDateToDraft, setMobileDateToDraft] = useState<Date | undefined>();
 
+  // Chaves estáveis (ordem-insensível) p/ deps de effect e queryKey — o array em
+  // si muda de referência a cada seleção, mas a chave só muda quando o conteúdo muda.
+  const origemKey = [...origemFilter].sort().join("|");
+  const destinoKey = [...destinoFilter].sort().join("|");
+  const perfilKey = [...perfilFilter].sort().join("|");
+  const clienteKey = [...clienteFilter].sort().join("|");
+
   useEffect(() => {
     setPage(1);
-  }, [origemFilter, destinoFilter, perfilFilter, dateFrom, dateTo]);
+  }, [origemKey, destinoKey, perfilKey, clienteKey, dateFrom, dateTo]);
 
   const deferredOrigemFilter = useDeferredValue(origemFilter);
   const deferredDestinoFilter = useDeferredValue(destinoFilter);
   const deferredPerfilFilter = useDeferredValue(perfilFilter);
+  const deferredClienteFilter = useDeferredValue(clienteFilter);
 
   useEffect(() => {
     try {
@@ -207,9 +219,10 @@ export function useDriverLoads() {
     queryKey: [
       "driver",
       "loads-read-model",
-      deferredOrigemFilter,
-      deferredDestinoFilter,
-      deferredPerfilFilter,
+      [...deferredOrigemFilter].sort().join("|"),
+      [...deferredDestinoFilter].sort().join("|"),
+      [...deferredPerfilFilter].sort().join("|"),
+      [...deferredClienteFilter].sort().join("|"),
       toDateInputValue(dateFrom),
       toDateInputValue(dateTo),
       page,
@@ -219,6 +232,7 @@ export function useDriverLoads() {
         origem: deferredOrigemFilter,
         destino: deferredDestinoFilter,
         perfil: deferredPerfilFilter,
+        clienteId: deferredClienteFilter,
         dateFrom: toDateInputValue(dateFrom),
         dateTo: toDateInputValue(dateTo),
         page: String(page),
@@ -307,25 +321,44 @@ export function useDriverLoads() {
     return Array.from(seen.values()).sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
   }, [facetsResponse?.perfilOptions]);
 
+  // DC-270: opções de cliente (embarcadores com carga aberta) do facet.
+  const clienteOptions = useMemo<FilterOption[]>(
+    () =>
+      (facetsResponse?.clienteOptions || [])
+        .map((c) => ({ value: c.id, label: c.nome }))
+        .sort((a, b) => a.label.localeCompare(b.label, "pt-BR")),
+    [facetsResponse?.clienteOptions],
+  );
+
+  // Resumo de uma seleção multiselect: vazio→""; 1→o rótulo; N→"N <noun>".
+  const summarizeSelection = (values: string[], options: FilterOption[], noun: string) => {
+    if (values.length === 0) return "";
+    if (values.length === 1) return options.find((o) => o.value === values[0])?.label ?? values[0];
+    return `${values.length} ${noun}`;
+  };
+
   const activeFilterCount = useMemo(
     () =>
-      (origemFilter ? 1 : 0) +
-      (destinoFilter ? 1 : 0) +
-      (perfilFilter ? 1 : 0) +
+      (origemFilter.length ? 1 : 0) +
+      (destinoFilter.length ? 1 : 0) +
+      (perfilFilter.length ? 1 : 0) +
+      (clienteFilter.length ? 1 : 0) +
       (dateFrom || dateTo ? 1 : 0),
-    [origemFilter, destinoFilter, perfilFilter, dateFrom, dateTo],
+    [origemFilter, destinoFilter, perfilFilter, clienteFilter, dateFrom, dateTo],
   );
   const hasActiveFilters = activeFilterCount > 0;
 
   const activeFilterSummaryItems = useMemo(
     () =>
       [
-        origemFilter ? `Origem: ${getFilterLabel(origemFilter, origemOptions, "Todas")}` : "",
-        destinoFilter ? `Destino: ${getFilterLabel(destinoFilter, destinoOptions, "Todos")}` : "",
-        perfilFilter ? `Veículo: ${formatVehicleProfileLabel(perfilFilter)}` : "",
+        origemFilter.length ? `Origem: ${summarizeSelection(origemFilter, origemOptions, "origens")}` : "",
+        destinoFilter.length ? `Destino: ${summarizeSelection(destinoFilter, destinoOptions, "destinos")}` : "",
+        perfilFilter.length ? `Veículo: ${summarizeSelection(perfilFilter, perfis, "veículos")}` : "",
+        clienteFilter.length ? `Cliente: ${summarizeSelection(clienteFilter, clienteOptions, "clientes")}` : "",
         dateFrom || dateTo ? `Período: ${buildPeriodLabel(dateFrom, dateTo)}` : "",
       ].filter(Boolean),
-    [origemFilter, destinoFilter, perfilFilter, dateFrom, dateTo, origemOptions, destinoOptions],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [origemFilter, destinoFilter, perfilFilter, clienteFilter, dateFrom, dateTo, origemOptions, destinoOptions, perfis, clienteOptions],
   );
 
   const mobileFilterSummary = useMemo(
@@ -366,16 +399,17 @@ export function useDriverLoads() {
   }, [hasActiveFilters, mobileFilterSummary, totalMatchingLoads]);
 
   const desktopStickyRoute = useMemo(() => {
-    const originLabel = origemFilter
-      ? getFilterLabel(origemFilter, origemOptions, "Todas as origens")
+    const originLabel = origemFilter.length
+      ? summarizeSelection(origemFilter, origemOptions, "origens")
       : "Todas as origens";
-    const destinationLabel = destinoFilter
-      ? getFilterLabel(destinoFilter, destinoOptions, "Todos os destinos")
+    const destinationLabel = destinoFilter.length
+      ? summarizeSelection(destinoFilter, destinoOptions, "destinos")
       : "Todos os destinos";
     return {
       originLabel: buildCompactLocationLabel(originLabel) || "Todas",
       destinationLabel: buildCompactLocationLabel(destinationLabel) || "Todos",
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [origemFilter, destinoFilter, origemOptions, destinoOptions]);
 
   const today = startOfToday();
@@ -394,27 +428,31 @@ export function useDriverLoads() {
     setMobileOrigemDraft(origemFilter);
     setMobileDestinoDraft(destinoFilter);
     setMobilePerfilDraft(perfilFilter);
+    setMobileClienteDraft(clienteFilter);
     setMobileDateFromDraft(dateFrom);
     setMobileDateToDraft(dateTo);
   };
 
   const clearAllFilters = () => {
-    setOrigemFilter("");
-    setDestinoFilter("");
-    setPerfilFilter("");
+    setOrigemFilter([]);
+    setDestinoFilter([]);
+    setPerfilFilter([]);
+    setClienteFilter([]);
     setDateFrom(undefined);
     setDateTo(undefined);
-    setMobileOrigemDraft("");
-    setMobileDestinoDraft("");
-    setMobilePerfilDraft("");
+    setMobileOrigemDraft([]);
+    setMobileDestinoDraft([]);
+    setMobilePerfilDraft([]);
+    setMobileClienteDraft([]);
     setMobileDateFromDraft(undefined);
     setMobileDateToDraft(undefined);
   };
 
   const clearMobileDraftFilters = () => {
-    setMobileOrigemDraft("");
-    setMobileDestinoDraft("");
-    setMobilePerfilDraft("");
+    setMobileOrigemDraft([]);
+    setMobileDestinoDraft([]);
+    setMobilePerfilDraft([]);
+    setMobileClienteDraft([]);
     setMobileDateFromDraft(undefined);
     setMobileDateToDraft(undefined);
   };
@@ -433,6 +471,7 @@ export function useDriverLoads() {
     setOrigemFilter(mobileOrigemDraft);
     setDestinoFilter(mobileDestinoDraft);
     setPerfilFilter(mobilePerfilDraft);
+    setClienteFilter(mobileClienteDraft);
     setDateFrom(mobileDateFromDraft);
     setDateTo(mobileDateToDraft);
   };
@@ -456,6 +495,7 @@ export function useDriverLoads() {
     origemFilter, setOrigemFilter,
     destinoFilter, setDestinoFilter,
     perfilFilter, setPerfilFilter,
+    clienteFilter, setClienteFilter,
     page, setPage,
     dateFrom, setDateFrom,
     dateTo, setDateTo,
@@ -463,6 +503,7 @@ export function useDriverLoads() {
     mobileOrigemDraft, setMobileOrigemDraft,
     mobileDestinoDraft, setMobileDestinoDraft,
     mobilePerfilDraft, setMobilePerfilDraft,
+    mobileClienteDraft, setMobileClienteDraft,
     mobileDateFromDraft, setMobileDateFromDraft,
     mobileDateToDraft, setMobileDateToDraft,
     // Query results
@@ -481,6 +522,7 @@ export function useDriverLoads() {
     origemOptions,
     destinoOptions,
     perfis,
+    clienteOptions,
     // Filter derived state
     activeFilterCount,
     hasActiveFilters,
