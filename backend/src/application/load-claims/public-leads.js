@@ -2167,8 +2167,11 @@ export async function createDirectLeadAllocation({ loadId, payload, operatorId, 
   const phone = normalizePhone(payload.phone);
   const horsePlate = normalizePlate(payload.horsePlate);
   const vehicleType = normalizeVehicleType(payload.vehicleType);
-  const trailerPlate = payload.trailerPlate ? normalizePlate(payload.trailerPlate) : null;
-  const trailerPlate2 = payload.trailerPlate2 ? normalizePlate(payload.trailerPlate2) : null;
+  // trailer_plate e trailer_plate_2 são NOT NULL (DEFAULT '' na coluna). Passar
+  // NULL explícito viola a constraint (o default só vale se a coluna for omitida),
+  // então usamos "" quando o operador não informa a carreta.
+  const trailerPlate = payload.trailerPlate ? normalizePlate(payload.trailerPlate) : "";
+  const trailerPlate2 = payload.trailerPlate2 ? normalizePlate(payload.trailerPlate2) : "";
 
   if (!cpf || cpf.length !== 11) {
     throw new ValidationError("CPF invalido (deve ter 11 digitos).");
@@ -2208,9 +2211,9 @@ export async function createDirectLeadAllocation({ loadId, payload, operatorId, 
     const { rows: leadRows } = await client.query(
       `
         INSERT INTO public.load_public_leads
-          (load_id, cpf, phone, horse_plate, trailer_plate, trailer_plate_2, vehicle_type, status, source,
+          (load_id, cpf, phone, horse_plate, trailer_plate, trailer_plate_2, vehicle_type, status,
            pre_registered_at, queued_at, approved_at, approved_by, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'OPERATOR_DIRECT',
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                 now(), now(), now(), $9, now(), now())
         RETURNING *
       `,
