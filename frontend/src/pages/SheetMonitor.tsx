@@ -66,6 +66,7 @@ import {
   deleteReserva,
   fetchRouteDriverHistory,
   setMonitorAllocationPin,
+  setMonitorRodoparStatus,
   updateMonitorAllocation,
   updateMonitorCargo,
   updateReserva,
@@ -1803,6 +1804,45 @@ const ROW_VIRTUALIZATION_STYLE = { contentVisibility: "auto" as const, containIn
 
 type RowDropIntent = "swap" | "before" | "after" | null;
 
+// DC-260 — Check Rodopar: marca se a carga já foi lançada no Rodopar.
+//   0 = NÃO lançado (vermelho) · 1 = lançado (preto) · 2 = lançado incorreto (azul)
+const RODOPAR_META: Record<number, { label: string; text: string; dot: string; title: string }> = {
+  0: { label: "não lançado", text: "text-red-600 dark:text-red-400", dot: "bg-red-500", title: "Rodopar: NÃO lançado (vermelho) — clique para marcar como lançado" },
+  1: { label: "lançado", text: "text-foreground", dot: "bg-foreground", title: "Rodopar: lançado (preto) — clique para marcar como lançado incorreto" },
+  2: { label: "lançado incorreto", text: "text-blue-600 dark:text-blue-500", dot: "bg-blue-500", title: "Rodopar: lançado mas incorreto/incompleto (azul) — clique para voltar a NÃO lançado" },
+};
+function rodoparMeta(status?: number | null) {
+  return RODOPAR_META[Number(status ?? 0)] ?? RODOPAR_META[0];
+}
+
+/** Badge clicável do Check Rodopar (DC-260): mostra a cor do estado atual e alterna
+ *  0→1→2→0 a cada clique. Usado na linha do Monitor e no modal. */
+function RodoparBadge({ status, busy, onCycle, withLabel = false }: {
+  status?: number | null;
+  busy?: boolean;
+  onCycle: () => void;
+  withLabel?: boolean;
+}) {
+  const meta = rodoparMeta(status);
+  return (
+    <button
+      type="button"
+      title={meta.title}
+      aria-label={`Rodopar: ${meta.label}`}
+      disabled={busy}
+      onClick={(e) => { e.stopPropagation(); if (!busy) onCycle(); }}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md border border-border/70 bg-background px-1.5 py-0.5 font-bold uppercase tracking-wide leading-none transition hover:bg-muted disabled:opacity-50",
+        withLabel ? "text-[0.65rem]" : "text-[0.55rem]",
+        meta.text,
+      )}
+    >
+      {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <span className={cn("inline-block h-2 w-2 rounded-full", meta.dot)} />}
+      {withLabel ? `Rodopar: ${meta.label}` : "R"}
+    </button>
+  );
+}
+
 const SheetMonitorRow = memo(function SheetMonitorRow({
   row,
   enriched,
@@ -1828,6 +1868,8 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   assigningReserva,
   standbyCountByRoute,
   onPullStandby,
+  onCycleRodopar,
+  rodoparBusy,
 }: {
   row: SheetMonitorRowType;
   enriched: SheetMonitorEnrichedRow | undefined;
@@ -1857,6 +1899,8 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   assigningReserva: boolean;
   standbyCountByRoute: Map<string, number>;
   onPullStandby: (lh: string) => void;
+  onCycleRodopar: (row: SheetMonitorRowType) => void;
+  rodoparBusy: boolean;
 }) {
   // Standbys da MESMA rota (de toda a base, não só desta página) → habilita o
   // botão "puxar standby" em cargas editáveis, independente da paginação.
@@ -1891,14 +1935,19 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
         <StatusBadge dense status={!row.status && row.motoristas ? "Reservado" : row.status} />
       </td>
 
-      {/* LH + Tipo (linha única) — trunca na linha; o LH completo fica no modal (título) */}
+      {/* LH + Tipo + Check Rodopar (DC-260). A COR DO LH reflete o estado do Rodopar
+          (vermelho=não lançado, preto=lançado, azul=lançado incorreto); o badge "R" ao
+          lado alterna os estados com um clique. */}
       <td className="px-3 py-1.5 align-middle">
         {row.reserva ? (
           <span className="text-[0.62rem] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">reserva</span>
         ) : (
-          <div className="min-w-0" title={row.tipo ? `${row.lh} · ${row.tipo}` : row.lh}>
-            <div className="truncate font-mono text-xs font-semibold text-foreground/80">{row.lh || "—"}</div>
-            {row.tipo && <div className="truncate text-[0.62rem] text-muted-foreground">{row.tipo}</div>}
+          <div className="flex min-w-0 items-start gap-1.5">
+            <div className="min-w-0 flex-1" title={row.tipo ? `${row.lh} · ${row.tipo}` : row.lh}>
+              <div className={cn("truncate font-mono text-xs font-semibold", rodoparMeta(row.rodoparStatus).text)}>{row.lh || "—"}</div>
+              {row.tipo && <div className="truncate text-[0.62rem] text-muted-foreground">{row.tipo}</div>}
+            </div>
+            <RodoparBadge status={row.rodoparStatus} busy={rodoparBusy} onCycle={() => onCycleRodopar(row)} />
           </div>
         )}
       </td>
@@ -2007,6 +2056,8 @@ function SheetMonitorTable({
   assigningReservaId,
   standbyCountByRoute,
   onPullStandby,
+  onCycleRodopar,
+  rodoparBusyKey,
   agendaSortDir,
   onToggleAgendaSort,
 }: {
@@ -2033,6 +2084,8 @@ function SheetMonitorTable({
   assigningReservaId: string | null;
   standbyCountByRoute: Map<string, number>;
   onPullStandby: (lh: string) => void;
+  onCycleRodopar: (row: SheetMonitorRowType) => void;
+  rodoparBusyKey: string | null;
   agendaSortDir: "asc" | "desc";
   onToggleAgendaSort: () => void;
 }) {
@@ -2312,6 +2365,8 @@ function SheetMonitorTable({
                 assigningReserva={!!row.reserva && !!row.reservaId && row.reservaId === assigningReservaId}
                 standbyCountByRoute={standbyCountByRoute}
                 onPullStandby={onPullStandby}
+                onCycleRodopar={onCycleRodopar}
+                rodoparBusy={rodoparBusyKey != null && (rodoparBusyKey === row.cargoId || rodoparBusyKey === row.lh)}
               />
             ))}
           </tbody>
@@ -2604,6 +2659,28 @@ function RowDetailModal({
     },
   });
 
+  // Check Rodopar (DC-260) no modal — mesmo controle da linha. Estado local otimista
+  // (fica vivo no modal ao clicar); reconcilia com o servidor no refetch.
+  const [rodoparStatus, setRodoparStatus] = useState(0);
+  useEffect(() => {
+    setRodoparStatus(Number(alloc?.rodopar_status ?? row?.rodoparStatus ?? 0));
+  }, [row, alloc, open]);
+  const rodoparMutation = useMutation({
+    mutationFn: setMonitorRodoparStatus,
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }); },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Não foi possível atualizar o Rodopar.");
+      setRodoparStatus(Number(alloc?.rodopar_status ?? row?.rodoparStatus ?? 0));
+    },
+  });
+  const cycleRodopar = () => {
+    if (!row) return;
+    const next = (rodoparStatus + 1) % 3;
+    setRodoparStatus(next);
+    if (row.source === "sistema" && row.cargoId) rodoparMutation.mutate({ cargoId: row.cargoId, status: next });
+    else rodoparMutation.mutate({ lh: row.lh, status: next });
+  };
+
   // DC-230: consulta Angellira/ASPX só DESTE item (a linha selecionada), sem
   // varrer a planilha inteira. Escopo por cargoId (carga do sistema) ou lh
   // (carga da planilha). Ao concluir, invalida o Monitor p/ atualizar os selos.
@@ -2729,11 +2806,15 @@ function RowDetailModal({
           {/* Fixed header */}
           <DialogHeader className="shrink-0 border-b border-border/60 px-6 py-4 pr-14 space-y-2">
             <div className="flex items-center gap-2 flex-wrap">
-              <DialogTitle className="font-mono text-base font-bold text-foreground">{row.lh}</DialogTitle>
+              <DialogTitle className={cn("font-mono text-base font-bold", rodoparMeta(rodoparStatus).text)}>{row.lh}</DialogTitle>
               {row.tipo && (
                 <span className="rounded-full bg-muted/70 px-2.5 py-0.5 text-[0.65rem] font-semibold text-muted-foreground">
                   {row.tipo}
                 </span>
+              )}
+              {/* Check Rodopar (DC-260) — alterna não lançado / lançado / lançado incorreto. */}
+              {!row.reserva && (
+                <RodoparBadge status={rodoparStatus} busy={rodoparMutation.isPending} onCycle={cycleRodopar} withLabel />
               )}
               {/* DC-230: consultar Angellira/ASPX só desta carga (sem varrer a planilha). */}
               <button
@@ -3481,6 +3562,7 @@ export default function SheetMonitor() {
         status,
         tipo: a.alloc_tipo ?? row.tipo,
         pinned: a.alloc_pinned ?? false,
+        rodoparStatus: a.rodopar_status ?? row.rodoparStatus ?? 0,
         hasDriver: Boolean(motoristas),
         isAvailable: !motoristas && !status,
       };
@@ -3810,6 +3892,52 @@ export default function SheetMonitor() {
   const handleTogglePin = useCallback(
     (lh: string, pinned: boolean) => mutatePin({ lh, pinned }),
     [mutatePin],
+  );
+
+  // ── Check Rodopar (DC-260): alterna 0=não lançado → 1=lançado → 2=lançado incorreto → 0 ──
+  const {
+    mutate: mutateRodopar,
+    isPending: rodoparPending,
+    variables: rodoparVars,
+  } = useMutation({
+    mutationFn: setMonitorRodoparStatus,
+    // OTIMISTA: reflete a cor NA HORA (planilha via allocByLh, sistema via item);
+    // reconcilia no refetch. Rollback se falhar.
+    onMutate: async (vars) => {
+      await queryClient.cancelQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      const prev = queryClient.getQueryData<Awaited<ReturnType<typeof fetchSheetMonitor>>>([...SHEET_MONITOR_QUERY_KEY]);
+      queryClient.setQueryData<Awaited<ReturnType<typeof fetchSheetMonitor>>>([...SHEET_MONITOR_QUERY_KEY], (old) => {
+        if (!old) return old;
+        if (vars.cargoId) {
+          const items = old.items.map((it) => (it.cargoId === vars.cargoId ? { ...it, rodoparStatus: vars.status } : it));
+          return { ...old, items };
+        }
+        const allocByLh = { ...(old.allocByLh ?? {}) };
+        const base = allocByLh[vars.lh ?? ""] ?? {
+          sheet_lh: vars.lh ?? "", alloc_motorista: null, alloc_cavalo: null, alloc_carreta: null,
+          alloc_status: null, alloc_tipo: null, alloc_pinned: false, alloc_updated_at: null,
+        };
+        allocByLh[vars.lh ?? ""] = { ...base, rodopar_status: vars.status };
+        return { ...old, allocByLh };
+      });
+      return { prev };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData([...SHEET_MONITOR_QUERY_KEY], ctx.prev);
+      toast.error(err instanceof Error ? err.message : "Não foi possível atualizar o Rodopar.");
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+    },
+  });
+  const rodoparBusyKey = rodoparPending ? (rodoparVars?.cargoId ?? rodoparVars?.lh ?? null) : null;
+  const handleCycleRodopar = useCallback(
+    (row: SheetMonitorRowType) => {
+      const next = (Number(row.rodoparStatus ?? 0) + 1) % 3;
+      if (row.source === "sistema" && row.cargoId) mutateRodopar({ cargoId: row.cargoId, status: next });
+      else mutateRodopar({ lh: row.lh, status: next });
+    },
+    [mutateRodopar],
   );
 
   const summary = useMemo(() => {
@@ -4312,6 +4440,8 @@ export default function SheetMonitor() {
                 assigningReservaId={assigningReservaId}
                 standbyCountByRoute={standbyCountByRoute}
                 onPullStandby={handlePullStandby}
+                onCycleRodopar={handleCycleRodopar}
+                rodoparBusyKey={rodoparBusyKey}
                 agendaSortDir={agendaSortDir}
                 onToggleAgendaSort={toggleAgendaSort}
               />
