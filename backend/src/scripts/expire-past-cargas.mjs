@@ -60,24 +60,29 @@ async function main() {
   const selectSql = `
     SELECT id, data, horario, origem, destino, status, sheet_motorista
     FROM public.cargas
-    WHERE status = 'OPEN'
-      AND data IS NOT NULL
-      AND (data < $1
-        OR (data = $2 AND horario IS NOT NULL AND horario < $3))
-      -- Exceção da carga lançada (Programação): sheet_lh NULL + lh_manual + data >= hoje
-      -- fica visível o dia todo no portal — NÃO expira enquanto o motorista a vê.
-      AND NOT (sheet_lh IS NULL AND lh_manual IS NOT NULL AND data >= $1)
+    WHERE data IS NOT NULL
       AND COALESCE(is_template, false) = false
-      AND COALESCE(alloc_motorista, sheet_motorista, '') = ''
       -- Recorrentes são avançadas pelo motor de recorrência (expirar quebraria a cadeia).
       AND COALESCE(is_recurring, false) = false
+      AND (
+        -- OPEN: passada, respeitando a exceção da carga lançada (visível o dia todo) e
+        -- o guard de motorista (haul ativo em pipeline).
+        (status = 'OPEN'
+          AND (data < $1 OR (data = $2 AND horario IS NOT NULL AND horario < $3))
+          AND NOT (sheet_lh IS NULL AND lh_manual IS NOT NULL AND data >= $1)
+          AND COALESCE(alloc_motorista, sheet_motorista, '') = '')
+        OR
+        -- DRAFT: rascunho de dia passado (nunca publicado → não é haul; sem exceção de
+        -- lançada nem guard de motorista). Rascunhos de hoje/futuros são preservados.
+        (status = 'DRAFT' AND data < $1)
+      )
     ORDER BY data, horario
     ${limit ? `LIMIT ${limit}` : ""}
   `;
 
   const { rows: candidates } = await pool.query(selectSql, [todaySp, todaySp, nowTimeSp]);
   console.log(
-    `[expire-past-cargas] found ${candidates.length} expired OPEN cargas.`,
+    `[expire-past-cargas] found ${candidates.length} expired OPEN/DRAFT cargas.`,
   );
 
   if (candidates.length === 0) {
