@@ -32,6 +32,7 @@ import { publicSupabase } from "@/integrations/supabase/public-client";
 import { getBadgeIcon } from "@/lib/badgeIcons";
 import { formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 import type { CustomBadgeItem } from "@/services/operatorAdmin";
+import { fetchDriverLoads } from "@/services/readModels";
 import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
 
 interface ClientRow {
@@ -68,16 +69,10 @@ const CLIENT_SELECT =
   "id, nome, descricao, logo_url, forma_pagamento, prazo_pagamento, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_exigencias, custom_reputacoes";
 const CLIENT_FALLBACK_SELECT =
   "id, nome, descricao, forma_pagamento, prazo_pagamento, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_exigencias, custom_reputacoes";
-const CLIENT_ACTIVE_LOADS_SELECT = "id, data, horario, origem, destino, perfil, valor";
 
 function isMissingClienteLogoColumnError(error: { message?: string; details?: string } | null) {
   const combinedMessage = `${error?.message || ""} ${error?.details || ""}`.toLowerCase();
   return combinedMessage.includes("logo_url");
-}
-
-function isMissingDriverVisibilityColumnError(error: { message?: string; details?: string } | null) {
-  const combinedMessage = `${error?.message || ""} ${error?.details || ""}`.toLowerCase();
-  return combinedMessage.includes("driver_visibility");
 }
 
 function formatMaybeText(value: string | null | undefined) {
@@ -285,38 +280,33 @@ const DriverClientDetails = () => {
     queryKey: ["driver", "cliente-loads", normalizedClienteId],
     enabled: Boolean(normalizedClienteId),
     queryFn: async () => {
-      const buildClientLoadsQuery = (includeDriverVisibilityFilter: boolean) => {
-        let query = publicSupabase
-          .from("cargas")
-          .select(CLIENT_ACTIVE_LOADS_SELECT)
-          .eq("cliente_id", normalizedClienteId)
-          .eq("status", "OPEN")
-          .eq("is_template", false)
-          // Exclui cargas que j\u00e1 foram reservadas por algum lead/claim ativo —
-          // essas n\u00e3o est\u00e3o mais dispon\u00edveis para o motorista, mesmo permanecendo em OPEN.
-          .is("reserved_public_lead_id", null)
-          .is("reserved_claim_id", null);
-
-        if (includeDriverVisibilityFilter) {
-          query = query.eq("driver_visibility", "PUBLIC");
+      // DC-265: usa o MESMO read model do portal (/api/driver/loads), escopado
+      // por cliente, para a contagem/listagem bater exatamente com o portal (so
+      // cargas OPEN, publicas, nao alocadas, futuras e prontas). A query supabase
+      // direta anterior nao aplicava esses filtros e inflava a contagem (205 vs
+      // 105). Busca todas as paginas (o read model limita pageSize a 24); trava
+      // de seguranca de 40 paginas.
+      const rows: ClientLoadRow[] = [];
+      for (let page = 1; page <= 40; page += 1) {
+        const res = await fetchDriverLoads({
+          clienteId: normalizedClienteId,
+          page: String(page),
+          pageSize: "24",
+        });
+        for (const item of res.items) {
+          rows.push({
+            id: item.id,
+            data: item.data,
+            horario: item.horario,
+            origem: item.origem,
+            destino: item.destino,
+            perfil: item.perfil,
+            valor: item.valor,
+          });
         }
-
-        return query.order("data", { ascending: true }).order("horario", { ascending: true });
-      };
-
-      let response = await buildClientLoadsQuery(true);
-
-      if (response.error && isMissingDriverVisibilityColumnError(response.error)) {
-        response = await buildClientLoadsQuery(false);
+        if (!res.meta?.hasNextPage) break;
       }
-
-      const { data, error } = response;
-
-      if (error) {
-        throw error;
-      }
-
-      return (data || []) as ClientLoadRow[];
+      return rows;
     },
   });
 
