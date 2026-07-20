@@ -1028,6 +1028,13 @@ export function buildDriverLoadFilters(query, {
     values.push(parsedQuery.perfil);
     index += 1;
   }
+  if (parsedQuery.clienteId) {
+    // DC-265: escopo por cliente (tela /motorista/cliente) — reaproveita todas as
+    // demais cláusulas de "disponível ao motorista" (OPEN, não-alocada, futura…).
+    clauses.push(`cargas.cliente_id = $${index}::uuid`);
+    values.push(parsedQuery.clienteId);
+    index += 1;
+  }
   if (parsedQuery.dateFrom) {
     clauses.push(`cargas.data >= $${index}`);
     values.push(parsedQuery.dateFrom);
