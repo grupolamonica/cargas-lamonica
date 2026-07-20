@@ -271,6 +271,19 @@ export function parseOperatorDashboardQuery(query = {}) {
   };
 }
 
+// DC-270: filtros do portal viraram MULTISELECT. Aceita param repetido
+// (?origem=a&origem=b) OU valor único (string). Não faz split por vírgula —
+// origem/destino podem conter vírgula (ex.: "Cidade, UF"). Vazio = sem filtro.
+function toFilterArray(value) {
+  if (Array.isArray(value)) {
+    return value.map((v) => String(v).trim()).filter(Boolean);
+  }
+  if (typeof value === "string" && value.trim()) {
+    return [value.trim()];
+  }
+  return [];
+}
+
 export function parseDriverLoadsQuery(query = {}) {
   const pagination = parsePaginationQuery(query, {
     defaultPageSize: 12,
@@ -279,14 +292,16 @@ export function parseDriverLoadsQuery(query = {}) {
 
   return {
     ...pagination,
-    origem: typeof query.origem === "string" ? query.origem.trim() : "",
-    destino: typeof query.destino === "string" ? query.destino.trim() : "",
-    perfil: typeof query.perfil === "string" ? query.perfil.trim() : "",
+    // Arrays (multiselect). DriverClientDetails ainda manda clienteId único →
+    // normalizado para [id] (retrocompatível).
+    origem: toFilterArray(query.origem),
+    destino: toFilterArray(query.destino),
+    perfil: toFilterArray(query.perfil),
     dateFrom: typeof query.dateFrom === "string" ? query.dateFrom.trim() : "",
     dateTo: typeof query.dateTo === "string" ? query.dateTo.trim() : "",
-    // DC-265: escopa as cargas disponíveis ao motorista por cliente (tela
-    // /motorista/cliente) usando a MESMA definição de "disponível" do portal.
-    clienteId: typeof query.clienteId === "string" ? query.clienteId.trim() : "",
+    // DC-265/DC-270: escopo por cliente (multiselect). /motorista/cliente manda
+    // um único; o portal manda vários.
+    clienteIds: toFilterArray(query.clienteId),
   };
 }
 
