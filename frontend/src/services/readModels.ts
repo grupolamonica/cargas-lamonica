@@ -1195,6 +1195,9 @@ export interface SheetMonitorRow {
   // 2=lançado incorreto/incompleto (azul). Sheet: vem do overlay allocByLh;
   // sistema: vem direto da linha. Mesclado no front (efetivo).
   rodoparStatus?: number;
+  /** Quem alterou o Check Rodopar por último (nome/email do operador) e quando (ISO). */
+  rodoparUpdatedBy?: string | null;
+  rodoparUpdatedAt?: string | null;
   // Linha sintética de RESERVA (motorista em standby na rota; não vem da
   // planilha, não tem LH real). Arrastável p/ puxar o motorista pra uma carga.
   reserva?: boolean;
