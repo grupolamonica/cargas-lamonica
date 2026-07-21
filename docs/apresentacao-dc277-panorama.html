@@ -1,0 +1,476 @@
+<title>Panorama da Plataforma &amp; Indicadores de Uso — Lamonica Cargas</title>
+<style>
+  :root{
+    --paper:#f6f5f2; --card:#ffffff; --ink:#15181d; --muted:#5c6470; --faint:#8a929e;
+    --line:#e4e2dc; --line-strong:#d3d0c8;
+    --navy:#22405c; --navy-soft:#325a7d;
+    --ok:#1f9d61; --ok-bg:#e6f4ec;
+    --warn:#c9861a; --warn-bg:#fbf0dd;
+    --build:#6366d9; --build-bg:#ececfb;
+    --s1:#22405c; --s2:#2f8f83; --s3:#c9861a; --s4:#b5546a;
+    --grid:#eceae4;
+    --shadow:0 1px 2px rgba(20,24,31,.05),0 6px 20px rgba(20,24,31,.05);
+    --radius:14px;
+    --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
+    --sans:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#101318; --card:#171b22; --ink:#eceef2; --muted:#9aa3b0; --faint:#6a7280;
+      --line:#262c35; --line-strong:#333b46;
+      --navy:#7fb0dd; --navy-soft:#9cc4e8;
+      --ok:#54c98d; --ok-bg:#123024;
+      --warn:#e0a744; --warn-bg:#33260f;
+      --build:#9497ee; --build-bg:#20213f;
+      --s1:#5f92c4; --s2:#46b3a5; --s3:#e0a744; --s4:#d97e93;
+      --grid:#222831;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 26px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#f6f5f2; --card:#ffffff; --ink:#15181d; --muted:#5c6470; --faint:#8a929e;
+    --line:#e4e2dc; --line-strong:#d3d0c8; --navy:#22405c; --navy-soft:#325a7d;
+    --ok:#1f9d61; --ok-bg:#e6f4ec; --warn:#c9861a; --warn-bg:#fbf0dd; --build:#6366d9; --build-bg:#ececfb;
+    --s1:#22405c; --s2:#2f8f83; --s3:#c9861a; --s4:#b5546a; --grid:#eceae4;
+    --shadow:0 1px 2px rgba(20,24,31,.05),0 6px 20px rgba(20,24,31,.05);
+  }
+  :root[data-theme="dark"]{
+    --paper:#101318; --card:#171b22; --ink:#eceef2; --muted:#9aa3b0; --faint:#6a7280;
+    --line:#262c35; --line-strong:#333b46; --navy:#7fb0dd; --navy-soft:#9cc4e8;
+    --ok:#54c98d; --ok-bg:#123024; --warn:#e0a744; --warn-bg:#33260f; --build:#9497ee; --build-bg:#20213f;
+    --s1:#5f92c4; --s2:#46b3a5; --s3:#e0a744; --s4:#d97e93; --grid:#222831;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 26px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0}
+  .wrap{background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.5;
+    -webkit-font-smoothing:antialiased;font-size:16px}
+  .page{max-width:1120px;margin:0 auto;padding:0 24px 72px}
+  h1,h2,h3{text-wrap:balance;margin:0}
+  .tnum{font-variant-numeric:tabular-nums}
+
+  /* Header */
+  header.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--paper) 88%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .top-in{max-width:1120px;margin:0 auto;padding:14px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .brandmark{width:34px;height:34px;border-radius:8px;background:var(--navy);color:#fff;display:grid;place-items:center;
+    font-family:var(--serif);font-weight:700;font-size:17px;flex:none}
+  :root[data-theme="dark"] .brandmark,@media (prefers-color-scheme:dark){.brandmark{color:#0b0d11}}
+  .top h1{font-family:var(--serif);font-size:17px;font-weight:700;letter-spacing:.1px}
+  .top .sub{color:var(--muted);font-size:12.5px;margin-top:1px}
+  .top-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+  .prodpill{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--ok);
+    background:var(--ok-bg);padding:5px 11px;border-radius:999px}
+  .dot{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 0 0 currentColor;animation:pulse 2.6s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,currentColor 60%,transparent)}70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
+  @media (prefers-reduced-motion:reduce){.dot{animation:none}}
+
+  /* Hero */
+  .hero{padding:44px 0 26px;border-bottom:1px solid var(--line)}
+  .eyebrow{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--navy)}
+  .hero h2{font-family:var(--serif);font-size:clamp(28px,4.4vw,44px);line-height:1.08;margin:14px 0 0;font-weight:700}
+  .hero p{color:var(--muted);max-width:64ch;margin:16px 0 0;font-size:16.5px}
+  .hero .meta{margin-top:20px;display:flex;gap:8px 22px;flex-wrap:wrap;font-size:13px;color:var(--faint)}
+  .hero .meta b{color:var(--ink);font-weight:600}
+
+  /* KPI row */
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin:30px 0 8px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 16px;box-shadow:var(--shadow)}
+  .kpi .n{font-family:var(--serif);font-size:30px;font-weight:700;letter-spacing:-.5px;line-height:1}
+  .kpi .l{font-size:12.5px;color:var(--muted);margin-top:8px;line-height:1.35}
+  .kpi .t{font-size:11.5px;font-weight:600;margin-top:9px;color:var(--ok);display:inline-flex;gap:5px;align-items:center}
+
+  /* Sections */
+  section{padding-top:46px}
+  .sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:6px}
+  .sec-num{font-family:var(--serif);font-size:15px;color:var(--navy);font-weight:700}
+  .sec-head h2{font-family:var(--serif);font-size:24px;font-weight:700}
+  .sec-sub{color:var(--muted);font-size:14.5px;margin:4px 0 22px;max-width:74ch}
+
+  /* Front cards */
+  .fronts{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+  .front{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow);
+    display:flex;flex-direction:column;gap:12px}
+  .front-top{display:flex;align-items:center;gap:10px}
+  .front-top h3{font-size:16.5px;font-weight:700;flex:1}
+  .pill{font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;white-space:nowrap;letter-spacing:.02em}
+  .pill.ok{color:var(--ok);background:var(--ok-bg)}
+  .pill.warn{color:var(--warn);background:var(--warn-bg)}
+  .pill.build{color:var(--build);background:var(--build-bg)}
+  .front .oneliner{font-size:13.5px;color:var(--muted);margin-top:-4px}
+  .rows{display:flex;flex-direction:column;gap:9px;margin-top:2px}
+  .row{display:grid;grid-template-columns:74px 1fr;gap:10px;font-size:13.2px;align-items:start}
+  .row .tag{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding-top:2px}
+  .tag.done{color:var(--ok)} .tag.now{color:var(--warn)} .tag.next{color:var(--navy)}
+  .row .txt{color:var(--ink)}
+  .row .txt .code{font-variant-numeric:tabular-nums;font-weight:600;color:var(--navy)}
+
+  /* Indicators */
+  .ind{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow);margin-bottom:16px}
+  .ind-head{display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:4px}
+  .ind-head h3{font-size:17px;font-weight:700}
+  .ind-head .big{font-family:var(--serif);font-size:26px;font-weight:700;color:var(--navy)}
+  .ind .src{font-size:11.5px;color:var(--faint);margin-bottom:14px}
+  .chart-wrap{width:100%;overflow-x:auto}
+  svg.chart{display:block;width:100%;height:auto;min-width:280px}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:10px}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .reading{margin-top:14px;padding:13px 15px;background:color-mix(in srgb,var(--navy) 6%,transparent);
+    border-left:3px solid var(--navy);border-radius:0 8px 8px 0;font-size:13.6px;line-height:1.55}
+  .reading b{color:var(--ink)}
+  .ind-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .note{font-size:12.5px;color:var(--muted);margin-top:12px;padding:11px 14px;border:1px dashed var(--line-strong);border-radius:9px}
+  .note b{color:var(--warn)}
+
+  /* small tables */
+  table.mini{width:100%;border-collapse:collapse;font-size:12.8px;margin-top:6px}
+  table.mini th,table.mini td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--line)}
+  table.mini th:first-child,table.mini td:first-child{text-align:left}
+  table.mini th{color:var(--faint);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  table.mini tr:last-child td{border-bottom:none;font-weight:700}
+
+  /* footer / accept */
+  .accept{display:grid;grid-template-columns:1fr 1fr;gap:12px 28px;margin-top:14px}
+  .accept div{font-size:13.5px;display:flex;gap:9px;align-items:flex-start}
+  .check{color:var(--ok);font-weight:800;flex:none}
+  footer.foot{margin-top:52px;padding-top:22px;border-top:1px solid var(--line);color:var(--faint);font-size:12.5px;line-height:1.6}
+
+  @media (max-width:820px){
+    .kpis{grid-template-columns:repeat(2,1fr)}
+    .fronts{grid-template-columns:1fr}
+    .ind-grid{grid-template-columns:1fr}
+  }
+  @media (max-width:460px){.kpis{grid-template-columns:1fr}}
+</style>
+
+<div class="wrap">
+<header class="top">
+  <div class="top-in">
+    <div class="brandmark">L</div>
+    <div>
+      <h1>Panorama da Plataforma &amp; Indicadores de Uso</h1>
+      <div class="sub">Lamonica Cargas · DC-277 · consolidação para a gestão</div>
+    </div>
+    <div class="top-right">
+      <span class="prodpill"><span class="dot"></span>Em produção</span>
+    </div>
+  </div>
+</header>
+
+<div class="page">
+
+  <div class="hero">
+    <div class="eyebrow">Visão de gestão — 21 de julho de 2026</div>
+    <h2>Três meses de operação real, medidos no banco de produção.</h2>
+    <p>De 17/04 a 21/07, a plataforma consolidou-se como um marketplace logístico de dois lados em produção — com tráfego recorrente, oferta de cargas rodando diariamente e automação de cadastro em portais de risco acelerando. Este material reúne o <b>status de cada frente</b> e os <b>indicadores de uso com evolução no tempo</b>.</p>
+    <div class="meta">
+      <span>Ambiente: <b>cargas.grupolamonica.com</b></span>
+      <span>Período: <b>17/04 → 21/07/2026</b> (jul. parcial)</span>
+      <span>Fonte: <b>banco de produção</b> (mesma da Epic DC-241)</span>
+    </div>
+  </div>
+
+  <!-- KPIs -->
+  <div class="kpis">
+    <div class="kpi"><div class="n tnum">18.863</div><div class="l">Acessos ao portal do motorista</div><div class="t">≈ 203 / dia ativo</div></div>
+    <div class="kpi"><div class="n tnum">638</div><div class="l">Reservas fechadas pela fila/portal</div><div class="t">↗ 18 → 258 / mês</div></div>
+    <div class="kpi"><div class="n tnum">2.137</div><div class="l">Spots de carga geridos</div><div class="t">Shopee · Nestlé · sistema</div></div>
+    <div class="kpi"><div class="n tnum">600</div><div class="l">Cadastros na esteira</div><div class="t">225 pelo wizard</div></div>
+    <div class="kpi"><div class="n tnum">105</div><div class="l">Cadastros automáticos em GR</div><div class="t">↗ salto em julho</div></div>
+  </div>
+
+  <!-- PARTE 1 -->
+  <section id="p1">
+    <div class="sec-head"><span class="sec-num">Parte 1</span><h2>Status por frente</h2></div>
+    <p class="sec-sub">Cada frente com <b style="color:var(--ok)">✔ o que foi feito</b>, <b style="color:var(--warn)">▶ onde está hoje</b> e <b style="color:var(--navy)">→ próximos passos</b>. Estado: 🟢 produção · 🟡 parcial/validação · 🔵 em construção.</p>
+
+    <div class="fronts">
+      <!-- Cargas -->
+      <div class="front">
+        <div class="front-top"><h3>Cargas</h3><span class="pill ok">🟢 Produção</span></div>
+        <div class="oneliner">Programação · Spots automáticos · Fila · Monitor · Portal do motorista</div>
+        <div class="rows">
+          <div class="row"><span class="tag done">Feito</span><span class="txt">Portal 24/7, Fila com reserva atômica, Monitor bidirecional com selo de risco, Programação SPX/Shopee/Nestlé ao vivo, auto-lançamento de spots (<span class="code">DC-201</span>), Cargas Casadas, recorrência.</span></div>
+          <div class="row"><span class="tag now">Hoje</span><span class="txt">Aceitação Shopee (<span class="code">DC-200</span>) e conexão Nestlé (<span class="code">DC-261</span>) em validação; filtro por usuário no Monitor (<span class="code">DC-275</span>).</span></div>
+          <div class="row"><span class="tag next">Próximo</span><span class="txt">Preço automático de rotas (<span class="code">DC-204</span>), auditoria de troca de motorista (<span class="code">DC-225</span>), cascata ao descer motorista (<span class="code">DC-247</span>).</span></div>
+        </div>
+      </div>
+
+      <!-- Cadastro -->
+      <div class="front">
+        <div class="front-top"><h3>Cadastro</h3><span class="pill ok">🟢🟡 Prod. + evolução</span></div>
+        <div class="oneliner">Wizard v2 do motorista + automação em portais de risco (CAM)</div>
+        <div class="rows">
+          <div class="row"><span class="tag done">Feito</span><span class="txt">Wizard v2 (cascata ANTT, OCR, drafts); automação Aprovar → Angellira + SPX (<span class="code">DC-111</span>); selos de aptidão Angellira/SPX/BRK no perfil.</span></div>
+          <div class="row"><span class="tag now">Hoje</span><span class="txt">Cadastro automático externo acelerando (105 concluídos); anexo obrigatório (<span class="code">DC-195</span>) e relatório de abandono (<span class="code">DC-232</span>) em validação.</span></div>
+          <div class="row"><span class="tag next">Próximo</span><span class="txt">Elevar conversão do wizard (<span class="code">DC-232/181</span>); WhatsApp ao aprovar (<span class="code">DC-198</span>); saúde da sessão SPX (<span class="code">DC-222</span>).</span></div>
+        </div>
+      </div>
+
+      <!-- Torre / GR -->
+      <div class="front">
+        <div class="front-top"><h3>Torre de Controle / GR</h3><span class="pill warn">🟡 Validação</span></div>
+        <div class="oneliner">GPS da frota, dossiê, score operacional, ocorrências — Projeto Galileu</div>
+        <div class="rows">
+          <div class="row"><span class="tag done">Feito</span><span class="txt">Integração Galileu (<span class="code">DC-216</span>); coletor que traz a programação Nestlé; consulta de risco em lote por placa.</span></div>
+          <div class="row"><span class="tag now">Hoje</span><span class="txt">Veredito de risco + feed de alertas (<span class="code">DC-234</span>), tela de GR (<span class="code">DC-235</span>) e cofre de credenciais (<span class="code">DC-236</span>) em validação.</span></div>
+          <div class="row"><span class="tag next">Próximo</span><span class="txt">Concluir tela de GR e alertas; sincronizar escopo do cadastro (<span class="code">DC-248</span>); documentação (<span class="code">DC-267/268/269</span>).</span></div>
+        </div>
+      </div>
+
+      <!-- Ranking -->
+      <div class="front">
+        <div class="front-top"><h3>Ranking</h3><span class="pill warn">🟡 Parcial</span></div>
+        <div class="oneliner">Posição · pontuação · vínculo · status do motorista</div>
+        <div class="rows">
+          <div class="row"><span class="tag done">Feito</span><span class="txt">Classificação por vínculo de <span class="code">127</span> motoristas (FROTA / AGREGADO / PX / PME) na fila do operador; base conhecida de <span class="code">1.851</span> motoristas.</span></div>
+          <div class="row"><span class="tag now">Hoje</span><span class="txt">Vínculo visível na operação; score operacional calculado no ecossistema da Torre.</span></div>
+          <div class="row"><span class="tag next">Próximo</span><span class="txt">Consolidar posição/pontuação numa visão única de ranking (definição de produto com a gestão).</span></div>
+        </div>
+      </div>
+
+      <!-- Mensageria -->
+      <div class="front">
+        <div class="front-top"><h3>Mensageria</h3><span class="pill build">🔵 Em construção</span></div>
+        <div class="oneliner">Comunicação automática com o motorista — padrão N8N (<span style="font-weight:600">DC-262</span>)</div>
+        <div class="rows">
+          <div class="row"><span class="tag done">Feito</span><span class="txt">Fundação driver-outreach: gatilhos, opt-out, templates editáveis, guardrails anti-ban; envio via Evolution com fila; captura do QR do WhatsApp.</span></div>
+          <div class="row"><span class="tag now">Hoje</span><span class="txt">Tela de mensageria (<span class="code">DC-262</span>) em andamento. Infra pronta; <span class="code">32</span> disparos de teste ainda falhando — <b>gateway não conectado em produção</b>.</span></div>
+          <div class="row"><span class="tag next">Próximo</span><span class="txt">Estabilizar gateway e ligar em produção os gatilhos já em curso: reserva (<span class="code">DC-192</span>, validação), spot (<span class="code">DC-202</span>), cadastro (<span class="code">DC-198</span>); avaliar API oficial (<span class="code">DC-176</span>).</span></div>
+        </div>
+      </div>
+
+      <!-- Apoio -->
+      <div class="front">
+        <div class="front-top"><h3>Frentes de apoio</h3><span class="pill ok">🟢🟡 Integrações</span></div>
+        <div class="oneliner">Integrações que sustentam as demais frentes</div>
+        <div class="rows">
+          <div class="row"><span class="tag done">SPX/Shopee</span><span class="txt">Programação ao vivo + aceite; cadastro SPX; login headless com self-heal de sessão.</span></div>
+          <div class="row"><span class="tag done">Angellira</span><span class="txt">Validação e cadastro no GR; selo de aptidão vigente.</span></div>
+          <div class="row"><span class="tag now">Nestlé/Galileu</span><span class="txt">Coletor traz ofertas (<span class="code">9.112</span> coletadas) e espelha na Programação.</span></div>
+          <div class="row"><span class="tag done">BRK</span><span class="txt">Cookie automático + consulta de aptidão + selo de vigência.</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PARTE 2 -->
+  <section id="p2">
+    <div class="sec-head"><span class="sec-num">Parte 2</span><h2>Indicadores de uso</h2></div>
+    <p class="sec-sub">Números reais do banco de produção, por mês, com leitura de evolução. Julho é parcial (21 dias). Detalhamento diário e fontes no documento consolidado.</p>
+
+    <!-- Acessos -->
+    <div class="ind">
+      <div class="ind-head"><h3>Acessos à plataforma</h3><span class="big tnum">18.863 <span style="font-size:14px;color:var(--muted);font-family:var(--sans);font-weight:600">acessos</span></span></div>
+      <div class="src">Fonte: <b>driver_portal_visits</b> · uma linha por visita ao portal do motorista</div>
+      <div class="ind-grid">
+        <div>
+          <div class="chart-wrap"><svg class="chart" id="c-acessos-mes" viewBox="0 0 520 240" role="img" aria-label="Acessos por mês"></svg></div>
+          <div class="legend"><span><i style="background:var(--s1)"></i>Acessos no mês</span></div>
+        </div>
+        <div>
+          <div class="chart-wrap"><svg class="chart" id="c-acessos-dia" viewBox="0 0 520 240" role="img" aria-label="Acessos por dia (últimos 45 dias)"></svg></div>
+          <div class="legend"><span><i style="background:var(--s2)"></i>Acessos por dia (45 dias)</span></div>
+        </div>
+      </div>
+      <div class="reading"><b>Leitura.</b> Pico de audiência em <b>maio</b> (8.650 acessos, 279/dia) — mês de lançamento. Depois, um <b>piso diário consistente de ~170/dia</b> (média móvel de 164 nos últimos 30 dias, pico de 292 em 15/07). O portal firmou tráfego recorrente, não curiosidade pontual.</div>
+    </div>
+
+    <!-- Cargas fechadas -->
+    <div class="ind">
+      <div class="ind-head"><h3>Cargas fechadas</h3><span class="big tnum">638 <span style="font-size:14px;color:var(--muted);font-family:var(--sans);font-weight:600">reservas aprovadas</span></span></div>
+      <div class="src">Fonte: <b>load_public_leads.approved_at</b> (fechamento nativo pela fila/portal) · e <b>cargas</b> por fonte (oferta gerida)</div>
+      <div class="ind-grid">
+        <div>
+          <div class="chart-wrap"><svg class="chart" id="c-aprov" viewBox="0 0 520 240" role="img" aria-label="Reservas aprovadas por mês"></svg></div>
+          <div class="legend"><span><i style="background:var(--s1)"></i>Reservas aprovadas / mês</span></div>
+        </div>
+        <div>
+          <div class="chart-wrap"><svg class="chart" id="c-spots" viewBox="0 0 520 240" role="img" aria-label="Spots de carga criados por fonte"></svg></div>
+          <div class="legend">
+            <span><i style="background:var(--s1)"></i>Shopee</span>
+            <span><i style="background:var(--s3)"></i>Nestlé</span>
+            <span><i style="background:var(--s2)"></i>Sistema</span>
+          </div>
+        </div>
+      </div>
+      <div class="reading"><b>Leitura.</b> Fechamento pela plataforma em alta consistente: <b>18 → 117 → 258 → 245</b> reservas/mês (jul. parcial já quase iguala jun.). Em paralelo, <b>2.137 spots</b> foram geridos — Shopee/Nestlé espelhados da operação real + 610 nativos do sistema. Estoque atual: 1.688 fechadas, 82 abertas.</div>
+      <div class="note"><b>Nota de medição:</b> a coluna <code>booked_at</code> não é populada no espelhamento de planilha; por isso o fechamento por período usa as aprovações de reserva. Instrumentar <code>booked_at</code> (DC-244) daria série de fechamento em todas as fontes.</div>
+    </div>
+
+    <!-- Cadastros -->
+    <div class="ind">
+      <div class="ind-head"><h3>Cadastros feitos pelo sistema</h3><span class="big tnum">600 <span style="font-size:14px;color:var(--muted);font-family:var(--sans);font-weight:600">na esteira</span></span></div>
+      <div class="src">Fonte: <b>pending_driver_registrations</b> · <b>external_registration_jobs</b></div>
+      <div class="ind-grid">
+        <div>
+          <div class="chart-wrap"><svg class="chart" id="c-auto" viewBox="0 0 520 240" role="img" aria-label="Cadastro automático em portais externos por mês"></svg></div>
+          <div class="legend"><span><i style="background:var(--s1)"></i>Angellira (OK)</span><span><i style="background:var(--s2)"></i>SPX (OK)</span></div>
+        </div>
+        <div>
+          <table class="mini" aria-label="Composição da esteira de cadastro">
+            <thead><tr><th>Origem do cadastro</th><th>Qtd.</th></tr></thead>
+            <tbody>
+              <tr><td>Migração em massa (robô)</td><td class="tnum">330</td></tr>
+              <tr><td>Wizard v2 (motorista)</td><td class="tnum">225</td></tr>
+              <tr><td>Runtime via robô</td><td class="tnum">45</td></tr>
+              <tr><td>Total na esteira</td><td class="tnum">600</td></tr>
+            </tbody>
+          </table>
+          <table class="mini" aria-label="Conversão do wizard v2" style="margin-top:14px">
+            <thead><tr><th>Wizard v2</th><th>Iniciados</th><th>Finalizados</th></tr></thead>
+            <tbody>
+              <tr><td>Total</td><td class="tnum">218</td><td class="tnum">7</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="reading"><b>Leitura.</b> <b>Salto de escala em julho</b> no cadastro automático em portais de risco: de 14 concluídos em junho para <b>78 no Angellira</b> em julho (105 concluídos no total das duas medições, 67% de sucesso). Já o <b>autoatendimento do motorista</b> (wizard) continua sendo o gargalo: 218 iniciados, só 7 finalizados — foco de produto em DC-232/181.</div>
+    </div>
+
+    <!-- Movimentos -->
+    <div class="ind">
+      <div class="ind-head"><h3>Movimentos no site</h3><span class="big tnum">≈ 25.321 <span style="font-size:14px;color:var(--muted);font-family:var(--sans);font-weight:600">eventos rastreados</span></span></div>
+      <div class="src">Soma de acessos + eventos de funil + reservas + analytics</div>
+      <table class="mini" aria-label="Composição dos movimentos">
+        <thead><tr><th>Tipo de movimento</th><th>Fonte</th><th>Total</th></tr></thead>
+        <tbody>
+          <tr><td>Acessos ao portal</td><td style="text-align:left;color:var(--faint)">driver_portal_visits</td><td class="tnum">18.863</td></tr>
+          <tr><td>Eventos de funil (candidatura→fila→aprovação)</td><td style="text-align:left;color:var(--faint)">load_public_lead_events</td><td class="tnum">5.295</td></tr>
+          <tr><td>Reservas no Monitor</td><td style="text-align:left;color:var(--faint)">monitor_reservas</td><td class="tnum">225</td></tr>
+          <tr><td>Visualizações de região</td><td style="text-align:left;color:var(--faint)">analytics_events</td><td class="tnum">768</td></tr>
+          <tr><td>Cliques em patrocinadores</td><td style="text-align:left;color:var(--faint)">analytics_events</td><td class="tnum">170</td></tr>
+          <tr><td>Total rastreado</td><td style="text-align:left;color:var(--faint)"></td><td class="tnum">25.321</td></tr>
+        </tbody>
+      </table>
+      <div class="note"><b>Recomendação:</b> hoje <code>analytics_events</code> só captura cliques de patrocinador e visualização de região. Unificar a captura de page views nessa tabela (DC-242) fecha a lacuna de "acessos" do Painel de Indicadores.</div>
+    </div>
+  </section>
+
+  <!-- Aceite -->
+  <section id="aceite">
+    <div class="sec-head"><span class="sec-num">✓</span><h2>Critério de aceite (DC-277)</h2></div>
+    <div class="accept">
+      <div><span class="check">✓</span><span>Material cobrindo as <b>2 partes</b> — status por frente + indicadores.</span></div>
+      <div><span class="check">✓</span><span>Cada frente com <b>status atual + próximos passos</b> (6 frentes).</span></div>
+      <div><span class="check">✓</span><span>Cada indicador com <b>números por período</b> e leitura de evolução.</span></div>
+      <div><span class="check">✓</span><span>Reaproveita a <b>fonte de dados da Epic DC-241</b> (banco de produção).</span></div>
+      <div><span class="check">✓</span><span>Formato final: <b>documento + apresentação</b> (este deck).</span></div>
+      <div><span class="check">✓</span><span>Números <b>medidos em produção</b> em 21/07/2026.</span></div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <b>Fontes.</b> Parte 1 atualizada a partir dos relatórios de Evolução do Sistema (11/06) e de Produto (30/06), cruzados com o histórico Git e o board Jira (projeto DC) até 21/07. Parte 2 medida diretamente no banco de produção (Supabase), agregada no fuso America/São_Paulo.<br>
+    Documento consolidado companheiro: <b>docs/RELATORIO-DC-277-PANORAMA-INDICADORES.md</b> · Card: <b>DC-277</b> (Epic DC-276).
+  </footer>
+</div>
+</div>
+
+<script>
+(function(){
+  var css=getComputedStyle(document.documentElement);
+  function v(n){return css.getPropertyValue(n).trim()||'#888';}
+  function el(t,a){var e=document.createElementNS('http://www.w3.org/2000/svg',t);for(var k in a)e.setAttribute(k,a[k]);return e;}
+  var muted=v('--muted'), grid=v('--grid');
+
+  function fmt(n){return n.toLocaleString('pt-BR');}
+
+  // Generic vertical bar chart (single or grouped)
+  function barChart(id, opts){
+    var svg=document.getElementById(id); if(!svg) return;
+    var W=520,H=240, padL=40, padR=12, padT=16, padB=34;
+    var cats=opts.cats, series=opts.series; // series: [{color, data:[...]}]
+    var max=opts.max || Math.max.apply(null,[].concat.apply([],series.map(function(s){return s.data;}))) ;
+    max=Math.ceil(max/ (opts.step||niceStep(max)))*(opts.step||niceStep(max));
+    var plotW=W-padL-padR, plotH=H-padT-padB;
+    // gridlines + y labels
+    var ticks=4;
+    for(var i=0;i<=ticks;i++){
+      var yv=max/ticks*i, y=padT+plotH-(yv/max)*plotH;
+      svg.appendChild(el('line',{x1:padL,y1:y,x2:W-padR,y2:y,stroke:grid,'stroke-width':1}));
+      var tl=el('text',{x:padL-6,y:y+3.5,'text-anchor':'end','font-size':10,fill:muted});
+      tl.textContent=fmt(Math.round(yv)); svg.appendChild(tl);
+    }
+    var groupW=plotW/cats.length;
+    var ns=series.length;
+    var inner=groupW*0.62, barW=inner/ns, gap=(groupW-inner)/2;
+    cats.forEach(function(cat,ci){
+      var gx=padL+ci*groupW;
+      series.forEach(function(s,si){
+        var val=s.data[ci]||0;
+        var h=(val/max)*plotH;
+        var x=gx+gap+si*barW;
+        var y=padT+plotH-h;
+        var partial = opts.partialIdx===ci;
+        var r=el('rect',{x:x+1,y:y,width:Math.max(1,barW-2),height:Math.max(0,h),rx:3,fill:s.color,opacity:partial?0.55:1});
+        svg.appendChild(r);
+        if(ns===1 && val>0){
+          var vl=el('text',{x:x+barW/2,y:y-5,'text-anchor':'middle','font-size':10.5,fill:v('--ink'),'font-weight':'700'});
+          vl.textContent=fmt(val); svg.appendChild(vl);
+        }
+      });
+      var cl=el('text',{x:gx+groupW/2,y:H-12,'text-anchor':'middle','font-size':11,fill:muted});
+      cl.textContent=cat; svg.appendChild(cl);
+    });
+  }
+  function niceStep(m){var p=Math.pow(10,Math.floor(Math.log10(m||1)));var n=m/p;var s=n<=2?0.5:(n<=5?1:2);return s*p;}
+
+  // Line/area chart for daily
+  function lineChart(id,opts){
+    var svg=document.getElementById(id); if(!svg) return;
+    var W=520,H=240,padL=36,padR=12,padT=16,padB=34;
+    var data=opts.data, labels=opts.labels, color=opts.color;
+    var max=Math.ceil(Math.max.apply(null,data)/50)*50;
+    var plotW=W-padL-padR, plotH=H-padT-padB;
+    var ticks=4;
+    for(var i=0;i<=ticks;i++){
+      var yv=max/ticks*i, y=padT+plotH-(yv/max)*plotH;
+      svg.appendChild(el('line',{x1:padL,y1:y,x2:W-padR,y2:y,stroke:grid,'stroke-width':1}));
+      var tl=el('text',{x:padL-6,y:y+3.5,'text-anchor':'end','font-size':10,fill:muted});
+      tl.textContent=yv; svg.appendChild(tl);
+    }
+    var stepX=plotW/(data.length-1);
+    function px(i){return padL+i*stepX;}
+    function py(val){return padT+plotH-(val/max)*plotH;}
+    var dLine='', dArea='';
+    data.forEach(function(val,i){var X=px(i),Y=py(val);dLine+=(i?'L':'M')+X.toFixed(1)+' '+Y.toFixed(1)+' ';});
+    dArea=dLine+'L'+px(data.length-1).toFixed(1)+' '+(padT+plotH)+' L'+px(0).toFixed(1)+' '+(padT+plotH)+' Z';
+    var grad=el('linearGradient',{id:id+'-g',x1:0,y1:0,x2:0,y2:1});
+    grad.appendChild(el('stop',{offset:'0%','stop-color':color,'stop-opacity':0.28}));
+    grad.appendChild(el('stop',{offset:'100%','stop-color':color,'stop-opacity':0.02}));
+    svg.appendChild(grad);
+    svg.appendChild(el('path',{d:dArea,fill:'url(#'+id+'-g)'}));
+    svg.appendChild(el('path',{d:dLine,fill:'none',stroke:color,'stroke-width':2,'stroke-linejoin':'round','stroke-linecap':'round'}));
+    // emphasized endpoint
+    var li=data.length-1;
+    svg.appendChild(el('circle',{cx:px(li),cy:py(data[li]),r:3.5,fill:color}));
+    // month labels
+    (opts.marks||[]).forEach(function(m){
+      var tl=el('text',{x:px(m.i),y:H-12,'text-anchor':'middle','font-size':10.5,fill:muted});
+      tl.textContent=m.label; svg.appendChild(tl);
+    });
+  }
+
+  var s1=v('--s1'),s2=v('--s2'),s3=v('--s3');
+
+  barChart('c-acessos-mes',{cats:['Abr*','Mai','Jun','Jul*'],series:[{color:s1,data:[1428,8650,5195,3590]}],partialIdx:3});
+
+  var daily=[179,84,167,209,266,194,133,103,85,183,174,184,176,134,227,128,164,126,157,178,141,106,117,117,235,137,146,128,138,94,177,161,223,157,189,133,101,182,236,292,223,213,166,141,260,93];
+  lineChart('c-acessos-dia',{data:daily,color:s2,marks:[{i:0,label:'06/06'},{i:24,label:'30/06'},{i:39,label:'15/07'},{i:45,label:'21/07'}]});
+
+  barChart('c-aprov',{cats:['Abr','Mai','Jun','Jul*'],series:[{color:s1,data:[18,117,258,245]}],partialIdx:3});
+
+  barChart('c-spots',{cats:['Abr','Mai','Jun','Jul*'],series:[
+    {color:s1,data:[4,396,586,447]},
+    {color:s3,data:[0,0,0,94]},
+    {color:s2,data:[234,205,49,122]}
+  ],partialIdx:3});
+
+  barChart('c-auto',{cats:['Jun','Jul*'],series:[
+    {color:s1,data:[13,78]},
+    {color:s2,data:[1,13]}
+  ],partialIdx:1});
+})();
+</script>
