@@ -15,26 +15,38 @@ function parseIsoDate(value, fallback) {
   return parsed;
 }
 
-function resolveWindow(query) {
+// Piso "todo o período": bem anterior a qualquer dado da plataforma. Usado
+// quando o operador tira o filtro de data (range=all) — a contagem passa a somar
+// tudo, sem o teto de MAX_WINDOW_DAYS.
+const ALL_TIME_FROM = new Date("2000-01-01T00:00:00.000Z");
+
+export function resolveWindow(query) {
   const now = new Date();
   const defaultTo = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
   const defaultFrom = new Date(defaultTo.getTime() - DEFAULT_WINDOW_DAYS * 86_400_000);
+
+  // "Limpar" no seletor de período = sem filtro de data = TODO o período. O front
+  // sinaliza com range=all; aqui abrimos a janela até ALL_TIME_FROM (ignorando o
+  // teto de 365d) para que os indicadores mostrem a soma total, não os últimos 7d.
+  if (String(query?.range || "").toLowerCase() === "all") {
+    return { dateFrom: ALL_TIME_FROM, dateToExclusive: defaultTo, allTime: true };
+  }
 
   const dateFrom = parseIsoDate(query?.dateFrom, defaultFrom);
   const dateToRaw = parseIsoDate(query?.dateTo, defaultTo);
   const dateToExclusive = new Date(dateToRaw.getTime() + 86_400_000);
 
   if (dateFrom >= dateToExclusive) {
-    return { dateFrom: defaultFrom, dateToExclusive: defaultTo };
+    return { dateFrom: defaultFrom, dateToExclusive: defaultTo, allTime: false };
   }
 
   const spanDays = Math.round((dateToExclusive.getTime() - dateFrom.getTime()) / 86_400_000);
   if (spanDays > MAX_WINDOW_DAYS) {
     const clampedFrom = new Date(dateToExclusive.getTime() - MAX_WINDOW_DAYS * 86_400_000);
-    return { dateFrom: clampedFrom, dateToExclusive };
+    return { dateFrom: clampedFrom, dateToExclusive, allTime: false };
   }
 
-  return { dateFrom, dateToExclusive };
+  return { dateFrom, dateToExclusive, allTime: false };
 }
 
 async function queryFunnel(client, dateFrom, dateTo) {
@@ -117,6 +129,7 @@ async function queryPortalVisits(client, dateFrom, dateTo) {
   const emptyResult = {
     total: 0,
     uniqueVisitors: 0,
+    firstVisitAt: null,
     byHour: Array.from({ length: 24 }, (_, hour) => ({ hour, total: 0 })),
     byDow: Array.from({ length: 7 }, (_, dow) => ({ dow, total: 0 })),
   };
@@ -152,9 +165,12 @@ async function queryPortalVisits(client, dateFrom, dateTo) {
         // total = soma de acessos (uma linha por visita); unique_visitors = IPs
         // distintos (DC-242, aprox. de "usuário único" — rede/aparelho, não pessoa).
         // COUNT(DISTINCT) ignora IPs nulos, o comportamento desejado.
+        // first_visit_at = acesso mais antigo na janela; usado para a "média/dia"
+        // no modo "todo o período" (senão dividiria pelo piso ALL_TIME_FROM).
         `SELECT
            COUNT(*)::int AS total,
-           COUNT(DISTINCT request_ip)::int AS unique_visitors
+           COUNT(DISTINCT request_ip)::int AS unique_visitors,
+           MIN(visited_at) AS first_visit_at
          FROM public.driver_portal_visits
          WHERE visited_at >= $1 AND visited_at < $2`,
         [dateFrom, dateTo],
@@ -171,6 +187,9 @@ async function queryPortalVisits(client, dateFrom, dateTo) {
     }
     emptyResult.total = Number(totalRows.rows[0]?.total) || 0;
     emptyResult.uniqueVisitors = Number(totalRows.rows[0]?.unique_visitors) || 0;
+    emptyResult.firstVisitAt = totalRows.rows[0]?.first_visit_at
+      ? new Date(totalRows.rows[0].first_visit_at).toISOString()
+      : null;
 
     return emptyResult;
   } catch (error) {
@@ -278,7 +297,7 @@ async function queryValidationQuality(client, dateFrom, dateTo) {
   };
 }
 
-async function queryRecurrence(client, dateFrom, dateTo) {
+async function queryRecurrence(client, dateFrom, dateTo, allTime = false) {
   const { rows: aggregateRows } = await client.query(
     `
       WITH per_cpf AS (
@@ -292,44 +311,60 @@ async function queryRecurrence(client, dateFrom, dateTo) {
         COUNT(*)::int AS unique_cpfs,
         COALESCE(SUM(candidaturas), 0)::int AS total_candidaturas,
         COALESCE(AVG(candidaturas), 0)::numeric(10,2) AS avg_per_cpf,
-        COALESCE(MAX(candidaturas), 0)::int AS max_per_cpf
+        COALESCE(MAX(candidaturas), 0)::int AS max_per_cpf,
+        COUNT(*) FILTER (WHERE candidaturas = 1)::int AS single_cpfs,
+        COUNT(*) FILTER (WHERE candidaturas > 1)::int AS repeat_cpfs
       FROM per_cpf
     `,
     [dateFrom, dateTo],
   );
 
-  const { rows: recurrenceRows } = await client.query(
-    `
-      WITH window_cpfs AS (
-        SELECT DISTINCT cpf
-        FROM public.load_public_leads
-        WHERE pre_registered_at >= $1 AND pre_registered_at < $2
-          AND cpf IS NOT NULL AND cpf <> ''
-      ), existing_before AS (
-        SELECT DISTINCT cpf
-        FROM public.load_public_leads
-        WHERE pre_registered_at < $1
-          AND cpf IS NOT NULL AND cpf <> ''
-      )
-      SELECT
-        COUNT(*) FILTER (WHERE e.cpf IS NULL)::int AS new_drivers,
-        COUNT(*) FILTER (WHERE e.cpf IS NOT NULL)::int AS recurring_drivers
-      FROM window_cpfs w
-      LEFT JOIN existing_before e ON e.cpf = w.cpf
-    `,
-    [dateFrom, dateTo],
-  );
-
   const aggregate = aggregateRows[0] || {};
-  const recurrence = recurrenceRows[0] || {};
+
+  let newDrivers;
+  let recurringDrivers;
+  if (allTime) {
+    // "Todo o período" não tem um "antes da janela" (o piso é ALL_TIME_FROM), então
+    // a definição por pré-existência degenera para 100% novos. Nesse modo, "recorrente"
+    // = candidatou-se mais de uma vez (candidaturas > 1) — consistente com o Recorde
+    // (maxPerCpf) e a Média por motorista mostrados no mesmo card.
+    newDrivers = Number(aggregate.single_cpfs) || 0;
+    recurringDrivers = Number(aggregate.repeat_cpfs) || 0;
+  } else {
+    // Janela delimitada: novo = CPF sem candidatura ANTES do início da janela.
+    const { rows: recurrenceRows } = await client.query(
+      `
+        WITH window_cpfs AS (
+          SELECT DISTINCT cpf
+          FROM public.load_public_leads
+          WHERE pre_registered_at >= $1 AND pre_registered_at < $2
+            AND cpf IS NOT NULL AND cpf <> ''
+        ), existing_before AS (
+          SELECT DISTINCT cpf
+          FROM public.load_public_leads
+          WHERE pre_registered_at < $1
+            AND cpf IS NOT NULL AND cpf <> ''
+        )
+        SELECT
+          COUNT(*) FILTER (WHERE e.cpf IS NULL)::int AS new_drivers,
+          COUNT(*) FILTER (WHERE e.cpf IS NOT NULL)::int AS recurring_drivers
+        FROM window_cpfs w
+        LEFT JOIN existing_before e ON e.cpf = w.cpf
+      `,
+      [dateFrom, dateTo],
+    );
+    const recurrence = recurrenceRows[0] || {};
+    newDrivers = Number(recurrence.new_drivers) || 0;
+    recurringDrivers = Number(recurrence.recurring_drivers) || 0;
+  }
 
   return {
     uniqueCpfs: Number(aggregate.unique_cpfs) || 0,
     totalCandidaturas: Number(aggregate.total_candidaturas) || 0,
     avgPerCpf: aggregate.avg_per_cpf !== null ? Number(aggregate.avg_per_cpf) : 0,
     maxPerCpf: Number(aggregate.max_per_cpf) || 0,
-    newDrivers: Number(recurrence.new_drivers) || 0,
-    recurringDrivers: Number(recurrence.recurring_drivers) || 0,
+    newDrivers,
+    recurringDrivers,
   };
 }
 
@@ -412,7 +447,7 @@ export async function fetchDriverFlowMetrics({ query, correlationId }) {
       queryFunnel(client, window.dateFrom, window.dateToExclusive),
       queryAccessPeaks(client, window.dateFrom, window.dateToExclusive),
       queryValidationQuality(client, window.dateFrom, window.dateToExclusive),
-      queryRecurrence(client, window.dateFrom, window.dateToExclusive),
+      queryRecurrence(client, window.dateFrom, window.dateToExclusive, window.allTime),
       queryPortalVisits(client, window.dateFrom, window.dateToExclusive),
       queryCadastros(client, window.dateFrom, window.dateToExclusive),
       queryPortalAvailability(client, window.dateFrom, window.dateToExclusive),
@@ -424,6 +459,7 @@ export async function fetchDriverFlowMetrics({ query, correlationId }) {
         window: {
           from: window.dateFrom.toISOString(),
           toExclusive: window.dateToExclusive.toISOString(),
+          allTime: window.allTime === true,
         },
         funnel,
         accessPeaks,
