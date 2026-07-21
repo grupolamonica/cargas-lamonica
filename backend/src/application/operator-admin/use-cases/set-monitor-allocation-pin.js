@@ -1,7 +1,7 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { NotFoundError } from "../../../domain/load-claims/errors.js";
-import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
+import { resolveMonitorCargoByLh } from "./_shared.js";
 
 /**
  * Fixa ("fixo") ou desafixa a alocação de uma carga do Monitor. Uma carga fixada
@@ -17,17 +17,17 @@ import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
  * @returns {Promise<{ statusCode: number, payload: object }>}
  */
 export async function setMonitorAllocationPin({ lh, pinned, operatorId, requestIp, correlationId }) {
-  const cargoId = createSheetLoadId(lh);
   const isPinned = Boolean(pinned);
 
   return withPgTransaction(async (client) => {
-    const { rows } = await client.query(
-      `SELECT id FROM public.cargas WHERE id = $1 FOR UPDATE`,
-      [cargoId],
-    );
-    if (rows.length === 0) {
+    // Resolve por id da PLANILHA OU por lh_manual (carga do sistema lançada na
+    // Programação) — mesma resolução do updateMonitorAllocation, senão fixar/
+    // desafixar uma carga lançada falhava com "Carga da planilha não encontrada".
+    const row = await resolveMonitorCargoByLh(client, lh, { columns: "id, sheet_lh" });
+    if (!row) {
       throw new NotFoundError("Carga da planilha não encontrada para este LH.");
     }
+    const cargoId = row.id;
 
     await client.query(
       `

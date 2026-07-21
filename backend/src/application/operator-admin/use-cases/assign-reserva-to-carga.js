@@ -1,8 +1,8 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
-import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
+import { resolveMonitorCargoByLh } from "./_shared.js";
 
 /**
  * Puxa um motorista em STANDBY (monitor_reservas) para uma carga da planilha
@@ -17,21 +17,21 @@ import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js"
  * @param {{ reservaId: string, targetLh: string, operatorId: string, requestIp?: string, correlationId?: string }} args
  */
 export async function assignReservaToCarga({ reservaId, targetLh, operatorId, requestIp, correlationId }) {
-  const cargoId = createSheetLoadId(targetLh);
-
   const result = await withPgTransaction(async (client) => {
     // 1) Trava a carga de destino PRIMEIRO (cargas-antes-de-reservas) — mesma ordem
     //    do cancel-load-cascade, evitando ciclo de deadlock entre as duas vias.
-    const { rows: cgs } = await client.query(
-      `SELECT id, alloc_pinned, origem, destino, alloc_status, sheet_status,
-              alloc_motorista, sheet_motorista, alloc_cavalo, sheet_cavalo, alloc_carreta, sheet_carreta
-       FROM public.cargas WHERE id = $1 FOR UPDATE`,
-      [cargoId],
-    );
-    if (cgs.length === 0) {
+    //    Resolve por id da PLANILHA OU por lh_manual (carga do sistema lançada na
+    //    Programação), senão puxar um standby p/ uma carga lançada falhava com
+    //    "Carga de destino não encontrada".
+    const carga = await resolveMonitorCargoByLh(client, targetLh, {
+      columns: `id, sheet_lh, alloc_pinned, origem, destino, alloc_status, sheet_status,
+                alloc_motorista, sheet_motorista, alloc_cavalo, sheet_cavalo, alloc_carreta, sheet_carreta`,
+    });
+    if (!carga) {
       throw new NotFoundError("Carga de destino não encontrada para este LH.");
     }
-    const carga = cgs[0];
+    const cargoId = carga.id;
+    const isSystemCargo = carga.sheet_lh == null;
     if (carga.alloc_pinned === true) {
       throw new ValidationError("A carga de destino está fixada. Desafixe antes de puxar o standby.");
     }
@@ -123,11 +123,16 @@ export async function assignReservaToCarga({ reservaId, targetLh, operatorId, re
       statusCode: 200,
       payload: { ok: true, lh: targetLh, bumped, meta: { correlationId } },
       effective: { motorista: reserva.motorista || "", cavalo: reserva.cavalo || "", carreta: reserva.carreta || "" },
+      isSystemCargo,
     };
   });
 
   // Espelho best-effort na planilha (mesma rota das outras edições do Monitor).
-  void writeAllocationsToSheet([{ lh: targetLh, ...result.effective }]).catch(() => {});
+  // Carga do SISTEMA (lh_manual, sheet_lh NULL) não tem linha própria na planilha
+  // para espelhar — pular evita mexer na linha homônima da planilha.
+  if (!result.isSystemCargo) {
+    void writeAllocationsToSheet([{ lh: targetLh, ...result.effective }]).catch(() => {});
+  }
 
   return { statusCode: result.statusCode, payload: result.payload };
 }

@@ -30,6 +30,14 @@ async function seedRouteCargo(lh, { motorista, horario, status, pinned, route } 
   return id;
 }
 
+// Carga LANÇADA na Programação: id ALEATÓRIO, sheet_lh NULL, lh_manual = LH.
+async function seedLaunchedRouteCargo(lhManual, { motorista, horario, route } = {}) {
+  const r = route ?? ROUTE;
+  const { id } = await seedCargo({ status: "OPEN", origem: r.origem, destino: r.destino, horario: horario ?? "08:00:00" });
+  await query(`UPDATE public.cargas SET lh_manual = $2, alloc_motorista = $3 WHERE id = $1`, [id, lhManual, motorista ?? null]);
+  return id;
+}
+
 const allocMotorista = async (id) => (await query(`SELECT alloc_motorista FROM public.cargas WHERE id = $1`, [id])).rows[0].alloc_motorista;
 const reservas = async () => (await query(`SELECT * FROM public.monitor_reservas WHERE active = true`)).rows;
 
@@ -169,6 +177,28 @@ describe("descendQueueCascade", () => {
     await expect(
       descendQueueCascade({ sourceLh: "Z1", targetLh: "NAO-EXISTE", orderedLhs: ["Z1", "Z2"], operatorId: op.id }),
     ).rejects.toThrow(/destino/i);
+  });
+
+  it("carga LANÇADA (lh_manual, sheet_lh NULL) na fila participa da descida (antes dava 404)", async () => {
+    // Fila: L1 (LANÇADA, JOAO) topo · L2 (planilha, vazia) base. Solto L1 em L2.
+    // Antes do fix, resolver L1 por createSheetLoadId(lh) não achava a lançada →
+    // sourceRow undefined → NotFound (404).
+    const c1 = await seedLaunchedRouteCargo("LT-DESC-1", { motorista: "JOAO", horario: "10:00:00" });
+    const c2 = await seedRouteCargo("L2", { motorista: null, horario: "08:00:00" });
+    const op = await seedUser({ email: "op-descend-launched@teste.local" });
+
+    const res = await descendQueueCascade({
+      sourceLh: "LT-DESC-1",
+      targetLh: "L2",
+      orderedLhs: ["LT-DESC-1", "L2"],
+      operatorId: op.id,
+      correlationId: "c-launched",
+    });
+
+    expect(res.payload.ok).toBe(true);
+    expect(await allocMotorista(c1)).toBe("");      // origem lançada esvaziou
+    expect(await allocMotorista(c2)).toBe("JOAO");   // desceu p/ a planilha vazia
+    expect(await reservas()).toHaveLength(0);
   });
 
   it("descer de novo a mesma origem não duplica reserva (supersede a anterior)", async () => {

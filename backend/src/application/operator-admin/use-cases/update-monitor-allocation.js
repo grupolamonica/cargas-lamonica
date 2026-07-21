@@ -2,10 +2,10 @@ import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { buildAuditChanges } from "../../../domain/operator-admin/audit-diff.js";
 import { NotFoundError } from "../../../domain/load-claims/errors.js";
-import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 import { cancelLoadCascade } from "./cancel-load-cascade.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
+import { resolveMonitorCargoByLh } from "./_shared.js";
 
 /**
  * Grava a ALOCAÇÃO editada no Monitor (motorista/cavalo/carreta/status operacional)
@@ -26,7 +26,6 @@ import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
  * @returns {Promise<{ statusCode: number, payload: object }>}
  */
 export async function updateMonitorAllocation({ lh, operatorId, payload, requestIp, correlationId }) {
-  const cargoId = createSheetLoadId(lh);
   // Semântica de atualização PARCIAL:
   //  - campo AUSENTE no payload  → preserva o alloc_* atual (não mexe);
   //  - campo enviado como ""     → vazio EXPLÍCITO: grava "" (NÃO null);
@@ -41,19 +40,30 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
   const norm = (value) => (value ?? "").toString().trim();
 
   const result = await withPgTransaction(async (client) => {
-    const { rows } = await client.query(
-      `SELECT id, sheet_lh, sheet_source, sheet_motorista, sheet_cavalo, sheet_carreta, sheet_status,
-              alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
-              alloc_descricao, alloc_vinculo, status, reserved_public_lead_id
-       FROM public.cargas WHERE id = $1 FOR UPDATE`,
-      [cargoId],
-    );
+    // Resolve a carga por id da PLANILHA OU por lh_manual (carga do SISTEMA lançada
+    // na Programação) — uma viagem lançada NÃO existe em id=createSheetLoadId(lh),
+    // então sem este fallback a edição de placa/motorista falhava com "Carga da
+    // planilha não encontrada". Ordem de preferência (alloc viva → planilha →
+    // desempate) em resolveMonitorCargoByLh, alinhada ao overlay allocByLh exibido.
+    const sheetRow = await resolveMonitorCargoByLh(client, lh, {
+      columns: `id, sheet_lh, sheet_source, sheet_motorista, sheet_cavalo, sheet_carreta, sheet_status,
+                alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
+                alloc_descricao, alloc_vinculo, status, reserved_public_lead_id`,
+    });
 
-    if (rows.length === 0) {
+    if (!sheetRow) {
       throw new NotFoundError("Carga da planilha não encontrada para este LH.");
     }
 
-    const sheetRow = rows[0];
+    // Id REAL da carga resolvida (planilha OU sistema) — usado em todas as
+    // escritas/consultas abaixo (não `createSheetLoadId(lh)`, que só bate na carga
+    // da planilha).
+    const cargoId = sheetRow.id;
+    // Carga do SISTEMA (lançada na Programação): sheet_lh nulo. Nesse caso NÃO há
+    // planilha por baixo (sheet_* são nulos) e o write-back para a planilha é
+    // pulado — senão editar só o status escreveria "" e apagaria o motorista/placa
+    // vivos da linha da planilha (que vêm do snapshot, não das colunas sheet_*).
+    const isSystemCargo = sheetRow.sheet_lh == null;
 
     // Carga FIXA: motorista/veículo são intocáveis — preserva o que já está
     // alocado (ignora os valores recebidos) e deixa passar só o status operacional.
@@ -194,6 +204,10 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       },
       resolvedStatus: finalStatus,
       reopenLeadId,
+      // Id resolvido (planilha OU sistema) + flag de carga do sistema — usados
+      // fora da transação (write-back e reabertura de reserva).
+      cargoId,
+      isSystemCargo,
       // Valor EFETIVO espelhado na planilha (write-back). Motorista/veículo usam
       // `||`: um override VAZIO ("" ou null) cai pro valor da planilha em vez de
       // LIMPAR a célula — assim editar só o status de uma carga (override de
@@ -226,12 +240,19 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
   // Write-back best-effort pra planilha (espelho) — FORA da transação e SEM
   // await. Quando vai cascatear, o write-back fica por conta da cascata (que
   // sabe os valores relocados) — evita gravar o valor antigo e depois corrigir.
-  if (!willCascade) {
+  // Carga do SISTEMA (lh_manual, sem sheet_lh) NÃO tem linha própria na planilha
+  // para espelhar — pular evita escrever "" e apagar o motorista/placa vivos da
+  // linha da planilha homônima (o operador enxerga o snapshot, não sheet_*).
+  if (!willCascade && !result.isSystemCargo) {
     void writeAllocationsToSheet([{ lh, ...result.effective }]).catch(() => {});
   }
 
   let cascadeMovedLhs = [];
-  if (willCascade) {
+  // Carga do SISTEMA (lh_manual) não participa da cascata da rota: a fila de rota
+  // (cancelLoadCascade) só considera cargas da planilha (sheet_lh IS NOT NULL) e
+  // resolve o gatilho por createSheetLoadId(lh), que não existe p/ carga lançada —
+  // rodá-la só produziria um NotFound engolido (falso alarme no log). Pula.
+  if (willCascade && !result.isSystemCargo) {
     // Best-effort: a edição de status já está commitada; se a cascata falhar, o
     // sweep do próximo sync recupera (cancelLoadCascade é idempotente).
     try {
@@ -251,7 +272,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
   // se falhar, a carga fica RESERVED sem motorista até o operador tentar de novo.
   if (result.reopenLeadId) {
     try {
-      await cancelPublicLoadLead({ loadId: cargoId, leadId: result.reopenLeadId, operatorId, correlationId });
+      await cancelPublicLoadLead({ loadId: result.cargoId, leadId: result.reopenLeadId, operatorId, correlationId });
     } catch (reopenErr) {
       console.warn(
         `[update-monitor-allocation] reabrir carga reservada falhou para ${lh}:`,
