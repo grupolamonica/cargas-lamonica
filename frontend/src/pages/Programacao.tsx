@@ -831,7 +831,10 @@ export default function Programacao() {
                         ) : (
                           // Sem data (r.data ausente) o operador ainda pode lançar — a
                           // carga entra "a confirmar" e a agenda é definida depois.
-                          r.tab === "planejado" && (
+                          // podeLancar (backend): Planejado (SPX/Nestlé) OU Nestlé aceita
+                          // sem motorista. Fallback ao comportamento antigo se o backend
+                          // ainda não mandar o campo (rollout).
+                          (r.podeLancar ?? r.tab === "planejado") && (
                             <button
                               type="button"
                               onClick={() => handleLancar(r)}

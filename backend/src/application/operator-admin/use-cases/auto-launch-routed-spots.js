@@ -6,12 +6,18 @@
 // no portal do motorista. NÃO aceita no SPX: o aceite (acceptance_status 0→1)
 // compromete a carga com a agência (SLA/financeiro) e continua sendo ação manual.
 //
-// Elegibilidade de um spot p/ auto-lançamento:
-//   - aba Planejado (viagem ainda ofertável)
-//   - line-haul (LH "LT…") — só essas são viagens reais do SPX
-//   - não atrasada (carregamento no futuro — get-programacao já filtra)
-//   - ainda não lançada (jaLancada=false — dedup por lh_manual/sheet_lh)
-//   - rota (origem→destino) casa uma linha de route_metrics_cache (tem valor)
+// Elegibilidade de um spot p/ auto-lançamento (duas famílias):
+//   SPX/Shopee/Nestlé PLANEJADO:
+//     - aba Planejado (viagem ainda ofertável)
+//     - line-haul (LH "LT…") — só essas são viagens reais do SPX (Nestlé sempre true)
+//   Nestlé ACEITA (Projeto Galileu):
+//     - aba Aceito, fonte nestle-galileu, SEM motorista — a Nestlé aceita sozinha
+//       (Galileu/robô); a carga aceita mas ainda sem caminhão é publicável no nosso
+//       portal p/ achar motorista. (Nestlé aceita → lançar)
+//   Em ambas:
+//     - não atrasada (carregamento no futuro)
+//     - ainda não lançada (jaLancada=false — dedup por lh_manual/sheet_lh)
+//     - rota (origem→destino) casa uma linha de route_metrics_cache (tem valor)
 //
 // A carga é lançada via launch-cargo-from-trip (lh_manual, Cidade/UF limpo p/ casar
 // a rota); com a rota cadastrada ela já nasce "ready" no portal (valor/métrica vêm
@@ -39,19 +45,31 @@ export async function autoLaunchRoutedSpots({ correlationId, maxPerRun = DEFAULT
 
   const empty = { ok: true, candidates: 0, routed: 0, launched: 0, already: 0, errors: 0, deferred: 0, results: [] };
 
-  // Só a aba Planejado (viagens ainda ofertáveis). Se o SPX estiver indisponível
-  // (sidecar/sessão), o read model devolve 503 → no-op silencioso neste ciclo.
-  const prog = await getProg({ correlationId, tabs: ["planejado"], deps });
+  // Planejado (viagens ofertáveis) + Aceito (p/ pegar as Nestlé aceitas sem motorista).
+  // A aba "aceito" também traz viagens SPX aceitas — que NUNCA viram candidato aqui
+  // (só Nestlé aceita entra); é um custo pequeno (1 fetch a cada ciclo de ~5min) p/
+  // alcançar as ofertas Nestlé aceitas, que só existem nessa aba. Se o SPX estiver
+  // indisponível, o read model devolve 503 → no-op silencioso (mas se só o SPX cair e
+  // a Nestlé responder, ainda processa).
+  const prog = await getProg({ correlationId, tabs: ["planejado", "aceito"], deps });
   if (prog.statusCode !== 200) {
     return { ...empty, ok: false, reason: prog.payload?.error || "spx_unavailable" };
   }
 
   const rows = Array.isArray(prog.payload?.rows) ? prog.payload.rows : [];
-  const candidates = rows.filter(
+  const candidates = rows.filter((r) => {
     // `r.data`: cargas SEM carregamento ("a confirmar") ficam manual-only — o operador
-    // decide lançá-las; o auto-lançamento não publica agenda indefinida.
-    (r) => r.tab === "planejado" && r.isLinehaul && r.data && !r.expirada && !r.jaLancada,
-  );
+    // decide lançá-las; o auto-lançamento não publica agenda indefinida. Atrasadas e já
+    // lançadas nunca entram.
+    if (!r.data || r.expirada || r.jaLancada) return false;
+    // SPX/Shopee/Nestlé planejado line-haul (comportamento original).
+    if (r.tab === "planejado" && r.isLinehaul) return true;
+    // Nestlé ACEITA aguardando caminhão. `podeLancar` (get-programacao) é a fonte única
+    // da regra: oferta aceita (não desconhecida/nula), sem motorista e sem embarque
+    // morto — nunca republica viagem cancelada/malformada.
+    if (r.tab === "aceito" && r.source === "nestle-galileu" && r.podeLancar) return true;
+    return false;
+  });
   if (candidates.length === 0) return empty;
 
   // Quais candidatos têm rota cadastrada (casam route_metrics_cache pelo trecho).

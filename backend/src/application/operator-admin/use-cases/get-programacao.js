@@ -134,6 +134,8 @@ function normalizeRow(t, tab) {
     podeAceitar: tab === "planejado" && isLinehaul && acceptanceStatus === 0,
     // Aguardando motorista = já aceita, sem motorista atribuído ainda.
     aguardandoMotorista: tab === "planejado" && isLinehaul && acceptanceStatus === 1 && !motorista,
+    // Lançável manualmente na tela: SPX/Shopee só na aba Planejado (comportamento atual).
+    podeLancar: tab === "planejado",
     // Preenchido adiante (dedup visual do botão "Lançar").
     jaLancada: false,
   };
@@ -153,6 +155,14 @@ const NESTLE_FINAIS = new Set(["CANCELADO", "DECLINADA", "RECUSA LEILAO", "EXPIR
 // ATIVA do mesmo grupo no DISTINCT ON. Filtradas fora do read model. FINALIZADO NÃO entra
 // aqui: é viagem concluída de verdade (com motorista) e continua indo p/ a aba Concluído.
 const NESTLE_STATUS_MORTOS = ["RECUSA LEILAO", "EXPIRADA", "CANCELADO", "CANCELADO PELA CENTRAL", "DECLINADA"];
+
+// "Aceita aguardando caminhão" (lançável): a oferta precisa estar EXPLICITAMENTE aceita
+// (não pendente, não um status desconhecido/nulo) e o embarque NÃO pode estar morto. O
+// status da oferta é defasado vs o embarque, então checamos os dois: só ACEITA/EMBARQUE
+// EMITIDO contam como aceita, e um embarque cancelado/declinado/etc. NUNCA é lançável
+// (senão o auto-lançamento republicaria viagem morta no portal — fail-safe).
+const NESTLE_OFERTA_ACEITA = new Set(["ACEITA", "EMBARQUE EMITIDO"]);
+const NESTLE_EMB_MORTO = new Set(["CANCELADO", "CANCELADO PELA CENTRAL", "DECLINADA", "RECUSA LEILAO", "EXPIRADA"]);
 
 // datetime ISO naive do Galileo (wall-clock BRT, ex.: '2026-07-20T08:00:00') →
 // { data:'YYYY-MM-DD', horario:'HH:MM', ts: epoch segundos (interpretando como BRT) }.
@@ -195,12 +205,16 @@ function normalizeNestleRow(o) {
   // Status/motorista/placa REAIS vêm do embarque (join) quando a carga já foi aceita;
   // senão, o status da oferta. O embarque é a verdade sobre a viagem.
   const statusRaw = String(o.emb_status || o.descrstatprogcoleta || "");
+  const motorista = String(o.emb_motorista ?? "").trim();
+  const tab = nestleTab(o.descrstatprogcoleta, o.emb_status);
+  const ofertaStatusUp = String(o.descrstatprogcoleta ?? "").toUpperCase().trim();
+  const embStatusUp = String(o.emb_status ?? "").toUpperCase().trim();
   return {
     lh,
     nome: codProg, // referência da programação (a viagem em si é o lh/codembarque)
     statusRaw,
     statusOperacional: statusRaw.toUpperCase(),
-    motorista: String(o.emb_motorista ?? "").trim(),
+    motorista,
     veiculo: o.tpveic_nome || "",
     placa: String(o.emb_placa ?? "").trim(),
     origem: origemCidadeUf,
@@ -214,7 +228,7 @@ function normalizeNestleRow(o) {
     carregamentoTs: carreg.ts,
     dataDescarga: desc.data,
     horarioDescarga: desc.horario,
-    tab: nestleTab(o.descrstatprogcoleta, o.emb_status),
+    tab,
     cliente: "Nestle",
     source: "nestle-galileu",
     // Elegível a lançar (equivalente ao line-haul do SPX). Aceite DESLIGADO p/ Nestlé.
@@ -222,6 +236,18 @@ function normalizeNestleRow(o) {
     acceptanceStatus: null,
     podeAceitar: false,
     aguardandoMotorista: false,
+    // Lançável na tela/auto: a oferta Planejada (pendente) OU "aceita aguardando
+    // caminhão" — a Nestlé aceita sozinha (Galileu/robô), então a carga aceita mas
+    // sem motorista é publicável no nosso portal p/ achar caminhão. Restrições
+    // (fail-safe): oferta EXPLICITAMENTE aceita (ACEITA/EMBARQUE EMITIDO — status
+    // desconhecido/nulo NÃO lança), embarque NÃO morto (cancelado/declinado/etc.) e
+    // sem motorista já atribuído. (DC-260 / Nestlé aceita → lançar)
+    podeLancar:
+      tab === "planejado" ||
+      (tab === "aceito"
+        && !motorista
+        && NESTLE_OFERTA_ACEITA.has(ofertaStatusUp)
+        && !NESTLE_EMB_MORTO.has(embStatusUp)),
     jaLancada: false,
     tipo: o.tipo || null, // CONTRATO | ADICIONAL | LEILAO (dimensão extra p/ filtro)
   };
