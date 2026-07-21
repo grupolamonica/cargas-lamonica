@@ -13,6 +13,10 @@ import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({ withPgTransaction }));
 
+// Write-back pra planilha (espelho) — mockado p/ capturar o valor EFETIVO espelhado.
+const { writeSpy } = vi.hoisted(() => ({ writeSpy: vi.fn(async () => {}) }));
+vi.mock("../../google-sheets/sheet-writeback.js", () => ({ writeAllocationsToSheet: writeSpy }));
+
 const { updateMonitorAllocation } = await import("./update-monitor-allocation.js");
 
 const LH = "LT-MONITOR-TEST-1";
@@ -96,6 +100,42 @@ describe("updateMonitorAllocation", () => {
     expect(row.alloc_status).toBe("");
     // sheet_* segue intocado (a planilha continua com o valor original por baixo)
     expect(row.sheet_motorista).toBe("MOTORISTA DA PLANILHA");
+  });
+
+  it("REMOVER de vez: clear explícito espelha VAZIO na planilha (não ressuscita o motorista)", async () => {
+    await seedSheetCargo(); // sheet_motorista = "MOTORISTA DA PLANILHA"
+    const operator = await seedUser({ email: "op-clear-wb@teste.local" });
+    writeSpy.mockClear();
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { motorista: "", cavalo: "", carreta: "", status: "Disponível" },
+      correlationId: "corr-clear-wb",
+    });
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const arg = writeSpy.mock.calls[0][0][0];
+    expect(arg.motorista).toBe(""); // vazio de verdade — limpa a célula, não volta o valor da planilha
+    expect(arg.cavalo).toBe("");
+    expect(arg.carreta).toBe("");
+  });
+
+  it("editar SÓ o status: write-back preserva o motorista da planilha (não apaga sem querer)", async () => {
+    await seedSheetCargo();
+    const operator = await seedUser({ email: "op-status-wb@teste.local" });
+    writeSpy.mockClear();
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { status: "AGUARDANDO DESCARGA" }, // motorista/veículo AUSENTES
+      correlationId: "corr-status-wb",
+    });
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const arg = writeSpy.mock.calls[0][0][0];
+    expect(arg.motorista).toBe("MOTORISTA DA PLANILHA"); // preservado (fallback `||` da planilha)
   });
 
   it("campo AUSENTE preserva o alloc_* atual — enviar só status não apaga motorista/veículo", async () => {
