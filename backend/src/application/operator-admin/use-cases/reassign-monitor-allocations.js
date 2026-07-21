@@ -1,8 +1,8 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
-import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
+import { resolveMonitorCargoByLh } from "./_shared.js";
 
 /**
  * Reatribui (move) a alocação motorista+cavalo+carreta entre cargas do Monitor,
@@ -36,20 +36,16 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
   // Mantém "" (vazio explícito); null/undefined também viram "".
   const val = (v) => (v ?? "").toString().trim();
 
-  const seen = new Set();
   const normalized = moves.map((m) => {
     const lh = (m.lh ?? "").toString().trim();
-    // Carga da planilha → id derivado do LH; carga do SISTEMA → cargoId explícito
+    // Carga da planilha → resolvida por LH; carga do SISTEMA → cargoId explícito
     // (não tem LH). A coluna alloc_* é a mesma nos dois, então o swap planilha↔sistema
     // é só escrever em duas cargas; a trava de rota abaixo já garante "mesma rota".
     const explicitCargoId = (m.cargoId ?? "").toString().trim();
     if (!lh && !explicitCargoId) throw new ValidationError("Movimentação sem LH nem cargoId.");
-    const cargoId = explicitCargoId || createSheetLoadId(lh);
-    if (seen.has(cargoId)) throw new ValidationError(`Carga repetida na movimentação: ${lh || cargoId}`);
-    seen.add(cargoId);
     return {
       lh,
-      cargoId,
+      explicitCargoId,
       motorista: val(m.motorista),
       cavalo: val(m.cavalo),
       carreta: val(m.carreta),
@@ -63,20 +59,38 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
     // 1) Trava e valida TODAS as cargas afetadas ANTES de escrever (sem escrita
     //    parcial em caso de falha de validação): existência, fixo e rota.
     const routeKeys = new Set();
+    const seen = new Set();
     for (const m of normalized) {
-      const { rows } = await client.query(
-        `SELECT id, alloc_pinned, origem, destino FROM public.cargas WHERE id = $1 FOR UPDATE`,
-        [m.cargoId],
-      );
-      if (rows.length === 0) {
-        throw new NotFoundError(`Carga não encontrada para ${m.lh || m.cargoId}.`);
+      // LH → resolve por id da PLANILHA OU por lh_manual (carga do SISTEMA lançada
+      // na Programação), senão arrastar/remanejar uma carga lançada dava 404.
+      // cargoId explícito (carga do sistema já identificada pelo grid) trava direto.
+      let row;
+      if (m.explicitCargoId) {
+        const { rows } = await client.query(
+          `SELECT id, sheet_lh, alloc_pinned, origem, destino FROM public.cargas WHERE id = $1 FOR UPDATE`,
+          [m.explicitCargoId],
+        );
+        row = rows[0];
+      } else {
+        row = await resolveMonitorCargoByLh(client, m.lh, { columns: "id, sheet_lh, alloc_pinned, origem, destino" });
       }
+      if (!row) {
+        throw new NotFoundError(`Carga não encontrada para ${m.lh || m.explicitCargoId}.`);
+      }
+      // Id REAL resolvido (planilha OU sistema lançado) — usado no lock/update.
+      m.cargoId = row.id;
+      // Carga do sistema (sheet_lh NULL) não vai pro write-back da planilha.
+      m.sheetLhNull = row.sheet_lh == null;
+      if (seen.has(m.cargoId)) {
+        throw new ValidationError(`Carga repetida na movimentação: ${m.lh || m.cargoId}`);
+      }
+      seen.add(m.cargoId);
       // Carga FIXA é intocável — não pode ser movida pela fila (nem origem nem
       // destino de uma troca/descida). O operador precisa desafixar antes.
-      if (rows[0].alloc_pinned) {
+      if (row.alloc_pinned) {
         throw new ValidationError(`A carga ${m.lh || m.cargoId} está fixada e não pode ser movida. Desafixe antes de reordenar.`);
       }
-      routeKeys.add(routeKeyFromRow(rows[0]));
+      routeKeys.add(routeKeyFromRow(row));
     }
 
     // Só reordena DENTRO da mesma rota (origem → destino). Um arrasto que cruza
@@ -133,10 +147,13 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
   // Write-back best-effort pra planilha (espelho) — FORA da transação e SEM
   // await (o Apps Script pode levar segundos; não travamos a resposta). Os
   // moves já são os valores EFETIVOS relocados ("" = célula vazia). Nunca lança.
-  // Só cargas da PLANILHA têm LH na planilha; cargas do sistema (só cargoId) não
-  // entram no write-back.
+  // Só cargas da PLANILHA têm linha na planilha; cargas do sistema — sem LH
+  // (só cargoId) OU lançadas por lh_manual (sheet_lh NULL) — NÃO entram no
+  // write-back (não têm linha própria na planilha para espelhar).
   void writeAllocationsToSheet(
-    normalized.filter((m) => m.lh).map(({ lh, motorista, cavalo, carreta }) => ({ lh, motorista, cavalo, carreta })),
+    normalized
+      .filter((m) => m.lh && !m.sheetLhNull)
+      .map(({ lh, motorista, cavalo, carreta }) => ({ lh, motorista, cavalo, carreta })),
   ).catch(() => {});
 
   return result;

@@ -326,6 +326,107 @@ describe("updateMonitorAllocation", () => {
     expect(rows[0].alloc_vinculo).toBe("AGREGADO DEDICADO");
   });
 
+  it("resolve carga do SISTEMA (lançada na Programação, lh_manual) por LH e grava alloc_*", async () => {
+    // Viagem lançada na Programação: id ALEATÓRIO, sheet_lh nulo, lh_manual = LH.
+    // NÃO existe carga com id = createSheetLoadId(lh) — antes do fix isso dava
+    // "Carga da planilha não encontrada" e o operador não conseguia editar a placa.
+    const SYS_LH = "LT-SYS-LAUNCHED-1";
+    const { id } = await seedCargo({ status: "OPEN" }); // sheet_lh nulo por padrão
+    await query(`UPDATE public.cargas SET lh_manual = $2 WHERE id = $1`, [id, SYS_LH]);
+    const operator = await seedUser({ email: "op-sys-launched@teste.local" });
+    writeSpy.mockClear();
+
+    const res = await updateMonitorAllocation({
+      lh: SYS_LH,
+      operatorId: operator.id,
+      payload: { motorista: "ABELARDO", cavalo: "CUA1123", carreta: "FDZ0B46" },
+      correlationId: "corr-sys-launched",
+    });
+
+    expect(res.statusCode).toBe(200);
+    const row = await getAlloc(id);
+    expect(row.alloc_motorista).toBe("ABELARDO");
+    expect(row.alloc_carreta).toBe("FDZ0B46");
+    expect(row.alloc_source).toBe("operator");
+    // Carga do sistema NÃO tem linha própria na planilha → NÃO faz write-back
+    // (senão apagaria/duplicaria a linha da planilha homônima).
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("carga do SISTEMA: editar só o status NÃO faz write-back (não apaga motorista da planilha homônima)", async () => {
+    const SYS_LH = "LT-SYS-LAUNCHED-2";
+    const { id } = await seedCargo({ status: "OPEN" });
+    await query(`UPDATE public.cargas SET lh_manual = $2 WHERE id = $1`, [id, SYS_LH]);
+    const operator = await seedUser({ email: "op-sys-status@teste.local" });
+    writeSpy.mockClear();
+
+    await updateMonitorAllocation({
+      lh: SYS_LH,
+      operatorId: operator.id,
+      payload: { status: "AGUARDANDO DESCARGA" },
+      correlationId: "corr-sys-status",
+    });
+
+    const row = await getAlloc(id);
+    expect(row.alloc_status).toBe("AGUARDANDO DESCARGA");
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("prefere a carga da PLANILHA quando o LH existe como planilha E como sistema (lh_manual)", async () => {
+    // Corrida: viagem lançada (lh_manual) E depois trazida pelo sync (sheet_lh).
+    // A edição por LH deve gravar na carga da PLANILHA (fonte de verdade) e ainda
+    // fazer write-back — não na carga do sistema.
+    const DUP_LH = "LT-DUP-1";
+    const sheetId = createSheetLoadId(DUP_LH);
+    await seedCargo({ id: sheetId, sheet_lh: DUP_LH, status: "OPEN" });
+    const { id: sysId } = await seedCargo({ status: "OPEN", origem: "X / SP", destino: "Y / BA" });
+    await query(`UPDATE public.cargas SET lh_manual = $2 WHERE id = $1`, [sysId, DUP_LH]);
+    const operator = await seedUser({ email: "op-dup@teste.local" });
+    writeSpy.mockClear();
+
+    await updateMonitorAllocation({
+      lh: DUP_LH,
+      operatorId: operator.id,
+      payload: { motorista: "PLANILHA VENCE", cavalo: "AAA1A11", carreta: "BBB2B22" },
+      correlationId: "corr-dup",
+    });
+
+    const sheetRow = await getAlloc(sheetId);
+    const sysRow = await getAlloc(sysId);
+    expect(sheetRow.alloc_motorista).toBe("PLANILHA VENCE"); // gravou na da planilha
+    expect(sysRow.alloc_motorista).toBeNull();               // sistema intocado
+    expect(writeSpy).toHaveBeenCalledTimes(1);               // planilha → write-back normal
+  });
+
+  it("prefere a carga com alocação viva (alloc_updated_at) quando sistema E planilha coexistem", async () => {
+    // Corrida lançamento↔sync: carga da PLANILHA sem alocação (alloc_updated_at NULL)
+    // + carga LANÇADA (lh_manual) COM motorista alocado (alloc_updated_at set). O
+    // overlay allocByLh exibe a lançada → editar por LH deve mirar a MESMA carga
+    // (senão editar só o status escreveria na planilha vazia e "sumia" o motorista).
+    const DUP_LH = "LT-PREF-1";
+    const sheetId = createSheetLoadId(DUP_LH);
+    await seedCargo({ id: sheetId, sheet_lh: DUP_LH, status: "OPEN" });
+    const { id: sysId } = await seedCargo({ status: "OPEN", origem: "X / SP", destino: "Y / BA" });
+    await query(
+      `UPDATE public.cargas SET lh_manual = $2, alloc_motorista = 'ABELARDO', alloc_updated_at = now() WHERE id = $1`,
+      [sysId, DUP_LH],
+    );
+    const operator = await seedUser({ email: "op-pref@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: DUP_LH,
+      operatorId: operator.id,
+      payload: { status: "AGUARDANDO DESCARGA" }, // só status (motorista ausente)
+      correlationId: "corr-pref",
+    });
+
+    const sys = await getAlloc(sysId);
+    const sheet = await getAlloc(sheetId);
+    expect(sys.alloc_status).toBe("AGUARDANDO DESCARGA"); // gravou na carga alocada
+    expect(sys.alloc_motorista).toBe("ABELARDO");         // motorista preservado
+    expect(sheet.alloc_status).toBeNull();                 // planilha vazia intocada
+  });
+
   it("lança NotFoundError quando o LH não tem carga correspondente", async () => {
     const operator = await seedUser({ email: "op-monitor-404@teste.local" });
     await expect(

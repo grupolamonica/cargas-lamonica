@@ -6,6 +6,7 @@
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 import { ConflictError, ForbiddenError, NotFoundError } from "../../../domain/load-claims/errors.js";
+import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 import { getRouteInfo } from "../../../infrastructure/geoapify/index.js";
 import {
   parseNullableNumber,
@@ -682,6 +683,46 @@ export async function findClientIdByName(client, name) {
     [targetName],
   );
   return rows[0]?.id ?? null;
+}
+
+/**
+ * Resolve a carga que representa um LH do Monitor.
+ *
+ * Uma viagem lançada na Programação vive como carga do SISTEMA (lh_manual, sheet_lh
+ * NULL, id ALEATÓRIO) — NÃO em `id = createSheetLoadId(lh)`. Quando essa viagem
+ * também está na planilha (snapshot), o Monitor a mostra como linha da planilha,
+ * editada por LH; resolver só por createSheetLoadId(lh) falhava com "Carga não
+ * encontrada" (bug de não conseguir editar/alocar/fixar/remanejar cargas lançadas).
+ *
+ * Resolve por `id = createSheetLoadId(lh)` OU por `lh_manual` (carga do sistema,
+ * sheet_lh NULL), preferindo:
+ *   1) a carga que carrega a alocação viva (alloc_updated_at) — bate com o overlay
+ *      allocByLh exibido, evitando escrever numa carga e exibir de outra;
+ *   2) a carga da planilha (id determinístico);
+ *   3) desempate determinístico (created_at, id) contra gêmeos lh_manual (o launch
+ *      não tem índice único; cliques concorrentes podem gerar 2 cargas do sistema).
+ *
+ * `columns` traz as colunas que o chamador precisa NA MESMA query travada (evita um
+ * 2º SELECT). Inclua sempre `id` (o chamador usa row.id como o id REAL da carga) e,
+ * quando precisar decidir write-back, `sheet_lh` (sistema = sheet_lh NULL). Retorna
+ * a linha ou null.
+ *
+ * @param {import("pg").PoolClient} client
+ * @param {string} lh
+ * @param {{ columns?: string, forUpdate?: boolean }} [opts]
+ */
+export async function resolveMonitorCargoByLh(client, lh, { columns = "id, sheet_lh", forUpdate = true } = {}) {
+  const lhTrim = String(lh ?? "").trim();
+  const sheetCargoId = createSheetLoadId(lhTrim);
+  const { rows } = await client.query(
+    `SELECT ${columns}
+       FROM public.cargas
+      WHERE id = $1 OR (lh_manual = $2 AND sheet_lh IS NULL)
+      ORDER BY (alloc_updated_at IS NOT NULL) DESC, (id = $1) DESC, created_at ASC, id ASC
+      LIMIT 1${forUpdate ? " FOR UPDATE" : ""}`,
+    [sheetCargoId, lhTrim],
+  );
+  return rows[0] ?? null;
 }
 
 export async function findCargoById(client, cargoId, { lock = false } = {}) {

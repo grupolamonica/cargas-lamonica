@@ -71,6 +71,25 @@ describe("setMonitorAllocationPin", () => {
     expect(row.alloc_pinned_by).toBeNull();
   });
 
+  it("fixa carga do SISTEMA (lançada na Programação, lh_manual) resolvida por LH", async () => {
+    const SYS_LH = "LT-SYS-PIN-1";
+    const { id } = await seedCargo({ status: "OPEN" }); // sheet_lh nulo por padrão
+    await query(`UPDATE public.cargas SET lh_manual = $2 WHERE id = $1`, [id, SYS_LH]);
+    const operator = await seedUser({ email: "op-sys-pin@teste.local" });
+
+    const res = await setMonitorAllocationPin({
+      lh: SYS_LH,
+      pinned: true,
+      operatorId: operator.id,
+      correlationId: "corr-sys-pin",
+    });
+
+    expect(res.statusCode).toBe(200);
+    const row = await getPin(id);
+    expect(row.alloc_pinned).toBe(true);
+    expect(row.alloc_pinned_by).toBe(operator.id);
+  });
+
   it("lança NotFoundError quando o LH não tem carga", async () => {
     const operator = await seedUser({ email: "op-pin-404@teste.local" });
     await expect(

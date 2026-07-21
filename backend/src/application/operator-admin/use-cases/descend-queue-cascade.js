@@ -44,7 +44,7 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
   if (!order.includes(source)) throw new ValidationError("A carga de origem não está na ordem da fila enviada.");
   if (!order.includes(target)) throw new ValidationError("A carga de destino não está na ordem da fila enviada.");
 
-  const ids = order.map((lh) => createSheetLoadId(lh));
+  const sheetIds = order.map((lh) => createSheetLoadId(lh));
 
   const result = await withPgTransaction(async (client) => {
     // Trava TODAS as cargas da fila. A ordem de aquisição do lock DEVE bater com a
@@ -52,20 +52,39 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
     // horario DESC, sheet_lh) — se as duas travarem a mesma rota em ordens
     // diferentes, concorrência entre elas dá deadlock. Lê o EFETIVO (alloc ??
     // planilha). IN-list de params (não ANY(array)) p/ compatibilidade com o harness.
-    const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
+    //
+    // Resolve tanto a carga da PLANILHA (id = createSheetLoadId(lh)) quanto a carga
+    // do SISTEMA lançada na Programação (lh_manual == LH, sheet_lh NULL) — uma
+    // viagem lançada aparece na fila como linha da planilha; sem incluí-la aqui a
+    // descida dava 404 (origem lançada) ou pulava a carga silenciosamente (destino/
+    // miolo lançado), embaralhando a cascata. `id` no fim do ORDER BY desempata
+    // gêmeos lh_manual (sheet_lh NULL) sem alterar a ordem das cargas da planilha
+    // (sheet_lh único), preservando a compatibilidade de lock com o cancelamento.
+    const idPlaceholders = sheetIds.map((_, i) => `$${i + 1}`).join(", ");
+    const lhPlaceholders = order.map((_, i) => `$${sheetIds.length + i + 1}`).join(", ");
     const { rows } = await client.query(
-      `SELECT id, sheet_lh, origem, destino, alloc_pinned,
+      `SELECT id, sheet_lh, lh_manual, origem, destino, alloc_pinned,
               COALESCE(alloc_motorista, sheet_motorista, '') AS motorista,
               COALESCE(alloc_cavalo,    sheet_cavalo,    '') AS cavalo,
               COALESCE(alloc_carreta,   sheet_carreta,   '') AS carreta,
               COALESCE(alloc_status,    sheet_status,    '') AS status
        FROM public.cargas
-       WHERE id IN (${placeholders})
-       ORDER BY (data IS NULL), data DESC, horario DESC, sheet_lh
+       WHERE id IN (${idPlaceholders})
+          OR (lh_manual IN (${lhPlaceholders}) AND sheet_lh IS NULL)
+       ORDER BY (data IS NULL), data DESC, horario DESC, sheet_lh, id
        FOR UPDATE`,
-      ids,
+      [...sheetIds, ...order],
     );
-    const byLh = new Map(rows.map((r) => [r.sheet_lh, r]));
+    // Chaveia pela identidade exibida na fila: sheet_lh (planilha) OU lh_manual
+    // (sistema lançado). Se o MESMO LH existir como planilha E como sistema (corrida
+    // lançamento↔sync), a da PLANILHA vence — a fila da rota é da planilha.
+    const byLh = new Map();
+    for (const r of rows) {
+      const key = r.sheet_lh ?? r.lh_manual;
+      if (!key) continue;
+      const existing = byLh.get(key);
+      if (!existing || (existing.sheet_lh == null && r.sheet_lh != null)) byLh.set(key, r);
+    }
 
     const sourceRow = byLh.get(source);
     if (!sourceRow) throw new NotFoundError(`Carga de origem ${source} não encontrada.`);
@@ -92,7 +111,10 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
         throw new ValidationError("Só é possível descer a fila dentro da mesma rota (origem → destino).");
       }
       loads.push({
-        lh: r.sheet_lh,
+        // Identidade exibida na fila: sheet_lh (planilha) OU lh_manual (sistema
+        // lançado). Usar r.sheet_lh cru deixava a carga lançada com lh=null e o
+        // computeDescendFromDrop não a encontrava (source/target NÃO batiam → no-op).
+        lh: r.sheet_lh ?? r.lh_manual,
         motorista: r.motorista,
         cavalo: r.cavalo,
         carreta: r.carreta,
@@ -111,11 +133,16 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
         statusCode: 200,
         payload: { ok: true, count: 0, reserva: false, skippedPinned: skippedPinnedLhs, moves: [], meta: { correlationId } },
         moves: [],
+        writebackMoves: [],
       };
     }
 
-    // Aplica os moves (só alloc_*; status operacional pertence à carga).
+    // Aplica os moves (só alloc_*; status operacional pertence à carga). Usa o id
+    // REAL resolvido (planilha OU sistema lançado) — não createSheetLoadId(m.lh),
+    // que não bate na carga lançada (lh_manual).
     for (const m of moves) {
+      const target = byLh.get(m.lh);
+      if (!target) continue; // defensivo: carga saiu da fila entre lock e cálculo
       await client.query(
         `
           UPDATE public.cargas
@@ -128,7 +155,7 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
               updated_at = now()
           WHERE id = $1
         `,
-        [createSheetLoadId(m.lh), m.motorista, m.cavalo, m.carreta, operatorId],
+        [target.id, m.motorista, m.cavalo, m.carreta, operatorId],
       );
     }
 
@@ -157,7 +184,7 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
       actorUserId: operatorId,
       actorRole: "operator",
       resourceType: "cargo",
-      resourceId: createSheetLoadId(source),
+      resourceId: sourceRow.id,
       action: "update",
       outcome: "success",
       requestIp,
@@ -186,14 +213,19 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
         meta: { correlationId },
       },
       moves,
+      // Só os moves que caíram em carga da PLANILHA (sheet_lh não nulo) vão pro
+      // write-back; cargas do SISTEMA lançadas (lh_manual) não têm linha própria
+      // na planilha para espelhar. Computado aqui (byLh só existe na transação).
+      writebackMoves: moves.filter((m) => byLh.get(m.lh)?.sheet_lh != null),
     };
   });
 
   // Write-back best-effort dos moves (espelho da planilha) — FORA da transação,
-  // sem await. A reserva não tem LH → não vai pra planilha.
-  if (result.moves.length > 0) {
+  // sem await. A reserva não tem LH → não vai pra planilha; cargas do sistema
+  // lançadas (lh_manual) também não (writebackMoves já as exclui).
+  if (result.writebackMoves.length > 0) {
     void writeAllocationsToSheet(
-      result.moves.map(({ lh, motorista, cavalo, carreta }) => ({ lh, motorista, cavalo, carreta })),
+      result.writebackMoves.map(({ lh, motorista, cavalo, carreta }) => ({ lh, motorista, cavalo, carreta })),
     ).catch(() => {});
   }
 

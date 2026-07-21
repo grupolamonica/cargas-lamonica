@@ -191,6 +191,33 @@ describe("reassignMonitorAllocations", () => {
     expect(b.alloc_motorista).toBeNull();
   });
 
+  it("resolve carga do SISTEMA (lançada, lh_manual) por LH ao remanejar — mesma rota", async () => {
+    // Carga da planilha + carga LANÇADA (lh_manual, sheet_lh NULL) na MESMA rota.
+    // Antes do fix, mover a lançada por LH resolvia createSheetLoadId(lh) → 404.
+    const idSheet = createSheetLoadId("LH-REORD-SHEET");
+    await seedCargo({ id: idSheet, sheet_lh: "LH-REORD-SHEET", status: "OPEN", origem: "Salvador / BA", destino: "Feira / BA" });
+    await query(`UPDATE public.cargas SET sheet_motorista = 'MOT SHEET' WHERE id = $1`, [idSheet]);
+    const { id: idSys } = await seedCargo({ status: "OPEN", origem: "Salvador / BA", destino: "Feira / BA" });
+    await query(`UPDATE public.cargas SET lh_manual = 'LT-REORD-SYS' WHERE id = $1`, [idSys]);
+    const operator = await seedUser({ email: "op-reassign-sys@teste.local" });
+
+    const res = await reassignMonitorAllocations({
+      moves: [
+        { lh: "LH-REORD-SHEET", motorista: "MOT SYS" },
+        { lh: "LT-REORD-SYS", motorista: "MOT SHEET", cavalo: "AAA1A11" },
+      ],
+      operatorId: operator.id,
+      correlationId: "corr-reassign-sys",
+    });
+
+    expect(res.payload.count).toBe(2);
+    // A carga lançada foi resolvida por lh_manual e recebeu a alocação.
+    const sys = await getAlloc(idSys);
+    expect(sys.alloc_motorista).toBe("MOT SHEET");
+    expect(sys.alloc_cavalo).toBe("AAA1A11");
+    expect((await getAlloc(idSheet)).alloc_motorista).toBe("MOT SYS");
+  });
+
   it("permite reordenar dentro da MESMA rota", async () => {
     const idA = createSheetLoadId("LH-MESMA-A");
     const idB = createSheetLoadId("LH-MESMA-B");
