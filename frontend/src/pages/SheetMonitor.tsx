@@ -2663,22 +2663,21 @@ function RowDetailModal({
   // (fica vivo no modal ao clicar); reconcilia com o servidor no refetch.
   const [rodoparStatus, setRodoparStatus] = useState(0);
   useEffect(() => {
-    setRodoparStatus(Number(alloc?.rodopar_status ?? row?.rodoparStatus ?? 0));
-  }, [row, alloc, open]);
+    setRodoparStatus(Number(row?.rodoparStatus ?? 0));
+  }, [row, open]);
   const rodoparMutation = useMutation({
     mutationFn: setMonitorRodoparStatus,
     onSuccess: () => { void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }); },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "Não foi possível atualizar o Rodopar.");
-      setRodoparStatus(Number(alloc?.rodopar_status ?? row?.rodoparStatus ?? 0));
+      setRodoparStatus(Number(row?.rodoparStatus ?? 0));
     },
   });
   const cycleRodopar = () => {
     if (!row) return;
     const next = (rodoparStatus + 1) % 3;
     setRodoparStatus(next);
-    if (row.source === "sistema" && row.cargoId) rodoparMutation.mutate({ cargoId: row.cargoId, status: next });
-    else rodoparMutation.mutate({ lh: row.lh, status: next });
+    rodoparMutation.mutate({ lh: row.lh, status: next });
   };
 
   // DC-230: consulta Angellira/ASPX só DESTE item (a linha selecionada), sem
@@ -3562,7 +3561,7 @@ export default function SheetMonitor() {
         status,
         tipo: a.alloc_tipo ?? row.tipo,
         pinned: a.alloc_pinned ?? false,
-        rodoparStatus: a.rodopar_status ?? row.rodoparStatus ?? 0,
+        rodoparStatus: row.rodoparStatus ?? 0,
         hasDriver: Boolean(motoristas),
         isAvailable: !motoristas && !status,
       };
@@ -3901,24 +3900,15 @@ export default function SheetMonitor() {
     variables: rodoparVars,
   } = useMutation({
     mutationFn: setMonitorRodoparStatus,
-    // OTIMISTA: reflete a cor NA HORA (planilha via allocByLh, sistema via item);
+    // OTIMISTA: reflete a cor NA HORA na linha (rodoparStatus vem por LH do backend);
     // reconcilia no refetch. Rollback se falhar.
     onMutate: async (vars) => {
       await queryClient.cancelQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
       const prev = queryClient.getQueryData<Awaited<ReturnType<typeof fetchSheetMonitor>>>([...SHEET_MONITOR_QUERY_KEY]);
       queryClient.setQueryData<Awaited<ReturnType<typeof fetchSheetMonitor>>>([...SHEET_MONITOR_QUERY_KEY], (old) => {
         if (!old) return old;
-        if (vars.cargoId) {
-          const items = old.items.map((it) => (it.cargoId === vars.cargoId ? { ...it, rodoparStatus: vars.status } : it));
-          return { ...old, items };
-        }
-        const allocByLh = { ...(old.allocByLh ?? {}) };
-        const base = allocByLh[vars.lh ?? ""] ?? {
-          sheet_lh: vars.lh ?? "", alloc_motorista: null, alloc_cavalo: null, alloc_carreta: null,
-          alloc_status: null, alloc_tipo: null, alloc_pinned: false, alloc_updated_at: null,
-        };
-        allocByLh[vars.lh ?? ""] = { ...base, rodopar_status: vars.status };
-        return { ...old, allocByLh };
+        const items = old.items.map((it) => (it.lh === vars.lh ? { ...it, rodoparStatus: vars.status } : it));
+        return { ...old, items };
       });
       return { prev };
     },
@@ -3930,12 +3920,11 @@ export default function SheetMonitor() {
       void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
     },
   });
-  const rodoparBusyKey = rodoparPending ? (rodoparVars?.cargoId ?? rodoparVars?.lh ?? null) : null;
+  const rodoparBusyKey = rodoparPending ? (rodoparVars?.lh ?? null) : null;
   const handleCycleRodopar = useCallback(
     (row: SheetMonitorRowType) => {
       const next = (Number(row.rodoparStatus ?? 0) + 1) % 3;
-      if (row.source === "sistema" && row.cargoId) mutateRodopar({ cargoId: row.cargoId, status: next });
-      else mutateRodopar({ lh: row.lh, status: next });
+      mutateRodopar({ lh: row.lh, status: next });
     },
     [mutateRodopar],
   );

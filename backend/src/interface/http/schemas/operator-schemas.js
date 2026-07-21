@@ -118,15 +118,13 @@ export const sheetMonitorPinBodySchema = z.object({
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/rodopar — "Check Rodopar" (DC-260):
- *  marca por carga se já foi lançada no Rodopar (0=não lançado, 1=lançado, 2=lançado
- *  incorreto). Aceita `lh` (carga da planilha) OU `cargoId` (carga do sistema). */
+ *  marca por LH da linha do Monitor se já foi lançada no Rodopar (0=não lançado,
+ *  1=lançado, 2=lançado incorreto). Guardado por LH (monitor_rodopar_status),
+ *  independente de existir carga — o Monitor é a visão da planilha. */
 export const sheetMonitorRodoparBodySchema = z.object({
-  lh: z.string().trim().min(1).max(120).optional(),
-  cargoId: z.string().uuid().optional(),
+  lh: z.string().trim().min(1).max(120),
   status: z.number().int().min(0).max(2),
-}).strict().refine((v) => Boolean(v.lh) || Boolean(v.cargoId), {
-  message: "Informe lh (planilha) ou cargoId (sistema).",
-});
+}).strict();
 
 /** Body for PATCH /api/operator/sheet-monitor/cargo — edita uma carga do SISTEMA
  *  (sheet_lh nulo) direto no grid do Monitor. Parcial: só os campos enviados são

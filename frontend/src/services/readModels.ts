@@ -1274,7 +1274,6 @@ export interface SheetMonitorAllocation {
   alloc_vinculo: string | null;
   alloc_pinned: boolean | null;
   alloc_updated_at: string | null;
-  rodopar_status?: number | null;
 }
 
 export async function fetchSheetMonitor({ refresh = false }: { refresh?: boolean } = {}) {
@@ -1483,14 +1482,13 @@ export async function setMonitorAllocationPin(input: { lh: string; pinned: boole
   }>("/api/operator/sheet-monitor/pin", { accessToken, method: "POST", body: input });
 }
 
-/** Check Rodopar (DC-260): grava o status por carga (0/1/2). Aceita `lh` (planilha)
- *  OU `cargoId` (sistema). */
-export async function setMonitorRodoparStatus(input: { lh?: string; cargoId?: string; status: number }) {
+/** Check Rodopar (DC-260): grava o status por LH da linha do Monitor (0/1/2),
+ *  em monitor_rodopar_status — independente de existir carga. */
+export async function setMonitorRodoparStatus(input: { lh: string; status: number }) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{
     ok: boolean;
-    cargoId: string;
-    lh: string | null;
+    lh: string;
     rodoparStatus: number;
     meta: { correlationId: string };
   }>("/api/operator/sheet-monitor/rodopar", { accessToken, method: "POST", body: input });
