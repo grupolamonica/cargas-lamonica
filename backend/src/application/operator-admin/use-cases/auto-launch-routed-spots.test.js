@@ -7,6 +7,9 @@ function row(lh, o = {}) {
   return {
     lh,
     tab: o.tab ?? "planejado",
+    source: o.source ?? "spx-direct",
+    motorista: o.motorista ?? "",
+    podeLancar: o.podeLancar ?? (o.tab === "planejado"),
     isLinehaul: o.isLinehaul ?? true,
     expirada: o.expirada ?? false,
     jaLancada: o.jaLancada ?? false,
@@ -58,6 +61,37 @@ describe("autoLaunchRoutedSpots (DC-201)", () => {
     // lança com Cidade/UF limpo (casa a rota) — nunca o rótulo "· TIPO".
     expect(deps.launchCargoFromTrip).toHaveBeenCalledWith(
       expect.objectContaining({ lh: "LT-A", origem: "Criciuma Verdinho/SC", destino: "Betim/MG" }),
+    );
+  });
+
+  it("lança Nestlé aceita lançável (podeLancar) COM rota; ignora não-lançável, com motorista, morta, expirada e SPX", async () => {
+    const rows = [
+      // Nestlé aceita lançável, com rota → lança
+      row("NES-A", { tab: "aceito", source: "nestle-galileu", podeLancar: true }),
+      // Nestlé aceita lançável, SEM rota → candidato mas não routed
+      row("NES-B", { tab: "aceito", source: "nestle-galileu", podeLancar: true }),
+      // Nestlé aceita NÃO lançável (embarque morto / status desconhecido / com motorista)
+      // → podeLancar=false → não é candidato (guarda dos achados MEDIUM/LOW da revisão)
+      row("NES-DEAD", { tab: "aceito", source: "nestle-galileu", podeLancar: false }),
+      // Nestlé aceita lançável mas EXPIRADA → excluída pela guarda genérica (achado LOW)
+      row("NES-EXP", { tab: "aceito", source: "nestle-galileu", podeLancar: true, expirada: true }),
+      // SPX/Shopee aceito (não-Nestlé) → nunca é candidato na aba aceito
+      row("LT-ACC", { tab: "aceito", source: "spx-direct", podeLancar: false }),
+    ];
+    // NES-B sem rota (candidato mas não routed); DEAD/EXP COM rota, p/ provar que são
+    // excluídos ANTES da rota (não basta ter rota — precisa ser lançável e não expirada).
+    const deps = makeDeps({ rows, routedLhs: new Set(["NES-A", "NES-DEAD", "NES-EXP"]) });
+    const res = await autoLaunchRoutedSpots({ deps });
+
+    expect(res.ok).toBe(true);
+    expect(res.candidates).toBe(2); // só NES-A e NES-B (lançáveis, não expiradas)
+    expect(res.routed).toBe(1); // só NES-A tem rota
+    expect(res.launched).toBe(1);
+    expect(deps.launchCargoFromTrip).toHaveBeenCalledTimes(1);
+    expect(deps.launchCargoFromTrip).toHaveBeenCalledWith(expect.objectContaining({ lh: "NES-A" }));
+    // busca as abas planejado E aceito (senão não pega a Nestlé aceita)
+    expect(deps.getProgramacao).toHaveBeenCalledWith(
+      expect.objectContaining({ tabs: ["planejado", "aceito"] }),
     );
   });
 

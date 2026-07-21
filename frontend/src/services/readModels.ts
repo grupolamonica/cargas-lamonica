@@ -1701,6 +1701,8 @@ export interface ProgramacaoRow {
   acceptanceStatus: number | null;
   podeAceitar: boolean;
   aguardandoMotorista: boolean;
+  /** Pode lançar no sistema pela tela: Planejado (SPX/Nestlé) ou Nestlé aceita sem motorista. */
+  podeLancar?: boolean;
   jaLancada: boolean;
   expirada: boolean;
 }
