@@ -143,6 +143,13 @@ const schemaSql = `
     updated_at timestamptz NOT NULL DEFAULT now()
   );
 
+  CREATE TABLE public.monitor_rodopar_status (
+    lh text PRIMARY KEY,
+    status smallint NOT NULL DEFAULT 0,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    updated_by uuid
+  );
+
   CREATE TABLE public.driver_profiles (
     user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     full_name text NOT NULL,

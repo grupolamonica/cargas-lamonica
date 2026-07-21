@@ -96,6 +96,7 @@ import { applySpxOperationalStatus } from "../../../application/operator-admin/u
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 import { attachRouteCodes } from "../../../application/operator-admin/use-cases/route-codes.js";
 import { attachRouteRegistration } from "../../../application/operator-admin/use-cases/attach-route-registration.js";
+import { attachRodoparStatus } from "../../../application/operator-admin/use-cases/attach-rodopar-status.js";
 import { updateMonitorCargo } from "../../../application/operator-admin/use-cases/update-monitor-cargo.js";
 import { buildSheetSummary, getSheetClientName } from "../../../application/google-sheets/google-sheet-loads.js";
 import { previewAspxAllocation } from "../../../application/operator-admin/use-cases/preview-aspx-allocation.js";
@@ -882,12 +883,9 @@ export async function resolveSheetMonitorResponse(request) {
             (from, to) =>
               supabaseClient
                 .from("cargas")
-                .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_pinned, alloc_updated_at, rodopar_status")
+                .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_pinned, alloc_updated_at")
                 .not("sheet_lh", "is", null)
-                // Overlay do operador: alocação editada (alloc_updated_at) OU Check Rodopar
-                // marcado (rodopar_status > 0, DC-260). O merge de alloc_* no front só usa
-                // os valores presentes, então incluir linhas só-rodopar não altera a alocação.
-                .or("alloc_updated_at.not.is.null,rodopar_status.gt.0")
+                .not("alloc_updated_at", "is", null)
                 .order("sheet_lh", { ascending: true })
                 .range(from, to),
             { label: "cargas_alloc", correlationId, partialOnError: true },
@@ -1106,6 +1104,7 @@ export async function resolveSheetMonitorResponse(request) {
             attachRouteCodes(supabaseClient, unified.items, correlationId),
             attachRouteRegistration(supabaseClient, unified.items, correlationId),
             readEnrichedMaps(supabaseClient, correlationId),
+            attachRodoparStatus(supabaseClient, unified.items, correlationId),
           ]);
           return {
             statusCode: 200,
@@ -1223,6 +1222,7 @@ export async function resolveSheetMonitorResponse(request) {
       await Promise.all([
         attachRouteCodes(supabaseClient, unified.items, correlationId),
         attachRouteRegistration(supabaseClient, unified.items, correlationId),
+        attachRodoparStatus(supabaseClient, unified.items, correlationId),
       ]);
       return {
         statusCode: 200,
@@ -1248,6 +1248,7 @@ export async function resolveSheetMonitorResponse(request) {
     await Promise.all([
       attachRouteCodes(supabaseClient, unified.items, correlationId),
       attachRouteRegistration(supabaseClient, unified.items, correlationId),
+      attachRodoparStatus(supabaseClient, unified.items, correlationId),
     ]);
     // Selos já lidos em paralelo com o snapshot acima.
     const { enrichedByLh, enrichedByCargoId } = enrichedMaps;
@@ -1488,8 +1489,8 @@ export async function resolveSetMonitorRodoparStatusResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-      const { lh, cargoId, status } = sheetMonitorRodoparBodySchema.parse(await parseJsonBody(request));
-      return setMonitorRodoparStatus({ lh, cargoId, status, operatorId, requestIp, correlationId });
+      const { lh, status } = sheetMonitorRodoparBodySchema.parse(await parseJsonBody(request));
+      return setMonitorRodoparStatus({ lh, status, operatorId, requestIp, correlationId });
     },
   );
 }

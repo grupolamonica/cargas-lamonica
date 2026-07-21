@@ -20,6 +20,9 @@ vi.mock("./angellira-check.js", () => ({ checkAngelliraVigencia: angMock }));
 const { getDriverOpportunities } = await import("./get-driver-opportunities.js");
 
 const daysAgoIso = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
+// Data (YYYY-MM-DD) relativa a hoje — carga de retorno precisa estar no FUTURO
+// (loadOpenLoads filtra dateIso >= hoje BRT), senão o teste apodrece na virada do dia.
+const daysFromNowDate = (n) => new Date(Date.now() + n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 describe("getDriverOpportunities (integração pg-mem)", () => {
   beforeEach(async () => {
@@ -39,7 +42,7 @@ describe("getDriverOpportunities (integração pg-mem)", () => {
       { motoristas: "Joao da Silva", data: "2026-04-01", origem: "Simoes Filho / BA", destino: "Recife / PE" },
       { motoristas: "Outro Motorista", data: "2026-05-02", origem: "X / SP", destino: "Y / SP" },
     ]);
-    await seedCargo({ status: "OPEN", origem: "Recife / PE", destino: "Simoes Filho / BA", data: "2026-07-20" });
+    await seedCargo({ status: "OPEN", origem: "Recife / PE", destino: "Simoes Filho / BA", data: daysFromNowDate(7) });
 
     const result = await getDriverOpportunities({ cpf: "123.456.789-01", nome: "Joao da Silva" });
 
