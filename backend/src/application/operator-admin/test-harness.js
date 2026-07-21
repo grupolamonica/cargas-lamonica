@@ -324,6 +324,8 @@ const schemaSql = `
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     id_cadastro text,
     status text NOT NULL DEFAULT 'draft',
+    versao_cadastro text,
+    observacoes text,
     dados jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()

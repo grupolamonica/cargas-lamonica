@@ -19,11 +19,12 @@ vi.mock("../operator-admin/use-cases/angellira/auto-approve-vigentes.js", () => 
   ensureAppSettingsTable: async () => {},
 }));
 
-// Evolution é externo — mock: capturamos os envios do número Repom.
-const { sendMock } = vi.hoisted(() => ({ sendMock: vi.fn() }));
+// Evolution é externo — mock: envios + download de mídia do número Repom.
+const { sendMock, getMediaMock } = vi.hoisted(() => ({ sendMock: vi.fn(), getMediaMock: vi.fn() }));
 vi.mock("../../infrastructure/whatsapp/evolution-client.js", () => ({
   getRepomInstance: () => "lamonica-repom",
   sendWhatsappText: sendMock,
+  getMediaBase64: getMediaMock,
 }));
 
 // OpenAI é externo — mock do cliente usado pelo agente-orientador (Fase 3c).
@@ -33,7 +34,14 @@ vi.mock("../../infrastructure/openai/openai-client.js", () => ({
   isOpenAiConfigured: configuredMock,
 }));
 
-const { handleRepomIncomingMessage, setRepomFlowEnabled, extractCpfFromText } = await import("./flow-engine.js");
+// Fase 3b: OCR (sidecar) e staging (Storage) são externos — mockados.
+const { extractMock, uploadMock } = vi.hoisted(() => ({ extractMock: vi.fn(), uploadMock: vi.fn() }));
+vi.mock("./ocr-sidecar-client.js", () => ({ extractCnhFromMedia: extractMock }));
+vi.mock("../candidatura/use-cases/upload-draft-file.js", () => ({ uploadDraftFile: uploadMock }));
+
+const { handleRepomIncomingMessage, setRepomFlowEnabled, setRepomCnhOcrEnabled, extractCpfFromText } = await import(
+  "./flow-engine.js"
+);
 const { setRepomAgentEnabled, resetRepomAgentRateLimitForTests } = await import("./agent-orientador.js");
 
 const inbound = (text, phone = "5571988887777") => ({
@@ -53,6 +61,33 @@ async function session(phone = "5571988887777") {
   return rows[0] || null;
 }
 
+// Mensagem de MÍDIA (foto da CNH) — carrega raw com a key p/ baixar do Evolution.
+const mediaInbound = (phone = "5571988887777") => {
+  const id = `mm-${Math.random().toString(36).slice(2, 8)}`;
+  return {
+    instance: "lamonica-repom",
+    direction: "in",
+    externalId: id,
+    phone,
+    text: "[image]",
+    messageType: "image",
+    raw: { key: { id, remoteJid: `${phone}@s.whatsapp.net` }, message: { imageMessage: { mimetype: "image/jpeg" } } },
+  };
+};
+
+// Leva a sessão até ask_cnh pelo fluxo real (oi → CPF).
+async function reachAskCnh(cpf = "12345678901", phone = "5571988887777") {
+  await handleRepomIncomingMessage(inbound("oi", phone));
+  await handleRepomIncomingMessage(inbound(cpf, phone));
+}
+
+async function pendings() {
+  const { rows } = await query(
+    `SELECT id_cadastro, status, versao_cadastro, observacoes, dados FROM public.pending_driver_registrations ORDER BY created_at DESC`,
+  );
+  return rows;
+}
+
 describe("repom flow-engine (integração pg-mem)", () => {
   beforeEach(async () => {
     await resetTestDatabase();
@@ -63,6 +98,14 @@ describe("repom flow-engine (integração pg-mem)", () => {
     // aos mocks OpenAI para os testes que o ligam.
     configuredMock.mockReturnValue(true);
     chatMock.mockResolvedValue({ text: "Sem problema! Me manda só os 11 números do seu CPF. 🙂" });
+    // Fase 3b defaults (a flag repom_cnh_ocr_enabled fica OFF; os testes que a ligam setam).
+    getMediaMock.mockResolvedValue({ base64: "BASE64CNH", mimetype: "image/jpeg" });
+    extractMock.mockResolvedValue({
+      ok: true,
+      provider: "infosimples",
+      fields: { nome: "LUCAS CAVALHEIRO", cpf: "12345678901", numero_registro: "07314868241", categoria: "D", validade: "06/04/2032" },
+    });
+    uploadMock.mockResolvedValue({ statusCode: 200, payload: { storage_path: "12345678901/repom/motorista_cnh_1.jpg" } });
   });
   afterAll(async () => {
     await closeTestDatabase();
@@ -242,6 +285,82 @@ describe("repom flow-engine (integração pg-mem)", () => {
       await handleRepomIncomingMessage(inbound("mais uma pergunta"));
       expect(chatMock).toHaveBeenCalledTimes(5);
       expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/11 números/); // MSG.invalidCpf
+    });
+  });
+
+  // ── Fase 3b — processamento da CNH (mídia → OCR → gates → pending) ──
+  describe("Fase 3b — OCR da CNH", () => {
+    beforeEach(async () => {
+      await setRepomFlowEnabled({ enabled: true });
+    });
+
+    it("flag OFF: mídia no ask_cnh NÃO processa OCR (cai no fallback), sem pending", async () => {
+      await reachAskCnh();
+      const r = await handleRepomIncomingMessage(mediaInbound());
+      expect(r).toMatchObject({ node: "ask_cnh", action: "parked" });
+      expect(extractMock).not.toHaveBeenCalled();
+      expect((await pendings()).length).toBe(0);
+    });
+
+    it("flag ON + CNH boa (CPF batendo): cria pending 'pendente' com dados.motorista.cnh + cnh_url, encerra e confirma", async () => {
+      await setRepomCnhOcrEnabled({ enabled: true });
+      await reachAskCnh("12345678901");
+      const r = await handleRepomIncomingMessage(mediaInbound());
+
+      expect(r).toMatchObject({ ok: true, node: "submitted", action: "submitted" });
+      expect(getMediaMock).toHaveBeenCalledOnce();
+      expect(extractMock).toHaveBeenCalledOnce();
+
+      const p = await pendings();
+      expect(p.length).toBe(1);
+      expect(p[0]).toMatchObject({ id_cadastro: "repom-12345678901", status: "pendente", versao_cadastro: "v2" });
+      expect(p[0].dados.motorista.cnh.registro).toBe("07314868241");
+      expect(p[0].dados.motorista.cnh.validade).toBe("2032-04-06"); // ISO
+      expect(p[0].dados.motorista.cnh_url).toContain("motorista_cnh");
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/Recebi sua CNH/);
+      expect(await session()).toMatchObject({ current_node: "submitted", status: "done" });
+    });
+
+    it("flag ON + OCR fora do ar: SALVA a foto + cria pending 'OCR indisponível' (não perde o doc)", async () => {
+      await setRepomCnhOcrEnabled({ enabled: true });
+      extractMock.mockResolvedValue({ ok: false, requiresUpload: true, error: "OPENAI_HTTP_500" });
+      await reachAskCnh("12345678901");
+      const r = await handleRepomIncomingMessage(mediaInbound());
+
+      expect(r).toMatchObject({ ok: true, action: "ocr_unavailable" });
+      const p = await pendings();
+      expect(p.length).toBe(1);
+      expect(p[0].dados.motorista.cnh_url).toContain("motorista_cnh"); // foto guardada
+      expect(p[0].dados.motorista.cnh).toBeUndefined(); // sem OCR, sem campos
+      expect(p[0].observacoes).toMatch(/OCR indispon/i);
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/Recebi sua CNH/);
+    });
+
+    it("flag ON + não é CNH (doc trocado): pede reenvio, NÃO cria pending, segue em ask_cnh", async () => {
+      await setRepomCnhOcrEnabled({ enabled: true });
+      extractMock.mockResolvedValue({ ok: true, fields: { placa: "ABC1D23", renavam: "123" } });
+      await reachAskCnh("12345678901");
+      const r = await handleRepomIncomingMessage(mediaInbound());
+
+      expect(r).toMatchObject({ node: "ask_cnh", action: "not_a_cnh" });
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/não parece ser uma CNH/);
+      expect((await pendings()).length).toBe(0);
+      expect(uploadMock).not.toHaveBeenCalled(); // não estaciona documento trocado
+    });
+
+    it("flag ON + CPF da CNH diverge do informado: pending 'pendente' com observação de revisão", async () => {
+      await setRepomCnhOcrEnabled({ enabled: true });
+      extractMock.mockResolvedValue({
+        ok: true,
+        fields: { nome: "LUCAS CAVALHEIRO", cpf: "99999999999", numero_registro: "0731", categoria: "D", validade: "06/04/2032" },
+      });
+      await reachAskCnh("12345678901");
+      await handleRepomIncomingMessage(mediaInbound());
+
+      const p = await pendings();
+      expect(p.length).toBe(1);
+      expect(p[0].status).toBe("pendente");
+      expect(p[0].observacoes).toMatch(/CPF da CNH difere/);
     });
   });
 });
