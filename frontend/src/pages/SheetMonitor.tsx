@@ -3459,24 +3459,84 @@ function ReservaPanelModal({ open, carga, reservas, onPull, onClose }: {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+// DC-275: persiste os filtros da tela de Monitor no localStorage — o operador
+// reencontra o último recorte após F5 / reabrir a página. Versão no key para
+// invalidar com segurança caso a forma dos filtros mude no futuro.
+const MONITOR_FILTERS_KEY = "lamonica-monitor-filters-v1";
+
+function loadMonitorFilters(): Record<string, unknown> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(MONITOR_FILTERS_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+const persistedStrArray = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+const persistedStr = (value: unknown, fallback: string): string =>
+  typeof value === "string" ? value : fallback;
+
 export default function SheetMonitor() {
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState("");
+  // DC-275: filtros do último uso, lidos uma vez no mount (localStorage).
+  const [persistedFilters] = useState(loadMonitorFilters);
+  const [search, setSearch] = useState(() => persistedStr(persistedFilters.search, ""));
   // Filtros multi-seleção (vazio = "todos"; semântica OR entre os selecionados).
-  const [statusFilter, setStatusFilter] = useState<string[]>([]);
-  const [tipoFilter, setTipoFilter] = useState<string[]>([]);
-  const [vinculoFilter, setVinculoFilter] = useState<string[]>([]);
-  const [assignmentFilter, setAssignmentFilter] = useState<string[]>([]);
-  const [routeFilter, setRouteFilter] = useState<string[]>([]);
-  const [editFilter, setEditFilter] = useState<string[]>([]);
-  const [clienteFilter, setClienteFilter] = useState<string[]>([]);
-  // Filtro de carregamento começa em HOJE (dia único: 00:00–23:59) ao abrir a
-  // tela — mostra só a agenda do dia, não as datas futuras. É só o valor
-  // inicial; o operador pode limpar ou ampliar o intervalo (ex.: subir o "até").
-  const [dateFromFilter, setDateFromFilter] = useState(() => `${todayLocalDate()}T00:00`);
-  const [dateToFilter, setDateToFilter] = useState(() => `${todayLocalDate()}T23:59`);
-  const [descargaFromFilter, setDescargaFromFilter] = useState("");
-  const [descargaToFilter, setDescargaToFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string[]>(() => persistedStrArray(persistedFilters.statusFilter));
+  const [tipoFilter, setTipoFilter] = useState<string[]>(() => persistedStrArray(persistedFilters.tipoFilter));
+  const [vinculoFilter, setVinculoFilter] = useState<string[]>(() => persistedStrArray(persistedFilters.vinculoFilter));
+  const [assignmentFilter, setAssignmentFilter] = useState<string[]>(() => persistedStrArray(persistedFilters.assignmentFilter));
+  const [routeFilter, setRouteFilter] = useState<string[]>(() => persistedStrArray(persistedFilters.routeFilter));
+  const [editFilter, setEditFilter] = useState<string[]>(() => persistedStrArray(persistedFilters.editFilter));
+  const [clienteFilter, setClienteFilter] = useState<string[]>(() => persistedStrArray(persistedFilters.clienteFilter));
+  // Filtro de carregamento começa em HOJE (dia único: 00:00–23:59) na primeira
+  // visita — mostra só a agenda do dia. DC-275: se o operador já tinha um
+  // intervalo salvo, restaura o dele em vez do padrão.
+  const [dateFromFilter, setDateFromFilter] = useState(() => persistedStr(persistedFilters.dateFromFilter, `${todayLocalDate()}T00:00`));
+  const [dateToFilter, setDateToFilter] = useState(() => persistedStr(persistedFilters.dateToFilter, `${todayLocalDate()}T23:59`));
+  const [descargaFromFilter, setDescargaFromFilter] = useState(() => persistedStr(persistedFilters.descargaFromFilter, ""));
+  const [descargaToFilter, setDescargaToFilter] = useState(() => persistedStr(persistedFilters.descargaToFilter, ""));
+  // DC-275: salva o recorte atual a cada mudança — sobrevive a F5 / reabrir.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        MONITOR_FILTERS_KEY,
+        JSON.stringify({
+          search,
+          statusFilter,
+          tipoFilter,
+          vinculoFilter,
+          assignmentFilter,
+          routeFilter,
+          editFilter,
+          clienteFilter,
+          dateFromFilter,
+          dateToFilter,
+          descargaFromFilter,
+          descargaToFilter,
+        }),
+      );
+    } catch {
+      /* localStorage indisponível — segue só em memória */
+    }
+  }, [
+    search,
+    statusFilter,
+    tipoFilter,
+    vinculoFilter,
+    assignmentFilter,
+    routeFilter,
+    editFilter,
+    clienteFilter,
+    dateFromFilter,
+    dateToFilter,
+    descargaFromFilter,
+    descargaToFilter,
+  ]);
   const [page, setPage] = useState(0);
   // Ordenação da agenda (Coleta) estilo planilha, escolhida pelo operador:
   // "asc" = mais ANTIGA primeiro (do primeiro ao último) — PADRÃO; "desc" = mais
