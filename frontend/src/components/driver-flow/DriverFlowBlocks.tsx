@@ -57,6 +57,9 @@ function formatSecondsHuman(seconds: number | null) {
 // ─── Seletor de período (slim) ───────────────────────────────────────────────
 export function DriverFlowPeriodBar({ controller }: { controller: DriverFlowController }) {
   const { dateFrom, dateTo, setDateFrom, setDateTo, quickRange, clear } = controller;
+  // Faltando qualquer extremo (limpar um ou os dois campos) = "Tudo" (todo o período)
+  // — casa com o range=all que o fetch envia quando falta início OU fim.
+  const cleared = !dateFrom || !dateTo;
   return (
     <div className="admin-panel flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
       <p className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
@@ -79,6 +82,18 @@ export function DriverFlowPeriodBar({ controller }: { controller: DriverFlowCont
               {range.label}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={clear}
+            aria-pressed={cleared}
+            title="Todo o período (sem filtro de data)"
+            className={cn(
+              "rounded-xl px-3 py-1.5 font-semibold transition-colors",
+              cleared ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+            )}
+          >
+            Tudo
+          </button>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <CalendarRange className="h-4 w-4" />
@@ -98,13 +113,6 @@ export function DriverFlowPeriodBar({ controller }: { controller: DriverFlowCont
             onChange={(event) => setDateTo(event.target.value)}
             className="rounded-xl border border-border/70 bg-white/80 px-3 py-2 text-xs dark:bg-muted/40 dark:text-foreground"
           />
-          <button
-            type="button"
-            onClick={clear}
-            className="rounded-xl border border-border/70 bg-white/80 px-3 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted dark:bg-muted/40"
-          >
-            Limpar
-          </button>
         </div>
       </div>
     </div>
@@ -281,13 +289,19 @@ export function CadastroDestaqueCard({
 export function AcessosCard({ data }: { data: DriverFlowMetricsResponse }) {
   const total = data.portalVisits?.total ?? 0;
   const uniqueVisitors = data.portalVisits?.uniqueVisitors ?? 0;
+  const allTime = data.window.allTime === true;
 
   const days = useMemo(() => {
-    const from = new Date(data.window.from).getTime();
+    // No modo "todo o período" a janela começa num piso artificial (ALL_TIME_FROM);
+    // usar o 1º acesso real como base para a média/dia não ficar diluída por anos vazios.
+    const fromMs =
+      allTime && data.portalVisits?.firstVisitAt
+        ? new Date(data.portalVisits.firstVisitAt).getTime()
+        : new Date(data.window.from).getTime();
     const to = new Date(data.window.toExclusive).getTime();
-    const span = Math.round((to - from) / 86_400_000);
+    const span = Math.round((to - fromMs) / 86_400_000);
     return span >= 1 ? span : 1;
-  }, [data.window.from, data.window.toExclusive]);
+  }, [allTime, data.window.from, data.window.toExclusive, data.portalVisits?.firstVisitAt]);
 
   const avgPerDay = total / days;
 
@@ -307,14 +321,16 @@ export function AcessosCard({ data }: { data: DriverFlowMetricsResponse }) {
           Acessos à plataforma
         </div>
         <p className="text-xs text-muted-foreground">
-          Motoristas que abriram o portal público — somado no período selecionado.
+          Motoristas que abriram o portal público — somado {allTime ? "em todo o período" : "no período selecionado"}.
         </p>
 
         <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary/70">Acessos no período</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary/70">
+            {allTime ? "Acessos (todo o período)" : "Acessos no período"}
+          </p>
           <p className="mt-1 text-4xl font-black tracking-tight text-foreground">{formatInt(total)}</p>
           <p className="text-[11px] text-muted-foreground">
-            {total === 1 ? "acesso ao portal" : "acessos ao portal"} no intervalo escolhido
+            {total === 1 ? "acesso ao portal" : "acessos ao portal"} {allTime ? "em todo o período" : "no intervalo escolhido"}
           </p>
         </div>
 
@@ -337,7 +353,7 @@ export function AcessosCard({ data }: { data: DriverFlowMetricsResponse }) {
             <p className="mt-1 text-xl font-black text-foreground">
               {avgPerDay.toLocaleString("pt-BR", { maximumFractionDigits: avgPerDay < 10 ? 1 : 0 })}
             </p>
-            <p className="text-[11px] text-muted-foreground">no período</p>
+            <p className="text-[11px] text-muted-foreground">{allTime ? "em todo o período" : "no período"}</p>
           </div>
           <div className="rounded-2xl border border-border/60 bg-muted/30 p-3">
             <div className="flex items-center gap-1.5">
@@ -359,6 +375,7 @@ export function AcessosCard({ data }: { data: DriverFlowMetricsResponse }) {
 
 // ─── Funil de candidatura ────────────────────────────────────────────────────
 export function FunilCard({ data }: { data: DriverFlowMetricsResponse }) {
+  const allTime = data.window.allTime === true;
   return (
     <Card className="admin-panel shadow-none">
       <CardContent className="space-y-4 p-5">
@@ -385,7 +402,7 @@ export function FunilCard({ data }: { data: DriverFlowMetricsResponse }) {
         {data.funnel.cancelled > 0 ? (
           <p className="text-xs text-muted-foreground">
             {formatInt(data.funnel.cancelled)} candidatura{data.funnel.cancelled === 1 ? "" : "s"} cancelada
-            {data.funnel.cancelled === 1 ? "" : "s"} no período.
+            {data.funnel.cancelled === 1 ? "" : "s"} {allTime ? "em todo o período" : "no período"}.
           </p>
         ) : null}
       </CardContent>
@@ -532,6 +549,7 @@ export function PicoAcessoCard({ data }: { data: DriverFlowMetricsResponse }) {
   }, [data]);
   const maxPortalHour = useMemo(() => Math.max(0, ...(data.portalVisits?.byHour ?? []).map((row) => row.total)), [data]);
   const maxPortalDow = useMemo(() => Math.max(0, ...(data.portalVisits?.byDow ?? []).map((row) => row.total)), [data]);
+  const allTime = data.window.allTime === true;
 
   return (
     <Card className="admin-panel shadow-none">
@@ -542,7 +560,7 @@ export function PicoAcessoCard({ data }: { data: DriverFlowMetricsResponse }) {
         </div>
         <p className="text-xs text-muted-foreground">
           Motoristas que entraram na tela pública (portal) — {formatInt(data.portalVisits?.total ?? 0)} acesso
-          {(data.portalVisits?.total ?? 0) === 1 ? "" : "s"} no período.
+          {(data.portalVisits?.total ?? 0) === 1 ? "" : "s"} {allTime ? "em todo o período" : "no período"}.
         </p>
 
         <div>

@@ -54,7 +54,8 @@ export function useDriverFlowMetrics(): DriverFlowController {
   };
 
   const clear = () => {
-    // Esvazia inputs; backend default de 7 dias assume quando string vazia.
+    // Esvazia os inputs → fetchDriverFlowMetrics manda range=all → o backend abre a
+    // janela para TODO o período (não o default de 7 dias). Ver DC-241 fix.
     setDateFrom("");
     setDateTo("");
   };

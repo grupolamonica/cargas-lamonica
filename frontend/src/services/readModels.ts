@@ -1970,6 +1970,8 @@ export interface DriverFlowMetricsPortalVisits {
   total: number;
   /** IPs distintos no período — aprox. de "usuário único" (DC-242); rede/aparelho, não pessoa. */
   uniqueVisitors: number;
+  /** acesso mais antigo na janela (ISO) — base da "média/dia" no modo todo o período. */
+  firstVisitAt: string | null;
   byHour: { hour: number; total: number }[];
   byDow: { dow: number; total: number }[];
 }
@@ -2014,6 +2016,8 @@ export interface DriverFlowMetricsResponse {
   window: {
     from: string;
     toExclusive: string;
+    /** true quando o filtro de data foi limpo (range=all) — janela = todo o período. */
+    allTime?: boolean;
   };
   funnel: DriverFlowMetricsFunnel;
   accessPeaks: DriverFlowMetricsAccessPeaks;
@@ -2117,6 +2121,10 @@ export async function fetchDriverFlowMetrics(query: { dateFrom?: string; dateTo?
   const search = new URLSearchParams();
   if (query.dateFrom) search.set("dateFrom", query.dateFrom);
   if (query.dateTo) search.set("dateTo", query.dateTo);
+  // Filtro de data limpo = todo o período. Basta faltar QUALQUER extremo (limpar só
+  // um dos campos também) para sinalizar range=all e o backend somar tudo, em vez de
+  // cair no default de 7 dias / janela estreita (DC-241 fix).
+  if (!query.dateFrom || !query.dateTo) search.set("range", "all");
   const qs = search.toString();
   const url = qs ? `/api/operator/driver-flow-metrics?${qs}` : "/api/operator/driver-flow-metrics";
 
