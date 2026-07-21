@@ -26,7 +26,15 @@ vi.mock("../../infrastructure/whatsapp/evolution-client.js", () => ({
   sendWhatsappText: sendMock,
 }));
 
+// OpenAI é externo — mock do cliente usado pelo agente-orientador (Fase 3c).
+const { chatMock, configuredMock } = vi.hoisted(() => ({ chatMock: vi.fn(), configuredMock: vi.fn() }));
+vi.mock("../../infrastructure/openai/openai-client.js", () => ({
+  chatComplete: chatMock,
+  isOpenAiConfigured: configuredMock,
+}));
+
 const { handleRepomIncomingMessage, setRepomFlowEnabled, extractCpfFromText } = await import("./flow-engine.js");
+const { setRepomAgentEnabled, resetRepomAgentRateLimitForTests } = await import("./agent-orientador.js");
 
 const inbound = (text, phone = "5571988887777") => ({
   instance: "lamonica-repom",
@@ -48,8 +56,13 @@ async function session(phone = "5571988887777") {
 describe("repom flow-engine (integração pg-mem)", () => {
   beforeEach(async () => {
     await resetTestDatabase();
+    resetRepomAgentRateLimitForTests();
     vi.clearAllMocks();
     sendMock.mockResolvedValue({ ok: true });
+    // Por padrão o agente fica OFF (flag não setada); mesmo assim damos defaults
+    // aos mocks OpenAI para os testes que o ligam.
+    configuredMock.mockReturnValue(true);
+    chatMock.mockResolvedValue({ text: "Sem problema! Me manda só os 11 números do seu CPF. 🙂" });
   });
   afterAll(async () => {
     await closeTestDatabase();
@@ -137,5 +150,98 @@ describe("repom flow-engine (integração pg-mem)", () => {
     expect(await handleRepomIncomingMessage({ ...inbound("oi"), direction: "out" })).toMatchObject({ skipped: "not_in" });
     expect(await handleRepomIncomingMessage(inbound("oi", ""))).toMatchObject({ skipped: "no_phone" });
     expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  // ── Agente orientador (Fase 3c) — só atua fora do roteiro, nunca decide fluxo ──
+  describe("agente orientador", () => {
+    const AGENTE = "🤖 Sem estresse! É só me mandar os números do seu CPF que a gente continua.";
+
+    it("ON: em ask_cpf sem CPF, responde com o texto do AGENTE (não a fixa)", async () => {
+      await setRepomFlowEnabled({ enabled: true });
+      await setRepomAgentEnabled({ enabled: true });
+      configuredMock.mockReturnValue(true);
+      chatMock.mockResolvedValue({ text: AGENTE });
+
+      await handleRepomIncomingMessage(inbound("oi"));
+      const r = await handleRepomIncomingMessage(inbound("não sei o que é isso"));
+
+      expect(r).toMatchObject({ ok: true, node: "ask_cpf", action: "invalid_cpf" });
+      expect(sendMock.mock.calls.at(-1)[0].text).toBe(AGENTE);
+      // o texto do motorista foi passado ao modelo no papel user (isolado)
+      expect(chatMock).toHaveBeenCalledOnce();
+      expect(chatMock.mock.calls[0][0].user).toBe("não sei o que é isso");
+    });
+
+    it("ON mas OpenAI FALHA: cai na mensagem fixa (fluxo idêntico ao sem agente)", async () => {
+      await setRepomFlowEnabled({ enabled: true });
+      await setRepomAgentEnabled({ enabled: true });
+      configuredMock.mockReturnValue(true);
+      chatMock.mockRejectedValue(new Error("OPENAI_HTTP_500"));
+
+      await handleRepomIncomingMessage(inbound("oi"));
+      const r = await handleRepomIncomingMessage(inbound("aaa"));
+
+      expect(r).toMatchObject({ ok: true, node: "ask_cpf", action: "invalid_cpf" });
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/11 números/); // MSG.invalidCpf
+    });
+
+    it("ON mas SEM chave OpenAI: usa a fixa e nem chama o modelo", async () => {
+      await setRepomFlowEnabled({ enabled: true });
+      await setRepomAgentEnabled({ enabled: true });
+      configuredMock.mockReturnValue(false);
+
+      await handleRepomIncomingMessage(inbound("oi"));
+      await handleRepomIncomingMessage(inbound("aaa"));
+
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/11 números/);
+      expect(chatMock).not.toHaveBeenCalled();
+    });
+
+    it("ON não atua no CAMINHO FELIZ: CPF válido → mensagem fixa de CNH, sem chamar o modelo", async () => {
+      await setRepomFlowEnabled({ enabled: true });
+      await setRepomAgentEnabled({ enabled: true });
+      configuredMock.mockReturnValue(true);
+      chatMock.mockResolvedValue({ text: AGENTE });
+
+      await handleRepomIncomingMessage(inbound("oi"));
+      const r = await handleRepomIncomingMessage(inbound("123.456.789-01"));
+
+      expect(r).toMatchObject({ ok: true, node: "ask_cnh", action: "create" });
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/foto da sua CNH/); // MSG.createNew
+      expect(chatMock).not.toHaveBeenCalled();
+    });
+
+    it("ON não atua em MÍDIA/texto vazio no ask_cnh: usa a fixa (não gasta chamada)", async () => {
+      await setRepomFlowEnabled({ enabled: true });
+      await setRepomAgentEnabled({ enabled: true });
+      configuredMock.mockReturnValue(true);
+      chatMock.mockResolvedValue({ text: AGENTE });
+
+      await handleRepomIncomingMessage(inbound("oi"));
+      await handleRepomIncomingMessage(inbound("12345678901"));
+      // motorista manda a FOTO da CNH → Evolution entrega text=null
+      const r = await handleRepomIncomingMessage({ ...inbound(""), text: null, messageType: "image" });
+
+      expect(r).toMatchObject({ ok: true, node: "ask_cnh", action: "parked" });
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/Recebido/); // MSG.cnhParked
+      expect(chatMock).not.toHaveBeenCalled();
+    });
+
+    it("ON mas estourou o RATE LIMIT por telefone: cai na fixa (freio de custo)", async () => {
+      await setRepomFlowEnabled({ enabled: true });
+      await setRepomAgentEnabled({ enabled: true });
+      configuredMock.mockReturnValue(true);
+      chatMock.mockResolvedValue({ text: AGENTE });
+
+      await handleRepomIncomingMessage(inbound("oi")); // greeting (não conta)
+      // default cap = 5 chamadas/telefone: as 5 primeiras usam o agente…
+      for (let i = 0; i < 5; i++) await handleRepomIncomingMessage(inbound(`pergunta ${i}`));
+      expect(chatMock).toHaveBeenCalledTimes(5);
+
+      // …a 6ª estoura → mensagem fixa, sem nova chamada ao modelo
+      await handleRepomIncomingMessage(inbound("mais uma pergunta"));
+      expect(chatMock).toHaveBeenCalledTimes(5);
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/11 números/); // MSG.invalidCpf
+    });
   });
 });

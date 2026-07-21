@@ -19,6 +19,7 @@
 import { withPgClient } from "../../infrastructure/pg/postgres.js";
 import { getRepomInstance, sendWhatsappText } from "../../infrastructure/whatsapp/evolution-client.js";
 import { ensureAppSettingsTable } from "../operator-admin/use-cases/angellira/auto-approve-vigentes.js";
+import { canAgentAssist, orientarMotorista, tryReserveAgentCall } from "./agent-orientador.js";
 import { resolveCpfDedup } from "./dedup-cpf.js";
 
 const SETTING_KEY = "repom_flow_enabled";
@@ -101,6 +102,32 @@ async function replyRepom(client, { phone, text, correlationId }) {
   }
 }
 
+/**
+ * Responde ao motorista no nó atual. Se o agente orientador (Fase 3c) puder
+ * atuar (agente ON + chave presente), tenta gerar uma resposta contextual pra
+ * quem fugiu do roteiro; QUALQUER falha — ou agente desligado — cai na mensagem
+ * fixa determinística. O agente só troca o TEXTO da resposta: nunca decide o
+ * estado do fluxo (quem valida CPF e avança nós é sempre o motor).
+ */
+async function replyForNode(client, { phone, node, driverText, fallbackText, correlationId }) {
+  let text = fallbackText;
+  try {
+    // Só aciona o agente quando o motorista mandou TEXTO (mídia/vazio → mensagem
+    // fixa, idêntico ao pré-agente e sem gastar chamada) e sob o rate limit
+    // (freio de custo do número público). Qualquer condição falsa → fixa.
+    const hasText = Boolean(driverText && String(driverText).trim());
+    if (hasText && (await canAgentAssist(client)) && tryReserveAgentCall(phone)) {
+      const r = await orientarMotorista({ node, driverText, correlationId });
+      if (r?.text) text = r.text;
+    }
+  } catch (err) {
+    // Degradação graciosa: mantém a mensagem fixa (fluxo idêntico ao sem agente).
+    console.warn(`[repom.flow] ${correlationId} agent fallback:`, err instanceof Error ? err.message : String(err));
+    text = fallbackText;
+  }
+  return replyRepom(client, { phone, text, correlationId });
+}
+
 async function loadActiveSession(client, phone) {
   const { rows } = await client.query(
     `SELECT id, cpf, current_node, variables, status, registration_id
@@ -147,7 +174,15 @@ export async function handleRepomIncomingMessage(msg) {
     if (session.current_node === "ask_cpf") {
       const cpf = extractCpfFromText(msg.text);
       if (!cpf) {
-        await replyRepom(client, { phone, text: MSG.invalidCpf, correlationId });
+        // Motorista mandou algo que não é CPF (pergunta, "não sei", texto solto):
+        // o agente orienta e reconduz; sem agente, a mensagem fixa de sempre.
+        await replyForNode(client, {
+          phone,
+          node: "ask_cpf",
+          driverText: msg.text,
+          fallbackText: MSG.invalidCpf,
+          correlationId,
+        });
         return { ok: true, node: "ask_cpf", action: "invalid_cpf" };
       }
 
@@ -187,9 +222,16 @@ export async function handleRepomIncomingMessage(msg) {
     }
 
     if (session.current_node === "ask_cnh") {
-      // Fase 3b liga a mídia→OCR aqui. Por ora, confirma o recebimento sem
+      // Fase 3b liga a mídia→OCR aqui. Por ora, se o motorista mandar texto em
+      // vez da foto, o agente pede a CNH; sem agente, confirma o recebimento sem
       // travar o motorista (flag OFF em produção; este caminho é p/ teste).
-      await replyRepom(client, { phone, text: MSG.cnhParked, correlationId });
+      await replyForNode(client, {
+        phone,
+        node: "ask_cnh",
+        driverText: msg.text,
+        fallbackText: MSG.cnhParked,
+        correlationId,
+      });
       return { ok: true, node: "ask_cnh", action: "parked" };
     }
 
