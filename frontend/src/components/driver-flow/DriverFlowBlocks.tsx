@@ -2,12 +2,14 @@ import type { ReactNode } from "react";
 import { useMemo } from "react";
 import { type UseQueryResult } from "@tanstack/react-query";
 import {
+  Activity,
   AlertTriangle,
   BadgeCheck,
   CalendarRange,
   CheckCircle2,
   ClipboardList,
   Clock,
+  Fingerprint,
   MessageCircle,
   TrendingUp,
   UserRound,
@@ -270,6 +272,91 @@ export function CadastroDestaqueCard({
   );
 }
 
+// ─── Indicador: Acessos à plataforma no período (DC-242) ─────────────────────
+// Indicador de destaque: soma dos acessos ao portal público no intervalo do
+// seletor de período (mesmo `useDriverFlowMetrics` do resto do Painel). O número
+// grande é a soma pedida no critério de aceite; os tiles secundários dão contexto
+// (usuários únicos por IP, média por dia e horário de pico) sem duplicar o
+// gráfico detalhado do "Pico de acesso" na aba Insights.
+export function AcessosCard({ data }: { data: DriverFlowMetricsResponse }) {
+  const total = data.portalVisits?.total ?? 0;
+  const uniqueVisitors = data.portalVisits?.uniqueVisitors ?? 0;
+
+  const days = useMemo(() => {
+    const from = new Date(data.window.from).getTime();
+    const to = new Date(data.window.toExclusive).getTime();
+    const span = Math.round((to - from) / 86_400_000);
+    return span >= 1 ? span : 1;
+  }, [data.window.from, data.window.toExclusive]);
+
+  const avgPerDay = total / days;
+
+  const peakHour = useMemo(() => {
+    let best = { hour: -1, total: 0 };
+    for (const row of data.portalVisits?.byHour ?? []) {
+      if (row.total > best.total) best = row;
+    }
+    return best.hour >= 0 && best.total > 0 ? best : null;
+  }, [data]);
+
+  return (
+    <Card className="admin-panel border-white/80 shadow-none">
+      <CardContent className="space-y-4 p-5">
+        <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Activity className="h-4 w-4 text-primary" />
+          Acessos à plataforma
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Motoristas que abriram o portal público — somado no período selecionado.
+        </p>
+
+        <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary/70">Acessos no período</p>
+          <p className="mt-1 text-4xl font-black tracking-tight text-foreground">{formatInt(total)}</p>
+          <p className="text-[11px] text-muted-foreground">
+            {total === 1 ? "acesso ao portal" : "acessos ao portal"} no intervalo escolhido
+          </p>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-2xl border border-border/60 bg-muted/30 p-3">
+            <div className="flex items-center gap-1.5">
+              <Fingerprint className="h-3.5 w-3.5 text-muted-foreground" />
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Únicos (aprox.)</p>
+            </div>
+            <p className="mt-1 text-xl font-black text-foreground">{formatInt(uniqueVisitors)}</p>
+            {/* COUNT(DISTINCT request_ip): rede/aparelho, não pessoa. CGNAT móvel e
+                Wi-Fi compartilhado podem sub/superestimar — por isso "aprox.". */}
+            <p className="text-[11px] text-muted-foreground">redes/aparelhos distintos</p>
+          </div>
+          <div className="rounded-2xl border border-border/60 bg-muted/30 p-3">
+            <div className="flex items-center gap-1.5">
+              <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Média/dia</p>
+            </div>
+            <p className="mt-1 text-xl font-black text-foreground">
+              {avgPerDay.toLocaleString("pt-BR", { maximumFractionDigits: avgPerDay < 10 ? 1 : 0 })}
+            </p>
+            <p className="text-[11px] text-muted-foreground">no período</p>
+          </div>
+          <div className="rounded-2xl border border-border/60 bg-muted/30 p-3">
+            <div className="flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Pico</p>
+            </div>
+            <p className="mt-1 text-xl font-black text-foreground">
+              {peakHour ? `${String(peakHour.hour).padStart(2, "0")}h` : "—"}
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              {peakHour ? `${formatInt(peakHour.total)} acesso${peakHour.total === 1 ? "" : "s"}` : "sem dados"}
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Funil de candidatura ────────────────────────────────────────────────────
 export function FunilCard({ data }: { data: DriverFlowMetricsResponse }) {
   return (
@@ -454,7 +541,7 @@ export function PicoAcessoCard({ data }: { data: DriverFlowMetricsResponse }) {
           Pico de acesso
         </div>
         <p className="text-xs text-muted-foreground">
-          Motoristas que entraram na tela pública (portal) — {formatInt(data.portalVisits?.total ?? 0)} visita
+          Motoristas que entraram na tela pública (portal) — {formatInt(data.portalVisits?.total ?? 0)} acesso
           {(data.portalVisits?.total ?? 0) === 1 ? "" : "s"} no período.
         </p>
 

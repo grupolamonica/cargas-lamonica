@@ -116,6 +116,7 @@ async function queryAccessPeaks(client, dateFrom, dateTo) {
 async function queryPortalVisits(client, dateFrom, dateTo) {
   const emptyResult = {
     total: 0,
+    uniqueVisitors: 0,
     byHour: Array.from({ length: 24 }, (_, hour) => ({ hour, total: 0 })),
     byDow: Array.from({ length: 7 }, (_, dow) => ({ dow, total: 0 })),
   };
@@ -148,7 +149,14 @@ async function queryPortalVisits(client, dateFrom, dateTo) {
         [dateFrom, dateTo],
       ),
       client.query(
-        `SELECT COUNT(*)::int AS total FROM public.driver_portal_visits WHERE visited_at >= $1 AND visited_at < $2`,
+        // total = soma de acessos (uma linha por visita); unique_visitors = IPs
+        // distintos (DC-242, aprox. de "usuário único" — rede/aparelho, não pessoa).
+        // COUNT(DISTINCT) ignora IPs nulos, o comportamento desejado.
+        `SELECT
+           COUNT(*)::int AS total,
+           COUNT(DISTINCT request_ip)::int AS unique_visitors
+         FROM public.driver_portal_visits
+         WHERE visited_at >= $1 AND visited_at < $2`,
         [dateFrom, dateTo],
       ),
     ]);
@@ -162,6 +170,7 @@ async function queryPortalVisits(client, dateFrom, dateTo) {
       if (idx >= 0 && idx <= 6) emptyResult.byDow[idx].total = Number(row.total) || 0;
     }
     emptyResult.total = Number(totalRows.rows[0]?.total) || 0;
+    emptyResult.uniqueVisitors = Number(totalRows.rows[0]?.unique_visitors) || 0;
 
     return emptyResult;
   } catch (error) {

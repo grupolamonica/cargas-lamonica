@@ -1966,7 +1966,10 @@ export interface DriverFlowMetricsAccessPeaks {
 }
 
 export interface DriverFlowMetricsPortalVisits {
+  /** soma de acessos ao portal no período (uma contagem por visita) — DC-242. */
   total: number;
+  /** IPs distintos no período — aprox. de "usuário único" (DC-242); rede/aparelho, não pessoa. */
+  uniqueVisitors: number;
   byHour: { hour: number; total: number }[];
   byDow: { dow: number; total: number }[];
 }

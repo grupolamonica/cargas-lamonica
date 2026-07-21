@@ -21,6 +21,7 @@ import {
   DriverFlowPeriodBar,
   DriverFlowGate,
   CadastroDestaqueCard,
+  AcessosCard,
   FunilCard,
   ValidacaoCard,
   PicoCandidaturaCard,
@@ -469,10 +470,14 @@ const Overview = () => {
             <>
               <DriverFlowPeriodBar controller={flow} />
 
-              {/* Cadastro em destaque (no período) — tiles clicáveis (drill-down) */}
-              <DriverFlowGate query={flow.query} skeletons={1}>
+              {/* Destaques no período: cadastros (clicáveis, drill-down) + acessos
+                  à plataforma (indicador de soma do período — DC-242). */}
+              <DriverFlowGate query={flow.query} skeletons={2}>
                 {(data) => (
-                  <CadastroDestaqueCard data={data} onOpenRealizados={goToMotoristas} onOpenPendentes={goToPendentes} />
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <CadastroDestaqueCard data={data} onOpenRealizados={goToMotoristas} onOpenPendentes={goToPendentes} />
+                    <AcessosCard data={data} />
+                  </div>
                 )}
               </DriverFlowGate>
 
