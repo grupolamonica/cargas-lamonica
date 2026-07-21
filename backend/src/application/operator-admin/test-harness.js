@@ -419,6 +419,14 @@ const schemaSql = `
     updated_by text
   );
 
+  CREATE TABLE public.repom_processed_messages (
+    external_id text PRIMARY KEY,
+    phone text,
+    kind text NOT NULL DEFAULT 'media',
+    file_sha256 text,
+    created_at timestamptz NOT NULL DEFAULT now()
+  );
+
   CREATE TABLE public.operator_notifications (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     kind text NOT NULL,
