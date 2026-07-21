@@ -92,6 +92,7 @@ import { listSystemCargasForMonitor } from "../../../application/operator-admin/
 import { dedupeSystemRowsByLh } from "../../../application/operator-admin/use-cases/dedupe-monitor-rows.js";
 import { readSheetSnapshotLhSet } from "../../../application/operator-admin/use-cases/read-sheet-snapshot-lhs.js";
 import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-admin/use-cases/planilha-availability.js";
+import { fetchSpxScheduleIndex, applySpxSchedule } from "../../../application/operator-admin/use-cases/spx-schedule-overlay.js";
 import { applySpxOperationalStatus } from "../../../application/operator-admin/use-cases/spx-operational-status.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 import { attachRouteCodes } from "../../../application/operator-admin/use-cases/route-codes.js";
@@ -817,7 +818,7 @@ function compareMonitorRows(a, b) {
 // Monta a visão UNIFICADA do Monitor: linhas da planilha ∪ cargas do sistema
 // (intercaladas por data), com reservas no fim. Cada linha ganha rowKey/source.
 // Summary recalculado sobre as linhas operacionais quando há cargas do sistema.
-function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh = {}, now = null, reservedByLh = {}, spxStatusByLh = null }) {
+function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh = {}, now = null, reservedByLh = {}, spxStatusByLh = null, spxScheduleByLh = null }) {
   // A planilha inteira é de um cliente (ex.: Shopee) — anexa o nome a cada linha
   // da planilha. Cargas do sistema já trazem o próprio cliente (cliente_id→nome).
   const sheetClient = getSheetClientName();
@@ -826,7 +827,11 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, o
     const withClient = { ...withMeta, cliente: withMeta.cliente ?? sheetClient };
     // "Disponível" só para quem está REALMENTE aberto pro motorista (mesma regra
     // do /motorista). Não-abertas passam a "Fechado" em vez de "Disponível".
-    return applyPlanilhaAvailabilityStatus(withClient, { openLhSet, allocByLh, now, reservedByLh });
+    const withStatus = applyPlanilhaAvailabilityStatus(withClient, { openLhSet, allocByLh, now, reservedByLh });
+    // Carga/Descarga AO VIVO do SPX (Torre) sobrepõem a planilha (defasada), casando
+    // por LH. Só Shopee casa (LH "LT…"); demais fontes passam inalteradas. Não mexe em
+    // motorista/status (a disponibilidade já foi decidida acima, sem depender da agenda).
+    return applySpxSchedule(withStatus, { spxScheduleByLh });
   });
   // Dedup planilha ∪ sistema por LH: uma carga do SISTEMA (lh_manual) com o MESMO
   // LH de uma linha da planilha é a MESMA viagem → mostra só a da planilha (fonte
@@ -872,7 +877,7 @@ export async function resolveSheetMonitorResponse(request) {
     // rodam em PARALELO. Cada thunk é best-effort e engole o próprio erro, então o
     // Promise.all NUNCA rejeita por causa deles: uma falha isolada só zera aquele
     // overlay (comportamento anterior por-bloco preservado), o Monitor serve o resto.
-    const [allocByLh, openLhSet, spxStatusByLh, reservedByLh, reservaRows, systemRows] = await Promise.all([
+    const [allocByLh, openLhSet, spxStatusByLh, reservedByLh, reservaRows, systemRows, spxScheduleByLh] = await Promise.all([
       // 1) Overlay da ALOCAÇÃO editada no Monitor (cargas.alloc_*), por LH — a
       //    decisão do operador que sobrepõe a planilha. Pode passar de 1000 →
       //    pagina (best-effort) p/ não perder alocações além da linha 1000.
@@ -1047,6 +1052,12 @@ export async function resolveSheetMonitorResponse(request) {
           return [];
         }
       })(),
+
+      // 7) Overlay de CARGA/DESCARGA AO VIVO do SPX (Torre asp), por LH. Usa só as
+      //    colunas ETA ORIGEM/DESTINO (geográficas, sem o problema de tradução do
+      //    STATUS). Sobrepõe a agenda da planilha (defasada) nas linhas Shopee. Reusa
+      //    o fetch cacheado da Torre (≤1x/60s). Best-effort: falha → null → sem overlay.
+      fetchSpxScheduleIndex({ correlationId }),
     ]);
 
     // ----------------------------------------------------------------
@@ -1097,7 +1108,7 @@ export async function resolveSheetMonitorResponse(request) {
 
           // Return the freshly-parsed rows immediately — no extra DB read needed.
           // Inclui o enriquecimento JÁ salvo (senão o refresh "apaga" os selos).
-          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now, reservedByLh, spxStatusByLh });
+          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now, reservedByLh, spxStatusByLh, spxScheduleByLh });
           // attachRouteCodes/Registration tocam campos DIFERENTES de cada item
           // (routeCodigo vs routeRegistered) e cada um faz um scan próprio → paraleliza.
           const [, , { enrichedByLh, enrichedByCargoId }] = await Promise.all([
@@ -1218,6 +1229,7 @@ export async function resolveSheetMonitorResponse(request) {
         now,
         reservedByLh,
         spxStatusByLh,
+        spxScheduleByLh,
       });
       await Promise.all([
         attachRouteCodes(supabaseClient, unified.items, correlationId),
@@ -1244,7 +1256,7 @@ export async function resolveSheetMonitorResponse(request) {
     // No snapshot yet (first use or migration pending). Mesmo sem planilha, as
     // cargas do sistema (+ reservas) devem aparecer no Monitor.
     const { getSheetExportUrl: getUrl } = await import("../../../application/google-sheets/google-sheet-loads.js");
-    const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary, allocByLh, spxStatusByLh });
+    const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary, allocByLh, spxStatusByLh, spxScheduleByLh });
     await Promise.all([
       attachRouteCodes(supabaseClient, unified.items, correlationId),
       attachRouteRegistration(supabaseClient, unified.items, correlationId),
