@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { faltantes, isCadastroCompleto, proximoPasso, REPOM_MOTORISTA_STEPS } from "./repom-flow.js";
+import { faltantes, isCadastroCompleto, normalizeTelefoneBr, proximoPasso, REPOM_MOTORISTA_STEPS } from "./repom-flow.js";
 
 const dados = (motorista = {}) => ({ motorista });
 
@@ -55,5 +55,33 @@ describe("repom-flow (motor declarativo — Fase 3d)", () => {
     expect(proximoPasso(undefined).key).toBe("cnh");
     expect(proximoPasso({}).key).toBe("cnh");
     expect(faltantes({}).length).toBe(REPOM_MOTORISTA_STEPS.length);
+  });
+
+  describe("metadata de fiação (field/slot) — alinhado ao wizard", () => {
+    it("docs têm slot da allowlist e field *_url; texto tem field e normalize", () => {
+      const byKey = Object.fromEntries(REPOM_MOTORISTA_STEPS.map((s) => [s.key, s]));
+      expect(byKey.cnh).toMatchObject({ tipo: "doc", field: "cnh_url", slot: "motorista_cnh" });
+      expect(byKey.selfie_cnh).toMatchObject({ tipo: "doc", field: "selfie_cnh_url", slot: "motorista_selfie_cnh" });
+      expect(byKey.comprovante).toMatchObject({ tipo: "doc", field: "comprovante_url", slot: "motorista_comprovante" });
+      expect(byKey.telefone).toMatchObject({ tipo: "texto", field: "telefone" });
+      expect(typeof byKey.telefone.normalize).toBe("function");
+    });
+  });
+
+  describe("normalizeTelefoneBr", () => {
+    it("aceita 10 (fixo) e 11 (celular) dígitos, com máscara", () => {
+      expect(normalizeTelefoneBr("(71) 3333-4444")).toBe("7133334444");
+      expect(normalizeTelefoneBr("71 99999-8888")).toBe("71999998888");
+    });
+    it("tira o 55 do código do país", () => {
+      expect(normalizeTelefoneBr("+55 71 99999-8888")).toBe("71999998888");
+      expect(normalizeTelefoneBr("5571333344 44".replace(" ", ""))).toBe("7133334444");
+    });
+    it("rejeita curto/longo demais → null", () => {
+      expect(normalizeTelefoneBr("99998888")).toBeNull(); // sem DDD
+      expect(normalizeTelefoneBr("")).toBeNull();
+      expect(normalizeTelefoneBr("não sei meu número")).toBeNull();
+      expect(normalizeTelefoneBr("119999988887777")).toBeNull(); // dígitos demais
+    });
   });
 });

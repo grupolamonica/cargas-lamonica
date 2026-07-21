@@ -39,9 +39,8 @@ const { extractMock, uploadMock } = vi.hoisted(() => ({ extractMock: vi.fn(), up
 vi.mock("./ocr-sidecar-client.js", () => ({ extractCnhFromMedia: extractMock }));
 vi.mock("../candidatura/use-cases/upload-draft-file.js", () => ({ uploadDraftFile: uploadMock }));
 
-const { handleRepomIncomingMessage, setRepomFlowEnabled, setRepomCnhOcrEnabled, extractCpfFromText } = await import(
-  "./flow-engine.js"
-);
+const { handleRepomIncomingMessage, setRepomFlowEnabled, setRepomCnhOcrEnabled, setRepomContinuacaoEnabled, extractCpfFromText } =
+  await import("./flow-engine.js");
 const { setRepomAgentEnabled, resetRepomAgentRateLimitForTests } = await import("./agent-orientador.js");
 const { tryReserveCnhCall, resetRepomCnhRateLimitForTests } = await import("./cnh-media.js");
 
@@ -405,6 +404,122 @@ describe("repom flow-engine (integração pg-mem)", () => {
       const r = await handleRepomIncomingMessage(mediaInbound());
       expect(r).toMatchObject({ node: "ask_cnh", action: "parked" });
       expect(chatMock).not.toHaveBeenCalled(); // "[image]" não vira chamada de agente
+    });
+  });
+
+  describe("Fase 3d — continuação da coleta (selfie → comprovante → telefone)", () => {
+    beforeEach(async () => {
+      await setRepomFlowEnabled({ enabled: true });
+    });
+
+    // Upload por slot: devolve um path coerente com o slot pedido (selfie/comprovante).
+    const slotAwareUpload = () =>
+      uploadMock.mockImplementation(async ({ slot }) => ({
+        statusCode: 200,
+        payload: { storage_path: `12345678901/repom/${slot}_1.jpg` },
+      }));
+
+    // Liga OCR + continuação e leva até 'coletando' na selfie (CNH já enviada/gravada).
+    async function reachColetaSelfie(phone = "5571988887777") {
+      await setRepomCnhOcrEnabled({ enabled: true });
+      await setRepomContinuacaoEnabled({ enabled: true });
+      slotAwareUpload();
+      await reachAskCnh("12345678901", phone);
+      return handleRepomIncomingMessage(mediaInbound(phone));
+    }
+
+    it("continuação OFF: CNH boa encerra em 'submitted' (comportamento da Fase 3b, intacto)", async () => {
+      await setRepomCnhOcrEnabled({ enabled: true }); // continuação fica OFF (default)
+      await reachAskCnh("12345678901");
+      const r = await handleRepomIncomingMessage(mediaInbound());
+      expect(r).toMatchObject({ node: "submitted", action: "submitted" });
+      expect(await session()).toMatchObject({ current_node: "submitted", status: "done" });
+    });
+
+    it("continuação ON: após a CNH NÃO encerra — pede a selfie e fica em 'coletando'", async () => {
+      const r = await reachColetaSelfie();
+      expect(r).toMatchObject({ ok: true, node: "coletando", action: "ask_selfie_cnh" });
+      expect(await session()).toMatchObject({ current_node: "coletando", status: "active" });
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/selfie/i);
+      const [p] = await pendings();
+      expect(p.dados.repom).toMatchObject({ coleta_status: "coletando", etapa_atual: "selfie_cnh" });
+    });
+
+    it("caminho feliz completo: CNH→selfie→comprovante→telefone grava tudo e conclui", async () => {
+      await reachColetaSelfie(); // CNH ok → pediu selfie
+      const rSelfie = await handleRepomIncomingMessage(mediaInbound()); // selfie
+      expect(rSelfie).toMatchObject({ node: "coletando", action: "ask_comprovante" });
+      const rCompr = await handleRepomIncomingMessage(mediaInbound()); // comprovante
+      expect(rCompr).toMatchObject({ node: "coletando", action: "ask_telefone" });
+      const rTel = await handleRepomIncomingMessage(inbound("(71) 99999-8888")); // telefone
+      expect(rTel).toMatchObject({ node: "complete", action: "coleta_completa" });
+
+      expect(await session()).toMatchObject({ current_node: "complete", status: "done" });
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/Recebi todos os seus documentos/i);
+
+      const [p] = await pendings();
+      expect(p.dados.motorista).toMatchObject({
+        cnh_url: expect.stringContaining("motorista_cnh"),
+        selfie_cnh_url: expect.stringContaining("motorista_selfie_cnh"),
+        comprovante_url: expect.stringContaining("motorista_comprovante"),
+        telefone: "71999998888",
+      });
+      expect(p.dados.repom).toMatchObject({ coleta_status: "concluida", etapa_atual: null });
+      expect(p.status).toBe("pendente"); // nunca muda de status (não some da fila do operador)
+    });
+
+    it("preserva a observação de revisão da CNH ao mesclar a selfie (COALESCE)", async () => {
+      // CNH com CPF divergente → observação de revisão gravada na CNH.
+      extractMock.mockResolvedValue({
+        ok: true,
+        provider: "infosimples",
+        fields: { nome: "LUCAS CAVALHEIRO", cpf: "99999999999", numero_registro: "07314868241", categoria: "D", validade: "06/04/2032" },
+      });
+      await reachColetaSelfie();
+      const antes = (await pendings())[0].observacoes;
+      expect(antes).toMatch(/Revisar/);
+      await handleRepomIncomingMessage(mediaInbound()); // selfie (observacoes: null)
+      expect((await pendings())[0].observacoes).toBe(antes); // preservada
+    });
+
+    it("telefone inválido: repede (mensagem específica), não conclui", async () => {
+      await reachColetaSelfie();
+      await handleRepomIncomingMessage(mediaInbound()); // selfie → comprovante
+      await handleRepomIncomingMessage(mediaInbound()); // comprovante → telefone
+      const r = await handleRepomIncomingMessage(inbound("não sei"));
+      expect(r).toMatchObject({ node: "coletando", action: "invalid_telefone" });
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/DDD/);
+      expect(await session()).toMatchObject({ current_node: "coletando", status: "active" });
+    });
+
+    it("doc esperado mas veio texto: reconduz; após 3 tentativas avisa o operador (uma vez)", async () => {
+      await reachColetaSelfie(); // espera selfie (doc)
+      await handleRepomIncomingMessage(inbound("como faço?")); // 1
+      await handleRepomIncomingMessage(inbound("não entendi")); // 2
+      const r = await handleRepomIncomingMessage(inbound("me ajuda")); // 3 → escala
+      expect(r).toMatchObject({ node: "coletando", action: "await_selfie_cnh" });
+      const { rows } = await query(`SELECT count(*)::int AS n FROM public.operator_notifications WHERE kind='repom_coleta_travada'`);
+      expect(rows[0].n).toBe(1);
+      // 4ª tentativa não duplica a notificação (coleta_escalada)
+      await handleRepomIncomingMessage(inbound("alô"));
+      const { rows: r2 } = await query(`SELECT count(*)::int AS n FROM public.operator_notifications WHERE kind='repom_coleta_travada'`);
+      expect(r2[0].n).toBe(1);
+    });
+
+    it("kill switch: sessão em 'coletando' e continuação desligada → encerra gentil", async () => {
+      await reachColetaSelfie();
+      await setRepomContinuacaoEnabled({ enabled: false });
+      const r = await handleRepomIncomingMessage(mediaInbound());
+      expect(r).toMatchObject({ node: "submitted", action: "continuacao_off" });
+      expect(await session()).toMatchObject({ current_node: "submitted", status: "done" });
+    });
+
+    it("idempotência: reenvio da MESMA mídia no passo (mesmo id) não duplica", async () => {
+      await reachColetaSelfie();
+      const selfie = mediaInbound();
+      await handleRepomIncomingMessage(selfie); // 1ª → comprovante
+      const r = await handleRepomIncomingMessage(selfie); // reenvio (mesmo externalId)
+      expect(r).toMatchObject({ skipped: "duplicate_media", node: "coletando" });
     });
   });
 });
