@@ -64,7 +64,12 @@ function parsePositiveIntEnv(name, fallbackValue) {
   return Number.isFinite(n) && n > 0 ? n : fallbackValue;
 }
 
-const CNH_MAX_PER_PHONE = parsePositiveIntEnv("REPOM_CNH_MAX_PER_PHONE", 6);
+// Teto por telefone/janela. Na Fase 3d o mesmo telefone envia LEGITIMAMENTE ≥3
+// mídias (CNH + selfie + comprovante) + reenvios de foto borrada, e o slot é
+// reservado ANTES do download (uma foto ruim também consome). 6 era apertado
+// demais e travava o motorista real; 12 dá folga. O anti denial-of-wallet real
+// é o teto GLOBAL/hora abaixo (não sobe) — este só evita rajada de um número.
+const CNH_MAX_PER_PHONE = parsePositiveIntEnv("REPOM_CNH_MAX_PER_PHONE", 12);
 const CNH_WINDOW_MS = parsePositiveIntEnv("REPOM_CNH_WINDOW_MS", 10 * 60 * 1000);
 const CNH_MAX_GLOBAL_HOUR = parsePositiveIntEnv("REPOM_CNH_MAX_GLOBAL_HOUR", 200);
 

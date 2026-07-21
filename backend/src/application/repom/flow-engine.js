@@ -564,13 +564,24 @@ export async function handleRepomIncomingMessage(msg) {
 
     // Primeira mensagem → cria a sessão e cumprimenta pedindo o CPF.
     if (!session) {
-      await client.query(
-        `INSERT INTO public.repom_flow_sessions (phone, current_node, status, last_inbound_at)
-         VALUES ($1, 'ask_cpf', 'active', now())`,
-        [phone],
-      );
-      await replyRepom(client, { phone, text: MSG.greeting, correlationId });
-      return { ok: true, node: "ask_cpf", action: "greeted" };
+      try {
+        await client.query(
+          `INSERT INTO public.repom_flow_sessions (phone, current_node, status, last_inbound_at)
+           VALUES ($1, 'ask_cpf', 'active', now())`,
+          [phone],
+        );
+        await replyRepom(client, { phone, text: MSG.greeting, correlationId });
+        return { ok: true, node: "ask_cpf", action: "greeted" };
+      } catch (err) {
+        // Corrida: 2 mensagens quase simultâneas do MESMO telefone sem sessão —
+        // ambas viram null no loadActiveSession e tentam INSERT; o índice único
+        // parcial (phone) WHERE status='active' faz o 2º estourar. Honra o
+        // contrato "nunca lança": recarrega a sessão que o vencedor criou e segue
+        // o fluxo normal (a saudação já foi enviada pelo vencedor).
+        console.warn(`[repom.flow] ${correlationId} corrida no INSERT da sessão:`, err instanceof Error ? err.message : String(err));
+        session = await loadActiveSession(client, phone);
+        if (!session) return { skipped: "session_insert_conflict" };
+      }
     }
 
     await client.query(

@@ -378,7 +378,9 @@ describe("repom flow-engine (integração pg-mem)", () => {
     it("flag ON + rate limit estourado: responde 'aguarde' e NÃO chama OCR/download (freio de custo)", async () => {
       await setRepomCnhOcrEnabled({ enabled: true });
       await reachAskCnh("12345678901");
-      for (let i = 0; i < 6; i++) tryReserveCnhCall("5571988887777"); // exaure o cap por telefone
+      while (tryReserveCnhCall("5571988887777")) {
+        /* exaure o cap por telefone (agnóstico ao valor do teto) */
+      }
       const r = await handleRepomIncomingMessage(mediaInbound());
       expect(r).toMatchObject({ node: "ask_cnh", action: "rate_limited" });
       expect(getMediaMock).not.toHaveBeenCalled();
@@ -514,12 +516,65 @@ describe("repom flow-engine (integração pg-mem)", () => {
       expect(await session()).toMatchObject({ current_node: "submitted", status: "done" });
     });
 
-    it("idempotência: reenvio da MESMA mídia no passo (mesmo id) não duplica", async () => {
+    it("idempotência por message-id: reenvio da MESMA mensagem (mesmo id) é ignorado e não reprocessa", async () => {
       await reachColetaSelfie();
       const selfie = mediaInbound();
-      await handleRepomIncomingMessage(selfie); // 1ª → comprovante
-      const r = await handleRepomIncomingMessage(selfie); // reenvio (mesmo externalId)
+      await handleRepomIncomingMessage(selfie); // 1ª → grava selfie, avança p/ comprovante
+      const uploadsApos1a = uploadMock.mock.calls.length;
+      const r = await handleRepomIncomingMessage(selfie); // reenvio do MESMO externalId
+      // dedup é GLOBAL por external_id (claimMessageOnce), não por passo — a 2ª
+      // chamada é barrada e NÃO dispara novo download/upload.
       expect(r).toMatchObject({ skipped: "duplicate_media", node: "coletando" });
+      expect(uploadMock.mock.calls.length).toBe(uploadsApos1a); // não reprocessou
+    });
+
+    it("OCR indisponível + continuação ON: salva a foto da CNH e AVANÇA p/ a selfie", async () => {
+      await setRepomCnhOcrEnabled({ enabled: true });
+      await setRepomContinuacaoEnabled({ enabled: true });
+      slotAwareUpload();
+      extractMock.mockResolvedValue({ ok: false, requiresUpload: true }); // OCR fora do ar
+      await reachAskCnh("12345678901");
+      const r = await handleRepomIncomingMessage(mediaInbound());
+      expect(r).toMatchObject({ ok: true, node: "coletando", action: "ask_selfie_cnh" });
+      expect(await session()).toMatchObject({ current_node: "coletando", status: "active" });
+      const [p] = await pendings();
+      expect(p.dados.motorista.cnh_url).toContain("motorista_cnh");
+      expect(p.observacoes).toMatch(/OCR indispon/i);
+      expect(p.dados.repom).toMatchObject({ coleta_status: "coletando", etapa_atual: "selfie_cnh" });
+    });
+
+    it("falha de staging no passo (upload 415): pede o MESMO passo, não grava nem avança", async () => {
+      await reachColetaSelfie(); // espera selfie
+      uploadMock.mockResolvedValueOnce({ statusCode: 415, payload: null }); // stageRepomMedia → {ok:false}
+      const r = await handleRepomIncomingMessage(mediaInbound());
+      expect(r).toMatchObject({ ok: true, node: "coletando", action: "stage_failed" });
+      const [p] = await pendings();
+      expect(p.dados.motorista.selfie_cnh_url).toBeUndefined(); // não gravou
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/selfie/i); // repetiu o pedido
+    });
+
+    it("rate-limit estourado DURANTE a coleta: responde 'aguarde' sem baixar/subir", async () => {
+      await reachColetaSelfie();
+      while (tryReserveCnhCall("5571988887777")) {
+        /* exaure o cap por telefone */
+      }
+      getMediaMock.mockClear();
+      uploadMock.mockClear();
+      const r = await handleRepomIncomingMessage(mediaInbound());
+      expect(r).toMatchObject({ ok: true, node: "coletando", action: "rate_limited" });
+      expect(getMediaMock).not.toHaveBeenCalled();
+      expect(uploadMock).not.toHaveBeenCalled();
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/processando|instante/i);
+    });
+
+    it("falha ao gravar doc na coleta: notifica 'repom_coleta_persist_failed' e confirma recebimento", async () => {
+      await reachColetaSelfie();
+      uploadMock.mockRejectedValueOnce(new Error("STORAGE_BOOM")); // stageRepomMedia lança no passo selfie
+      const r = await handleRepomIncomingMessage(mediaInbound());
+      expect(r).toMatchObject({ ok: true, action: "persist_failed" });
+      const { rows } = await query(`SELECT count(*)::int AS n FROM public.operator_notifications WHERE kind='repom_coleta_persist_failed'`);
+      expect(rows[0].n).toBe(1);
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/Recebi/i);
     });
   });
 });
