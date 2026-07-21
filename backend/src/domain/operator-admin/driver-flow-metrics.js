@@ -359,21 +359,26 @@ async function queryPortalAvailability(client, dateFrom, dateTo) {
   // depois foram reservadas/fechadas/expiraram — o operador quer saber "quantas
   // cargas ficaram visíveis para o motorista aceitar", somadas no período. Recorte:
   // created_at na janela BRT semi-aberta [from, toExclusive) + carga publicada
-  // (não-rascunho, não-template, visível ao motorista: avulsa PUBLIC ou perna de
-  // pacote).
+  // (não-rascunho, não-template) E visível ao motorista pela MESMA regra do
+  // buildDriverLoadFilters (_shared.js): avulsa (viagem_id NULL) → driver_visibility
+  // 'PUBLIC'; perna de pacote (viagem_id NOT NULL) → o pacote está publicado
+  // (cc.status IN publicado/reservado/em_andamento). Sem o gate por cc.status,
+  // pernas de pacote em rascunho (nunca vistas pelo motorista) inflariam a conta.
   const { rows } = await client.query(
     `
       SELECT
         COUNT(*) FILTER (
-          WHERE created_at >= $1 AND created_at < $2
-            AND COALESCE(is_template, false) = false
-            AND status <> 'DRAFT'
+          WHERE cargas.created_at >= $1 AND cargas.created_at < $2
+            AND COALESCE(cargas.is_template, false) = false
+            AND cargas.status <> 'DRAFT'
             AND (
-              COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'
-              OR viagem_id IS NOT NULL
+              (cargas.viagem_id IS NULL AND COALESCE(cargas.driver_visibility, 'PUBLIC') = 'PUBLIC')
+              OR
+              (cargas.viagem_id IS NOT NULL AND cc.status IN ('publicado','reservado','em_andamento'))
             )
         )::int AS total
       FROM public.cargas
+      LEFT JOIN public.cargas_casadas cc ON cc.id = cargas.viagem_id
     `,
     [dateFrom, dateTo],
   );

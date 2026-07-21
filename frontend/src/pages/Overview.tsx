@@ -482,7 +482,7 @@ const Overview = () => {
                   exibe o erro da mesma query. */}
               <DriverFlowGate query={flow.query} skeletons={1} hideError>
                 {(data) => (
-                  <section className="grid gap-4">
+                  <section className="grid gap-4 xl:grid-cols-4">
                     <KpiCard
                       label="Disponibilizadas no portal"
                       value={formatNumber(data.portalAvailability.total)}
