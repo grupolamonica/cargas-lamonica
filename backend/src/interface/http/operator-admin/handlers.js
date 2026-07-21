@@ -904,6 +904,36 @@ export async function resolveSheetMonitorResponse(request) {
             message: allocErr instanceof Error ? allocErr.message : String(allocErr),
           });
         }
+        // Overlay das cargas do SISTEMA (lançadas na Programação, lh_manual) que o
+        // operador editou. Uma viagem lançada aparece no Monitor como linha da
+        // planilha (snapshot) e é editada por LH → a edição grava alloc_* na carga
+        // do sistema (lh_manual == LH da linha). Sem este overlay a edição não se
+        // refletia na linha (o overlay era keyed só por sheet_lh) e parecia perdida.
+        // Keyed por lh_manual; NÃO sobrescreve uma chave já vinda da planilha
+        // (a carga da planilha é a fonte quando ambas existem).
+        try {
+          const systemAllocRows = await selectAllPaginated(
+            (from, to) =>
+              supabaseClient
+                .from("cargas")
+                .select("lh_manual, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_pinned, alloc_updated_at")
+                .is("sheet_lh", null)
+                .not("lh_manual", "is", null)
+                .not("alloc_updated_at", "is", null)
+                .order("lh_manual", { ascending: true })
+                .range(from, to),
+            { label: "cargas_alloc_system", correlationId, partialOnError: true },
+          );
+          for (const r of systemAllocRows) {
+            const key = (r.lh_manual ?? "").toString().trim();
+            if (key && !map[key]) map[key] = { ...r, sheet_lh: key };
+          }
+        } catch (systemAllocErr) {
+          logStructuredEvent("warn", "sheet-monitor.system-alloc-read-failed", {
+            correlationId,
+            message: systemAllocErr instanceof Error ? systemAllocErr.message : String(systemAllocErr),
+          });
+        }
         return map;
       })(),
 

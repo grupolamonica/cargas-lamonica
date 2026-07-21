@@ -3656,7 +3656,10 @@ export default function SheetMonitor() {
         cavalo: a.alloc_cavalo || row.cavalo,
         carreta: a.alloc_carreta || row.carreta,
         status,
-        tipo: a.alloc_tipo ?? row.tipo,
+        // `||` (não `??`): um override de tipo VAZIO ("") cai pro tipo da linha
+        // (ex.: "SISTEMA" nas cargas do sistema), consistente com motorista/status
+        // acima — senão editar uma carga lançada zerava o rótulo "SISTEMA".
+        tipo: a.alloc_tipo || row.tipo,
         pinned: a.alloc_pinned ?? false,
         rodoparStatus: row.rodoparStatus ?? 0,
         hasDriver: Boolean(motoristas),
