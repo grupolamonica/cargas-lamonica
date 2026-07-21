@@ -58,13 +58,28 @@ function firstNonEmpty(row, cols) {
  * Torre fora, circuito aberto) — o Monitor não sobrepõe e nunca quebra por causa disso.
  * Reusa fetchSpxTrips (cache 60s + circuit breaker) → 1 chamada barata amortizada.
  *
- * @param {{ daysBack?: number, daysFwd?: number, correlationId?: string, deps?: { fetchSpx?: typeof fetchSpxTrips } }} [args]
+ * ORÇAMENTO DE TEMPO (timeoutMs, default 4s): este overlay roda no caminho de LEITURA
+ * do Monitor (dentro do Promise.all de resolveSheetMonitorResponse). A Torre pode estar
+ * UP-porém-LENTA — o circuit breaker do cliente só cobre erro/timeout(20s)/5xx, não uma
+ * resposta lenta —, então sem um teto próprio um cache-miss travaria a tela inteira até
+ * 20s. Estourando o orçamento, degrada p/ SEM overlay (a Carga/Descarga cai na planilha)
+ * em vez de bloquear o Monitor. O fetch segue em background e popula o cache (60s) p/ o
+ * próximo request.
+ *
+ * @param {{ daysBack?: number, daysFwd?: number, timeoutMs?: number, correlationId?: string, deps?: { fetchSpx?: typeof fetchSpxTrips } }} [args]
  * @returns {Promise<Map<string, { carga: object|null, descarga: object|null }>|null>}
  */
-export async function fetchSpxScheduleIndex({ daysBack = 30, daysFwd = 15, correlationId = null, deps = {} } = {}) {
+export async function fetchSpxScheduleIndex({ daysBack = 30, daysFwd = 15, timeoutMs = 4000, correlationId = null, deps = {} } = {}) {
   const fetchSpx = deps.fetchSpx || fetchSpxTrips;
+  let budgetTimer;
   try {
-    const payload = await fetchSpx({ daysBack, daysFwd }, { correlationId });
+    const payload = await Promise.race([
+      fetchSpx({ daysBack, daysFwd }, { correlationId }),
+      new Promise((_, reject) => {
+        budgetTimer = setTimeout(() => reject(new Error(`spx-schedule-timeout:${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+    clearTimeout(budgetTimer);
     const rows = Array.isArray(payload?.rows) ? payload.rows : [];
     const map = new Map();
     for (const r of rows) {
@@ -76,6 +91,7 @@ export async function fetchSpxScheduleIndex({ daysBack = 30, daysFwd = 15, corre
     }
     return map;
   } catch (err) {
+    clearTimeout(budgetTimer);
     // Sem chave configurada é esperado em alguns ambientes — não polui como erro.
     if (!(err instanceof SpxAspNotConfigured)) {
       logStructuredEvent("warn", "sheet-monitor.spx-schedule-index-failed", {

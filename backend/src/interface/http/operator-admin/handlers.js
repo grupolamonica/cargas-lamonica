@@ -830,7 +830,11 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, o
     const withStatus = applyPlanilhaAvailabilityStatus(withClient, { openLhSet, allocByLh, now, reservedByLh });
     // Carga/Descarga AO VIVO do SPX (Torre) sobrepõem a planilha (defasada), casando
     // por LH. Só Shopee casa (LH "LT…"); demais fontes passam inalteradas. Não mexe em
-    // motorista/status (a disponibilidade já foi decidida acima, sem depender da agenda).
+    // motorista/status. O badge Disponível/Fechado (applyPlanilhaAvailabilityStatus,
+    // acima) deriva do openLhSet — cargas abertas no portal (public.cargas), a fonte de
+    // verdade do /motorista — e NÃO da agenda exibida; por isso o overlay de agenda não
+    // o recalcula. Efeito colateral aceito: se a planilha estiver defasada vs o SPX, a
+    // data exibida (SPX) pode divergir do badge (baseado na data da planilha) até o sync.
     return applySpxSchedule(withStatus, { spxScheduleByLh });
   });
   // Dedup planilha ∪ sistema por LH: uma carga do SISTEMA (lh_manual) com o MESMO
