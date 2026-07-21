@@ -2688,12 +2688,16 @@ function RowDetailModal({
   }, [row, open]);
   const rodoparMutation = useMutation({
     mutationFn: setMonitorRodoparStatus,
+    // Snapshot do estado local ANTES deste clique — reverte p/ ele no erro (e NÃO p/ o
+    // snapshot de abertura do modal, que pode estar defasado após um ciclo bem-sucedido
+    // na mesma sessão do modal).
+    onMutate: () => ({ status: rodoparStatus, by: rodoparBy, at: rodoparAt }),
     onSuccess: () => { void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }); },
-    onError: (err) => {
+    onError: (err, _vars, ctx) => {
       toast.error(err instanceof Error ? err.message : "Não foi possível atualizar o Rodopar.");
-      setRodoparStatus(Number(row?.rodoparStatus ?? 0));
-      setRodoparBy(row?.rodoparUpdatedBy ?? null);
-      setRodoparAt(row?.rodoparUpdatedAt ?? null);
+      setRodoparStatus(ctx?.status ?? Number(row?.rodoparStatus ?? 0));
+      setRodoparBy(ctx?.by ?? row?.rodoparUpdatedBy ?? null);
+      setRodoparAt(ctx?.at ?? row?.rodoparUpdatedAt ?? null);
     },
   });
   const cycleRodopar = () => {
