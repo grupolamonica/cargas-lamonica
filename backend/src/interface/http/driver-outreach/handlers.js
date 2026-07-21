@@ -31,6 +31,8 @@ import {
 import {
   cacheInstanceQr,
   clearInstanceQr,
+  getEvolutionInstance,
+  getRepomInstance,
   sendWhatsappText,
 } from "../../../infrastructure/whatsapp/evolution-client.js";
 import {
@@ -377,6 +379,49 @@ export async function resolveWhatsappDisconnectResponse(request) {
   }
 }
 
+// ─── Conexão do WhatsApp do REPOM (número dedicado ao cadastro) ───────────────
+// Mesmos guardrails dos endpoints de Cargas; muda só a instância Evolution.
+
+/** GET /api/operator/repom/whatsapp/status */
+export async function resolveRepomWhatsappStatusResponse(request) {
+  const correlationId = getCorrelationId(request);
+  try {
+    const { user } = await requireOperatorSession(getAuthorizationHeader(request));
+    assertOperatorPermission(user, "operator:read", "Somente operadores autorizados podem ver o WhatsApp.");
+    const payload = await getWhatsappStatus({ instance: getRepomInstance() });
+    return { statusCode: 200, payload: { ...payload, meta: { correlationId } } };
+  } catch (error) {
+    return toErrorResponse(error, correlationId);
+  }
+}
+
+/** POST /api/operator/repom/whatsapp/connect */
+export async function resolveRepomWhatsappConnectResponse(request) {
+  const correlationId = getCorrelationId(request);
+  try {
+    const { user } = await requireOperatorSession(getAuthorizationHeader(request));
+    assertOperatorPermission(user, "leads:write", "Somente operadores com acesso intermediário podem conectar o WhatsApp.");
+    const body = (await parseJsonBody(request)) || {};
+    const payload = await connectWhatsapp({ number: body.number, instance: getRepomInstance() });
+    return { statusCode: 200, payload: { ...payload, meta: { correlationId } } };
+  } catch (error) {
+    return toErrorResponse(error, correlationId);
+  }
+}
+
+/** POST /api/operator/repom/whatsapp/disconnect */
+export async function resolveRepomWhatsappDisconnectResponse(request) {
+  const correlationId = getCorrelationId(request);
+  try {
+    const { user } = await requireOperatorSession(getAuthorizationHeader(request));
+    assertOperatorPermission(user, "leads:write", "Somente operadores com acesso intermediário podem desconectar o WhatsApp.");
+    const payload = await disconnectWhatsapp({ instance: getRepomInstance() });
+    return { statusCode: 200, payload: { ...payload, meta: { correlationId } } };
+  } catch (error) {
+    return toErrorResponse(error, correlationId);
+  }
+}
+
 /** POST /api/operator/outreach/whatsapp/test  { phone, text? } */
 export async function resolveWhatsappTestResponse(request) {
   const correlationId = getCorrelationId(request);
@@ -435,10 +480,20 @@ export async function resolveEvolutionWebhookResponse(request) {
       const parsed = parseUpsertPayload(body);
       const items = Array.isArray(parsed) ? parsed : parsed.items;
       const unresolved = Array.isArray(parsed) ? [] : parsed.unresolved;
+      // Mensagens da instância REPOM (número dedicado do cadastro) ficam FORA
+      // dos fluxos de Cargas (reserva/route-need): persistimos no chat e paramos
+      // aí — o motor de fluxo do cadastro (Fase 3) é quem vai reagir a elas.
+      // Guarda só vale quando o Repom usa instância própria (≠ Cargas).
+      const repomInstance = getRepomInstance();
+      const repomIsSeparate = repomInstance !== getEvolutionInstance();
       for (const msg of items) {
         try {
           const saved = await saveWhatsappMessageStandalone(msg);
           if (msg.direction === "in" && saved) {
+            if (repomIsSeparate && msg.instance === repomInstance) {
+              console.info("[evolution.webhook] mensagem da instância Repom parqueada (motor de fluxo ainda não ativo)");
+              continue;
+            }
             handleIncomingDriverMessage(msg, saved).catch((err) =>
               console.warn("[evolution.webhook] handleIncoming error:", err?.message),
             );

@@ -1067,6 +1067,30 @@ export async function disconnectWhatsapp() {
   });
 }
 
+// ── WhatsApp do REPOM (número dedicado ao cadastro de motoristas) ─────────────
+
+export async function fetchRepomWhatsappStatus() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<WhatsappStatus>("/api/operator/repom/whatsapp/status", { accessToken });
+}
+
+export async function connectRepomWhatsapp(input?: { number?: string }) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<WhatsappConnectResult>("/api/operator/repom/whatsapp/connect", {
+    method: "POST",
+    body: input?.number ? { number: input.number } : {},
+    accessToken,
+  });
+}
+
+export async function disconnectRepomWhatsapp() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean }>("/api/operator/repom/whatsapp/disconnect", {
+    method: "POST",
+    accessToken,
+  });
+}
+
 export async function sendWhatsappTest(body: { phone: string; text?: string }) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{ ok: boolean; to: string }>("/api/operator/outreach/whatsapp/test", {

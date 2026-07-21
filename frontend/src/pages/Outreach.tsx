@@ -43,10 +43,13 @@ import { MessageTemplatesPanel } from "@/components/operator/MessageTemplatesPan
 import {
   addOutreachOptout,
   cancelOutreachQueued,
+  connectRepomWhatsapp,
   connectWhatsapp,
   createOutreachManual,
+  disconnectRepomWhatsapp,
   disconnectWhatsapp,
   fetchOutreachOverview,
+  fetchRepomWhatsappStatus,
   fetchOutreachQueueItem,
   fetchWhatsappStatus,
   reconcileRegistrations,
@@ -65,23 +68,109 @@ const OVERVIEW_KEY = ["operator", "outreach", "overview"];
 const WHATSAPP_KEY = ["operator", "outreach", "whatsapp"];
 
 // Sub-módulo Repom (cadastro de motorista via WhatsApp) — em construção,
-// incremental. Enquanto OFF, a aba não aparece e nada muda. Ligar só quando
-// as fases (entidade central, motor de fluxo, agente, editor visual) estiverem prontas.
-const REPOM_TAB_ENABLED = false;
+// incremental. A aba mostra por ora só a CONEXÃO do número dedicado (Fase 2b);
+// mensagens recebidas por ele ficam parqueadas no backend até o motor de fluxo
+// (Fase 3) existir — nada é enviado automaticamente.
+const REPOM_TAB_ENABLED = true;
+
+const REPOM_WA_KEY = ["operator", "repom", "whatsapp"];
 
 /**
- * Casca da aba "Cadastro (Repom)". Placeholder — a fundação (entidade central por
- * CPF + motor de fluxo) está sendo construída por fases. Atrás de REPOM_TAB_ENABLED.
+ * Aba "Cadastro (Repom)" — Fase 2b: conexão do número WhatsApp dedicado ao
+ * cadastro (separado do número de Cargas). O fluxo conversacional vem na Fase 3.
  */
 function RepomCadastroTab() {
+  const queryClient = useQueryClient();
+  const [qr, setQr] = useState<string | null>(null);
+
+  const { data: status } = useQuery({
+    queryKey: REPOM_WA_KEY,
+    queryFn: fetchRepomWhatsappStatus,
+    refetchInterval: 15_000,
+  });
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: REPOM_WA_KEY });
+
+  const connectMut = useMutation({
+    mutationFn: () => connectRepomWhatsapp(),
+    onSuccess: (r) => {
+      if (r.state === "open") {
+        toast.success("Número do Repom já conectado.");
+      } else if (r.qrBase64) {
+        setQr(r.qrBase64);
+      } else {
+        toast.error("O gateway não gerou o QR. Tente novamente em instantes.");
+      }
+      invalidate();
+    },
+    onError: (e: Error) => toast.error(e.message || "Erro ao conectar."),
+  });
+
+  const disconnectMut = useMutation({
+    mutationFn: () => disconnectRepomWhatsapp(),
+    onSuccess: () => {
+      toast.success("Número do Repom desconectado.");
+      invalidate();
+    },
+    onError: (e: Error) => toast.error(e.message || "Erro ao desconectar."),
+  });
+
+  const connected = status?.state === "open";
+
   return (
-    <div className="rounded-xl border border-border/60 bg-background p-6">
-      <p className="font-medium">Cadastro de Motoristas (Repom)</p>
-      <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-        Módulo em construção — cadastro conduzido por WhatsApp com agente de IA, editor visual de
-        fluxos e entidade central de motorista por CPF (compartilhada com o wizard web; aprovado vai
-        para o Módulo Motoristas). Será ligado por etapas.
-      </p>
+    <div className="space-y-4">
+      <div className="rounded-xl border border-border/60 bg-background p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="flex items-center gap-2 font-medium">
+              <Smartphone className="h-4 w-4" /> Número do cadastro (Repom)
+            </p>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              Número de WhatsApp dedicado ao cadastro de motoristas — separado do número de Cargas.
+              Mensagens recebidas por ele ainda não disparam nada (o fluxo conversacional chega na
+              próxima fase).
+            </p>
+          </div>
+          <span
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold",
+              connected
+                ? "border-emerald-200 bg-emerald-50/80 text-emerald-700"
+                : "border-amber-200 bg-amber-50/80 text-amber-800",
+            )}
+          >
+            <Power className="h-3.5 w-3.5" /> {connected ? "Conectado" : status?.state === "connecting" ? "Conectando…" : "Desconectado"}
+          </span>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Button onClick={() => connectMut.mutate()} disabled={connectMut.isPending || connected} className="gap-1.5">
+            {connectMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />} Conectar (QR)
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => disconnectMut.mutate()}
+            disabled={disconnectMut.isPending || (!connected && status?.state !== "connecting")}
+            className="gap-1.5"
+          >
+            {disconnectMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Power className="h-4 w-4" />} Desconectar
+          </Button>
+          {status?.instance ? (
+            <span className="text-xs text-muted-foreground">instância: {status.instance}</span>
+          ) : null}
+        </div>
+      </div>
+
+      <Dialog open={Boolean(qr)} onOpenChange={(o) => { if (!o) setQr(null); }}>
+        <DialogContent className="max-w-sm rounded-3xl">
+          <DialogHeader>
+            <DialogTitle>Conectar número do Repom</DialogTitle>
+            <DialogDescription>
+              No celular do número dedicado: WhatsApp → Aparelhos conectados → Conectar um aparelho →
+              escaneie o QR abaixo.
+            </DialogDescription>
+          </DialogHeader>
+          {qr ? <img src={qr} alt="QR Code do WhatsApp" className="mx-auto w-64 rounded-xl border border-border/60" /> : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

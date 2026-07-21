@@ -46,6 +46,9 @@ import {
   resolveWhatsappDisconnectResponse,
   resolveWhatsappStatusResponse,
   resolveWhatsappTestResponse,
+  resolveRepomWhatsappConnectResponse,
+  resolveRepomWhatsappDisconnectResponse,
+  resolveRepomWhatsappStatusResponse,
 } from "./driver-outreach/handlers.js";
 
 import { resolveClientLogoResponse } from "./client-logo.handler.js";
@@ -423,6 +426,10 @@ export function registerRoutes(app) {
   router.post("/api/operator/outreach/whatsapp/connect", wrap(resolveWhatsappConnectResponse));
   router.post("/api/operator/outreach/whatsapp/disconnect", wrap(resolveWhatsappDisconnectResponse));
   router.post("/api/operator/outreach/whatsapp/test", wrap(resolveWhatsappTestResponse));
+  // Conexão do WhatsApp do REPOM (número dedicado ao cadastro de motoristas)
+  router.get("/api/operator/repom/whatsapp/status", wrap(resolveRepomWhatsappStatusResponse));
+  router.post("/api/operator/repom/whatsapp/connect", wrap(resolveRepomWhatsappConnectResponse));
+  router.post("/api/operator/repom/whatsapp/disconnect", wrap(resolveRepomWhatsappDisconnectResponse));
   // Webhook interno do Evolution (QR/conexão) — sem auth de operador
   router.post("/api/webhooks/evolution", wrap(resolveEvolutionWebhookResponse));
 
