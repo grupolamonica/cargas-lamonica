@@ -60,12 +60,14 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     // Campo ausente no payload também preserva o alloc_* atual; enviado "" =
     // vazio explícito; enviado com valor = define.
     const pinned = sheetRow.alloc_pinned === true;
-    // Campo ENVIADO EXPLICITAMENTE pelo operador (e a carga não é fixa) = decisão
-    // deliberada, inclusive LIMPAR ("" explícito). O front só manda motorista/veículo
-    // quando o operador REALMENTE trocou/limpou (allocEditable && mvChanged), então
-    // aqui "" significa "remover de vez" — o efetivo e o write-back NÃO caem de volta
+    // Campo ENVIADO pelo operador (e a carga não é fixa) = decisão deliberada, inclusive
+    // LIMPAR ("" explícito → "remover de vez"): o efetivo e o write-back NÃO caem de volta
     // pro valor da planilha (senão o motorista da planilha ressuscitava e não saía).
-    // Editar só o status (motorista AUSENTE) segue preservando o valor da planilha.
+    // Editar só o status (motorista AUSENTE no payload) preserva o valor da planilha.
+    // NOTA: o modal (AllocEditDialog) só manda motorista/veículo quando o operador trocou
+    // (allocEditable && mvChanged); já o editor INLINE sempre reenvia os campos. Isso é
+    // seguro porque ambos vêm PRÉ-PREENCHIDOS com o valor EFETIVO exibido (alloc||planilha),
+    // então reenviar reafirma o valor atual e "" só chega quando o operador esvaziou de fato.
     const explicit = (k) => has(k) && !pinned;
     const finalMotorista = pinned || !has("motorista") ? (sheetRow.alloc_motorista ?? null) : norm(payload.motorista);
     const finalCavalo = pinned || !has("cavalo") ? (sheetRow.alloc_cavalo ?? null) : norm(payload.cavalo);

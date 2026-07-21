@@ -66,6 +66,14 @@ describe("fetchSpxScheduleIndex (Torre asp → carga/descarga por LH)", () => {
     const fetchSpx = vi.fn(async () => { throw new SpxAspUnavailable(); });
     expect(await fetchSpxScheduleIndex({ deps: { fetchSpx } })).toBeNull();
   });
+
+  it("Torre UP-porém-LENTA → estoura o orçamento de tempo e degrada p/ null (não trava)", async () => {
+    // fetch que nunca resolve (Torre lenta); o teto de tempo (timeoutMs) vence.
+    const fetchSpx = vi.fn(() => new Promise(() => {}));
+    const idx = await fetchSpxScheduleIndex({ timeoutMs: 20, deps: { fetchSpx } });
+    expect(idx).toBeNull();
+    expect(fetchSpx).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("applySpxSchedule (sobrepõe agenda por LH)", () => {
