@@ -1,5 +1,6 @@
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { resolveOperatorDirectory } from "./audit-logs-read-model.js";
+import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 
 // ── Helpers de apresentação (linguagem do operador, sem jargão técnico) ──────
 
@@ -58,6 +59,12 @@ export async function fetchCargoHistoryByLh({ lh, correlationId }) {
   return withPgClient(async (client) => {
     let eventRows = [];
     let allocRows = [];
+    let auditRows = [];
+    // Mudanças do operador (alocar/trocar/remover motorista, status) vivem em
+    // security_audit_logs por resource_id = id determinístico da carga da planilha.
+    // Sem isso, uma carga gerida só por alocação (sem lead do portal) mostrava
+    // "Sem histórico" mesmo tendo trocas registradas.
+    const cargoId = createSheetLoadId(lh);
     try {
       const events = await client.query(
         `
@@ -89,6 +96,25 @@ export async function fetchCargoHistoryByLh({ lh, correlationId }) {
     } catch {
       eventRows = [];
       allocRows = [];
+    }
+
+    // Best-effort SEPARADO: uma falha aqui (ex.: tabela ausente) NÃO pode zerar os
+    // eventos/alocação já lidos acima.
+    try {
+      const audit = await client.query(
+        `
+          SELECT event_type, actor_user_id, created_at, metadata
+          FROM public.security_audit_logs
+          WHERE resource_id = $1
+            AND event_type = 'operator.cargo.allocation_updated'
+          ORDER BY created_at ASC, id ASC
+          LIMIT 200
+        `,
+        [cargoId],
+      );
+      auditRows = audit.rows;
+    } catch {
+      auditRows = [];
     }
 
     // Diretório de operadores (id → nome). Best-effort — se indisponível, cai
@@ -162,6 +188,19 @@ export async function fetchCargoHistoryByLh({ lh, correlationId }) {
         por,
         tipo: "ALLOC_OPERADOR",
       });
+    }
+
+    // Mudanças de alocação feitas pelo operador (audit log): descreve antes→depois de
+    // cada troca (motorista/status/tipo/vínculo). Pula updates sem mudança real (ruído).
+    for (const r of auditRows) {
+      const changes = Array.isArray(r.metadata?.changes) ? r.metadata.changes : [];
+      if (changes.length === 0) continue;
+      const por = r.actor_user_id
+        ? directory.get(r.actor_user_id)?.displayName || directory.get(r.actor_user_id)?.email || "Operador"
+        : "Operador";
+      const fmt = (v) => (v == null || String(v).trim() === "" ? "vazio" : String(v).trim());
+      const detalhe = changes.map((ch) => `${ch.label || ch.field}: ${fmt(ch.before)} → ${fmt(ch.after)}`).join(" · ");
+      items.push({ quando: r.created_at, titulo: "Alocação alterada no sistema", detalhe, por, tipo: "ALLOC_AUDIT" });
     }
 
     // Ordena cronologicamente (mais antigo → mais novo). Entradas sem data ao fim.
