@@ -60,6 +60,13 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     // Campo ausente no payload também preserva o alloc_* atual; enviado "" =
     // vazio explícito; enviado com valor = define.
     const pinned = sheetRow.alloc_pinned === true;
+    // Campo ENVIADO EXPLICITAMENTE pelo operador (e a carga não é fixa) = decisão
+    // deliberada, inclusive LIMPAR ("" explícito). O front só manda motorista/veículo
+    // quando o operador REALMENTE trocou/limpou (allocEditable && mvChanged), então
+    // aqui "" significa "remover de vez" — o efetivo e o write-back NÃO caem de volta
+    // pro valor da planilha (senão o motorista da planilha ressuscitava e não saía).
+    // Editar só o status (motorista AUSENTE) segue preservando o valor da planilha.
+    const explicit = (k) => has(k) && !pinned;
     const finalMotorista = pinned || !has("motorista") ? (sheetRow.alloc_motorista ?? null) : norm(payload.motorista);
     const finalCavalo = pinned || !has("cavalo") ? (sheetRow.alloc_cavalo ?? null) : norm(payload.cavalo);
     const finalCarreta = pinned || !has("carreta") ? (sheetRow.alloc_carreta ?? null) : norm(payload.carreta);
@@ -144,7 +151,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     // a planilha ainda escala — senão o portal ofereceria uma carga com motorista
     // vivo na planilha (duplo-booking). Só reabre quando não há motorista em lugar
     // nenhum (nem override, nem planilha).
-    const effMotorista = (finalMotorista || sheetRow.sheet_motorista || "").toString().trim();
+    const effMotorista = (explicit("motorista") ? finalMotorista : (finalMotorista || sheetRow.sheet_motorista) || "").toString().trim();
     const cancelling = Boolean(finalStatus) && /cancel/i.test(finalStatus);
     // Status "Disponível" numa carga SEM motorista = reabrir pro painel do
     // motorista (volta pra fila do portal). Só quando não há motorista efetivo.
@@ -196,9 +203,12 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       effective: {
         // Roteia o write-back pra planilha da fonte certa (shopee vs nestle).
         source: sheetRow.sheet_source ?? null,
-        motorista: finalMotorista || sheetRow.sheet_motorista || "",
-        cavalo: finalCavalo || sheetRow.sheet_cavalo || "",
-        carreta: finalCarreta || sheetRow.sheet_carreta || "",
+        // Enviado explicitamente → espelha o valor do operador (inclusive "" = limpa a
+        // célula, "remover de vez"). Ausente (editou só status) → cai pro valor da
+        // planilha (`||`) p/ NÃO apagar o motorista vivo da planilha sem querer.
+        motorista: explicit("motorista") ? (finalMotorista ?? "") : (finalMotorista || sheetRow.sheet_motorista || ""),
+        cavalo: explicit("cavalo") ? (finalCavalo ?? "") : (finalCavalo || sheetRow.sheet_cavalo || ""),
+        carreta: explicit("carreta") ? (finalCarreta ?? "") : (finalCarreta || sheetRow.sheet_carreta || ""),
         // Status (col L): finalStatus é sempre o status enviado pelo modal ("" p/
         // Disponível/limpar a etapa) — espelha direto.
         status: finalStatus ?? sheetRow.sheet_status ?? "",

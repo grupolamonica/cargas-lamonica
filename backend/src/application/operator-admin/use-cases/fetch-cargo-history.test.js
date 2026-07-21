@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock do banco: withPgClient injeta um client cujo query() decide a resposta
 // pelo texto do SQL (eventos do lead vs. alocação atual).
-const canned = { events: [], allocs: [] };
+const canned = { events: [], allocs: [], audit: [] };
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({
   withPgClient: async (cb) =>
     cb({
       query: async (sql) => {
         if (String(sql).includes("load_public_lead_events")) return { rows: canned.events };
         if (String(sql).includes("DISTINCT ON (sheet_lh)")) return { rows: canned.allocs };
+        if (String(sql).includes("security_audit_logs")) return { rows: canned.audit };
         return { rows: [] };
       },
     }),
@@ -26,6 +27,7 @@ describe("fetchCargoHistoryByLh", () => {
   beforeEach(() => {
     canned.events = [];
     canned.allocs = [];
+    canned.audit = [];
     directory.current = new Map();
   });
 
@@ -129,6 +131,33 @@ describe("fetchCargoHistoryByLh", () => {
 
     const { items } = (await fetchCargoHistoryByLh({ lh: "LT3", correlationId: "c3" })).payload;
     expect(items.map((i) => i.tipo)).toEqual(["APPROVED", "ALLOC_OPERADOR"]);
+  });
+
+  it("inclui as mudanças de alocação do operador (audit log): set e remoção do motorista", async () => {
+    directory.current = new Map([["op-9", { displayName: "Marina Reis", email: "marina@x.com" }]]);
+    canned.audit = [
+      {
+        event_type: "operator.cargo.allocation_updated",
+        actor_user_id: "op-9",
+        created_at: "2026-07-17T20:57:59.000Z",
+        metadata: { changes: [{ field: "motorista", label: "Motorista", before: null, after: "FERNANDO" }] },
+      },
+      {
+        event_type: "operator.cargo.allocation_updated",
+        actor_user_id: "op-9",
+        created_at: "2026-07-21T15:51:50.000Z",
+        metadata: { changes: [{ field: "motorista", label: "Motorista", before: "FERNANDO", after: null }] },
+      },
+      // Update sem mudança real → ignorado (ruído).
+      { event_type: "operator.cargo.allocation_updated", actor_user_id: "op-9", created_at: "2026-07-21T15:56:40.000Z", metadata: { changes: [] } },
+    ];
+
+    const { items } = (await fetchCargoHistoryByLh({ lh: "LT0Q7M02BME81", correlationId: "c9" })).payload;
+    const alloc = items.filter((i) => i.tipo === "ALLOC_AUDIT");
+    expect(alloc).toHaveLength(2); // o de changes vazio foi pulado
+    expect(alloc[0]).toMatchObject({ titulo: "Alocação alterada no sistema", por: "Marina Reis" });
+    expect(alloc[0].detalhe).toBe("Motorista: vazio → FERNANDO");
+    expect(alloc[1].detalhe).toBe("Motorista: FERNANDO → vazio");
   });
 
   it("cai no rótulo 'Motorista (final NNNN)' quando não há nome do Angellira", async () => {
