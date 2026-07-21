@@ -351,6 +351,39 @@ async function queryCadastros(client, dateFrom, dateTo) {
   };
 }
 
+async function queryPortalAvailability(client, dateFrom, dateTo) {
+  // DC-244 — total de cargas DISPONIBILIZADAS no portal do motorista no período.
+  // Não existe coluna de "publicado no portal", então usamos created_at como proxy
+  // de "entrou no portal": a carga nasce OPEN/pública no lançamento (inclui os spots
+  // automáticos do DC-201, inseridos direto como OPEN/PUBLIC). Conta mesmo as que
+  // depois foram reservadas/fechadas/expiraram — o operador quer saber "quantas
+  // cargas ficaram visíveis para o motorista aceitar", somadas no período. Recorte:
+  // created_at na janela BRT semi-aberta [from, toExclusive) + carga publicada
+  // (não-rascunho, não-template, visível ao motorista: avulsa PUBLIC ou perna de
+  // pacote).
+  const { rows } = await client.query(
+    `
+      SELECT
+        COUNT(*) FILTER (
+          WHERE created_at >= $1 AND created_at < $2
+            AND COALESCE(is_template, false) = false
+            AND status <> 'DRAFT'
+            AND (
+              COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'
+              OR viagem_id IS NOT NULL
+            )
+        )::int AS total
+      FROM public.cargas
+    `,
+    [dateFrom, dateTo],
+  );
+
+  const row = rows[0] || {};
+  return {
+    total: Number(row.total) || 0,
+  };
+}
+
 export async function fetchDriverFlowMetrics({ query, correlationId }) {
   const window = resolveWindow(query);
 
@@ -361,13 +394,14 @@ export async function fetchDriverFlowMetrics({ query, correlationId }) {
   });
 
   return withPgClient(async (client) => {
-    const [funnel, accessPeaks, validation, recurrence, portalVisits, cadastros] = await Promise.all([
+    const [funnel, accessPeaks, validation, recurrence, portalVisits, cadastros, portalAvailability] = await Promise.all([
       queryFunnel(client, window.dateFrom, window.dateToExclusive),
       queryAccessPeaks(client, window.dateFrom, window.dateToExclusive),
       queryValidationQuality(client, window.dateFrom, window.dateToExclusive),
       queryRecurrence(client, window.dateFrom, window.dateToExclusive),
       queryPortalVisits(client, window.dateFrom, window.dateToExclusive),
       queryCadastros(client, window.dateFrom, window.dateToExclusive),
+      queryPortalAvailability(client, window.dateFrom, window.dateToExclusive),
     ]);
 
     return {
@@ -383,6 +417,7 @@ export async function fetchDriverFlowMetrics({ query, correlationId }) {
         recurrence,
         portalVisits,
         cadastros,
+        portalAvailability,
         meta: {
           correlationId: correlationId || null,
         },
