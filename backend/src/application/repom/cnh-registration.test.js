@@ -132,5 +132,27 @@ describe("repom cnh-registration", () => {
       const { rows: all } = await query(`SELECT count(*)::int AS n FROM public.pending_driver_registrations`);
       expect(all[0].n).toBe(1);
     });
+
+    it("create idempotente por id_cadastro: 2º upsert do MESMO CPF (sem registrationId) faz merge, NÃO duplica", async () => {
+      const m1 = buildMotoristaFromCnhFields(visionFields, { cpf: "11296552969" });
+      const r1 = await withPgClient((c) =>
+        upsertPendingCnh(c, { cpf: "11296552969", registrationId: null, motorista: m1, status: "pendente" }),
+      );
+      expect(r1.created).toBe(true);
+
+      // 2ª foto do mesmo CPF (corrida / reenvio) — id_cadastro repom-<cpf> já existe
+      const m2 = buildMotoristaFromCnhFields({ ...visionFields, categoria: "E" }, { cpf: "11296552969" });
+      const r2 = await withPgClient((c) =>
+        upsertPendingCnh(c, { cpf: "11296552969", registrationId: null, motorista: m2, status: "pendente" }),
+      );
+      expect(r2).toEqual({ id: r1.id, created: false }); // merge na mesma linha
+
+      const { rows } = await query(
+        `SELECT count(*)::int AS n FROM public.pending_driver_registrations WHERE id_cadastro='repom-11296552969'`,
+      );
+      expect(rows[0].n).toBe(1); // não duplicou
+      const { rows: d } = await query(`SELECT dados FROM public.pending_driver_registrations WHERE id=$1`, [r1.id]);
+      expect(d[0].dados.motorista.cnh.categoria).toBe("E"); // novo prevalece
+    });
   });
 });

@@ -51,6 +51,53 @@ export function sha256Base64(base64) {
     .digest("hex");
 }
 
+// ─── Rate limit da CNH (denial-of-wallet) ──────────────────────────────────────
+// O caminho da CNH é o MAIS caro (download + OCR pago + upload) e o número do
+// Repom é PÚBLICO/sem auth do remetente — mesmo motivo do freio do agente. Sem
+// isto, um script mandando N fotos distintas dispara N OCRs pagos. Limita por
+// telefone (janela deslizante) + teto global/hora. Estourou → o motor responde
+// "aguarde" e NÃO dispara o pipeline. Process-local (worker single-instance).
+function parsePositiveIntEnv(name, fallbackValue) {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallbackValue;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallbackValue;
+}
+
+const CNH_MAX_PER_PHONE = parsePositiveIntEnv("REPOM_CNH_MAX_PER_PHONE", 6);
+const CNH_WINDOW_MS = parsePositiveIntEnv("REPOM_CNH_WINDOW_MS", 10 * 60 * 1000);
+const CNH_MAX_GLOBAL_HOUR = parsePositiveIntEnv("REPOM_CNH_MAX_GLOBAL_HOUR", 200);
+
+const cnhPhoneHits = new Map(); // phone(dígitos) -> timestamps[]
+let cnhGlobalHits = []; // timestamps
+
+function pruneAndCount(arr, windowMs, now) {
+  const cutoff = now - windowMs;
+  while (arr.length && arr[0] <= cutoff) arr.shift();
+  return arr.length;
+}
+
+/** Reserva UMA rodada de OCR de CNH sob os limites; false = estourou → usar msg de espera. */
+export function tryReserveCnhCall(phone) {
+  const now = Date.now();
+  if (pruneAndCount(cnhGlobalHits, 60 * 60 * 1000, now) >= CNH_MAX_GLOBAL_HOUR) return false;
+  const key = String(phone || "").replace(/\D/g, "") || "unknown";
+  const arr = cnhPhoneHits.get(key) || [];
+  if (pruneAndCount(arr, CNH_WINDOW_MS, now) >= CNH_MAX_PER_PHONE) {
+    cnhPhoneHits.set(key, arr);
+    return false;
+  }
+  arr.push(now);
+  cnhPhoneHits.set(key, arr);
+  cnhGlobalHits.push(now);
+  return true;
+}
+
+export function resetRepomCnhRateLimitForTests() {
+  cnhPhoneHits.clear();
+  cnhGlobalHits = [];
+}
+
 /**
  * Estaciona a CNH no Storage (bucket cadastro-drafts, slot motorista_cnh,
  * ownerKey = CPF). Reusa a validação (MIME/tamanho/limpeza de slot) do

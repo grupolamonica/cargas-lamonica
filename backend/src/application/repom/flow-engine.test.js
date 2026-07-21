@@ -43,6 +43,7 @@ const { handleRepomIncomingMessage, setRepomFlowEnabled, setRepomCnhOcrEnabled, 
   "./flow-engine.js"
 );
 const { setRepomAgentEnabled, resetRepomAgentRateLimitForTests } = await import("./agent-orientador.js");
+const { tryReserveCnhCall, resetRepomCnhRateLimitForTests } = await import("./cnh-media.js");
 
 const inbound = (text, phone = "5571988887777") => ({
   instance: "lamonica-repom",
@@ -92,6 +93,7 @@ describe("repom flow-engine (integração pg-mem)", () => {
   beforeEach(async () => {
     await resetTestDatabase();
     resetRepomAgentRateLimitForTests();
+    resetRepomCnhRateLimitForTests();
     vi.clearAllMocks();
     sendMock.mockResolvedValue({ ok: true });
     // Por padrão o agente fica OFF (flag não setada); mesmo assim damos defaults
@@ -361,6 +363,48 @@ describe("repom flow-engine (integração pg-mem)", () => {
       expect(p.length).toBe(1);
       expect(p[0].status).toBe("pendente");
       expect(p[0].observacoes).toMatch(/CPF da CNH difere/);
+    });
+
+    it("flag ON + áudio (não-mídia-CNH) no ask_cnh: pede foto/PDF explicitamente (não a msg enganosa)", async () => {
+      await setRepomCnhOcrEnabled({ enabled: true });
+      await reachAskCnh("12345678901");
+      const r = await handleRepomIncomingMessage({ ...mediaInbound(), messageType: "audio", text: "[audio]" });
+      expect(r).toMatchObject({ node: "ask_cnh", action: "await_media" });
+      expect(extractMock).not.toHaveBeenCalled();
+      const txt = sendMock.mock.calls.at(-1)[0].text;
+      expect(txt).toMatch(/foto/i);
+      expect(txt).not.toMatch(/leitura automática/); // não é o cnhParked enganoso
+    });
+
+    it("flag ON + rate limit estourado: responde 'aguarde' e NÃO chama OCR/download (freio de custo)", async () => {
+      await setRepomCnhOcrEnabled({ enabled: true });
+      await reachAskCnh("12345678901");
+      for (let i = 0; i < 6; i++) tryReserveCnhCall("5571988887777"); // exaure o cap por telefone
+      const r = await handleRepomIncomingMessage(mediaInbound());
+      expect(r).toMatchObject({ node: "ask_cnh", action: "rate_limited" });
+      expect(getMediaMock).not.toHaveBeenCalled();
+      expect(extractMock).not.toHaveBeenCalled();
+    });
+
+    it("flag ON + falha ao guardar/gravar: avisa o operador e confirma recebimento (nunca lança)", async () => {
+      await setRepomCnhOcrEnabled({ enabled: true });
+      uploadMock.mockRejectedValue(new Error("STORAGE_BOOM")); // stageCnhMedia lança
+      await reachAskCnh("12345678901");
+      const r = await handleRepomIncomingMessage(mediaInbound());
+      expect(r).toMatchObject({ ok: true, action: "persist_failed" });
+      const { rows } = await query(`SELECT count(*)::int AS n FROM public.operator_notifications WHERE kind='cnh_persist_failed'`);
+      expect(rows[0].n).toBe(1);
+      expect(sendMock.mock.calls.at(-1)[0].text).toMatch(/Recebi sua CNH/);
+      expect((await pendings()).length).toBe(0); // falhou antes de gravar
+    });
+
+    it("flag OFF + agente ON + mídia: NÃO gasta chamada de LLM (gate por messageType)", async () => {
+      await setRepomAgentEnabled({ enabled: true });
+      configuredMock.mockReturnValue(true);
+      await reachAskCnh("12345678901");
+      const r = await handleRepomIncomingMessage(mediaInbound());
+      expect(r).toMatchObject({ node: "ask_cnh", action: "parked" });
+      expect(chatMock).not.toHaveBeenCalled(); // "[image]" não vira chamada de agente
     });
   });
 });

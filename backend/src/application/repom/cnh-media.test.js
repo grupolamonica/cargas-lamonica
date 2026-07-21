@@ -17,7 +17,9 @@ vi.mock("../candidatura/use-cases/upload-draft-file.js", () => ({
   DRAFT_FILE_BUCKET: "cadastro-drafts",
 }));
 
-const { claimMessageOnce, sha256Base64, stageCnhMedia } = await import("./cnh-media.js");
+const { claimMessageOnce, resetRepomCnhRateLimitForTests, sha256Base64, stageCnhMedia, tryReserveCnhCall } = await import(
+  "./cnh-media.js"
+);
 
 // base64 de "cnh-bytes" (conteúdo qualquer, > 0 bytes)
 const B64 = Buffer.from("cnh-bytes").toString("base64");
@@ -25,6 +27,7 @@ const B64 = Buffer.from("cnh-bytes").toString("base64");
 describe("repom cnh-media (Fase 3b — blocos)", () => {
   beforeEach(async () => {
     await resetTestDatabase();
+    resetRepomCnhRateLimitForTests();
     vi.clearAllMocks();
     uploadMock.mockResolvedValue({ statusCode: 200, payload: { storage_path: "12345678901/repom/motorista_cnh_1.jpg" } });
   });
@@ -90,6 +93,15 @@ describe("repom cnh-media (Fase 3b — blocos)", () => {
       uploadMock.mockResolvedValue({ statusCode: 502, payload: { error: "STORAGE_UNAVAILABLE" } });
       const r = await stageCnhMedia({ cpf: "12345678901", base64: B64, mimetype: "application/pdf" });
       expect(r).toMatchObject({ ok: false, reason: "storage_unavailable", statusCode: 502 });
+    });
+  });
+
+  describe("tryReserveCnhCall (rate limit anti denial-of-wallet)", () => {
+    it("libera até o teto por telefone e então nega; outro telefone tem orçamento próprio", () => {
+      const phone = "5571980001111";
+      for (let i = 0; i < 6; i++) expect(tryReserveCnhCall(phone)).toBe(true); // default 6/telefone
+      expect(tryReserveCnhCall(phone)).toBe(false); // 7ª estoura
+      expect(tryReserveCnhCall("5571980002222")).toBe(true);
     });
   });
 });

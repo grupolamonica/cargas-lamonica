@@ -102,27 +102,44 @@ export function renderObservacoes(issues, extra = null) {
  *
  * @returns {Promise<{ id: string, created: boolean }>}
  */
+/** Merge do motorista no dados existente da linha `rowId` (novo prevalece). */
+async function mergeIntoPending(client, rowId, motorista, status, observacoes) {
+  const { rows } = await client.query(
+    `SELECT dados FROM public.pending_driver_registrations WHERE id = $1`,
+    [rowId],
+  );
+  const dados = rows[0]?.dados && typeof rows[0].dados === "object" ? rows[0].dados : {};
+  dados.motorista = { ...(dados.motorista || {}), ...motorista };
+  await client.query(
+    `UPDATE public.pending_driver_registrations
+        SET dados = $2::jsonb, status = $3, observacoes = $4, updated_at = now()
+      WHERE id = $1`,
+    [rowId, JSON.stringify(dados), status, observacoes],
+  );
+  return { id: rowId, created: false };
+}
+
 export async function upsertPendingCnh(client, { cpf, registrationId, motorista, status = "pendente", observacoes = null }) {
+  // 1) registrationId explícito (dedup continue/resume/reopen) → merge.
   if (registrationId) {
     const { rows } = await client.query(
-      `SELECT dados FROM public.pending_driver_registrations WHERE id = $1`,
+      `SELECT id FROM public.pending_driver_registrations WHERE id = $1`,
       [registrationId],
     );
-    if (rows[0]) {
-      const dados = rows[0].dados && typeof rows[0].dados === "object" ? rows[0].dados : {};
-      dados.motorista = { ...(dados.motorista || {}), ...motorista };
-      await client.query(
-        `UPDATE public.pending_driver_registrations
-            SET dados = $2::jsonb, status = $3, observacoes = $4, updated_at = now()
-          WHERE id = $1`,
-        [registrationId, JSON.stringify(dados), status, observacoes],
-      );
-      return { id: registrationId, created: false };
-    }
-    // registrationId órfão (não achou) → cai no INSERT.
+    if (rows[0]) return mergeIntoPending(client, registrationId, motorista, status, observacoes);
+    // registrationId órfão → segue pelo id_cadastro.
   }
 
+  // 2) Idempotência por id_cadastro (repom-<cpf>): se já existe (ex.: 2ª foto do
+  //    MESMO CPF novo, ou corrida), faz merge em vez de criar linha duplicada.
   const idCadastro = `repom-${onlyDigits(cpf)}`;
+  const existing = await client.query(
+    `SELECT id FROM public.pending_driver_registrations WHERE id_cadastro = $1 LIMIT 1`,
+    [idCadastro],
+  );
+  if (existing.rows[0]) return mergeIntoPending(client, existing.rows[0].id, motorista, status, observacoes);
+
+  // 3) Novo cadastro.
   const { rows } = await client.query(
     `INSERT INTO public.pending_driver_registrations
        (id_cadastro, status, versao_cadastro, dados, observacoes)
