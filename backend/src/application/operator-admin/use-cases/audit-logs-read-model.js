@@ -12,11 +12,14 @@ const AUDIT_LOGS_DEFAULT_PAGE_SIZE = 50;
 const AUDIT_LOGS_MAX_PAGE_SIZE = 200;
 
 // Cache in-memory de user_id -> { email, displayName } para evitar listUsers
-// em toda chamada ao audit-logs. TTL curto (60s) é suficiente.
+// em toda chamada. Nomes de operador mudam raríssimo (contratação), então o TTL é
+// folgado (5 min): cobre o polling do Monitor (~2 min — o attach-rodopar-status
+// resolve "quem alterou" o Check Rodopar a cada leitura) sem um listUsers por poll,
+// e mantém o audit fresco o bastante. Compartilhado (audit-logs + monitor).
 //
 // AUDIT.md M-05 follow-up: in-memory cache aceitável em single-replica
 // (CLAUDE.md confirma); virar Redis quando passar a multi-replica (DC-95).
-const OPERATOR_DIRECTORY_TTL_MS = 60_000;
+const OPERATOR_DIRECTORY_TTL_MS = 300_000;
 let operatorDirectoryCache = { at: 0, map: new Map() };
 
 export async function resolveOperatorDirectory() {

@@ -1815,6 +1815,21 @@ function rodoparMeta(status?: number | null) {
   return RODOPAR_META[Number(status ?? 0)] ?? RODOPAR_META[0];
 }
 
+/** "DD/MM/AAAA HH:MM" no fuso de São Paulo (updated_at vem em UTC). */
+function formatRodoparWhen(iso?: string | null) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 /** Badge clicável do Check Rodopar (DC-260): mostra a cor do estado atual e alterna
  *  0→1→2→0 a cada clique. Usado na linha do Monitor e no modal. */
 function RodoparBadge({ status, busy, onCycle, withLabel = false }: {
@@ -2661,22 +2676,36 @@ function RowDetailModal({
 
   // Check Rodopar (DC-260) no modal — mesmo controle da linha. Estado local otimista
   // (fica vivo no modal ao clicar); reconcilia com o servidor no refetch.
+  // rodoparBy/At = QUEM alterou por último e QUANDO (vêm do backend por LH); ao
+  // alterar aqui, mostra "Você" na hora e o refetch traz o nome resolvido depois.
   const [rodoparStatus, setRodoparStatus] = useState(0);
+  const [rodoparBy, setRodoparBy] = useState<string | null>(null);
+  const [rodoparAt, setRodoparAt] = useState<string | null>(null);
   useEffect(() => {
     setRodoparStatus(Number(row?.rodoparStatus ?? 0));
+    setRodoparBy(row?.rodoparUpdatedBy ?? null);
+    setRodoparAt(row?.rodoparUpdatedAt ?? null);
   }, [row, open]);
   const rodoparMutation = useMutation({
     mutationFn: setMonitorRodoparStatus,
+    // Snapshot do estado local ANTES deste clique — reverte p/ ele no erro (e NÃO p/ o
+    // snapshot de abertura do modal, que pode estar defasado após um ciclo bem-sucedido
+    // na mesma sessão do modal).
+    onMutate: () => ({ status: rodoparStatus, by: rodoparBy, at: rodoparAt }),
     onSuccess: () => { void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }); },
-    onError: (err) => {
+    onError: (err, _vars, ctx) => {
       toast.error(err instanceof Error ? err.message : "Não foi possível atualizar o Rodopar.");
-      setRodoparStatus(Number(row?.rodoparStatus ?? 0));
+      setRodoparStatus(ctx?.status ?? Number(row?.rodoparStatus ?? 0));
+      setRodoparBy(ctx?.by ?? row?.rodoparUpdatedBy ?? null);
+      setRodoparAt(ctx?.at ?? row?.rodoparUpdatedAt ?? null);
     },
   });
   const cycleRodopar = () => {
     if (!row) return;
     const next = (rodoparStatus + 1) % 3;
     setRodoparStatus(next);
+    setRodoparBy("Você");
+    setRodoparAt(new Date().toISOString());
     rodoparMutation.mutate({ lh: row.lh, status: next });
   };
 
@@ -2827,6 +2856,14 @@ function RowDetailModal({
                 {consultItem.isPending ? "Consultando…" : "Consultar item"}
               </button>
             </div>
+            {/* DC-260: quem alterou o Check Rodopar por último (e quando). */}
+            {!row.reserva && rodoparBy && (
+              <p className="text-[0.65rem] text-muted-foreground">
+                Rodopar alterado por{" "}
+                <span className="font-semibold text-foreground">{rodoparBy}</span>
+                {rodoparAt ? ` · ${formatRodoparWhen(rodoparAt)}` : ""}
+              </p>
+            )}
             <StatusBadge status={row.status} />
           </DialogHeader>
 
@@ -3907,7 +3944,11 @@ export default function SheetMonitor() {
       const prev = queryClient.getQueryData<Awaited<ReturnType<typeof fetchSheetMonitor>>>([...SHEET_MONITOR_QUERY_KEY]);
       queryClient.setQueryData<Awaited<ReturnType<typeof fetchSheetMonitor>>>([...SHEET_MONITOR_QUERY_KEY], (old) => {
         if (!old) return old;
-        const items = old.items.map((it) => (it.lh === vars.lh ? { ...it, rodoparStatus: vars.status } : it));
+        const items = old.items.map((it) =>
+          it.lh === vars.lh
+            ? { ...it, rodoparStatus: vars.status, rodoparUpdatedBy: "Você", rodoparUpdatedAt: new Date().toISOString() }
+            : it,
+        );
         return { ...old, items };
       });
       return { prev };
