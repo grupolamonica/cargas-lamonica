@@ -17,12 +17,17 @@
  */
 
 import { withPgClient } from "../../infrastructure/pg/postgres.js";
-import { getRepomInstance, sendWhatsappText } from "../../infrastructure/whatsapp/evolution-client.js";
+import { getMediaBase64, getRepomInstance, sendWhatsappText } from "../../infrastructure/whatsapp/evolution-client.js";
 import { ensureAppSettingsTable } from "../operator-admin/use-cases/angellira/auto-approve-vigentes.js";
 import { canAgentAssist, orientarMotorista, tryReserveAgentCall } from "./agent-orientador.js";
+import { evaluateCnhExtraction } from "./cnh-gates.js";
+import { claimMessageOnce, stageCnhMedia } from "./cnh-media.js";
+import { buildMotoristaFromCnhFields, renderObservacoes, upsertPendingCnh } from "./cnh-registration.js";
 import { resolveCpfDedup } from "./dedup-cpf.js";
+import { extractCnhFromMedia } from "./ocr-sidecar-client.js";
 
 const SETTING_KEY = "repom_flow_enabled";
+const CNH_OCR_SETTING_KEY = "repom_cnh_ocr_enabled";
 
 // Mensagens v1 (hardcoded; o editor visual da Fase 5 tornará configurável).
 const MSG = {
@@ -48,7 +53,21 @@ const MSG = {
   cnhParked:
     "Recebido! 🙌 A leitura automática da CNH está sendo ativada — em breve continuo seu cadastro por aqui.\n" +
     "Se preferir, um operador também pode te atender neste número.",
+  cnhReceived:
+    "Recebi sua CNH! ✅ Nossa equipe vai conferir os dados e continuar o seu cadastro.\n" +
+    "Te aviso por aqui assim que tiver novidade. 🙌",
+  cnhUnreadable:
+    "Recebi o arquivo, mas não consegui ler os dados da CNH. 🤔\n" +
+    "Pode reenviar uma *foto da frente da CNH, aberta e bem iluminada* (ou o PDF)?",
+  cnhNotACnh:
+    "Hmm, isso não parece ser uma CNH. 🤔\n" +
+    "Me envia a *foto da sua CNH* (frente, aberta, bem iluminada), por favor.",
+  cnhDownloadFailed:
+    "Não consegui baixar o arquivo agora. 😕 Pode reenviar a *foto da sua CNH*, por favor?",
 };
+
+// Tipos de mensagem que tratamos como "documento da CNH" (foto ou PDF).
+const CNH_MEDIA_TYPES = new Set(["image", "document"]);
 
 /** Lê a flag do motor (default OFF). */
 export async function isRepomFlowEnabled(client) {
@@ -66,6 +85,27 @@ export async function setRepomFlowEnabled({ enabled, actorId = null }) {
        VALUES ($1, $2::jsonb, $3)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by`,
       [SETTING_KEY, JSON.stringify({ enabled: Boolean(enabled) }), actorId],
+    );
+    return { enabled: Boolean(enabled) };
+  });
+}
+
+/** Lê a flag do OCR de CNH (Fase 3b; default OFF). */
+export async function isRepomCnhOcrEnabled(client) {
+  await ensureAppSettingsTable(client);
+  const { rows } = await client.query(`SELECT value FROM public.app_settings WHERE key = $1`, [CNH_OCR_SETTING_KEY]);
+  return Boolean(rows[0]?.value?.enabled);
+}
+
+/** Liga/desliga o processamento automático da CNH (OCR→cadastro); reversível. */
+export async function setRepomCnhOcrEnabled({ enabled, actorId = null }) {
+  return withPgClient(async (client) => {
+    await ensureAppSettingsTable(client);
+    await client.query(
+      `INSERT INTO public.app_settings (key, value, updated_by)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+      [CNH_OCR_SETTING_KEY, JSON.stringify({ enabled: Boolean(enabled) }), actorId],
     );
     return { enabled: Boolean(enabled) };
   });
@@ -137,6 +177,95 @@ async function loadActiveSession(client, phone) {
     [phone],
   );
   return rows[0] || null;
+}
+
+/** Marca a sessão como submetida/encerrada e confirma o recebimento (passivo). */
+async function finishCnh(client, { session, phone, correlationId }) {
+  await client.query(
+    `UPDATE public.repom_flow_sessions SET current_node = 'submitted', status = 'done', updated_at = now() WHERE id = $1`,
+    [session.id],
+  );
+  await replyRepom(client, { phone, text: MSG.cnhReceived, correlationId });
+}
+
+/**
+ * Fase 3b — processa a CNH (mídia) no nó ask_cnh: idempotência → baixa do
+ * Evolution → OCR → gates → staging → grava o cadastro no pending. Nunca lança.
+ * Só é chamada com a flag repom_cnh_ocr_enabled ON. Sempre grava status
+ * 'pendente' (garante aparecer na fila); os motivos de revisão vão em
+ * `observacoes` (o operador é quem decide — nunca aprova sozinho).
+ */
+async function handleCnhMedia(client, { session, msg, phone, correlationId }) {
+  const first = await claimMessageOnce(client, { externalId: msg.externalId, phone, kind: "cnh_media" });
+  if (!first) return { skipped: "duplicate_media", node: "ask_cnh" };
+
+  const cpf = session.cpf;
+
+  // 1) baixa a mídia do Evolution
+  let media;
+  try {
+    media = await getMediaBase64({ message: msg.raw, instance: getRepomInstance() });
+  } catch (err) {
+    console.warn(`[repom.flow] ${correlationId} media download:`, err instanceof Error ? err.message : String(err));
+    await replyRepom(client, { phone, text: MSG.cnhDownloadFailed, correlationId });
+    return { ok: true, node: "ask_cnh", action: "media_download_failed" };
+  }
+  if (!media?.base64) {
+    await replyRepom(client, { phone, text: MSG.cnhDownloadFailed, correlationId });
+    return { ok: true, node: "ask_cnh", action: "media_empty" };
+  }
+
+  // 2) OCR
+  const ocr = await extractCnhFromMedia({ imagemBase64: media.base64, idCadastro: `repom-${cpf}`, correlationId });
+
+  // 2a) OCR indisponível/ilegível → SALVA a foto + cria pending p/ revisão manual
+  //     (decisão do Samuel: nunca perder o documento do motorista).
+  if (!ocr.ok) {
+    const staged = await stageCnhMedia({ cpf, base64: media.base64, mimetype: media.mimetype, correlationId });
+    const motorista = { cpf: String(cpf).replace(/\D/g, "") };
+    if (staged.ok) motorista.cnh_url = staged.storagePath;
+    const obs = renderObservacoes(
+      null,
+      staged.ok
+        ? "OCR indisponível no envio — ler a CNH manualmente."
+        : "OCR indisponível e o arquivo não pôde ser guardado — pedir reenvio.",
+    );
+    await upsertPendingCnh(client, {
+      cpf,
+      registrationId: session.registration_id,
+      motorista,
+      status: "pendente",
+      observacoes: obs,
+    });
+    await finishCnh(client, { session, phone, correlationId });
+    return { ok: true, node: "submitted", action: "ocr_unavailable" };
+  }
+
+  // 3) gates: doc trocado (abaixo do sinal mínimo) → pede reenvio, NÃO cria cadastro
+  const gate = evaluateCnhExtraction(ocr.fields, { sessionCpf: cpf });
+  if (!gate.accepted) {
+    await replyRepom(client, { phone, text: MSG.cnhNotACnh, correlationId });
+    return { ok: true, node: "ask_cnh", action: "not_a_cnh" };
+  }
+
+  // 4) staging + 5) monta dados.motorista (alinhado ao wizard) + cnh_url
+  const staged = await stageCnhMedia({ cpf, base64: media.base64, mimetype: media.mimetype, correlationId });
+  const motorista = buildMotoristaFromCnhFields(ocr.fields, { cpf });
+  if (staged.ok) motorista.cnh_url = staged.storagePath;
+
+  // 6) grava/atualiza o pending
+  const observacoes = renderObservacoes(gate.issues, staged.ok ? null : "Falha ao guardar o arquivo da CNH.");
+  await upsertPendingCnh(client, {
+    cpf,
+    registrationId: session.registration_id,
+    motorista,
+    status: "pendente",
+    observacoes,
+  });
+
+  // 7) encerra (passivo) — o operador assume
+  await finishCnh(client, { session, phone, correlationId });
+  return { ok: true, node: "submitted", action: gate.issues.length ? "submitted_review" : "submitted" };
 }
 
 /**
@@ -222,9 +351,12 @@ export async function handleRepomIncomingMessage(msg) {
     }
 
     if (session.current_node === "ask_cnh") {
-      // Fase 3b liga a mídia→OCR aqui. Por ora, se o motorista mandar texto em
-      // vez da foto, o agente pede a CNH; sem agente, confirma o recebimento sem
-      // travar o motorista (flag OFF em produção; este caminho é p/ teste).
+      // Fase 3b: se veio MÍDIA (foto/PDF) e o OCR está ligado, processa a CNH.
+      if (CNH_MEDIA_TYPES.has(msg.messageType) && (await isRepomCnhOcrEnabled(client))) {
+        return handleCnhMedia(client, { session, msg, phone, correlationId });
+      }
+      // OCR desligado (flag OFF) ou texto solto: o agente pede a CNH; sem agente,
+      // a mensagem fixa (não trava o motorista).
       await replyForNode(client, {
         phone,
         node: "ask_cnh",

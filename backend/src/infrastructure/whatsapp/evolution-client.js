@@ -516,6 +516,32 @@ export async function logoutWhatsappInstance({ instance: reqInstance } = {}) {
   return { ok: true, instance };
 }
 
+/**
+ * Baixa a mídia (imagem/documento) de uma mensagem recebida, em base64.
+ * Usado pelo Repom (Fase 3b) para pegar a foto/PDF da CNH que o motorista
+ * enviou. Recebe a MENSAGEM CRUA do webhook (msg.raw do parseUpsertPayload),
+ * que carrega o `key` + o `imageMessage`/`documentMessage`.
+ *
+ * @param {object} args
+ * @param {object} args.message - mensagem crua do Evolution (com key + message)
+ * @param {string} [args.instance]
+ * @returns {Promise<{ base64: string|null, mimetype: string|null }>}
+ * @throws {Error} HTTP != 2xx (o caller trata como "reenvie")
+ */
+export async function getMediaBase64({ message, instance: reqInstance } = {}) {
+  const instance = resolveInstance(reqInstance);
+  const r = await evolutionRequest("POST", `/chat/getBase64FromMediaMessage/${instance}`, {
+    message,
+    convertToMp4: false,
+  });
+  if (!r.ok) throw new Error(`EVOLUTION_HTTP_${r.status}${r.text ? `:${r.text.slice(0, 120)}` : ""}`);
+  // Evolution v2 varia o nome do campo entre versões — defensivo.
+  const base64 = r.data?.base64 || r.data?.media || r.data?.buffer || null;
+  const mimetype =
+    r.data?.mimetype || r.data?.mediaType || r.data?.mimeType || r.data?.mime || null;
+  return { base64, mimetype };
+}
+
 // ─── Utilitarios para tests ───────────────────────────────────────────────────
 
 export function resetEvolutionClientStateForTests() {
