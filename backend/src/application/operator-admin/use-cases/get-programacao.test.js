@@ -86,6 +86,9 @@ describe("getProgramacao (consulta direta ao SPX via sidecar)", () => {
     expect(res.payload.rows.find((r) => r.lh === "LT2").podeAceitar).toBe(false);
     expect(res.payload.rows.find((r) => r.lh === "XX9").podeAceitar).toBe(false);
     expect(res.payload.rows.find((r) => r.lh === "LT4").tab).toBe("aceito");
+    // podeLancar (SPX/Shopee): só a aba Planejado; a aba Aceito nunca lança pela tela.
+    expect(lt1.podeLancar).toBe(true);
+    expect(res.payload.rows.find((r) => r.lh === "LT4").podeLancar).toBe(false);
   });
 
   it("remove do Planejado viagens ATRASADAS (carregamento anterior ao instante atual, nível minuto)", async () => {
@@ -173,6 +176,7 @@ describe("getProgramacao (consulta direta ao SPX via sidecar)", () => {
     expect(nst.podeAceitar).toBe(false); // aceite Nestlé fica no Galileu
     expect(nst.isLinehaul).toBe(true); // lançável
     expect(nst.tab).toBe("planejado");
+    expect(nst.podeLancar).toBe(true); // planejado (pendente) → lançável
     expect(nst.origemCidadeUf).toBe("Caçapava/SP");
     expect(nst.destinoCidadeUf).toBe("Jundiaí/SP");
     expect(nst.data).toBe("2026-07-20");
@@ -188,5 +192,62 @@ describe("getProgramacao (consulta direta ao SPX via sidecar)", () => {
     expect(fin.placa).toBe("NWC3B78");
     // cliente Nestle exposto no array clientes.
     expect(res.payload.clientes.some((c) => c.nome === "Nestle")).toBe(true);
+  });
+
+  it("Nestlé ACEITA sem motorista é lançável (podeLancar); com motorista não", async () => {
+    const fetchTripsByTab = makeTripsFn({ 1: [], 2: [], 3: [] });
+    const fetchNestleOfertas = async () => [
+      {
+        // ACEITA no Galileu, ainda SEM embarque/motorista → aba "aceito", lançável.
+        codprogcoleta: "NST-ACC", grupos_id: "B900000001", descrstatprogcoleta: "ACEITA",
+        emporig_nomecid: "Caçapava", emporig_uf: "SP", empdest_nomecid: "Jundiaí", empdest_uf: "SP",
+        dtahrprevatual: "2026-07-20T08:00:00", dtahrpreventrega: "2026-07-21T10:00:00",
+      },
+      {
+        // Aceita e JÁ com embarque em progresso + motorista (join) → aba "aceito", NÃO lançável.
+        codprogcoleta: "NST-DRV", grupos_id: "B900000002", codembarque: "9000002",
+        descrstatprogcoleta: "EMBARQUE EMITIDO",
+        emporig_nomecid: "Betim", emporig_uf: "MG", empdest_nomecid: "Contagem", empdest_uf: "MG",
+        dtahrprevatual: "2026-07-20T09:00:00",
+        emb_status: "EM VIAGEM", emb_motorista: "CARLOS SOUZA", emb_placa: "ABC1D23",
+      },
+      {
+        // Aceita mas com embarque MORTO (CANCELADO) e sem motorista → aba "aceito",
+        // NÃO lançável (não republica viagem morta). Guarda do achado MEDIUM da revisão.
+        codprogcoleta: "NST-DEAD", grupos_id: "B900000003", codembarque: "9000003",
+        descrstatprogcoleta: "EMBARQUE EMITIDO",
+        emporig_nomecid: "Betim", emporig_uf: "MG", empdest_nomecid: "Contagem", empdest_uf: "MG",
+        dtahrprevatual: "2026-07-20T09:00:00",
+        emb_status: "CANCELADO", emb_motorista: "",
+      },
+      {
+        // Status de oferta desconhecido/malformado, sem embarque nem motorista → cai na
+        // aba "aceito" (fail-open do nestleTab) mas NÃO é lançável. Guarda do achado LOW.
+        codprogcoleta: "NST-UNK", grupos_id: "B900000004", descrstatprogcoleta: "AGUARDANDO SEI LA",
+        emporig_nomecid: "Betim", emporig_uf: "MG", empdest_nomecid: "Contagem", empdest_uf: "MG",
+        dtahrprevatual: "2026-07-20T09:00:00",
+      },
+    ];
+    const res = await getProgramacao({ deps: { ...baseDeps, fetchTripsByTab, fetchNestleOfertas } });
+
+    const acc = res.payload.rows.find((r) => r.lh === "B900000001");
+    expect(acc.tab).toBe("aceito");
+    expect(acc.motorista).toBe("");
+    expect(acc.podeLancar).toBe(true);
+
+    const drv = res.payload.rows.find((r) => r.lh === "B900000002");
+    expect(drv.tab).toBe("aceito");
+    expect(drv.motorista).toBe("CARLOS SOUZA");
+    expect(drv.podeLancar).toBe(false);
+
+    // Embarque morto e status desconhecido: aba "aceito" mas NÃO lançáveis.
+    const dead = res.payload.rows.find((r) => r.lh === "B900000003");
+    expect(dead.tab).toBe("aceito");
+    expect(dead.motorista).toBe("");
+    expect(dead.podeLancar).toBe(false);
+
+    const unk = res.payload.rows.find((r) => r.lh === "B900000004");
+    expect(unk.tab).toBe("aceito");
+    expect(unk.podeLancar).toBe(false);
   });
 });

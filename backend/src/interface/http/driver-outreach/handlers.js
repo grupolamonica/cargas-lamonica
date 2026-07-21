@@ -39,6 +39,7 @@ import {
   parseUpsertPayload,
   saveWhatsappMessageStandalone,
 } from "../../../application/driver-outreach/whatsapp-messages.js";
+import { handleRepomIncomingMessage } from "../../../application/repom/flow-engine.js";
 import {
   composeThankYouMessage,
   findReturnLoadForDriver,
@@ -491,7 +492,16 @@ export async function resolveEvolutionWebhookResponse(request) {
           const saved = await saveWhatsappMessageStandalone(msg);
           if (msg.direction === "in" && saved) {
             if (repomIsSeparate && msg.instance === repomInstance) {
-              console.info("[evolution.webhook] mensagem da instância Repom parqueada (motor de fluxo ainda não ativo)");
+              // Motor de fluxo do cadastro (Fase 3a): reage à mensagem do número
+              // Repom. Com a flag repom_flow_enabled OFF (default), o motor não
+              // responde nada — a mensagem fica só registrada no chat.
+              handleRepomIncomingMessage(msg)
+                .then((r) => {
+                  if (r?.skipped === "disabled") {
+                    console.info("[evolution.webhook] mensagem da instância Repom parqueada (motor de fluxo desligado)");
+                  }
+                })
+                .catch((err) => console.warn("[evolution.webhook] repom flow error:", err?.message));
               continue;
             }
             handleIncomingDriverMessage(msg, saved).catch((err) =>

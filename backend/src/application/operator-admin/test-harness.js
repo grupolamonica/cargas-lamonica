@@ -398,6 +398,27 @@ const schemaSql = `
     created_at timestamptz NOT NULL DEFAULT now()
   );
 
+  CREATE TABLE public.repom_flow_sessions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    cpf text,
+    phone text,
+    flow_id uuid,
+    current_node text,
+    variables jsonb NOT NULL DEFAULT '{}',
+    status text NOT NULL DEFAULT 'active',
+    registration_id uuid,
+    last_inbound_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.app_settings (
+    key text PRIMARY KEY,
+    value jsonb NOT NULL DEFAULT '{}'::jsonb,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    updated_by text
+  );
+
   CREATE TABLE public.operator_notifications (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     kind text NOT NULL,
