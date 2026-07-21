@@ -2001,6 +2001,12 @@ export interface DriverFlowMetricsCadastros {
   pendentes: number;
 }
 
+/** DC-244: cargas disponibilizadas no portal do motorista no período (cargas.created_at). */
+export interface DriverFlowMetricsPortalAvailability {
+  /** total de cargas publicadas no portal (não-rascunho, visíveis) criadas no período — inclui spots DC-201. */
+  total: number;
+}
+
 export interface DriverFlowMetricsResponse {
   window: {
     from: string;
@@ -2012,6 +2018,7 @@ export interface DriverFlowMetricsResponse {
   recurrence: DriverFlowMetricsRecurrence;
   portalVisits: DriverFlowMetricsPortalVisits;
   cadastros: DriverFlowMetricsCadastros;
+  portalAvailability: DriverFlowMetricsPortalAvailability;
   meta: {
     correlationId: string | null;
   };

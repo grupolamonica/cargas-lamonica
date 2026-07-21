@@ -476,6 +476,24 @@ const Overview = () => {
                 )}
               </DriverFlowGate>
 
+              {/* DC-244: total de cargas disponibilizadas no portal do motorista no
+                  período selecionado (por data de entrada no portal; inclui spots
+                  automáticos do DC-201). hideError: o gate do cadastro acima já
+                  exibe o erro da mesma query. */}
+              <DriverFlowGate query={flow.query} skeletons={1} hideError>
+                {(data) => (
+                  <section className="grid gap-4">
+                    <KpiCard
+                      label="Disponibilizadas no portal"
+                      value={formatNumber(data.portalAvailability.total)}
+                      note="Cargas publicadas no portal do motorista no período selecionado — inclui spots automáticos e conta também as que já foram reservadas ou fechadas."
+                      icon={Truck}
+                      tone="primary"
+                    />
+                  </section>
+                )}
+              </DriverFlowGate>
+
               {/* Números-chave · agora (ao vivo, do snapshot) */}
               <section className="grid gap-4 xl:grid-cols-4">
                 <KpiCard
