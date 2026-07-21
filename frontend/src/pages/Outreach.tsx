@@ -73,6 +73,12 @@ const WHATSAPP_KEY = ["operator", "outreach", "whatsapp"];
 // (Fase 3) existir — nada é enviado automaticamente.
 const REPOM_TAB_ENABLED = true;
 
+// Aba "Automação" (envio automático de WhatsApp) PAUSADA por ora — mantemos o
+// módulo de mensageria (Chat + Cadastro Repom) no ar e só escondemos esta aba.
+// O runtime já fica no-op enquanto o envio está desligado nas settings; isto só
+// tira a aba da UI pra ninguém ligar. Reversível: basta voltar para `true`.
+const AUTOMACAO_TAB_ENABLED = false;
+
 const REPOM_WA_KEY = ["operator", "repom", "whatsapp"];
 
 /**
@@ -1142,16 +1148,18 @@ export default function Outreach() {
           >
             Chat com motoristas
           </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab("automacao")}
-            className={cn(
-              "rounded-lg px-3 py-1.5 text-xs font-semibold transition",
-              activeTab === "automacao" ? "bg-background text-foreground shadow" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Automação
-          </button>
+          {AUTOMACAO_TAB_ENABLED ? (
+            <button
+              type="button"
+              onClick={() => setActiveTab("automacao")}
+              className={cn(
+                "rounded-lg px-3 py-1.5 text-xs font-semibold transition",
+                activeTab === "automacao" ? "bg-background text-foreground shadow" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Automação
+            </button>
+          ) : null}
           {REPOM_TAB_ENABLED ? (
             <button
               type="button"
