@@ -1648,7 +1648,7 @@ function AllocCell({ row, enriched, aspxAssigned, cavaloChecklist, carretaCheckl
       </div>
     );
   }
-  const { editable, aspxWarning } = allocEditPolicy(row);
+  const { editable } = allocEditPolicy(row);
   const pinned = !!row.pinned;
   // Fixo trava motorista/veículo (intocável). Status-lock (ASPX) também trava.
   const canEditAlloc = editable && !pinned;
@@ -1729,13 +1729,15 @@ function AllocCell({ row, enriched, aspxAssigned, cavaloChecklist, carretaCheckl
             {/* Slot FIXO do marcador de estado (fixado / atribuído no ASPX) — DC-226. */}
             <span
               className="flex h-3 w-3 shrink-0 items-center justify-center"
-              title={pinned ? "Fixado nesta carga (motorista/veículo travados)" : aspxWarning ? "Motorista já atribuído no ASPX" : undefined}
+              title={pinned ? "Fixado nesta carga (motorista/veículo travados)" : aspxAssigned === true ? "Motorista atribuído no ASPX" : undefined}
             >
               {pinned ? (
                 <Pin className="h-3 w-3 fill-current text-amber-500" />
-              ) : aspxWarning ? (
-                // DC-227: já atribuído no ASPX = estado normal → selo positivo (pessoa+check),
-                // não triângulo de alerta (reservado a avisos que pedem ação).
+              ) : aspxAssigned === true ? (
+                // Selo verde SÓ quando o motorista efetivo está REALMENTE atribuído à
+                // viagem no ASPX (aspxAssigned da consulta ao vivo) — NÃO por `aspxWarning`
+                // (que era só "tem status", pintava verde carga CANCELADA/sem motorista e
+                // persistia ao remover o motorista). null/false → sem selo (S mostra o resto).
                 <UserCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
               ) : null}
             </span>
@@ -3682,45 +3684,11 @@ export default function SheetMonitor() {
   // (lh, motorista) das viagens SPX ("LT…"): trocar a fila/motorista muda a chave
   // e RE-CONSULTA na hora; um polling curto pega troca feita DIRETO no ASPX. Cache
   // curto no backend evita martelar o sidecar. Cargas não-SPX ficam fora (cinza).
-  const aspxAssignedPairs = useMemo(() => {
-    const pairs: Array<{ lh: string; motorista: string }> = [];
-    for (const it of items) {
-      if (!it?.lh || it.reserva || !isSpxTrip(it.lh)) continue;
-      const motorista = (it.motoristas ?? "").trim();
-      if (!motorista) continue;
-      pairs.push({ lh: it.lh, motorista });
-    }
-    pairs.sort((a, b) => (a.lh < b.lh ? -1 : a.lh > b.lh ? 1 : 0));
-    return pairs;
-  }, [items]);
-  const aspxAssignedKey = useMemo(
-    () => aspxAssignedPairs.map((p) => `${p.lh}|${normNameKey(p.motorista)}`).join(","),
-    [aspxAssignedPairs],
-  );
-  const aspxAssignedQuery = useQuery({
-    queryKey: ["admin", "sheet-monitor", "aspx-assigned", aspxAssignedKey],
-    queryFn: () => fetchAspxAssigned(aspxAssignedPairs),
-    enabled: aspxAssignedPairs.length > 0,
-    staleTime: 15_000,
-    gcTime: 60_000,
-    // Polling curto pega atribuição trocada DIRETO no ASPX (sem mexer no sistema).
-    // Pausa em edição inline e com a aba em segundo plano.
-    refetchInterval: editingLh ? false : 30_000,
-    refetchIntervalInBackground: false,
-    refetchOnWindowFocus: true,
-    // Mantém os selos anteriores durante o refetch da nova chave (evita piscar cinza).
-    placeholderData: (prev) => prev,
-  });
-  const assignedByLh = aspxAssignedQuery.data?.assignedByLh ?? EMPTY_ASSIGNED;
-  const resolveAssigned = useCallback(
-    (row: SheetMonitorRowType): boolean | null => {
-      if (!row?.lh || row.reserva || !isSpxTrip(row.lh)) return null;
-      if (!(row.motoristas ?? "").trim()) return null;
-      const v = assignedByLh[row.lh];
-      return typeof v === "boolean" ? v : null; // null = ainda não consultado (cinza)
-    },
-    [assignedByLh],
-  );
+  // aspxAssignedPairs / aspxAssignedQuery / resolveAssigned ficam DEPOIS de
+  // `paginatedRows` — o selo é escopado à PÁGINA VISÍVEL (≤ PAGE_SIZE), não à lista
+  // inteira: antes enviava TODAS as viagens SPX com motorista (~5.8k) e estourava o
+  // teto de 3000 do schema → a requisição falhava (400) → o selo "S" ficava cinza
+  // sempre. Ver o bloco logo após `paginatedRows`.
 
   // Standbys (reservas ativas) agrupados por rota — de TODA a base (não só da
   // página atual), p/ o botão "puxar standby" listar os candidatos mesmo quando
@@ -4304,6 +4272,52 @@ export default function SheetMonitor() {
   const paginatedRows = useMemo(() => filteredRows.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE), [filteredRows, safePage]);
   const pageStart = filteredRows.length === 0 ? 0 : safePage * PAGE_SIZE + 1;
   const pageEnd = Math.min(filteredRows.length, (safePage + 1) * PAGE_SIZE);
+
+  // ── Selo "S" (atribuído no ASPX) — só da PÁGINA VISÍVEL ───────────────────────
+  // O selo é renderizado apenas nas linhas visíveis (`paginatedRows`, ≤ PAGE_SIZE),
+  // então consultamos só elas. Antes iterava a lista inteira (~5.8k viagens SPX com
+  // motorista) e estourava o teto de 3000 pares do schema → a requisição falhava
+  // (400) → `assignedByLh` vazio → o selo "S" ficava CINZA para todas. Chaveado
+  // pelos pares (lh, motorista): trocar fila/motorista ou de página re-consulta.
+  const aspxAssignedPairs = useMemo(() => {
+    const pairs: Array<{ lh: string; motorista: string }> = [];
+    for (const it of paginatedRows) {
+      if (!it?.lh || it.reserva || !isSpxTrip(it.lh)) continue;
+      const motorista = (it.motoristas ?? "").trim();
+      if (!motorista) continue;
+      pairs.push({ lh: it.lh, motorista });
+    }
+    pairs.sort((a, b) => (a.lh < b.lh ? -1 : a.lh > b.lh ? 1 : 0));
+    return pairs;
+  }, [paginatedRows]);
+  const aspxAssignedKey = useMemo(
+    () => aspxAssignedPairs.map((p) => `${p.lh}|${normNameKey(p.motorista)}`).join(","),
+    [aspxAssignedPairs],
+  );
+  const aspxAssignedQuery = useQuery({
+    queryKey: ["admin", "sheet-monitor", "aspx-assigned", aspxAssignedKey],
+    queryFn: () => fetchAspxAssigned(aspxAssignedPairs),
+    enabled: aspxAssignedPairs.length > 0,
+    staleTime: 15_000,
+    gcTime: 60_000,
+    // Polling curto pega atribuição trocada DIRETO no ASPX (sem mexer no sistema).
+    // Pausa em edição inline e com a aba em segundo plano.
+    refetchInterval: editingLh ? false : 30_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    // Mantém os selos anteriores durante o refetch da nova chave (evita piscar cinza).
+    placeholderData: (prev) => prev,
+  });
+  const assignedByLh = aspxAssignedQuery.data?.assignedByLh ?? EMPTY_ASSIGNED;
+  const resolveAssigned = useCallback(
+    (row: SheetMonitorRowType): boolean | null => {
+      if (!row?.lh || row.reserva || !isSpxTrip(row.lh)) return null;
+      if (!(row.motoristas ?? "").trim()) return null;
+      const v = assignedByLh[row.lh];
+      return typeof v === "boolean" ? v : null; // null = ainda não consultado (cinza)
+    },
+    [assignedByLh],
+  );
 
   // ── Refresh sheet ────────────────────────────────────────────────────────────
   const refreshMutation = useMutation({
