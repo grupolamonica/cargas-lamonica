@@ -16,6 +16,7 @@
 
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
+import { spxTripStatusLabel } from "../../../domain/operator-admin/spx-trip-status.js";
 import {
   fetchSpxTripsByTab,
   isAspxAcceptWriteEnabled,
@@ -32,27 +33,9 @@ const TABS = [
   { key: "concluido", queryType: 3, opts: { daysBack: 30, daysForward: 2, maxPages: 15 } },
 ];
 
-// trip_status_name (SPX) → rótulo operacional (espelha a tradução da aba `asp`).
-const STATUS_OPERACIONAL = {
-  created: "AGUARDANDO ACEITE",
-  pending: "AGUARDANDO ACEITE",
-  assigning: "AGUARDANDO CHEGAR NO CLIENTE",
-  assigned: "AGUARDANDO CHEGAR NO CLIENTE",
-  loading: "CARREGANDO",
-  seal: "CARREGANDO",
-  departed: "CARREGADO",
-  arrived: "AGUARDANDO DESCARGA",
-  unseal: "DESCARREGANDO",
-  operating: "DESCARREGANDO",
-  unloaded: "DESCARREGADO",
-  completed: "DESCARREGADO",
-  cancelled: "CANCELADO",
-};
-
-function statusOperacional(statusName) {
-  const key = String(statusName || "").trim().toLowerCase();
-  return STATUS_OPERACIONAL[key] || String(statusName || "").toUpperCase();
-}
+// trip_status_name (SPX) → rótulo operacional: `spxTripStatusLabel`
+// (domain/operator-admin/spx-trip-status.js) — FONTE ÚNICA compartilhada com o
+// overlay de status ao vivo do Monitor, para as duas telas nunca divergirem.
 
 // epoch (segundos) → { data: 'YYYY-MM-DD', horario: 'HH:MM' } no fuso America/Sao_Paulo.
 // 0/ausente → null. Node 22 tem ICU completo, então o timeZone é confiável.
@@ -110,7 +93,7 @@ function normalizeRow(t, tab) {
     lh,
     nome: t.trip_name || "",
     statusRaw,
-    statusOperacional: statusOperacional(statusRaw),
+    statusOperacional: spxTripStatusLabel(statusRaw),
     motorista,
     veiculo: t.vehicle_type || "",
     placa,
