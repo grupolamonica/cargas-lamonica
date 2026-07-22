@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { callOcrSidecar, extractCnhFromMedia, flattenOcrCampos } from "./ocr-sidecar-client.js";
+import { callOcrSidecar, extractCnhFromMedia, extractComprovanteFromMedia, flattenOcrCampos } from "./ocr-sidecar-client.js";
 
 const okEnvelope = (campos, extra = {}) => ({
   code: 200,
@@ -89,6 +89,14 @@ describe("repom ocr-sidecar-client", () => {
         callOcrSidecar({ docType: "cnh", imagemBase64: "B", idCadastro: "id" }),
       ).rejects.toMatchObject({ statusCode: 502 });
     });
+
+    it("extraBody entra no corpo (ex.: comprovante → concessionaria)", async () => {
+      const fetchMock = mockFetchOnce({ json: okEnvelope({}) });
+      await callOcrSidecar({ docType: "comprovante-residencia", imagemBase64: "B", idCadastro: "id", extraBody: { concessionaria: "enel" } });
+      const [url, opts] = fetchMock.mock.calls[0];
+      expect(url).toBe("http://cadastro-ocr:8765/api/ocr/comprovante-residencia");
+      expect(JSON.parse(opts.body)).toEqual({ imagem: "B", id_cadastro: "id", concessionaria: "enel" });
+    });
   });
 
   describe("extractCnhFromMedia", () => {
@@ -126,6 +134,36 @@ describe("repom ocr-sidecar-client", () => {
       const r = await extractCnhFromMedia({ imagemBase64: "", idCadastro: "" });
       expect(r).toMatchObject({ ok: false, requiresUpload: true, error: "MISSING_IMAGE_OR_ID" });
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("extractComprovanteFromMedia (Vision)", () => {
+    it("chama /api/ocr/comprovante-residencia com concessionaria e devolve fields achatados", async () => {
+      const fetchMock = mockFetchOnce({
+        json: okEnvelope(
+          { logradouro: { valor: "Rua A" }, cep: { valor: "40000-000" }, municipio_uf: { valor: "Salvador - BA" } },
+          { header: { provider: "openai-vision" } },
+        ),
+      });
+      const r = await extractComprovanteFromMedia({ imagemBase64: "B", idCadastro: "repom-1", correlationId: "c1" });
+      expect(r.ok).toBe(true);
+      expect(r.fields).toMatchObject({ logradouro: "Rua A", cep: "40000-000", municipio_uf: "Salvador - BA" });
+      const [url, opts] = fetchMock.mock.calls[0];
+      expect(url).toBe("http://cadastro-ocr:8765/api/ocr/comprovante-residencia");
+      expect(JSON.parse(opts.body).concessionaria).toBe("neoenergia"); // default
+    });
+
+    it("respeita REPOM_COMPROVANTE_CONCESSIONARIA", async () => {
+      process.env.REPOM_COMPROVANTE_CONCESSIONARIA = "cemig";
+      const fetchMock = mockFetchOnce({ json: okEnvelope({}) });
+      await extractComprovanteFromMedia({ imagemBase64: "B", idCadastro: "repom-1" });
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body).concessionaria).toBe("cemig");
+    });
+
+    it("degradação suave: erro de rede → ok=false (nunca lança)", async () => {
+      mockFetchOnce({ throwErr: new Error("ETIMEDOUT") });
+      const r = await extractComprovanteFromMedia({ imagemBase64: "B", idCadastro: "repom-1" });
+      expect(r).toMatchObject({ ok: false, requiresUpload: true });
     });
   });
 });

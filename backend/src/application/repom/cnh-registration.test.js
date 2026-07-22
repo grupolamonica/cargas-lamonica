@@ -11,9 +11,8 @@ import {
 
 vi.mock("../../infrastructure/pg/postgres.js", () => ({ withPgClient, withPgTransaction }));
 
-const { brDateToIso, buildMotoristaFromCnhFields, buildRepomProgress, renderObservacoes, upsertPendingCnh } = await import(
-  "./cnh-registration.js"
-);
+const { brDateToIso, buildEnderecoFromComprovanteFields, buildMotoristaFromCnhFields, buildRepomProgress, renderObservacoes, upsertPendingCnh } =
+  await import("./cnh-registration.js");
 
 // campos como o sidecar (Vision) devolve
 const visionFields = {
@@ -83,6 +82,27 @@ describe("repom cnh-registration", () => {
     it("omite campos vazios (só cpf quando o OCR não achou nada)", () => {
       const m = buildMotoristaFromCnhFields({}, { cpf: "11296552969" });
       expect(m).toEqual({ cpf: "11296552969" });
+    });
+  });
+
+  describe("buildEnderecoFromComprovanteFields (Vision → dados.motorista.endereco)", () => {
+    it("mapeia chaves canônicas + split cidade/UF do municipio_uf", () => {
+      const e = buildEnderecoFromComprovanteFields({
+        cep: "40000-000",
+        logradouro: "Rua das Flores",
+        numero: "123",
+        bairro: "Centro",
+        municipio_uf: "Salvador - BA",
+      });
+      expect(e).toEqual({ cep: "40000-000", logradouro: "Rua das Flores", numero: "123", bairro: "Centro", cidade: "Salvador", uf: "BA" });
+    });
+    it("aceita aliases (endereco→logradouro, numero_cep→cep, municipio/uf separados)", () => {
+      const e = buildEnderecoFromComprovanteFields({ endereco: "Av. Brasil", numero_cep: "12345678", municipio: "Recife", uf: "pe" });
+      expect(e).toMatchObject({ logradouro: "Av. Brasil", cep: "12345678", cidade: "Recife", uf: "PE" });
+    });
+    it("endereço parcial só inclui o que veio; vazio → {}", () => {
+      expect(buildEnderecoFromComprovanteFields({ bairro: "Boa Viagem" })).toEqual({ bairro: "Boa Viagem" });
+      expect(buildEnderecoFromComprovanteFields({})).toEqual({});
     });
   });
 

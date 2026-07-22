@@ -22,14 +22,15 @@ import { ensureAppSettingsTable } from "../operator-admin/use-cases/angellira/au
 import { canAgentAssist, orientarMotorista, tryReserveAgentCall } from "./agent-orientador.js";
 import { evaluateCnhExtraction } from "./cnh-gates.js";
 import { claimMessageOnce, stageCnhMedia, stageRepomMedia, tryReserveCnhCall } from "./cnh-media.js";
-import { buildMotoristaFromCnhFields, renderObservacoes, upsertPendingCnh } from "./cnh-registration.js";
+import { buildEnderecoFromComprovanteFields, buildMotoristaFromCnhFields, renderObservacoes, upsertPendingCnh } from "./cnh-registration.js";
 import { resolveCpfDedup } from "./dedup-cpf.js";
-import { extractCnhFromMedia } from "./ocr-sidecar-client.js";
+import { extractCnhFromMedia, extractComprovanteFromMedia } from "./ocr-sidecar-client.js";
 import { proximoPasso } from "./repom-flow.js";
 
 const SETTING_KEY = "repom_flow_enabled";
 const CNH_OCR_SETTING_KEY = "repom_cnh_ocr_enabled";
 const CONTINUACAO_SETTING_KEY = "repom_continuacao_enabled";
+const COMPROVANTE_OCR_SETTING_KEY = "repom_comprovante_ocr_enabled";
 
 // Anti-loop: após N tentativas frustradas no mesmo passo, avisa o operador (uma
 // vez) — mas o bot segue PASSIVO (continua respondendo o pedido; não desiste).
@@ -137,6 +138,27 @@ export async function setRepomCnhOcrEnabled({ enabled, actorId = null }) {
        VALUES ($1, $2::jsonb, $3)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by`,
       [CNH_OCR_SETTING_KEY, JSON.stringify({ enabled: Boolean(enabled) }), actorId],
+    );
+    return { enabled: Boolean(enabled) };
+  });
+}
+
+/** Lê a flag do OCR de comprovante de residência (Vision; Fase 3d; default OFF). */
+export async function isRepomComprovanteOcrEnabled(client) {
+  await ensureAppSettingsTable(client);
+  const { rows } = await client.query(`SELECT value FROM public.app_settings WHERE key = $1`, [COMPROVANTE_OCR_SETTING_KEY]);
+  return Boolean(rows[0]?.value?.enabled);
+}
+
+/** Liga/desliga a extração do endereço do comprovante (Vision→dados.motorista.endereco); reversível. */
+export async function setRepomComprovanteOcrEnabled({ enabled, actorId = null }) {
+  return withPgClient(async (client) => {
+    await ensureAppSettingsTable(client);
+    await client.query(
+      `INSERT INTO public.app_settings (key, value, updated_by)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+      [COMPROVANTE_OCR_SETTING_KEY, JSON.stringify({ enabled: Boolean(enabled) }), actorId],
     );
     return { enabled: Boolean(enabled) };
   });
@@ -422,14 +444,35 @@ async function handleColeta(client, { session, msg, phone, correlationId }) {
       await replyRepom(client, { phone, text: passo.ask, correlationId });
       return { ok: true, node: "coletando", action: "stage_failed" };
     }
+    const motoristaPatch = { cpf: onlyDigits(cpf), [passo.field]: staged.storagePath };
+
+    // Comprovante de residência → OpenAI Vision extrai o endereço (BÔNUS). É
+    // best-effort e atrás de flag própria (OFF): se o OCR falhar, o arquivo já
+    // está guardado e a coleta segue normal — a extração NUNCA trava o fluxo.
+    if (passo.key === "comprovante" && (await isRepomComprovanteOcrEnabled(client))) {
+      try {
+        const ocr = await extractComprovanteFromMedia({
+          imagemBase64: media.base64,
+          idCadastro: `repom-${onlyDigits(cpf)}`,
+          correlationId,
+        });
+        if (ocr.ok) {
+          const endereco = buildEnderecoFromComprovanteFields(ocr.fields);
+          if (Object.keys(endereco).length) motoristaPatch.endereco = endereco;
+        }
+      } catch (err) {
+        console.warn(`[repom.flow] ${correlationId} comprovante OCR (bônus) falhou:`, err instanceof Error ? err.message : String(err));
+      }
+    }
+
     await upsertPendingCnh(client, {
       cpf,
       registrationId: session.registration_id,
-      motorista: { cpf: onlyDigits(cpf), [passo.field]: staged.storagePath },
+      motorista: motoristaPatch,
       status: "pendente",
       observacoes: null,
     });
-    return askNextOrFinish(client, { session, phone, correlationId, motorista: { ...motorista, [passo.field]: staged.storagePath } });
+    return askNextOrFinish(client, { session, phone, correlationId, motorista: { ...motorista, ...motoristaPatch } });
   } catch (err) {
     console.warn(`[repom.flow] ${correlationId} coleta persist (${passo.key}) falhou:`, err instanceof Error ? err.message : String(err));
     try {

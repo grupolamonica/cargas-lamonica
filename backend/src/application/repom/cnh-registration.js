@@ -89,6 +89,46 @@ export function buildMotoristaFromCnhFields(fields, { cpf } = {}) {
   return motorista;
 }
 
+/** "São Paulo - SP" → { cidade, uf }; sem UF → só cidade. Espelha o splitLocal do wizard. */
+function splitLocalBR(texto) {
+  const s = String(texto || "").trim();
+  if (!s) return { cidade: "", uf: "" };
+  const m = s.match(/^(.+?)[\s\-/,]+([A-Za-z]{2})\s*$/);
+  if (m) return { cidade: m[1].trim(), uf: m[2].trim().toUpperCase() };
+  return { cidade: s, uf: "" };
+}
+
+/**
+ * Monta `dados.motorista.endereco` a partir dos campos achatados do OCR de
+ * comprovante (Vision). Chaves canônicas do wizard: cep, numero, logradouro,
+ * bairro, cidade, uf (mesmo mapeamento do cadastroApi.ocrComprovante). Só inclui
+ * o que veio preenchido — endereço parcial é melhor que nenhum (operador corrige).
+ * @param {Record<string,unknown>} fields  saída de flattenOcrCampos
+ * @returns {{cep?:string,numero?:string,logradouro?:string,bairro?:string,cidade?:string,uf?:string}}
+ */
+export function buildEnderecoFromComprovanteFields(fields) {
+  const pick = (...keys) => {
+    for (const k of keys) {
+      const v = fields?.[k];
+      if (v !== null && v !== undefined && String(v).trim() !== "") return String(v).trim();
+    }
+    return "";
+  };
+  const local = splitLocalBR(pick("municipio_uf", "cidade_uf"));
+  const endereco = {};
+  const set = (k, v) => {
+    if (v) endereco[k] = v;
+  };
+  set("cep", pick("cep", "numero_cep"));
+  set("logradouro", pick("logradouro", "endereco", "rua"));
+  set("numero", pick("numero", "numero_endereco"));
+  set("bairro", pick("bairro"));
+  set("cidade", local.cidade || pick("municipio", "cidade"));
+  const uf = local.uf || pick("uf");
+  set("uf", uf ? uf.toUpperCase() : "");
+  return endereco;
+}
+
 // Traduz os códigos de issue dos gates para uma frase de revisão ao operador.
 const ISSUE_PT = {
   ocr_suspeito: "possível erro de leitura (OCR) em CPF/registro",

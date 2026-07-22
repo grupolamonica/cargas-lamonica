@@ -37,6 +37,13 @@ function getTimeoutMs() {
   return parsePositiveIntegerEnv("REPOM_OCR_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
 }
 
+// Distribuidora "padrão" mandada ao endpoint de comprovante. Só orienta o parser
+// por-distribuidora do sidecar; o fallback Vision lê qualquer conta. Configurável
+// por env (mesma lista do wizard: cpfl|enel|cemig|light|energisa|neoenergia|rge|elektro).
+function getComprovanteConcessionaria() {
+  return process.env.REPOM_COMPROVANTE_CONCESSIONARIA?.trim() || "neoenergia";
+}
+
 /**
  * Achata `envelope.data[0].campos` num objeto plano { campo: valor }.
  * Cada campo pode vir como { valor: "..." } (Infosimples) ou valor cru (Vision).
@@ -61,13 +68,14 @@ export function flattenOcrCampos(envelope) {
  * Isolado para permitir mock nos testes.
  *
  * @param {object} p
- * @param {'cnh'} p.docType     - tipo do documento (por ora só 'cnh')
+ * @param {'cnh'|'comprovante-residencia'} p.docType - tipo do documento (endpoint do sidecar)
  * @param {string} p.imagemBase64 - imagem/PDF em base64 (sem prefixo data:)
  * @param {string} p.idCadastro  - id do cadastro (persistência do anexo no sidecar)
+ * @param {Record<string,unknown>} [p.extraBody] - campos extras no corpo (ex.: comprovante → { concessionaria })
  * @param {AbortSignal} [p.signal]
  * @returns {Promise<object>} envelope cru do sidecar
  */
-export async function callOcrSidecar({ docType, imagemBase64, idCadastro, signal }) {
+export async function callOcrSidecar({ docType, imagemBase64, idCadastro, extraBody, signal }) {
   const url = `${getSidecarUrl().replace(/\/$/, "")}/api/ocr/${docType}`;
   const response = await fetch(url, {
     method: "POST",
@@ -75,7 +83,7 @@ export async function callOcrSidecar({ docType, imagemBase64, idCadastro, signal
       "Content-Type": "application/json",
       ...getSidecarAuthHeaders(),
     },
-    body: JSON.stringify({ imagem: imagemBase64, id_cadastro: idCadastro }),
+    body: JSON.stringify({ imagem: imagemBase64, id_cadastro: idCadastro, ...(extraBody || {}) }),
     signal,
   });
 
@@ -110,7 +118,7 @@ export async function callOcrSidecar({ docType, imagemBase64, idCadastro, signal
  *   error?: string,
  * }>}
  */
-export async function extractCnhFromMedia({ imagemBase64, idCadastro, correlationId } = {}) {
+async function extractDocFromMedia({ docType, imagemBase64, idCadastro, extraBody, correlationId, logTag = "ocr" }) {
   if (!imagemBase64 || !idCadastro) {
     return { ok: false, requiresUpload: true, error: "MISSING_IMAGE_OR_ID" };
   }
@@ -120,16 +128,11 @@ export async function extractCnhFromMedia({ imagemBase64, idCadastro, correlatio
 
   let envelope;
   try {
-    envelope = await callOcrSidecar({
-      docType: "cnh",
-      imagemBase64,
-      idCadastro,
-      signal: controller.signal,
-    });
+    envelope = await callOcrSidecar({ docType, imagemBase64, idCadastro, extraBody, signal: controller.signal });
   } catch (err) {
     // Falha de INFRA (rede/timeout/HTTP != 2xx) → suave: motorista reenvia.
     console.warn(
-      `[repom.ocr] ${correlationId || "-"} OCR indisponível:`,
+      `[repom.${logTag}] ${correlationId || "-"} OCR indisponível:`,
       err instanceof Error ? err.message : String(err),
     );
     return {
@@ -156,4 +159,33 @@ export async function extractCnhFromMedia({ imagemBase64, idCadastro, correlatio
   }
 
   return { ok: true, fields: flattenOcrCampos(envelope), provider, code };
+}
+
+/** CNH → Infosimples (+fallback Vision), via /api/ocr/cnh. Nunca lança (degradação suave). */
+export async function extractCnhFromMedia({ imagemBase64, idCadastro, correlationId } = {}) {
+  return extractDocFromMedia({ docType: "cnh", imagemBase64, idCadastro, correlationId, logTag: "ocr" });
+}
+
+/**
+ * Comprovante de residência → OpenAI Vision, via /api/ocr/comprovante-residencia.
+ * Mesma degradação suave da CNH: nunca lança; falha → { ok:false } (o caller só
+ * guarda o arquivo e segue — a extração do endereço é um BÔNUS, nunca trava).
+ * `concessionaria` orienta o parser por-distribuidora do sidecar (o Vision cobre
+ * o resto); no WhatsApp não sabemos qual é, então mandamos um padrão neutro.
+ *
+ * @param {object} args
+ * @param {string} args.imagemBase64
+ * @param {string} args.idCadastro
+ * @param {string} [args.concessionaria]
+ * @param {string} [args.correlationId]
+ */
+export async function extractComprovanteFromMedia({ imagemBase64, idCadastro, concessionaria, correlationId } = {}) {
+  return extractDocFromMedia({
+    docType: "comprovante-residencia",
+    imagemBase64,
+    idCadastro,
+    extraBody: { concessionaria: concessionaria || getComprovanteConcessionaria() },
+    correlationId,
+    logTag: "ocr.comprovante",
+  });
 }
