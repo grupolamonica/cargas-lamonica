@@ -11,6 +11,7 @@ import {
 } from "@/lib/assignableRoutes";
 import { VEHICLE_PROFILE_OPTIONS, EIXOS_OPTIONS, formatVehicleProfileLabel, normalizeVehicleProfile } from "@/lib/vehicleProfiles";
 import { CitySelector } from "@/components/CitySelector";
+import { RouteSelector } from "@/components/RouteSelector";
 
 interface CargoData {
   data: string;
@@ -304,20 +305,11 @@ const CargoModal = ({
         <div className="space-y-4 px-6 py-5">
           <div>
             <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Rota padrão</label>
-            <select
+            <RouteSelector
+              routes={selectableRoutes}
               value={form.route_key || ""}
-              onChange={(event) => handleRouteChange(event.target.value)}
-              className={`${inputClass} cursor-pointer`}
-            >
-              <option value="">Selecionar rota do catálogo</option>
-              {selectableRoutes.map((route) => (
-                <option key={route.id} value={route.route_key}>
-                  {getAssignableRouteLabel(route)}
-                  {route.perfil_padrao ? ` — ${formatVehicleProfileLabel(route.perfil_padrao)}` : ""}
-                  {route.eixos ? ` ${route.eixos} eixos` : ""}
-                </option>
-              ))}
-            </select>
+              onChange={handleRouteChange}
+            />
             <p className="mt-2 text-xs text-muted-foreground">
               Escolha uma rota ou apenas informe origem e destino. Quando houver coincidência, a carga recebe a rota e os valores automaticamente.
             </p>

@@ -38,11 +38,10 @@ describe("CargoModal", () => {
       />,
     );
 
-    // O primeiro combobox no DOM é o <select> "Rota padrão" (origem/destino agora
-    // são CitySelector). Selecionar a rota herda perfil/valor/bônus do catálogo.
-    fireEvent.change(screen.getAllByRole("combobox")[0], {
-      target: { value: route.route_key },
-    });
+    // DC-302: "Rota padrão" virou combobox pesquisável (RouteSelector). Abre pelo
+    // placeholder e seleciona a rota — herda perfil/valor/bônus do catálogo.
+    fireEvent.click(screen.getByText("Selecionar rota do catálogo"));
+    fireEvent.click(screen.getByRole("option", { name: /SAO PAULO X SIMOES FILHO/i }));
 
     // Com o trecho tendo veículo cadastrado, o Perfil/Eixos deixam de aparecer:
     // o principal passa a ser o seletor "Veículo da rota". Valor/bônus seguem visíveis.
