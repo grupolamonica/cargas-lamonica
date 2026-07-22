@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import Leads from "@/pages/Leads";
@@ -312,6 +312,62 @@ describe("Leads", () => {
     fireEvent.change(filtro, { target: { value: "sem" } });
     expect(screen.queryByText("Curitiba / PR -> Joinville / SC")).not.toBeInTheDocument();
     expect(screen.getByText("Carga sem-lead")).toBeInTheDocument();
+  });
+
+  it("DC-287: os cards do topo (Cargas/Na fila/Reservadas) refletem o filtro de cliente", () => {
+    const makeQueuedLead = (id: string, cpf: string, phone: string) => ({
+      id, status: "QUEUED", cpf, phone, horsePlate: "AAA1A11", trailerPlate: "BBB2B22",
+      trailerPlate2: "", vehicleType: "CARRETA", preRegisteredAt: "2026-04-07T10:00:00.000Z",
+      queuedAt: "2026-04-07T10:01:00.000Z", whatsappClickedAt: null, approvedAt: null,
+      approvedBy: null, queuePosition: 1, validation: null, whatsappUrl: `https://wa.me/55${phone}`,
+    });
+
+    // useQuery é mockado globalmente; roteia por queryKey para servir também os
+    // clientes do seletor (senão o dropdown fica vazio e não dá pra filtrar).
+    mockUseQuery.mockImplementation((opts: { queryKey?: unknown[] }) => {
+      const key = opts?.queryKey?.[1];
+      if (key === "clientes-selector") {
+        return { data: { items: [{ id: "cli-1", nome: "Cliente A" }, { id: "cli-2", nome: "Cliente B" }] } };
+      }
+      if (key === "sheet-monitor") {
+        return { data: { items: [] } };
+      }
+      return {
+        data: {
+          groups: [
+            {
+              load: {
+                id: "load-a", status: "OPEN", origem: "A / AA", destino: "B / BB", perfil: "CARRETA",
+                data: "2026-04-07", horario: "08:00:00", reservedPublicLeadId: null,
+                clienteId: "cli-1", clienteNome: "Cliente A",
+              },
+              queueCount: 1, totalLeads: 1, leads: [makeQueuedLead("lead-a", "11111111111", "71911111111")],
+            },
+            {
+              load: {
+                id: "load-b", status: "OPEN", origem: "C / CC", destino: "D / DD", perfil: "CARRETA",
+                data: "2026-04-08", horario: "09:00:00", reservedPublicLeadId: null,
+                clienteId: "cli-2", clienteNome: "Cliente B",
+              },
+              queueCount: 1, totalLeads: 1, leads: [makeQueuedLead("lead-b", "22222222222", "71922222222")],
+            },
+          ],
+        },
+        isLoading: false, isFetching: false,
+      };
+    });
+
+    render(<Leads />);
+
+    const cargasCardValue = () =>
+      within(screen.getByText("Cargas").closest("div") as HTMLElement).getByText(/^\d+$/).textContent;
+
+    // Sem filtro: as duas cargas contam.
+    expect(cargasCardValue()).toBe("2");
+
+    // Ao filtrar por Cliente A, o card do topo cai para 1 (antes do fix ficava 2).
+    fireEvent.change(screen.getByDisplayValue("Todos os clientes"), { target: { value: "cli-1" } });
+    expect(cargasCardValue()).toBe("1");
   });
 
   it("renderiza a fila real e aprova a reserva do motorista selecionado", async () => {

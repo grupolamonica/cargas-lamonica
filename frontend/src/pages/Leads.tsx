@@ -649,8 +649,12 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     return () => window.clearTimeout(timerId);
   }, [groups, historicoMode, queryClient]);
 
+  // DC-287: os cards do topo (Cargas / Na fila / Reservadas) devem refletir TODOS
+  // os filtros ativos, inclusive o de cliente. Antes reduzia sobre `filteredGroups`
+  // (sem o filtro de cliente), então filtrar por cliente não mexia nos números —
+  // divergindo da lista renderizada, que usa `filteredByCliente`.
   const summary = useMemo(() => {
-    return filteredGroups.reduce(
+    return filteredByCliente.reduce(
       (accumulator, group) => {
         accumulator.loads += 1;
         accumulator.queued += group.leads.some((lead) => lead.status === "QUEUED") ? 1 : 0;
@@ -663,7 +667,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
         approved: 0,
       },
     );
-  }, [filteredGroups]);
+  }, [filteredByCliente]);
 
   const handleApprove = async (loadId: string, leadId: string, validation?: PublicLeadValidationSummary | null) => {
     const ovs = validation?.overallStatus;
