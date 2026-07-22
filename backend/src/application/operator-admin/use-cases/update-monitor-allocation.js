@@ -5,7 +5,7 @@ import { NotFoundError } from "../../../domain/load-claims/errors.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 import { cancelLoadCascade } from "./cancel-load-cascade.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
-import { resolveMonitorCargoByLh } from "./_shared.js";
+import { ensureMonitorSheetCargo } from "./_shared.js";
 
 /**
  * Grava a ALOCAÇÃO editada no Monitor (motorista/cavalo/carreta/status operacional)
@@ -41,11 +41,12 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
 
   const result = await withPgTransaction(async (client) => {
     // Resolve a carga por id da PLANILHA OU por lh_manual (carga do SISTEMA lançada
-    // na Programação) — uma viagem lançada NÃO existe em id=createSheetLoadId(lh),
-    // então sem este fallback a edição de placa/motorista falhava com "Carga da
-    // planilha não encontrada". Ordem de preferência (alloc viva → planilha →
-    // desempate) em resolveMonitorCargoByLh, alinhada ao overlay allocByLh exibido.
-    const sheetRow = await resolveMonitorCargoByLh(client, lh, {
+    // na Programação); e, quando a linha da planilha ainda NÃO tem carga no sistema
+    // (viagem SPX que entrou já atribuída — o sync só cria carga p/ linha
+    // disponível), MATERIALIZA a carga a partir do snapshot. Sem isso a edição/
+    // limpeza de motorista/placa dessas linhas falhava com "Carga da planilha não
+    // encontrada" (não havia onde gravar o override alloc_*).
+    const sheetRow = await ensureMonitorSheetCargo(client, lh, {
       columns: `id, sheet_lh, sheet_source, sheet_motorista, sheet_cavalo, sheet_carreta, sheet_status,
                 alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
                 alloc_descricao, alloc_vinculo, status, reserved_public_lead_id`,
