@@ -1368,6 +1368,72 @@ export async function descendQueueCascade(input: { sourceLh: string; targetLh: s
   }>("/api/operator/sheet-monitor/descend", { accessToken, method: "POST", body: input });
 }
 
+// ── Reverter últimas mudanças de alocação (DC-283) ──────────────────────────
+
+export interface AllocationChangeAlloc {
+  motorista: string | null;
+  cavalo: string | null;
+  carreta: string | null;
+  status?: string | null;
+}
+
+export interface AllocationChangeCargo {
+  lh: string | null;
+  cargoId: string | null;
+  before: AllocationChangeAlloc;
+  after: AllocationChangeAlloc;
+  /** Alocação atual ainda bate com o "depois" gravado → seguro reverter. */
+  currentMatchesAfter: boolean;
+  cargoFound: boolean;
+}
+
+export interface AllocationChangeItem {
+  auditLogId: string;
+  eventType: string;
+  eventLabel: string;
+  createdAt: string;
+  route: string | null;
+  /** A ação criou/mexeu num standby (reserva) — o modal avisa p/ revisar manual. */
+  reserva: boolean;
+  touchesStatus: boolean;
+  /** Ao menos uma carga é revertível (tem estado anterior E não foi mexida depois). */
+  revertible: boolean;
+  reason: string | null;
+  cargos: AllocationChangeCargo[];
+}
+
+/** Últimas mudanças de alocação do operador logado (fonte do modal "Reverter"). */
+export async function fetchOperatorAllocationChanges(params: { page?: number; pageSize?: number } = {}) {
+  const accessToken = await getOperatorAccessToken();
+  const qs = new URLSearchParams();
+  if (params.page) qs.set("page", String(params.page));
+  if (params.pageSize) qs.set("pageSize", String(params.pageSize));
+  const query = qs.toString();
+  return requestJson<{ items: AllocationChangeItem[]; meta: PaginationMeta }>(
+    `/api/operator/allocation-changes${query ? `?${query}` : ""}`,
+    { accessToken },
+  );
+}
+
+/**
+ * Reverte mudanças de alocação selecionadas no modal. Manda só os pares
+ * (auditLogId, carga) — o servidor lê o "antes" do próprio audit log. Devolve o
+ * que foi revertido e o que foi pulado (com motivo, ex.: alterada depois).
+ */
+export async function revertAllocationChanges(
+  items: Array<{ auditLogId: string; lh?: string; cargoId?: string }>,
+) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{
+    ok: boolean;
+    revertedCount: number;
+    skippedCount: number;
+    reverted: Array<{ auditLogId: string; lh: string | null; cargoId: string | null }>;
+    skipped: Array<{ auditLogId: string; lh?: string | null; cargoId?: string | null; reason: string }>;
+    meta: { correlationId: string };
+  }>("/api/operator/allocation-changes/revert", { accessToken, method: "POST", body: { items } });
+}
+
 /**
  * Consulta, por viagem SPX ("LT…"), se o motorista informado (o EFETIVO da carga)
  * é o MESMO que está atribuído àquela viagem no SPX/ASPX. Alimenta o selo "S":

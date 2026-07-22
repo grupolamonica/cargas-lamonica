@@ -23,6 +23,7 @@ import {
   PinOff,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Send,
   ShieldX,
@@ -38,6 +39,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import DashboardHeader from "@/components/DashboardHeader";
+import RevertChangesModal from "@/components/operator/RevertChangesModal";
 import {
   Dialog,
   DialogContent,
@@ -3754,6 +3756,7 @@ export default function SheetMonitor() {
   const [aspxAssignOpen, setAspxAssignOpen] = useState(false);
   const [editingSystemRow, setEditingSystemRow] = useState<SheetMonitorRowType | null>(null);
   const [newCargoOpen, setNewCargoOpen] = useState(false);
+  const [revertOpen, setRevertOpen] = useState(false);
 
   const sheetConfigured = monitorData?.meta?.sheetConfigured ?? true;
   const noSnapshot = monitorData?.meta?.noSnapshot ?? false;
@@ -4483,6 +4486,12 @@ export default function SheetMonitor() {
                 <RefreshCw className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")} />
                 {refreshMutation.isPending ? "Buscando planilha..." : "Atualizar planilha"}
               </button>
+
+              <button type="button" onClick={() => setRevertOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs font-semibold text-amber-700 hover:bg-amber-500/20 dark:text-amber-300">
+                <RotateCcw className="h-3.5 w-3.5" />
+                Reverter mudanças
+              </button>
             </div>
 
             {cachedAt && (
@@ -4633,6 +4642,20 @@ export default function SheetMonitor() {
 
       {/* ── Nova carga (sistema) ── */}
       <NewCargoModal open={newCargoOpen} onClose={() => setNewCargoOpen(false)} statusOptions={OPERATIONAL_STATUS_OPTIONS} />
+
+      {/* ── Reverter últimas mudanças de alocação (DC-283) ── */}
+      <RevertChangesModal
+        open={revertOpen}
+        onClose={() => setRevertOpen(false)}
+        onReverted={() => {
+          // Espelha o padrão das outras mutações do Monitor: invalida agora e de
+          // novo após ~2s (pega a re-consulta/enriquecimento em background).
+          void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+          window.setTimeout(() => {
+            void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+          }, 2000);
+        }}
+      />
 
       {/* ── Painel de reserva: gerenciar reservas da rota + histórico + puxar p/ carga ── */}
       <ReservaPanelModal
