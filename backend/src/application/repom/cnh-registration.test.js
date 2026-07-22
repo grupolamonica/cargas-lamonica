@@ -11,7 +11,7 @@ import {
 
 vi.mock("../../infrastructure/pg/postgres.js", () => ({ withPgClient, withPgTransaction }));
 
-const { brDateToIso, buildMotoristaFromCnhFields, renderObservacoes, upsertPendingCnh } = await import(
+const { brDateToIso, buildMotoristaFromCnhFields, buildRepomProgress, renderObservacoes, upsertPendingCnh } = await import(
   "./cnh-registration.js"
 );
 
@@ -86,6 +86,18 @@ describe("repom cnh-registration", () => {
     });
   });
 
+  describe("buildRepomProgress (dados.repom — progresso da coleta)", () => {
+    it("só CNH → coletando, próximo passo = selfie_cnh", () => {
+      const r = buildRepomProgress({ cpf: "12345678901", cnh_url: "p/cnh.jpg" });
+      expect(r).toMatchObject({ origem: "whatsapp", coleta_status: "coletando", etapa_atual: "selfie_cnh" });
+      expect(typeof r.ultima_interacao).toBe("string");
+    });
+    it("cadastro completo → concluida, etapa_atual null", () => {
+      const r = buildRepomProgress({ cpf: "12345678901", cnh_url: "a", selfie_cnh_url: "b", comprovante_url: "c", telefone: "71999998888" });
+      expect(r).toMatchObject({ coleta_status: "concluida", etapa_atual: null });
+    });
+  });
+
   describe("renderObservacoes", () => {
     it("com issues → marca + motivos; sem issues → só marca", () => {
       expect(renderObservacoes([{ code: "cnh_vencida" }, { code: "cpf_diverge_sessao" }])).toMatch(
@@ -111,6 +123,8 @@ describe("repom cnh-registration", () => {
       expect(rows[0]).toMatchObject({ id_cadastro: "repom-11296552969", status: "pendente", versao_cadastro: "v2", observacoes: "obs" });
       expect(rows[0].dados.motorista.cnh.registro).toBe("07314868241");
       expect(rows[0].dados.motorista.cnh_url).toContain("motorista_cnh");
+      // Fase 3d: progresso derivado gravado — só CNH → coletando, próximo = selfie.
+      expect(rows[0].dados.repom).toMatchObject({ origem: "whatsapp", coleta_status: "coletando", etapa_atual: "selfie_cnh" });
     });
 
     it("update (com registrationId): merge no dados existente, dado NOVO prevalece", async () => {

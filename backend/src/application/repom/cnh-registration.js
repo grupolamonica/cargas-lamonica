@@ -12,9 +12,28 @@
  *
  * Decisões (Samuel): sempre operador aprova (nunca auto-aprova); status gravado
  * = 'pendente' (garante aparecer na fila) + motivos de revisão em `observacoes`.
+ *
+ * Progresso da coleta (Fase 3d): grava `dados.repom` (origem + coleta_status +
+ * etapa_atual), DERIVADO de `dados.motorista` via repom-flow. É o que o painel
+ * usa pra mostrar o rótulo "EM ANDAMENTO" — sem status novo (o status segue
+ * 'pendente', senão o cadastro sumiria do read-model do operador).
  */
 
+import { isCadastroCompleto, proximoPasso } from "./repom-flow.js";
+
 const onlyDigits = (v) => String(v ?? "").replace(/\D/g, "");
+
+/** Bloco `dados.repom` derivado do estado atual do motorista (progresso da coleta). */
+export function buildRepomProgress(motorista, nowIso) {
+  const dados = { motorista: motorista || {} };
+  const proximo = proximoPasso(dados);
+  return {
+    origem: "whatsapp",
+    coleta_status: isCadastroCompleto(dados) ? "concluida" : "coletando",
+    etapa_atual: proximo?.key || null,
+    ultima_interacao: nowIso || new Date().toISOString(),
+  };
+}
 
 /** DD/MM/AAAA → AAAA-MM-DD; já-ISO mantém; outro formato mantém (operador corrige). */
 export function brDateToIso(value) {
@@ -110,6 +129,7 @@ async function mergeIntoPending(client, rowId, motorista, status, observacoes) {
   );
   const dados = rows[0]?.dados && typeof rows[0].dados === "object" ? rows[0].dados : {};
   dados.motorista = { ...(dados.motorista || {}), ...motorista };
+  dados.repom = buildRepomProgress(dados.motorista);
   await client.query(
     `UPDATE public.pending_driver_registrations
         SET dados = $2::jsonb, status = $3, observacoes = $4, updated_at = now()
@@ -145,7 +165,7 @@ export async function upsertPendingCnh(client, { cpf, registrationId, motorista,
        (id_cadastro, status, versao_cadastro, dados, observacoes)
      VALUES ($1, $2, 'v2', $3::jsonb, $4)
      RETURNING id`,
-    [idCadastro, status, JSON.stringify({ motorista }), observacoes],
+    [idCadastro, status, JSON.stringify({ motorista, repom: buildRepomProgress(motorista) }), observacoes],
   );
   return { id: rows[0]?.id, created: true };
 }
