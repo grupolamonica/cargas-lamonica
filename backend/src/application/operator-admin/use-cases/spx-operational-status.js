@@ -20,9 +20,13 @@ import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 const LH_TRIP_COL = "LH Trip Number";
 const STATUS_OPERACIONAL_COL = "Status Operacional";
 
-// Tab "aceito" (query_type 2) do portal SPX: viagens JÁ aceitas (com motorista),
-// progredindo pelo ciclo (loading→departed→arrived→…). É onde vive o status ao vivo
-// das cargas Shopee "no ASPX" — exatamente as que o operador acompanha no Monitor.
+// Abas do portal SPX que carregam o status ao vivo das viagens COM motorista:
+//  - Planejado (1): motorista ATRIBUÍDO no ASPX mas ainda NÃO aceito → status
+//    "Assigned" (→ AGUARDANDO CHEGAR NO CLIENTE). É o momento "atribuiu no ASPX".
+//  - Aceito (2): já aceita, progredindo (loading→departed→arrived→…).
+// Só Aceito (o estado anterior) fazia o status do motorista recém-atribuído NÃO
+// atualizar no sistema até a viagem ser aceita.
+const SPX_PLANEJADO_QUERY_TYPE = 1;
 const SPX_ACEITO_QUERY_TYPE = 2;
 
 /** Kill-switch do status AO VIVO do SPX no Monitor. LIGADO por padrão; defina
@@ -92,17 +96,34 @@ export async function fetchSpxStatusIndexFromSnapshot({ correlationId = null, fo
     return _statusIndexCache.value;
   }
   const fetchTab = deps.fetchSpxTripsByTab || fetchSpxTripsByTab;
+  // Planejado (janela 45/30 — a viagem atribuída pode ter STD à frente) + Aceito.
+  const tabs = [
+    { qt: SPX_PLANEJADO_QUERY_TYPE, opts: { daysBack: 45, daysForward: 30, maxPages: 30 } },
+    { qt: SPX_ACEITO_QUERY_TYPE, opts: { maxPages: 30 } },
+  ];
   try {
-    // timeout curto: numa falha de cache o Monitor espera no máx. ~10s por isto.
-    const res = await fetchTab(SPX_ACEITO_QUERY_TYPE, { maxPages: 30 }, { correlationId, timeoutMs: 10000 });
-    const trips = Array.isArray(res?.trips) ? res.trips : [];
+    // timeout curto: numa falha de cache o Monitor espera no máx. ~10s por aba.
+    // Best-effort por aba: uma aba fora do ar não derruba a outra.
+    const perTab = await Promise.all(
+      tabs.map((t) =>
+        fetchTab(t.qt, t.opts, { correlationId, timeoutMs: 10000 })
+          .then((r) => (Array.isArray(r?.trips) ? r.trips : []))
+          .catch(() => null),
+      ),
+    );
+    if (perTab.every((r) => r === null)) throw new Error("todas as abas SPX de status falharam");
     const map = new Map();
-    for (const t of trips) {
-      const lh = String(t?.trip_number ?? "").trim();
-      const raw = t?.trip_status_name || t?.trip_status;
-      if (!lh || !raw) continue;
-      const label = spxTripStatusLabel(raw);
-      if (label) map.set(lh, label);
+    // Planejado é processado ANTES; Aceito DEPOIS sobrescreve (status mais avançado
+    // vence quando a MESMA viagem aparecer em ambas — raro, mas determinístico).
+    for (const trips of perTab) {
+      if (!trips) continue;
+      for (const t of trips) {
+        const lh = String(t?.trip_number ?? "").trim();
+        const raw = t?.trip_status_name || t?.trip_status;
+        if (!lh || !raw) continue;
+        const label = spxTripStatusLabel(raw);
+        if (label) map.set(lh, label);
+      }
     }
     const ttl = statusIndexTtlMs();
     if (ttl > 0) _statusIndexCache = { value: map, expiresAt: Date.now() + ttl };
