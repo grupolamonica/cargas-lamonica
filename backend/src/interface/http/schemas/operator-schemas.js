@@ -69,6 +69,26 @@ export const sheetMonitorDescendBodySchema = z.object({
   orderedLhs: z.array(z.string().trim().min(1).max(120)).min(1).max(3000),
 }).strict();
 
+/** Query para GET /api/operator/allocation-changes — últimas mudanças de alocação
+ *  do operador logado (modal "Reverter últimas mudanças"). Paginação opcional. */
+export const allocationChangesQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(50).optional(),
+}).passthrough();
+
+/** Body para POST /api/operator/allocation-changes/revert — pares (evento, carga)
+ *  a reverter. O servidor lê o "antes" do próprio audit log (não confia em valores
+ *  do cliente); cada item aponta uma carga por lh OU cargoId. */
+export const allocationChangesRevertBodySchema = z.object({
+  items: z.array(z.object({
+    auditLogId: z.string().uuid(),
+    lh: z.string().trim().max(120).optional(),
+    cargoId: z.string().uuid().optional(),
+  }).refine((it) => (it.lh && it.lh.length > 0) || !!it.cargoId, {
+    message: "Cada item precisa de lh ou cargoId.",
+  })).min(1).max(500),
+}).strict();
+
 /** Body for POST /api/operator/sheet-monitor/aspx-assigned — consulta, por viagem
  *  SPX ("LT…"), se o motorista informado (efetivo da carga) é o mesmo ATRIBUÍDO
  *  àquela viagem no SPX/ASPX. Usado pelo selo "S" (verde = atribuído). */

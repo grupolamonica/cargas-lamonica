@@ -39,7 +39,7 @@ import {
 } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
-import { dashboardQuerySchema, programacaoLaunchBodySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAcceptBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAspxAssignedBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorDescendBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorRodoparBodySchema, sheetMonitorUpdateReservaBodySchema, vehicleChecklistQuerySchema } from "../schemas/operator-schemas.js";
+import { allocationChangesQuerySchema, allocationChangesRevertBodySchema, dashboardQuerySchema, programacaoLaunchBodySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAcceptBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAspxAssignedBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorDescendBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorRodoparBodySchema, sheetMonitorUpdateReservaBodySchema, vehicleChecklistQuerySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
@@ -79,6 +79,8 @@ import { submitDraftAsOperator } from "../../../application/operator-admin/use-c
 import { updateMonitorAllocation } from "../../../application/operator-admin/use-cases/update-monitor-allocation.js";
 import { reassignMonitorAllocations } from "../../../application/operator-admin/use-cases/reassign-monitor-allocations.js";
 import { descendQueueCascade } from "../../../application/operator-admin/use-cases/descend-queue-cascade.js";
+import { listOperatorAllocationChanges } from "../../../application/operator-admin/use-cases/list-operator-allocation-changes.js";
+import { revertAllocationChanges } from "../../../application/operator-admin/use-cases/revert-allocation-changes.js";
 import { buildAspxAssignedByLh } from "../../../application/operator-admin/use-cases/aspx-assigned-map.js";
 import { assignReservaToCarga } from "../../../application/operator-admin/use-cases/assign-reserva-to-carga.js";
 import { getRouteDriverHistory } from "../../../application/operator-admin/use-cases/route-driver-history.js";
@@ -1384,6 +1386,41 @@ export async function resolveDescendQueueCascadeResponse(request) {
       const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
       const lhs = (result.movedLhs ?? []).filter(Boolean);
       if (lhs.length) void enrichSheetRowsByLh(createSupabaseAdminClient(), lhs, { correlationId }).catch(() => {});
+      return { statusCode: result.statusCode, payload: result.payload };
+    },
+  );
+}
+
+export async function resolveListAllocationChangesResponse(request) {
+  return withOperatorSession(
+    request,
+    "list-allocation-changes",
+    { requiredPermission: "operator:read", forbiddenMessage: "Sem permissão para consultar as mudanças de alocação." },
+    async ({ correlationId, operatorId }) => {
+      const query = allocationChangesQuerySchema.parse(request.query || {});
+      return listOperatorAllocationChanges({ operatorId, query, correlationId });
+    },
+  );
+}
+
+export async function resolveRevertAllocationChangesResponse(request) {
+  return withOperatorSession(
+    request,
+    "revert-allocation-changes",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem reverter alocações.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const { items } = allocationChangesRevertBodySchema.parse(await parseJsonBody(request));
+      const result = await revertAllocationChanges({ operatorId, items, requestIp, correlationId });
+      // Re-enriquece as cargas revertidas com o motorista/placa EFETIVO (selo não
+      // fica "não consultado"). Fire-and-forget — não bloqueia; front faz refetch.
+      const lhs = (result.movedLhs ?? []).filter(Boolean);
+      if (lhs.length) {
+        const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
+        void enrichSheetRowsByLh(createSupabaseAdminClient(), lhs, { correlationId }).catch(() => {});
+      }
       return { statusCode: result.statusCode, payload: result.payload };
     },
   );
