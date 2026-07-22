@@ -725,6 +725,88 @@ export async function resolveMonitorCargoByLh(client, lh, { columns = "id, sheet
   return rows[0] ?? null;
 }
 
+/**
+ * Como resolveMonitorCargoByLh, mas MATERIALIZA a carga da planilha quando ela
+ * ainda não existe no sistema.
+ *
+ * O sync só cria carga (id = createSheetLoadId(lh)) para linha DISPONÍVEL da
+ * planilha (sem motorista/status). Viagens SPX que entram na planilha JÁ
+ * atribuídas (motorista preenchido) nunca viram carga — então editar/limpar o
+ * motorista/veículo delas no Monitor dava "Carga da planilha não encontrada"
+ * (não havia onde gravar o override alloc_*). Aqui, quando não há carga, criamos
+ * uma carga da planilha a partir do SNAPSHOT (rota/agenda/motorista/veículo da
+ * linha) e a integramos ao ciclo do sync (sheet_synced_at preenchido). A partir
+ * daí o override alloc_* do operador tem onde morar e o efetivo = alloc ?? sheet.
+ *
+ * Idempotente (ON CONFLICT (id) DO NOTHING). Se o LH não está no snapshot, devolve
+ * null (LH genuinamente desconhecido → o chamador lança NotFound).
+ *
+ * @param {import("pg").PoolClient} client
+ * @param {string} lh
+ * @param {{ columns?: string, forUpdate?: boolean }} [opts]
+ */
+export async function ensureMonitorSheetCargo(client, lh, { columns = "id, sheet_lh", forUpdate = true } = {}) {
+  const existing = await resolveMonitorCargoByLh(client, lh, { columns, forUpdate });
+  if (existing) return existing;
+
+  const lhTrim = String(lh ?? "").trim();
+  if (!lhTrim) return null;
+
+  // Linha correspondente no snapshot da planilha (rota/agenda/motorista/veículo).
+  // Lê a coluna rows_json e filtra em JS (sem jsonb_array_elements) p/ rodar tanto
+  // no Postgres quanto no harness pg-mem dos testes.
+  let snapRow = null;
+  try {
+    const { rows } = await client.query(
+      "SELECT rows_json FROM public.sheet_monitor_snapshot WHERE id = 1",
+    );
+    let list = rows[0]?.rows_json ?? null;
+    if (typeof list === "string") list = JSON.parse(list);
+    if (Array.isArray(list)) {
+      snapRow = list.find((r) => String(r?.lh ?? "").trim() === lhTrim) ?? null;
+    }
+  } catch {
+    // Sem snapshot (tabela ausente/pg-mem) → não materializa; cai em NotFound.
+    snapRow = null;
+  }
+  if (!snapRow) return null;
+
+  const cargoId = createSheetLoadId(lhTrim);
+  const clienteId = await findSheetClientId(client);
+  // Colunas NOT NULL (data/horario/origem/destino): usam o valor do snapshot com
+  // fallback seguro (placeholder de agenda p/ linhas sem data — "sem horário").
+  const dataValue = /^\d{4}-\d{2}-\d{2}/.test(String(snapRow.data ?? "")) ? String(snapRow.data).slice(0, 10) : getSaoPauloWallClock().dateIso;
+  const horarioValue = /^\d{2}:\d{2}/.test(String(snapRow.horario ?? "")) ? String(snapRow.horario).slice(0, 8) : "00:00";
+  const hasDriver = String(snapRow.motoristas ?? "").trim() !== "";
+  await client.query(
+    `INSERT INTO public.cargas
+       (id, cliente_id, data, horario, origem, destino, perfil, status, is_template,
+        driver_visibility, sheet_lh, sheet_tipo, sheet_motorista, sheet_cavalo, sheet_carreta,
+        sheet_status, sheet_data_carregamento, sheet_data_descarga, sheet_synced_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 'CARRETA', $7, false, 'PUBLIC', $8, $9, $10, $11, $12, $13, $14, $15, now())
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      cargoId,
+      clienteId,
+      dataValue,
+      horarioValue,
+      String(snapRow.origem ?? ""),
+      String(snapRow.destino ?? ""),
+      hasDriver ? "BOOKED" : "OPEN",
+      lhTrim,
+      snapRow.tipo || null,
+      snapRow.motoristas || null,
+      snapRow.cavalo || null,
+      snapRow.carreta || null,
+      snapRow.status || null,
+      snapRow.carregamentoLabel || null,
+      snapRow.descargaLabel || null,
+    ],
+  );
+
+  return resolveMonitorCargoByLh(client, lh, { columns, forUpdate });
+}
+
 export async function findCargoById(client, cargoId, { lock = false } = {}) {
   const suffix = lock ? "FOR UPDATE" : "";
   const { rows } = await client.query(

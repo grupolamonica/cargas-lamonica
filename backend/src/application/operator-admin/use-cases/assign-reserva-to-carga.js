@@ -2,7 +2,7 @@ import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
-import { resolveMonitorCargoByLh } from "./_shared.js";
+import { ensureMonitorSheetCargo } from "./_shared.js";
 
 /**
  * Puxa um motorista em STANDBY (monitor_reservas) para uma carga da planilha
@@ -21,9 +21,10 @@ export async function assignReservaToCarga({ reservaId, targetLh, operatorId, re
     // 1) Trava a carga de destino PRIMEIRO (cargas-antes-de-reservas) — mesma ordem
     //    do cancel-load-cascade, evitando ciclo de deadlock entre as duas vias.
     //    Resolve por id da PLANILHA OU por lh_manual (carga do sistema lançada na
-    //    Programação), senão puxar um standby p/ uma carga lançada falhava com
-    //    "Carga de destino não encontrada".
-    const carga = await resolveMonitorCargoByLh(client, targetLh, {
+    //    Programação), e materializa a carga do snapshot se a linha ainda não tem
+    //    carga — senão puxar um standby p/ essas cargas falhava com "Carga de
+    //    destino não encontrada".
+    const carga = await ensureMonitorSheetCargo(client, targetLh, {
       columns: `id, sheet_lh, alloc_pinned, origem, destino, alloc_status, sheet_status,
                 alloc_motorista, sheet_motorista, alloc_cavalo, sheet_cavalo, alloc_carreta, sheet_carreta`,
     });

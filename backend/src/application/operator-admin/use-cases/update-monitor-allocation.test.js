@@ -6,6 +6,7 @@ import {
   resetTestDatabase,
   seedCargo,
   seedPublicLead,
+  seedSheetSnapshot,
   seedUser,
   withPgTransaction,
 } from "../test-harness.js";
@@ -427,7 +428,59 @@ describe("updateMonitorAllocation", () => {
     expect(sheet.alloc_status).toBeNull();                 // planilha vazia intocada
   });
 
-  it("lança NotFoundError quando o LH não tem carga correspondente", async () => {
+  it("MATERIALIZA a carga da planilha a partir do snapshot quando ela ainda não existe (viagem já atribuída)", async () => {
+    // Linha da planilha que entrou JÁ ATRIBUÍDA (motorista no sheet) → o sync nunca
+    // criou carga p/ ela. Antes: editar dava "Carga da planilha não encontrada".
+    // Agora: materializa a carga do snapshot e grava o override do operador.
+    const SLH = "LT-SNAP-ONLY-1";
+    await seedSheetSnapshot([
+      {
+        lh: SLH,
+        origem: "SJ Rio Preto / SP",
+        destino: "Simoes Filho / BA",
+        data: "2026-08-01",
+        horario: "14:00:00",
+        motoristas: "ABELARDO",
+        cavalo: "CUA1123",
+        carreta: "FDZ0B46",
+        status: "AGUARDANDO CARREGAMENTO",
+        tipo: "Tendência",
+        carregamentoLabel: "01/08/2026 14:00",
+        descargaLabel: "03/08/2026 09:00",
+      },
+    ]);
+    const operator = await seedUser({ email: "op-snap-only@teste.local" });
+    writeSpy.mockClear();
+
+    const id = createSheetLoadId(SLH);
+    const pre = await query("SELECT id FROM public.cargas WHERE id = $1", [id]);
+    expect(pre.rows).toHaveLength(0); // nenhuma carga ainda
+
+    const res = await updateMonitorAllocation({
+      lh: SLH,
+      operatorId: operator.id,
+      payload: { carreta: "NOVA1234" }, // operador troca só a carreta
+      correlationId: "corr-snap-only",
+    });
+    expect(res.statusCode).toBe(200);
+
+    const cargo = await query(
+      "SELECT sheet_lh, origem, destino, sheet_motorista, alloc_carreta, sheet_synced_at, status FROM public.cargas WHERE id = $1",
+      [id],
+    );
+    expect(cargo.rows).toHaveLength(1); // materializada
+    expect(cargo.rows[0].sheet_lh).toBe(SLH);
+    expect(cargo.rows[0].origem).toBe("SJ Rio Preto / SP");
+    expect(cargo.rows[0].sheet_motorista).toBe("ABELARDO"); // veio do snapshot
+    expect(cargo.rows[0].status).toBe("BOOKED"); // linha atribuída → não fica no portal
+    expect(cargo.rows[0].alloc_carreta).toBe("NOVA1234"); // override do operador gravado
+    expect(cargo.rows[0].sheet_synced_at).toBeTruthy(); // integrada ao ciclo do sync
+    // Carga da PLANILHA (não sistema) → faz write-back; motorista preservado (||).
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(writeSpy.mock.calls[0][0][0].motorista).toBe("ABELARDO");
+  });
+
+  it("lança NotFoundError quando o LH não tem carga NEM está no snapshot", async () => {
     const operator = await seedUser({ email: "op-monitor-404@teste.local" });
     await expect(
       updateMonitorAllocation({

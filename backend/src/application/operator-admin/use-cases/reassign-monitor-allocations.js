@@ -2,7 +2,7 @@ import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
-import { resolveMonitorCargoByLh } from "./_shared.js";
+import { ensureMonitorSheetCargo } from "./_shared.js";
 
 /**
  * Reatribui (move) a alocação motorista+cavalo+carreta entre cargas do Monitor,
@@ -72,7 +72,7 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
         );
         row = rows[0];
       } else {
-        row = await resolveMonitorCargoByLh(client, m.lh, { columns: "id, sheet_lh, alloc_pinned, origem, destino" });
+        row = await ensureMonitorSheetCargo(client, m.lh, { columns: "id, sheet_lh, alloc_pinned, origem, destino" });
       }
       if (!row) {
         throw new NotFoundError(`Carga não encontrada para ${m.lh || m.explicitCargoId}.`);
