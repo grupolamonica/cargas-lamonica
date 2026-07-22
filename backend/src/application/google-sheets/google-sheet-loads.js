@@ -1338,6 +1338,22 @@ export async function updateSheetMonitorSnapshot({
 
   const isShopee = !source || source === SHEET_SOURCE_SHOPEE;
 
+  // ── Guarda anti-wipe do snapshot ──────────────────────────────────────────
+  // Ponto ÚNICO de escrita do snapshot. O botão "Atualizar planilha" do Monitor
+  // chama esta função DIRETO (sem passar pelo EMPTY_SHEET_GUARD do
+  // syncGoogleSheetLoads). Se o parse veio SEM nenhuma linha usável (0 LHs —
+  // planilha limpa / HTTP 200 em branco / hiccup do Google), NÃO sobrescreve o
+  // snapshot com vazio — senão o Monitor zerava. Lança: o refresh cai no snapshot
+  // cacheado do banco (catch → fall-through) e o sync loga e segue. Nunca há caso
+  // legítimo de a planilha Shopee/Nestlé ficar 100% sem LH em operação normal;
+  // manter o último snapshot bom é o modo de falha seguro.
+  const usableRowCount = rows.filter((r) => r.lh && String(r.lh).trim()).length;
+  if (usableRowCount === 0) {
+    throw new Error(
+      `EMPTY_SNAPSHOT_GUARD: planilha sem linhas usáveis (source=${source}, csvLen=${csvText?.length ?? 0}) — overwrite do snapshot abortado para não zerar o Monitor`,
+    );
+  }
+
   // Persist to DB so future reads are instant.
   // Non-fatal in terms of user experience (rows are still returned), but the
   // caller MUST be able to tell if the save succeeded so it can surface a

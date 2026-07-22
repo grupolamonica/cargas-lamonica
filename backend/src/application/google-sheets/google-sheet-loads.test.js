@@ -1361,6 +1361,28 @@ describe("updateSheetMonitorSnapshot", () => {
     };
   }
 
+  it("ABORTA (lança EMPTY_SNAPSHOT_GUARD) quando a planilha vem sem linhas usáveis — não zera o snapshot", async () => {
+    const supabaseClient = createSnapshotSupabaseClient();
+    // Cabeçalho presente + linhas de dados em branco (planilha limpa / HTTP 200
+    // vazio). Cobre o refresh manual "Atualizar planilha", que chama esta função
+    // direto sem passar pelo EMPTY_SHEET_GUARD do syncGoogleSheetLoads.
+    const headerOnlyCsv = [
+      "Lamina",
+      "Outra linha de cabecalho",
+      ["LH", "TIPO", "DATA CARREGAMENTO", "DATA DESCARGA", "Motoristas", "CAVALO", "CARRETA", "VINCULO", "ORIGEM", "DESTINO", "EXTRA", "STATUS"].join(","),
+      ",,,,,,,,,,,",
+      ",,,,,,,,,,,",
+    ].join("\n");
+
+    await expect(
+      updateSheetMonitorSnapshot({ csvText: headerOnlyCsv, supabaseClient }),
+    ).rejects.toThrow(/EMPTY_SNAPSHOT_GUARD/);
+
+    // Não tentou sobrescrever o snapshot (nenhum upsert).
+    const upsertCall = supabaseClient.calls.find((call) => call[0] === "upsert");
+    expect(upsertCall).toBeUndefined();
+  });
+
   it("returns persisted=true when upsert succeeds", async () => {
     const supabaseClient = createSnapshotSupabaseClient();
 
