@@ -7,7 +7,12 @@ vi.mock("../../../infrastructure/spx/spx-allocation-client.js", () => ({ fetchTr
 const { buildAspxAssignedByLh, isSpxTripLh, resetAspxAssignedCacheForTests } = await import("./aspx-assigned-map.js");
 
 function indexOf(pairs) {
-  return { byNumber: new Map(pairs.map(([lh, driver]) => [lh, { status: 4, statusName: "x", driver }])) };
+  // pares: [lh, driver] (viagem ATIVA por padrão) ou [lh, driver, statusName].
+  return {
+    byNumber: new Map(
+      pairs.map(([lh, driver, statusName = "Assigned"]) => [lh, { status: 4, statusName, driver }]),
+    ),
+  };
 }
 
 describe("isSpxTripLh", () => {
@@ -87,5 +92,51 @@ describe("buildAspxAssignedByLh", () => {
     await buildAspxAssignedByLh([{ lh: "LT1", motorista: "JOAO" }]);
     await buildAspxAssignedByLh([{ lh: "LT1", motorista: "JOAO" }]);
     expect(fetchTripIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it("verde (true) mesmo com conectivo a mais/menos — mesma pessoa (WESLEY [DE] ARAUJO SOARES)", async () => {
+    fetchTripIndex.mockResolvedValue(indexOf([["LT1", "WESLEY DE ARAUJO SOARES"]]));
+    const out = await buildAspxAssignedByLh([{ lh: "LT1", motorista: "WESLEY ARAUJO SOARES" }]);
+    expect(out).toEqual({ LT1: true });
+  });
+
+  it("verde (true) com nome do meio a mais no ASPX — mesma pessoa (JOAO [PEDRO] SILVA)", async () => {
+    fetchTripIndex.mockResolvedValue(indexOf([["LT1", "JOAO PEDRO SILVA"]]));
+    const out = await buildAspxAssignedByLh([{ lh: "LT1", motorista: "JOAO SILVA" }]);
+    expect(out).toEqual({ LT1: true });
+  });
+
+  it("VERMELHO ainda p/ pessoas diferentes que só compartilham sobrenome (NESTOR LIMA vs GABRIEL … LIMA)", async () => {
+    fetchTripIndex.mockResolvedValue(indexOf([["LT1", "GABRIEL WESLEY MORAIS DE LIMA"]]));
+    const out = await buildAspxAssignedByLh([{ lh: "LT1", motorista: "NESTOR DE LIMA" }]);
+    expect(out).toEqual({ LT1: false });
+  });
+
+  it("viagem CONCLUÍDA com motorista divergente → OMITE (cinza), NÃO vermelho (ruído histórico)", async () => {
+    fetchTripIndex.mockResolvedValue(indexOf([["LT1", "OUTRO MOTORISTA", "Completed"]]));
+    const out = await buildAspxAssignedByLh([{ lh: "LT1", motorista: "JOAO" }]);
+    expect("LT1" in out).toBe(false);
+    expect(out).toEqual({});
+  });
+
+  it("viagem CANCELADA com motorista divergente → OMITE (cinza), NÃO vermelho", async () => {
+    fetchTripIndex.mockResolvedValue(indexOf([["LT1", "OUTRO", "Cancelled"]]));
+    const out = await buildAspxAssignedByLh([{ lh: "LT1", motorista: "JOAO" }]);
+    expect(out).toEqual({});
+  });
+
+  it("viagem CONCLUÍDA que BATE segue verde (mantém o ganho do PR #262)", async () => {
+    fetchTripIndex.mockResolvedValue(indexOf([["LT1", "JOAO DA SILVA", "Completed"]]));
+    const out = await buildAspxAssignedByLh([{ lh: "LT1", motorista: "joao da silva" }]);
+    expect(out).toEqual({ LT1: true });
+  });
+
+  it("viagem ATIVA (Assigned/Departed) com motorista divergente → VERMELHO (acionável)", async () => {
+    fetchTripIndex.mockResolvedValue(indexOf([["LT1", "MARIA", "Departed"], ["LT2", "PEDRO", "Assigned"]]));
+    const out = await buildAspxAssignedByLh([
+      { lh: "LT1", motorista: "JOAO" },
+      { lh: "LT2", motorista: "JOAO" },
+    ]);
+    expect(out).toEqual({ LT1: false, LT2: false });
   });
 });

@@ -1,5 +1,14 @@
 import { fetchTripIndex } from "../../../infrastructure/spx/spx-allocation-client.js";
-import { normNameForMatch } from "../sheet-monitor-enrichment.js";
+import { driverNamesMatch, normNameForMatch } from "../sheet-monitor-enrichment.js";
+
+// Viagem já ENCERRADA (concluída/cancelada). Para essas, a atribuição não é mais
+// acionável e o histórico do ASPX frequentemente diverge do que ficou no sistema
+// (substituição na execução, edições posteriores) — marcar vermelho vira RUÍDO.
+// Detecta pelo rótulo de status (SPX: "Completed"/"Cancelled"; PT: conclu/cancel/finaliz).
+function isHistoricalTrip(trip) {
+  const s = (trip?.statusName || "").toString().toLowerCase();
+  return s.includes("complet") || s.includes("cancel") || s.includes("conclu") || s.includes("finaliz");
+}
 
 // Só códigos "LT…" são viagens reais do SPX (mesmo gate do assign/preview). Nestlé
 // (B10…), manual e cargas do sistema NÃO existem no ASPX → selo N/A (cinza).
@@ -66,8 +75,16 @@ export async function buildAspxAssignedByLh(items, opts = {}) {
     // consultado"), NUNCA marca vermelho. Marcar `false` aqui era o falso-negativo
     // que fazia motoristas JÁ atribuídos aparecerem como "não atribuídos".
     if (!trip) continue;
-    const assignedDriver = normNameForMatch(trip.driver || "");
-    out[lh] = Boolean(assignedDriver && assignedDriver === eff);
+    // Match tolerante a acento/caixa/conectivo/nome-do-meio (mesma pessoa grafada
+    // diferente entre planilha e ASPX — ex.: "WESLEY ARAUJO SOARES" vs "WESLEY DE
+    // ARAUJO SOARES" — não é divergência de motorista).
+    if (driverNamesMatch(it.motorista, trip.driver)) { out[lh] = true; continue; }
+    // Divergência: para viagem ENCERRADA (concluída/cancelada), a maior parte é
+    // ruído histórico (não acionável) → OMITE (cinza), NUNCA vermelho. Só viagem
+    // ATIVA (planejada/aceita/em execução) com motorista diferente vira vermelho —
+    // aí sim é acionável (o motorista do sistema não está atribuído no ASPX).
+    if (isHistoricalTrip(trip)) continue;
+    out[lh] = false;
   }
   return out;
 }

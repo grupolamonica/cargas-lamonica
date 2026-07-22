@@ -37,6 +37,52 @@ export function normNameForMatch(s) {
   return (s ?? "").toString().normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+// Conectivos de nome (não distinguem pessoas) — ignorados no match nome↔nome.
+const NAME_CONNECTORS = new Set(["de", "da", "do", "das", "dos", "e", "di", "du", "del", "la"]);
+
+// Tokens "significativos" de um nome já normalizado: descarta conectivos e tokens
+// de 1 letra (iniciais abreviadas). "wesley de araujo soares" → [wesley,araujo,soares].
+function significantNameTokens(norm) {
+  return norm.split(" ").filter((t) => t.length > 1 && !NAME_CONNECTORS.has(t));
+}
+
+/**
+ * Diz se dois nomes de motorista são a MESMA pessoa, tolerante às divergências
+ * reais entre a planilha/sistema e o ASPX: acento (normaliza), caixa, espaços,
+ * conectivos inseridos/omitidos ("WESLEY ARAUJO SOARES" ⇄ "WESLEY DE ARAUJO
+ * SOARES") e nome do meio a mais/a menos ("JOAO SILVA" ⇄ "JOAO PEDRO SILVA").
+ *
+ * Conservador p/ NÃO gerar falso-positivo (que esconderia motorista trocado):
+ *  - conjuntos de tokens significativos IGUAIS (ordem/conectivo à parte), OU
+ *  - um nome é SUBCONJUNTO do outro (≥2 tokens) COM o MESMO primeiro e último
+ *    token significativo. Pessoas diferentes ("NESTOR LIMA" vs "GABRIEL … LIMA")
+ *    não passam (primeiro token difere).
+ */
+export function driverNamesMatch(a, b) {
+  const na = normNameForMatch(a);
+  const nb = normNameForMatch(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const ta = significantNameTokens(na);
+  const tb = significantNameTokens(nb);
+  if (ta.length === 0 || tb.length === 0) return false;
+  const sa = new Set(ta);
+  const sb = new Set(tb);
+  // Mesmos tokens significativos (só conectivo/ordem mudou) → mesma pessoa.
+  if (ta.length === tb.length && ta.every((t) => sb.has(t))) return true;
+  // Subconjunto (nome do meio a mais/menos), guardado por primeiro+último token.
+  const [short, long, longSet] = ta.length <= tb.length ? [ta, tb, sb] : [tb, ta, sa];
+  if (
+    short.length >= 2 &&
+    short.every((t) => longSet.has(t)) &&
+    short[0] === long[0] &&
+    short[short.length - 1] === long[long.length - 1]
+  ) {
+    return true;
+  }
+  return false;
+}
+
 // Pré-normaliza a lista do ASPX uma vez (evita normalizar 1600 nomes por motorista).
 export function indexAspxList(aspxList) {
   return (aspxList || []).map((d) => ({ cpf: d.cpf, display_name: d.display_name, norm: normNameForMatch(d.display_name) }));
