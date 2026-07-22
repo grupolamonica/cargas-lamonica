@@ -457,8 +457,13 @@ async function handleColeta(client, { session, msg, phone, correlationId }) {
           correlationId,
         });
         if (ocr.ok) {
-          const endereco = buildEnderecoFromComprovanteFields(ocr.fields);
-          if (Object.keys(endereco).length) motoristaPatch.endereco = endereco;
+          const extraido = buildEnderecoFromComprovanteFields(ocr.fields);
+          // Merge POR-CAMPO: só sobrescreve as chaves que a Vision trouxe,
+          // preservando endereço já gravado (ex.: preenchido no wizard web) — o
+          // merge de dados.motorista é shallow, então montamos o objeto completo aqui.
+          if (Object.keys(extraido).length) {
+            motoristaPatch.endereco = { ...(motorista.endereco || {}), ...extraido };
+          }
         }
       } catch (err) {
         console.warn(`[repom.flow] ${correlationId} comprovante OCR (bônus) falhou:`, err instanceof Error ? err.message : String(err));

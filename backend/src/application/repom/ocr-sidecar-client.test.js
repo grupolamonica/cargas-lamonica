@@ -28,6 +28,7 @@ describe("repom ocr-sidecar-client", () => {
   const ENV = { ...process.env };
   beforeEach(() => {
     delete process.env.OCR_SIDECAR_TOKEN;
+    delete process.env.REPOM_COMPROVANTE_CONCESSIONARIA; // default 'neoenergia' testado de forma hermética
     process.env.CADASTRO_OCR_URL = "http://cadastro-ocr:8765";
   });
   afterEach(() => {

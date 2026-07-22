@@ -485,6 +485,17 @@ describe("repom flow-engine (integração pg-mem)", () => {
         expect(p.dados.motorista.comprovante_url).toBeTruthy();
         expect(p.dados.motorista.endereco).toBeUndefined();
       });
+
+      it("flag ON + Vision ok mas sem campos de endereço: NÃO grava endereco:{} e avança", async () => {
+        await reachColetaComprovante();
+        await setRepomComprovanteOcrEnabled({ enabled: true });
+        extractComprovanteMock.mockResolvedValue({ ok: true, fields: {} }); // leu, mas nada mapeável
+        const r = await handleRepomIncomingMessage(mediaInbound());
+        expect(r).toMatchObject({ node: "coletando", action: "ask_telefone" });
+        const [p] = await pendings();
+        expect(p.dados.motorista.comprovante_url).toBeTruthy();
+        expect(p.dados.motorista.endereco).toBeUndefined(); // guard Object.keys().length
+      });
     });
 
     it("continuação OFF: CNH boa encerra em 'submitted' (comportamento da Fase 3b, intacto)", async () => {
