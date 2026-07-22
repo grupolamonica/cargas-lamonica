@@ -67,8 +67,15 @@ app.use(
 
 // Body parsing — express.json() pré-parseia req.body; http-utils.parseJsonBody
 // já faz short-circuit quando req.body é objeto, então é compatível.
-// Limite de 1MB previne abuse via payloads gigantes (mutations operator-admin
-// hoje cabem em ~50KB; OCR usa endpoint próprio com multer).
+//
+// Webhook do Evolution: com `base64: true` a mídia recebida (foto/PDF) vem
+// EMBUTIDA no corpo do POST. Uma foto comprimida cabe em <1MB, mas um PDF de
+// comprovante/conta (1–5MB) vira base64 e ESTOURA 1MB → o Express rejeitava com
+// 413 e o documento era perdido (o motorista mandava o PDF e o bot ficava
+// re-pedindo). Parser dedicado com limite maior SÓ nessa rota (autenticada por
+// secret); teto ≈ máximo do bucket (8MB) + overhead do base64 (~33%) + envelope.
+// TODO o resto segue em 1MB (anti-abuse — mutations do operador cabem em ~50KB).
+app.use("/api/webhooks/evolution", express.json({ limit: "20mb" }));
 app.use(express.json({ limit: "1mb" }));
 
 // Middleware CORS manual (porta fiel de api/[...route].mjs)
