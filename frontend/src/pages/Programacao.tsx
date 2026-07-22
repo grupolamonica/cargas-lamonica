@@ -552,12 +552,16 @@ export default function Programacao() {
       if (stSet.size && !stSet.has(rowStatus(r))) return false;
       // Filtro por data+hora (datetime-local). Compara instante de parede como string
       // 'YYYY-MM-DDTHH:MM' (largura fixa → ordem lexicográfica = cronológica).
+      // "A confirmar" (SEM data — ex.: ofertas Nestlé/leilão de carregamento ainda não
+      // definido) NUNCA é barrada pelo filtro de período: não dá pra casar uma data que
+      // não existe. Antes, `!(cDt && cDt >= carregDe)` derrubava toda linha sem data ao
+      // aplicar qualquer filtro de carregamento — as pendentes "a confirmar" sumiam.
       const cDt = dtKey(r.data, r.horario);
-      if (carregDe && !(cDt && cDt >= carregDe)) return false;
-      if (carregAte && !(cDt && cDt <= carregAte)) return false;
+      if (cDt && carregDe && cDt < carregDe) return false;
+      if (cDt && carregAte && cDt > carregAte) return false;
       const dDt = dtKey(r.dataDescarga, r.horarioDescarga);
-      if (descargaDe && !(dDt && dDt >= descargaDe)) return false;
-      if (descargaAte && !(dDt && dDt <= descargaAte)) return false;
+      if (dDt && descargaDe && dDt < descargaDe) return false;
+      if (dDt && descargaAte && dDt > descargaAte) return false;
       // Lançado / não lançado (carga já criada no sistema).
       if (lancSet.size && !lancSet.has(r.jaLancada ? "sim" : "nao")) return false;
       // Aceito / não aceito no SPX (acceptanceStatus 1=aceito, 0=não aceito; null=não-LT).
@@ -573,13 +577,17 @@ export default function Programacao() {
   const visibleRows = useMemo(() => {
     const list = filteredAll.filter((r) => r.tab === tab);
     const dir = agendaSortDir === "asc" ? 1 : -1;
-    // Ordena pela data de carregamento (epoch); linhas sem data vão pro fim.
+    // Ordena pela data de carregamento (epoch). Linhas SEM data ("a confirmar"):
+    // no Planejado vão pro TOPO (são backlog acionável — precisam de agenda/lançamento
+    // e antes ficavam enterradas no fim, saindo da 1ª página); nas demais abas seguem
+    // no fim (comportamento anterior).
+    const undatedFirst = tab === "planejado";
     return [...list].sort((a, b) => {
       const ta = a.carregamentoTs;
       const tb = b.carregamentoTs;
       if (ta == null && tb == null) return 0;
-      if (ta == null) return 1;
-      if (tb == null) return -1;
+      if (ta == null) return undatedFirst ? -1 : 1;
+      if (tb == null) return undatedFirst ? 1 : -1;
       return (ta - tb) * dir;
     });
   }, [filteredAll, tab, agendaSortDir]);
