@@ -99,6 +99,8 @@ import {
   resolveUpdateMonitorAllocationResponse,
   resolveReassignMonitorAllocationsResponse,
   resolveDescendQueueCascadeResponse,
+  resolveListAllocationChangesResponse,
+  resolveRevertAllocationChangesResponse,
   resolveAspxAssignedResponse,
   resolveAssignReservaResponse,
   resolveRouteDriverHistoryResponse,
@@ -485,6 +487,9 @@ export function registerRoutes(app) {
   router.patch("/api/operator/sheet-monitor", wrap(resolveUpdateMonitorAllocationResponse));
   router.post("/api/operator/sheet-monitor/reassign", wrap(resolveReassignMonitorAllocationsResponse));
   router.post("/api/operator/sheet-monitor/descend", wrap(resolveDescendQueueCascadeResponse));
+  // Reverter últimas mudanças de alocação do operador (modal do Monitor, DC-283).
+  router.get("/api/operator/allocation-changes", wrap(resolveListAllocationChangesResponse));
+  router.post("/api/operator/allocation-changes/revert", wrap(resolveRevertAllocationChangesResponse));
   router.post("/api/operator/sheet-monitor/aspx-assigned", wrap(resolveAspxAssignedResponse));
   router.post("/api/operator/sheet-monitor/assign-reserva", wrap(resolveAssignReservaResponse));
   router.get("/api/operator/sheet-monitor/route-history", wrap(resolveRouteDriverHistoryResponse));

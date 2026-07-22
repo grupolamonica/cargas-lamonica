@@ -8,12 +8,16 @@ const {
   mockCreateOperatorCargo,
   mockUpdateOperatorCargo,
   mockBuildAspxAssignedByLh,
+  mockListAllocationChanges,
+  mockRevertAllocationChanges,
 } = vi.hoisted(() => ({
   mockRequireOperatorSession: vi.fn(),
   mockRecordSecurityAuditEvent: vi.fn(),
   mockCreateOperatorCargo: vi.fn(),
   mockUpdateOperatorCargo: vi.fn(),
   mockBuildAspxAssignedByLh: vi.fn(),
+  mockListAllocationChanges: vi.fn(),
+  mockRevertAllocationChanges: vi.fn(),
 }));
 
 vi.mock("../../../application/load-claims/auth.js", () => ({
@@ -26,6 +30,14 @@ vi.mock("../../../infrastructure/security-audit.js", () => ({
 
 vi.mock("../../../application/operator-admin/use-cases/aspx-assigned-map.js", () => ({
   buildAspxAssignedByLh: mockBuildAspxAssignedByLh,
+}));
+
+vi.mock("../../../application/operator-admin/use-cases/list-operator-allocation-changes.js", () => ({
+  listOperatorAllocationChanges: mockListAllocationChanges,
+}));
+
+vi.mock("../../../application/operator-admin/use-cases/revert-allocation-changes.js", () => ({
+  revertAllocationChanges: mockRevertAllocationChanges,
 }));
 
 vi.mock("../../../application/operator-admin/service.js", () => ({
@@ -48,6 +60,8 @@ import {
   resolveAspxAssignedResponse,
   resolveCreateOperatorCargoResponse,
   resolveUpdateOperatorCargoResponse,
+  resolveListAllocationChangesResponse,
+  resolveRevertAllocationChangesResponse,
 } from "./handlers.js";
 
 describe("operator-admin handlers", () => {
@@ -240,5 +254,58 @@ describe("operator-admin handlers", () => {
 
     expect(response.statusCode).toBe(422);
     expect(mockBuildAspxAssignedByLh).not.toHaveBeenCalled();
+  });
+
+  it("lista as mudanças de alocação do operador logado (GET)", async () => {
+    mockListAllocationChanges.mockResolvedValue({ statusCode: 200, payload: { items: [], meta: {} } });
+
+    const response = await resolveListAllocationChangesResponse({
+      headers: { authorization: "Bearer valid-token" },
+      method: "GET",
+      query: { page: "1", pageSize: "20" },
+      url: "/api/operator/allocation-changes",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mockListAllocationChanges).toHaveBeenCalledWith(
+      expect.objectContaining({ operatorId: "operator-1" }),
+    );
+  });
+
+  it("reverte mudanças selecionadas (POST) e repassa os items", async () => {
+    mockRevertAllocationChanges.mockResolvedValue({
+      statusCode: 200,
+      payload: { ok: true, revertedCount: 1, skippedCount: 0, reverted: [], skipped: [] },
+      movedLhs: [],
+    });
+
+    const response = await resolveRevertAllocationChangesResponse({
+      body: JSON.stringify({ items: [{ auditLogId: "11111111-1111-1111-1111-111111111111", lh: "LT-1" }] }),
+      headers: { authorization: "Bearer valid-token" },
+      method: "POST",
+      query: {},
+      url: "/api/operator/allocation-changes/revert",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mockRevertAllocationChanges).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operatorId: "operator-1",
+        items: [{ auditLogId: "11111111-1111-1111-1111-111111111111", lh: "LT-1" }],
+      }),
+    );
+  });
+
+  it("rejeita body inesperado no revert (strict schema) e não chama o use-case", async () => {
+    const response = await resolveRevertAllocationChangesResponse({
+      body: JSON.stringify({ items: [{ auditLogId: "11111111-1111-1111-1111-111111111111", lh: "LT-1" }], injected: "nope" }),
+      headers: { authorization: "Bearer valid-token" },
+      method: "POST",
+      query: {},
+      url: "/api/operator/allocation-changes/revert",
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(mockRevertAllocationChanges).not.toHaveBeenCalled();
   });
 });

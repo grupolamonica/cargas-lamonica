@@ -64,15 +64,23 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
       // LH → resolve por id da PLANILHA OU por lh_manual (carga do SISTEMA lançada
       // na Programação), senão arrastar/remanejar uma carga lançada dava 404.
       // cargoId explícito (carga do sistema já identificada pelo grid) trava direto.
+      // Reverter (DC-283): lê o EFETIVO-ANTES (alloc ?? planilha) na MESMA query
+      // travada, antes de sobrescrever — o undo do Monitor restaura este valor.
+      const beforeCols =
+        "COALESCE(alloc_motorista, sheet_motorista, '') AS before_motorista, " +
+        "COALESCE(alloc_cavalo, sheet_cavalo, '') AS before_cavalo, " +
+        "COALESCE(alloc_carreta, sheet_carreta, '') AS before_carreta";
       let row;
       if (m.explicitCargoId) {
         const { rows } = await client.query(
-          `SELECT id, sheet_lh, alloc_pinned, origem, destino FROM public.cargas WHERE id = $1 FOR UPDATE`,
+          `SELECT id, sheet_lh, alloc_pinned, origem, destino, ${beforeCols} FROM public.cargas WHERE id = $1 FOR UPDATE`,
           [m.explicitCargoId],
         );
         row = rows[0];
       } else {
-        row = await ensureMonitorSheetCargo(client, m.lh, { columns: "id, sheet_lh, alloc_pinned, origem, destino" });
+        row = await ensureMonitorSheetCargo(client, m.lh, {
+          columns: `id, sheet_lh, alloc_pinned, origem, destino, ${beforeCols}`,
+        });
       }
       if (!row) {
         throw new NotFoundError(`Carga não encontrada para ${m.lh || m.explicitCargoId}.`);
@@ -81,6 +89,12 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
       m.cargoId = row.id;
       // Carga do sistema (sheet_lh NULL) não vai pro write-back da planilha.
       m.sheetLhNull = row.sheet_lh == null;
+      // Efetivo-antes desta carga (p/ beforeMoves no audit → revert).
+      m.before = {
+        motorista: row.before_motorista ?? "",
+        cavalo: row.before_cavalo ?? "",
+        carreta: row.before_carreta ?? "",
+      };
       if (seen.has(m.cargoId)) {
         throw new ValidationError(`Carga repetida na movimentação: ${m.lh || m.cargoId}`);
       }
@@ -135,6 +149,15 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
       metadata: {
         count: normalized.length,
         moves: normalized.map(({ lh, motorista, cavalo, carreta }) => ({ lh, motorista, cavalo, carreta })),
+        // Reverter (DC-283): efetivo-ANTES por carga. Chaveado por lh OU cargoId
+        // (carga do sistema sem LH) — o revert resolve a carga por qualquer um.
+        beforeMoves: normalized.map(({ lh, cargoId, before }) => ({
+          lh: lh || null,
+          cargoId: lh ? null : cargoId,
+          motorista: before?.motorista ?? "",
+          cavalo: before?.cavalo ?? "",
+          carreta: before?.carreta ?? "",
+        })),
       },
     });
 

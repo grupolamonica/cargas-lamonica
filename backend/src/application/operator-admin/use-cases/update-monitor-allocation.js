@@ -135,6 +135,25 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
         descricao: finalDescricao,
         pinned,
         cleared: !finalMotorista && !finalCavalo && !finalCarreta && !finalStatus,
+        // Reverter (DC-283): pré/pós-imagem BRUTA de alloc_* desta carga — o
+        // undo do Monitor restaura `beforeAlloc` e a guarda "não mudou desde
+        // então" compara alloc_* atual com `afterAlloc`. Preserva null vs ""
+        // (null = sem override → cai pra planilha; "" = vazio explícito) p/ o
+        // revert devolver EXATAMENTE o estado de override anterior. cavalo/carreta
+        // são placas mas já vazam no top-level `cavalo`/`carreta` acima — manter
+        // aqui é consistente (a redação por chave não alcança nenhum dos dois).
+        beforeAlloc: {
+          motorista: sheetRow.alloc_motorista ?? null,
+          cavalo: sheetRow.alloc_cavalo ?? null,
+          carreta: sheetRow.alloc_carreta ?? null,
+          status: sheetRow.alloc_status ?? null,
+        },
+        afterAlloc: {
+          motorista: finalMotorista ?? null,
+          cavalo: finalCavalo ?? null,
+          carreta: finalCarreta ?? null,
+          status: finalStatus ?? null,
+        },
         // DC-184: antes → depois. SEM cavalo/carreta (placas = sensível "plate"
         // no sanitizeLogPayload; as chaves genéricas before/after não são
         // redigidas e vazariam no CSV do DC-186).
