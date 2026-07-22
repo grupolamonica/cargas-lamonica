@@ -3,10 +3,37 @@ import {
   buildEnrichedUpsertRow,
   mergePreservingGood,
   matchAspxDriver,
+  driverNamesMatch,
   indexAspxList,
   fetchEnrichedLhSet,
   filterRowsToProcess,
 } from "./sheet-monitor-enrichment.js";
+
+describe("driverNamesMatch — mesma pessoa entre planilha e ASPX", () => {
+  it("acento/caixa/espaço não separam a pessoa", () => {
+    expect(driverNamesMatch("José da Silva", "JOSE DA SILVA")).toBe(true);
+    expect(driverNamesMatch("  joão   silva ", "JOAO SILVA")).toBe(true);
+  });
+  it("conectivo (DE/DA/DOS) inserido/omitido não separa", () => {
+    expect(driverNamesMatch("WESLEY ARAUJO SOARES", "WESLEY DE ARAUJO SOARES")).toBe(true);
+    expect(driverNamesMatch("ANTONIO DOS SANTOS", "ANTONIO SANTOS")).toBe(true);
+  });
+  it("nome do meio a mais/menos (mesmo 1º e último) não separa", () => {
+    expect(driverNamesMatch("JOAO SILVA", "JOAO PEDRO SILVA")).toBe(true);
+    expect(driverNamesMatch("MARIA CLARA SOUZA LIMA", "MARIA SOUZA LIMA")).toBe(true);
+  });
+  it("pessoas DIFERENTES não casam (evita esconder motorista trocado)", () => {
+    expect(driverNamesMatch("NESTOR DE LIMA", "GABRIEL WESLEY MORAIS DE LIMA")).toBe(false); // só sobrenome
+    expect(driverNamesMatch("ALEX CARNIO", "JOSE ROBERTO DE SANTANA")).toBe(false);
+    expect(driverNamesMatch("JOAO SILVA", "JOAO SANTOS")).toBe(false); // 1º igual, resto não
+    expect(driverNamesMatch("JOAO SILVA", "PEDRO SILVA")).toBe(false); // último igual, 1º não
+  });
+  it("vazio de qualquer lado → não casa", () => {
+    expect(driverNamesMatch("", "JOAO")).toBe(false);
+    expect(driverNamesMatch("JOAO", "")).toBe(false);
+    expect(driverNamesMatch(null, undefined)).toBe(false);
+  });
+});
 
 // Mock do client supabase para sheet_monitor_enriched: simula a paginação do
 // PostgREST (cada .range devolve no máximo o tamanho do intervalo). `rows` =
