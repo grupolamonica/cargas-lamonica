@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { applySpxOperationalStatus, fetchSpxStatusIndex } from "./spx-operational-status.js";
+import {
+  applySpxOperationalStatus,
+  fetchSpxStatusIndex,
+  fetchSpxStatusIndexFromSnapshot,
+  isSpxMonitorLiveStatusEnabled,
+} from "./spx-operational-status.js";
 
 function row(over = {}) {
   return { lh: "LT1", status: "AGUARDANDO CARREGAMENTO", motoristas: "JOÃO", ...over };
@@ -68,5 +73,65 @@ describe("fetchSpxStatusIndex", () => {
       throw new Error("boom");
     };
     expect(await fetchSpxStatusIndex({ deps: { fetchSpx } })).toBeNull();
+  });
+});
+
+describe("fetchSpxStatusIndexFromSnapshot (status AO VIVO do SPX no Monitor)", () => {
+  it("mapeia trip_number → rótulo operacional via trip_status_name (aba aceito)", async () => {
+    const fetchSpxTripsByTab = async (queryType) => {
+      expect(queryType).toBe(2); // tab "aceito"
+      return {
+        trips: [
+          { trip_number: "LT-CARREGANDO", trip_status_name: "loading" },
+          { trip_number: "LT-DESCARGA", trip_status_name: "arrived" },
+          { trip_number: "LT-DESC", trip_status_name: "completed" },
+          { trip_number: "", trip_status_name: "loading" }, // sem lh → ignora
+          { trip_number: "LT-SEM-STATUS" }, // sem status → ignora
+        ],
+      };
+    };
+    const map = await fetchSpxStatusIndexFromSnapshot({ force: true, deps: { fetchSpxTripsByTab } });
+    // arrived → AGUARDANDO DESCARGA (destino), loading → CARREGANDO (origem): a
+    // tradução que distingue origem×destino (o que a Torre errava).
+    expect(map.get("LT-CARREGANDO")).toBe("CARREGANDO");
+    expect(map.get("LT-DESCARGA")).toBe("AGUARDANDO DESCARGA");
+    expect(map.get("LT-DESC")).toBe("DESCARREGADO");
+    expect(map.size).toBe(3);
+  });
+
+  it("é leve: memoiza o índice (2ª leitura não rebusca o SPX)", async () => {
+    let calls = 0;
+    const fetchSpxTripsByTab = async () => {
+      calls += 1;
+      return { trips: [{ trip_number: "LT-X", trip_status_name: "departed" }] };
+    };
+    // force:true reseta o cache e busca 1×; a 2ª (sem force) lê do cache memoizado.
+    await fetchSpxStatusIndexFromSnapshot({ force: true, deps: { fetchSpxTripsByTab } });
+    const again = await fetchSpxStatusIndexFromSnapshot({ deps: { fetchSpxTripsByTab } });
+    expect(again.get("LT-X")).toBe("CARREGADO"); // departed → CARREGADO
+    expect(calls).toBe(1);
+  });
+
+  it("sidecar fora do ar → retorna null (best-effort, Monitor segue com status da planilha)", async () => {
+    const fetchSpxTripsByTab = async () => {
+      throw new Error("sidecar down");
+    };
+    expect(await fetchSpxStatusIndexFromSnapshot({ force: true, deps: { fetchSpxTripsByTab } })).toBeNull();
+  });
+});
+
+describe("isSpxMonitorLiveStatusEnabled (kill-switch)", () => {
+  const prev = process.env.SPX_MONITOR_LIVE_STATUS_ENABLED;
+  it("LIGADO por padrão (env ausente)", () => {
+    delete process.env.SPX_MONITOR_LIVE_STATUS_ENABLED;
+    expect(isSpxMonitorLiveStatusEnabled()).toBe(true);
+  });
+  it("desliga só com 'false' explícito", () => {
+    process.env.SPX_MONITOR_LIVE_STATUS_ENABLED = "false";
+    expect(isSpxMonitorLiveStatusEnabled()).toBe(false);
+    process.env.SPX_MONITOR_LIVE_STATUS_ENABLED = "true";
+    expect(isSpxMonitorLiveStatusEnabled()).toBe(true);
+    if (prev === undefined) delete process.env.SPX_MONITOR_LIVE_STATUS_ENABLED;
+    else process.env.SPX_MONITOR_LIVE_STATUS_ENABLED = prev;
   });
 });

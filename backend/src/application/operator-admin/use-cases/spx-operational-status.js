@@ -13,10 +13,33 @@
 // Monitor segue com o status da planilha/alocação, sem quebrar).
 
 import { fetchSpxTrips, SpxAspNotConfigured } from "../../../infrastructure/torre/torre-spx-trips-client.js";
+import { fetchSpxTripsByTab } from "../../../infrastructure/spx/spx-allocation-client.js";
+import { spxTripStatusLabel } from "../../../domain/operator-admin/spx-trip-status.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 
 const LH_TRIP_COL = "LH Trip Number";
 const STATUS_OPERACIONAL_COL = "Status Operacional";
+
+// Tab "aceito" (query_type 2) do portal SPX: viagens JÁ aceitas (com motorista),
+// progredindo pelo ciclo (loading→departed→arrived→…). É onde vive o status ao vivo
+// das cargas Shopee "no ASPX" — exatamente as que o operador acompanha no Monitor.
+const SPX_ACEITO_QUERY_TYPE = 2;
+
+/** Kill-switch do status AO VIVO do SPX no Monitor. LIGADO por padrão; defina
+ *  SPX_MONITOR_LIVE_STATUS_ENABLED=false para voltar ao status só da planilha. */
+export function isSpxMonitorLiveStatusEnabled() {
+  return (process.env.SPX_MONITOR_LIVE_STATUS_ENABLED || "").trim().toLowerCase() !== "false";
+}
+
+function statusIndexTtlMs() {
+  const s = Number(process.env.SPX_MONITOR_STATUS_CACHE_SECONDS);
+  return (Number.isFinite(s) && s >= 0 ? s : 90) * 1000;
+}
+
+// Cache do índice de status (Map lh→status) — memoizado process-wide. A fonte SPX
+// só atualiza ~a cada 10min, então ~90s mantém "ao vivo" com no máximo 1 busca por
+// ~90s, independentemente de quantos operadores estão com o Monitor aberto.
+let _statusIndexCache = null; // { value: Map|null, expiresAt: number }
 
 /**
  * Índice lh(trip_number) → "Status Operacional" das viagens SPX (Torre asp).
@@ -46,6 +69,52 @@ export async function fetchSpxStatusIndex({ daysBack = 30, daysFwd = 15, correla
         message: err instanceof Error ? err.message : String(err),
       });
     }
+    return null;
+  }
+}
+
+/**
+ * Índice lh(trip_number) → status operacional AO VIVO das viagens SPX aceitas,
+ * lido do portal SPX pelo sidecar spx-bot (tab "aceito"), com a MESMA tradução da
+ * Programação (`spxTripStatusLabel` sobre `trip_status_name`). NÃO usa a Torre
+ * /api/spx/asp (que colapsava origem×descarga — motivo do overlay antigo ter sido
+ * desligado).
+ *
+ * Leve: índice memoizado por ~90s (SPX_MONITOR_STATUS_CACHE_SECONDS) e a busca por
+ * tab já tem cache de 30s compartilhado com a Programação. Best-effort: falha →
+ * null + backoff curto (não martela o sidecar fora do ar).
+ *
+ * @param {{ correlationId?: string, force?: boolean, deps?: { fetchSpxTripsByTab?: typeof fetchSpxTripsByTab } }} [args]
+ * @returns {Promise<Map<string,string>|null>}
+ */
+export async function fetchSpxStatusIndexFromSnapshot({ correlationId = null, force = false, deps = {} } = {}) {
+  if (!force && _statusIndexCache && _statusIndexCache.expiresAt > Date.now()) {
+    return _statusIndexCache.value;
+  }
+  const fetchTab = deps.fetchSpxTripsByTab || fetchSpxTripsByTab;
+  try {
+    // timeout curto: numa falha de cache o Monitor espera no máx. ~10s por isto.
+    const res = await fetchTab(SPX_ACEITO_QUERY_TYPE, { maxPages: 30 }, { correlationId, timeoutMs: 10000 });
+    const trips = Array.isArray(res?.trips) ? res.trips : [];
+    const map = new Map();
+    for (const t of trips) {
+      const lh = String(t?.trip_number ?? "").trim();
+      const raw = t?.trip_status_name || t?.trip_status;
+      if (!lh || !raw) continue;
+      const label = spxTripStatusLabel(raw);
+      if (label) map.set(lh, label);
+    }
+    const ttl = statusIndexTtlMs();
+    if (ttl > 0) _statusIndexCache = { value: map, expiresAt: Date.now() + ttl };
+    return map;
+  } catch (err) {
+    logStructuredEvent("warn", "sheet-monitor.spx-live-status-failed", {
+      correlationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    // Backoff: memoiza null por 30s p/ não repetir a busca a cada leitura quando o
+    // sidecar está fora do ar. Recupera sozinho no próximo ciclo.
+    _statusIndexCache = { value: null, expiresAt: Date.now() + 30_000 };
     return null;
   }
 }
