@@ -1924,6 +1924,17 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   // Standbys da MESMA rota (de toda a base, não só desta página) → habilita o
   // botão "puxar standby" em cargas editáveis, independente da paginação.
   const routeStandbyCount = row.reserva || row.source === "sistema" ? 0 : (standbyCountByRoute.get(routeKeyOf(row)) ?? 0);
+  // ALERTA — motorista divergente: a linha TODA pisca em vermelho quando o motorista
+  // da carga NÃO é o atribuído no ASPX (aspxAssigned === false, consulta ao vivo) E a
+  // viagem já passou das fases iniciais de espera — ou seja, o status NÃO é
+  // "aguardando carregamento" nem "aguardando chegar no cliente". Nessas fases a
+  // divergência é acionável/urgente (a viagem está andando com o motorista errado no
+  // ASPX). Antes/durante a espera inicial não pisca (a atribuição ainda pode estar
+  // sendo acertada).
+  const blinkDivergent =
+    aspxAssigned === false &&
+    !!(row.status || "").trim() &&
+    !/aguardando\s+(carreg|chegar)/i.test(row.status || "");
   return (
     <tr
       style={ROW_VIRTUALIZATION_STYLE}
@@ -1938,11 +1949,15 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
           ? "bg-blue-500/20"
           : selected
             ? "bg-primary/10 dark:bg-primary/20"
-            : row.reserva
-              ? "bg-amber-50/70 dark:bg-amber-500/10"
-              // Linha inteira na cor do STATUS (mesma cor do badge) — visual rápido
-              // pro operador. Mesma expressão de status efetivo do StatusBadge.
-              : resolveSheetStatusStyle(!row.status && row.motoristas ? "Reservado" : row.status).row,
+            // Motorista divergente numa viagem em andamento → pisca vermelho (sobrepõe
+            // a cor do status). Selecionar/arrastar ainda vencem (feedback da ação).
+            : blinkDivergent
+              ? "animate-blink-divergent"
+              : row.reserva
+                ? "bg-amber-50/70 dark:bg-amber-500/10"
+                // Linha inteira na cor do STATUS (mesma cor do badge) — visual rápido
+                // pro operador. Mesma expressão de status efetivo do StatusBadge.
+                : resolveSheetStatusStyle(!row.status && row.motoristas ? "Reservado" : row.status).row,
         // Soltar na BORDA = descer/subir a fila → só a borda azul.
         dropIntent === "before" && "[&>td]:border-t-[3px] [&>td]:border-blue-600",
         dropIntent === "after" && "[&>td]:border-b-[3px] [&>td]:border-blue-600",
