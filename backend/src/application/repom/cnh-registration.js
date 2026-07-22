@@ -130,9 +130,12 @@ async function mergeIntoPending(client, rowId, motorista, status, observacoes) {
   const dados = rows[0]?.dados && typeof rows[0].dados === "object" ? rows[0].dados : {};
   dados.motorista = { ...(dados.motorista || {}), ...motorista };
   dados.repom = buildRepomProgress(dados.motorista);
+  // observacoes: COALESCE — ao mesclar um passo novo (ex.: selfie) sem motivo de
+  // revisão (null), PRESERVA os motivos já gravados na CNH (ex.: "CNH vencida").
+  // Só sobrescreve quando o caller manda uma observação nova de fato.
   await client.query(
     `UPDATE public.pending_driver_registrations
-        SET dados = $2::jsonb, status = $3, observacoes = $4, updated_at = now()
+        SET dados = $2::jsonb, status = $3, observacoes = COALESCE($4, observacoes), updated_at = now()
       WHERE id = $1`,
     [rowId, JSON.stringify(dados), status, observacoes],
   );

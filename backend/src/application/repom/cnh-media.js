@@ -64,7 +64,12 @@ function parsePositiveIntEnv(name, fallbackValue) {
   return Number.isFinite(n) && n > 0 ? n : fallbackValue;
 }
 
-const CNH_MAX_PER_PHONE = parsePositiveIntEnv("REPOM_CNH_MAX_PER_PHONE", 6);
+// Teto por telefone/janela. Na Fase 3d o mesmo telefone envia LEGITIMAMENTE ≥3
+// mídias (CNH + selfie + comprovante) + reenvios de foto borrada, e o slot é
+// reservado ANTES do download (uma foto ruim também consome). 6 era apertado
+// demais e travava o motorista real; 12 dá folga. O anti denial-of-wallet real
+// é o teto GLOBAL/hora abaixo (não sobe) — este só evita rajada de um número.
+const CNH_MAX_PER_PHONE = parsePositiveIntEnv("REPOM_CNH_MAX_PER_PHONE", 12);
 const CNH_WINDOW_MS = parsePositiveIntEnv("REPOM_CNH_WINDOW_MS", 10 * 60 * 1000);
 const CNH_MAX_GLOBAL_HOUR = parsePositiveIntEnv("REPOM_CNH_MAX_GLOBAL_HOUR", 200);
 
@@ -99,15 +104,17 @@ export function resetRepomCnhRateLimitForTests() {
 }
 
 /**
- * Estaciona a CNH no Storage (bucket cadastro-drafts, slot motorista_cnh,
- * ownerKey = CPF). Reusa a validação (MIME/tamanho/limpeza de slot) do
- * uploadDraftFile do wizard. Não decide nada do fluxo — só guarda e devolve o path.
+ * Estaciona uma mídia do Repom no Storage (bucket cadastro-drafts, ownerKey = CPF)
+ * em UM slot da allowlist (motorista_cnh | motorista_selfie_cnh | motorista_comprovante).
+ * Reusa a validação (MIME/tamanho/limpeza de slot) do uploadDraftFile do wizard.
+ * Não decide nada do fluxo — só guarda e devolve o path.
  *
  * @returns {Promise<{ok:boolean, storagePath?:string, sha256?:string, reason?:string, statusCode?:number}>}
  */
-export async function stageCnhMedia({ cpf, base64, mimetype, correlationId } = {}) {
+export async function stageRepomMedia({ cpf, base64, mimetype, slot, correlationId } = {}) {
   const digits = String(cpf || "").replace(/\D/g, "");
   if (digits.length !== 11) return { ok: false, reason: "invalid_cpf" };
+  if (!slot) return { ok: false, reason: "invalid_slot" };
   if (!base64) return { ok: false, reason: "empty_media" };
 
   const file = Buffer.from(base64, "base64");
@@ -116,11 +123,11 @@ export async function stageCnhMedia({ cpf, base64, mimetype, correlationId } = {
   const res = await uploadDraftFile({
     ownerKey: digits,
     cargaId: REPOM_CARGA_SENTINEL,
-    slot: CNH_SLOT,
+    slot,
     file,
     size: file.length,
     contentType: String(mimetype || "").toLowerCase(),
-    originalFilename: "cnh",
+    originalFilename: slot,
     correlationId,
   });
 
@@ -135,4 +142,9 @@ export async function stageCnhMedia({ cpf, base64, mimetype, correlationId } = {
     502: "storage_unavailable",
   };
   return { ok: false, reason: reasonByCode[res?.statusCode] || "upload_failed", statusCode: res?.statusCode ?? null };
+}
+
+/** Atalho da CNH (slot motorista_cnh) — mantém a assinatura usada na Fase 3b. */
+export async function stageCnhMedia({ cpf, base64, mimetype, correlationId } = {}) {
+  return stageRepomMedia({ cpf, base64, mimetype, slot: CNH_SLOT, correlationId });
 }

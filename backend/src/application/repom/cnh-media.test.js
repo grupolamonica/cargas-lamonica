@@ -99,9 +99,11 @@ describe("repom cnh-media (Fase 3b — blocos)", () => {
   describe("tryReserveCnhCall (rate limit anti denial-of-wallet)", () => {
     it("libera até o teto por telefone e então nega; outro telefone tem orçamento próprio", () => {
       const phone = "5571980001111";
-      for (let i = 0; i < 6; i++) expect(tryReserveCnhCall(phone)).toBe(true); // default 6/telefone
-      expect(tryReserveCnhCall(phone)).toBe(false); // 7ª estoura
-      expect(tryReserveCnhCall("5571980002222")).toBe(true);
+      let liberadas = 0;
+      while (tryReserveCnhCall(phone)) liberadas++; // consome até o teto (default 12/telefone)
+      expect(liberadas).toBe(12);
+      expect(tryReserveCnhCall(phone)).toBe(false); // estourou
+      expect(tryReserveCnhCall("5571980002222")).toBe(true); // outro telefone tem orçamento próprio
     });
   });
 });
