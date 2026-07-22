@@ -88,6 +88,22 @@ describe("sheet-writeback", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("HTTP 200 com HTML de erro (Apps Script quebrado) → FALHA, não sucesso silencioso", async () => {
+    // Regressão do incidente 2026-07-22: o Apps Script publicado quebrado retorna
+    // HTTP 200 com uma página HTML ("ReferenceError: out_ is not defined"). O parse
+    // falha → body=null. Antes isso contava como sucesso (write-back silenciosamente
+    // sem gravar). Agora tem que ser FALHA.
+    process.env[URL_KEY] = TEST_URL;
+    const html = '<!DOCTYPE html><html><body><div>ReferenceError: out_ is not defined</div></body></html>';
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => html });
+    const log = vi.fn();
+    const res = await writeAllocationsToSheet([{ lh: "L1", motorista: "A" }], { fetchImpl, log });
+    expect(res.ok).toBe(false);
+    expect(res.updated).toBe(0);
+    // Falha é logada como "error" (alarmável), não engolida.
+    expect(log).toHaveBeenCalledWith("error", "failed", expect.objectContaining({ status: 200 }));
+  });
+
   it("fetch lança → ok:false, NUNCA propaga o erro", async () => {
     process.env[URL_KEY] = TEST_URL;
     const fetchImpl = vi.fn().mockRejectedValue(new Error("network down"));
