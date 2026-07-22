@@ -127,6 +127,9 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
 
     const { moves, reserva } = computeDescendFromDrop(loads, source, target);
     const skippedPinnedLhs = loads.filter((l) => l.pinned).map((l) => l.lh);
+    // Reverter (DC-283): efetivo-ANTES por LH (do `loads`) p/ o undo do Monitor
+    // restaurar cada carga movida ao estado pré-cascata. `moves` já é o depois.
+    const beforeByLh = new Map(loads.map((l) => [l.lh, { motorista: l.motorista, cavalo: l.cavalo, carreta: l.carreta }]));
 
     if (moves.length === 0 && !reserva) {
       return {
@@ -194,6 +197,7 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
         targetLh: target,
         route: sourceRouteKey,
         moves: moves.map(({ lh, motorista, cavalo, carreta }) => ({ lh, motorista, cavalo, carreta })),
+        beforeMoves: moves.map(({ lh }) => ({ lh, ...(beforeByLh.get(lh) || { motorista: "", cavalo: "", carreta: "" }) })),
         reserva: reservaCreated,
         reservaMotorista: reserva?.motorista ?? null,
         skippedPinned: skippedPinnedLhs,

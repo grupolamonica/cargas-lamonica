@@ -52,6 +52,7 @@ export const AUDIT_EVENT_CATALOG = {
   // ── Alocação (Monitor) ────────────────────────────────────────────────────
   "operator.cargo.allocation_updated": { label: "Alocação atualizada", category: "alocacao" },
   "operator.cargo.allocation_reassigned": { label: "Alocação realocada (arrasto)", category: "alocacao" },
+  "operator.cargo.allocation_reverted": { label: "Alocação revertida", category: "alocacao" },
   "operator.cargo.queue_descended": { label: "Fila descida (cascata)", category: "alocacao" },
   "operator.cargo.aspx_accept": { label: "Viagem SPX aceita", category: "alocacao" },
   "operator.cargo.aspx_assign": { label: "Viagem SPX lançada", category: "alocacao" },

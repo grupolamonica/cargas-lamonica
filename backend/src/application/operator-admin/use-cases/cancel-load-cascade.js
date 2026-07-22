@@ -81,6 +81,9 @@ export async function cancelLoadCascade({ lh, operatorId, requestIp, correlation
 
     const { moves, reserva } = computeCancelCascade(loads, lh);
     if (moves.length === 0 && !reserva) return noop;
+    // Reverter (DC-283): efetivo-ANTES por LH movida (do `loads`) p/ o undo do
+    // Monitor restaurar cada carga ao estado pré-cascata.
+    const beforeByLh = new Map(loads.map((l) => [l.lh, { motorista: l.motorista, cavalo: l.cavalo, carreta: l.carreta }]));
 
     // Aplica os moves (mesma semântica do reassign: "" = vazio explícito).
     for (const m of moves) {
@@ -133,7 +136,10 @@ export async function cancelLoadCascade({ lh, operatorId, requestIp, correlation
       metadata: {
         lh,
         route: `${origem ?? ""} → ${destino ?? ""}`,
-        moves: moves.length,
+        // Antes contava os moves; agora grava o array (depois) + o antes, p/ o
+        // revert do Monitor poder restaurar cada carga da cascata.
+        moves: moves.map(({ lh: mLh, motorista, cavalo, carreta }) => ({ lh: mLh, motorista, cavalo, carreta })),
+        beforeMoves: moves.map(({ lh: mLh }) => ({ lh: mLh, ...(beforeByLh.get(mLh) || { motorista: "", cavalo: "", carreta: "" }) })),
         reserva: reservaCreated,
         reservaMotorista: reserva?.motorista ?? null,
       },
