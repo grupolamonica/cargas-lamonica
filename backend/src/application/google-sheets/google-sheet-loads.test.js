@@ -667,6 +667,54 @@ describe("google sheet loads sync", () => {
     });
   });
 
+  it("ABORTA o sync quando a planilha volta VAZIA mas há cargas existentes (guarda anti-wipe)", async () => {
+    const supabaseClient = createSupabaseMock({
+      existingSheetRows: [
+        { id: "00000000-0000-4000-a000-000000000001", sheet_lh: "LT-EXIST-1", status: "OPEN" },
+        { id: "00000000-0000-4000-a000-000000000002", sheet_lh: "LT-EXIST-2", status: "OPEN" },
+      ],
+    });
+    // Fetch 200 com CABEÇALHO presente mas TODAS as linhas de dados em branco
+    // (planilha limpa / hiccup do Google) — o parse acha o header e devolve []
+    // (não lança), então chega na guarda. É o cenário exato do incidente de prod.
+    const headerOnlyCsv = [
+      "Lamina",
+      "Outra linha de cabecalho",
+      ["LH", "TIPO", "DATA CARREGAMENTO", "DATA DESCARGA", "Motoristas", "CAVALO", "CARRETA", "VINCULO", "ORIGEM", "DESTINO", "EXTRA", "STATUS"].join(","),
+      // linhas de dados totalmente em branco
+      ",,,,,,,,,,,",
+      ",,,,,,,,,,,",
+    ].join("\n");
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(headerOnlyCsv)),
+      text: vi.fn().mockResolvedValue(headerOnlyCsv),
+    });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    // Abortou com a guarda — NADA destrutivo.
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe("EMPTY_SHEET_GUARD");
+    // Nenhum UPDATE no banco (staleTrulyGone/staleInSheet NÃO rodaram → cargas não expiraram).
+    expect(pgQueryCalls).toHaveLength(0);
+    // Snapshot do Monitor NÃO foi sobrescrito com vazio.
+    const snapshotUpsert = supabaseClient.calls.find(
+      (c) => c[0] === "upsert" && c[1] === "sheet_monitor_snapshot",
+    );
+    expect(snapshotUpsert).toBeFalsy();
+
+    errSpy.mockRestore();
+  });
+
   it("skips only the invalid spreadsheet rows and keeps syncing the valid loads", async () => {
     const supabaseClient = createSupabaseMock();
     const fetchImpl = vi.fn().mockResolvedValue({
