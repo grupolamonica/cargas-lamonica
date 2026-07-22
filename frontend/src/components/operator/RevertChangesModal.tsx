@@ -163,8 +163,8 @@ export default function RevertChangesModal({ open, onClose, onReverted }: Props)
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto rounded-3xl">
-        <DialogHeader>
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden rounded-3xl flex flex-col">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <RotateCcw className="h-5 w-5" /> Reverter últimas mudanças
           </DialogTitle>
@@ -175,7 +175,7 @@ export default function RevertChangesModal({ open, onClose, onReverted }: Props)
         </DialogHeader>
 
         {anyReserva ? (
-          <div className="flex items-start gap-2 rounded-2xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-800 dark:text-amber-200">
+          <div className="flex shrink-0 items-start gap-2 rounded-2xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-800 dark:text-amber-200">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>
               Alguma ação gerou/mexeu num <strong>standby (reserva)</strong>. Reverter volta a
@@ -185,7 +185,7 @@ export default function RevertChangesModal({ open, onClose, onReverted }: Props)
           </div>
         ) : null}
 
-        <div className="space-y-3">
+        <div className="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1">
           {isLoading ? (
             <p className="p-4 text-sm text-muted-foreground">Carregando suas mudanças…</p>
           ) : items.length === 0 ? (
@@ -262,7 +262,7 @@ export default function RevertChangesModal({ open, onClose, onReverted }: Props)
           )}
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3">
           <span className="text-[11px] text-muted-foreground">
             {selectedCount} carga(s) selecionada(s)
             {isFetching ? " · atualizando…" : ""}
