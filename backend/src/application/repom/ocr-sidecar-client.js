@@ -45,20 +45,28 @@ function getComprovanteConcessionaria() {
 }
 
 /**
- * Achata `envelope.data[0].campos` num objeto plano { campo: valor }.
- * Cada campo pode vir como { valor: "..." } (Infosimples) ou valor cru (Vision).
- * Ignora campos vazios/nulos.
+ * Achata `envelope.data[].campos` num objeto plano { campo: valor }.
+ *
+ * Varre TODAS as seções (não só a primeira): a CNH da Infosimples vem em
+ * anverso (`data[0]`) + verso (`data[1]`, cnh_verso), e campos como o número de
+ * segurança ficam no verso. Ler só `data[0]` perdia o verso (paridade com o
+ * `ocrValor` do wizard, que varre todas as seções). 1º valor NÃO-VAZIO vence
+ * (ordem das seções). Cada campo pode vir como { valor } (Infosimples) ou cru
+ * (Vision); campos vazios/nulos são ignorados.
  */
 export function flattenOcrCampos(envelope) {
-  const item = Array.isArray(envelope?.data) ? envelope.data[0] : null;
-  const campos = item && typeof item.campos === "object" && item.campos ? item.campos : {};
+  const sections = Array.isArray(envelope?.data) ? envelope.data : [];
   const out = {};
-  for (const [key, raw] of Object.entries(campos)) {
-    const value = raw && typeof raw === "object" && "valor" in raw ? raw.valor : raw;
-    if (value === null || value === undefined) continue;
-    const str = typeof value === "string" ? value.trim() : value;
-    if (str === "") continue;
-    out[key] = str;
+  for (const item of sections) {
+    const campos = item && typeof item.campos === "object" && item.campos ? item.campos : {};
+    for (const [key, raw] of Object.entries(campos)) {
+      if (key in out) continue; // já preenchido por uma seção anterior → 1º não-vazio vence
+      const value = raw && typeof raw === "object" && "valor" in raw ? raw.valor : raw;
+      if (value === null || value === undefined) continue;
+      const str = typeof value === "string" ? value.trim() : value;
+      if (str === "") continue;
+      out[key] = str;
+    }
   }
   return out;
 }
