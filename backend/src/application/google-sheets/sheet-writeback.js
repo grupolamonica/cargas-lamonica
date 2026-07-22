@@ -14,6 +14,15 @@
 // - NUNCA lança: se a planilha falhar (rede/limite/Apps Script fora), a edição
 //   já foi salva no banco; aqui só logamos um aviso.
 // - Escreve os valores EFETIVOS (o que o Monitor mostra). "" = limpa a célula.
+//
+// IMPORTANTE (incidente 2026-07-22): o Apps Script pode responder HTTP 200 com uma
+// PÁGINA HTML de erro (ex.: `ReferenceError: out_ is not defined` quando o script
+// publicado está quebrado). Antes, o parse falhava → body=null → o check só olhava
+// `body.ok === false`, então uma resposta HTML passava como SUCESSO silencioso: a
+// edição "salvava" mas a planilha nunca era escrita e NADA era logado. Agora só
+// contamos sucesso quando a resposta é JSON com `ok === true`.
+
+import { logStructuredEvent } from "../../infrastructure/security-log.js";
 
 /** Normaliza a fonte da carga. Só "nestle" é roteado à planilha Nestlé; o resto
  *  (shopee, importadas, nulo) cai na shopee — preservando o comportamento antigo. */
@@ -51,7 +60,10 @@ export function isSheetWritebackEnabled(source) {
  * @param {{ fetchImpl?: typeof fetch, log?: (level:string,event:string,data:object)=>void }} [opts]
  */
 export async function writeAllocationsToSheet(updates, { fetchImpl = globalThis.fetch, log } = {}) {
-  const warn = (event, data) => (log ? log("warn", event, data) : console.warn(`[sheet-writeback] ${event}`, data));
+  // Log estruturado por padrão (alarmável no Loki/Grafana) — o write-back quebrou
+  // silenciosamente por dias porque só ia pra console.warn; falha vai como "error".
+  const emit = (level, event, data) =>
+    (log ? log(level, event, data) : logStructuredEvent(level, `sheet-writeback.${event}`, data));
 
   // Normaliza e AGRUPA por fonte — cada Apps Script só escreve na sua planilha,
   // então um lote com fontes misturadas vira um POST por fonte.
@@ -86,7 +98,7 @@ export async function writeAllocationsToSheet(updates, { fetchImpl = globalThis.
     if (!url) {
       // Fonte sem write-back configurado (ex.: Nestlé antes de criar o Apps Script)
       // → não é erro, apenas não espelha. Loga p/ visibilidade.
-      warn("skipped-no-url", { source, count: list.length });
+      emit("warn", "skipped-no-url", { source, count: list.length });
       continue;
     }
     try {
@@ -99,17 +111,22 @@ export async function writeAllocationsToSheet(updates, { fetchImpl = globalThis.
       let body = null;
       try { body = JSON.parse(text); } catch { /* resposta não-JSON (ex.: HTML de erro) */ }
 
-      if (!res.ok || (body && body.ok === false)) {
+      // SUCESSO só com JSON `{ ok: true }`. Qualquer outra coisa — HTTP não-2xx,
+      // corpo não-JSON (página HTML de erro do Apps Script), ou `ok !== true` — é
+      // FALHA. Antes, uma resposta HTML (body=null) escapava do check e contava
+      // como sucesso, mascarando o write-back quebrado.
+      if (!res.ok || !body || body.ok !== true) {
         anyFail = true;
-        warn("failed", { source, status: res.status, body: text.slice(0, 200) });
+        lastError = body?.error ? String(body.error) : `HTTP ${res.status} (resposta ${body ? "sem ok:true" : "não-JSON"})`;
+        emit("error", "failed", { source, status: res.status, error: lastError, body: text.slice(0, 200) });
         continue;
       }
       sent = true;
-      totalUpdated += body?.updated ?? list.length;
+      totalUpdated += body.updated ?? list.length;
     } catch (err) {
       anyFail = true;
       lastError = err instanceof Error ? err.message : String(err);
-      warn("error", { source, message: lastError });
+      emit("error", "error", { source, message: lastError });
     }
   }
 
