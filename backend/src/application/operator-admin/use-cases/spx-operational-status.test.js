@@ -77,9 +77,13 @@ describe("fetchSpxStatusIndex", () => {
 });
 
 describe("fetchSpxStatusIndexFromSnapshot (status AO VIVO do SPX no Monitor)", () => {
-  it("mapeia trip_number → rótulo operacional via trip_status_name (aba aceito)", async () => {
+  it("mapeia trip_number → rótulo via trip_status_name, consultando PLANEJADO + ACEITO", async () => {
+    const seen = [];
     const fetchSpxTripsByTab = async (queryType) => {
-      expect(queryType).toBe(2); // tab "aceito"
+      seen.push(queryType);
+      // Planejado (1): motorista ATRIBUÍDO no ASPX mas ainda não aceito → "Assigned".
+      if (queryType === 1) return { trips: [{ trip_number: "LT-ATRIBUIDO", trip_status_name: "Assigned" }] };
+      // Aceito (2): já em execução.
       return {
         trips: [
           { trip_number: "LT-CARREGANDO", trip_status_name: "loading" },
@@ -91,12 +95,14 @@ describe("fetchSpxStatusIndexFromSnapshot (status AO VIVO do SPX no Monitor)", (
       };
     };
     const map = await fetchSpxStatusIndexFromSnapshot({ force: true, deps: { fetchSpxTripsByTab } });
-    // arrived → AGUARDANDO DESCARGA (destino), loading → CARREGANDO (origem): a
-    // tradução que distingue origem×destino (o que a Torre errava).
+    expect(seen.sort()).toEqual([1, 2]); // consulta AS DUAS abas
+    // O motorista recém-atribuído (planejado, "Assigned") já entra no índice:
+    expect(map.get("LT-ATRIBUIDO")).toBe("AGUARDANDO CHEGAR NO CLIENTE");
+    // arrived → AGUARDANDO DESCARGA (destino), loading → CARREGANDO (origem).
     expect(map.get("LT-CARREGANDO")).toBe("CARREGANDO");
     expect(map.get("LT-DESCARGA")).toBe("AGUARDANDO DESCARGA");
     expect(map.get("LT-DESC")).toBe("DESCARREGADO");
-    expect(map.size).toBe(3);
+    expect(map.size).toBe(4);
   });
 
   it("é leve: memoiza o índice (2ª leitura não rebusca o SPX)", async () => {
@@ -105,14 +111,25 @@ describe("fetchSpxStatusIndexFromSnapshot (status AO VIVO do SPX no Monitor)", (
       calls += 1;
       return { trips: [{ trip_number: "LT-X", trip_status_name: "departed" }] };
     };
-    // force:true reseta o cache e busca 1×; a 2ª (sem force) lê do cache memoizado.
+    // force:true reseta o cache e busca (1× por aba); a 2ª (sem force) lê do cache.
     await fetchSpxStatusIndexFromSnapshot({ force: true, deps: { fetchSpxTripsByTab } });
+    const afterFirst = calls;
     const again = await fetchSpxStatusIndexFromSnapshot({ deps: { fetchSpxTripsByTab } });
     expect(again.get("LT-X")).toBe("CARREGADO"); // departed → CARREGADO
-    expect(calls).toBe(1);
+    expect(afterFirst).toBe(2); // uma busca por aba (planejado + aceito)
+    expect(calls).toBe(afterFirst); // 2ª leitura veio do cache (sem novas buscas)
   });
 
-  it("sidecar fora do ar → retorna null (best-effort, Monitor segue com status da planilha)", async () => {
+  it("uma aba fora do ar → usa a outra (best-effort por aba)", async () => {
+    const fetchSpxTripsByTab = async (queryType) => {
+      if (queryType === 1) throw new Error("planejado down");
+      return { trips: [{ trip_number: "LT-A", trip_status_name: "loading" }] };
+    };
+    const map = await fetchSpxStatusIndexFromSnapshot({ force: true, deps: { fetchSpxTripsByTab } });
+    expect(map.get("LT-A")).toBe("CARREGANDO");
+  });
+
+  it("todas as abas fora do ar → retorna null (best-effort, Monitor segue com status da planilha)", async () => {
     const fetchSpxTripsByTab = async () => {
       throw new Error("sidecar down");
     };
