@@ -83,6 +83,32 @@ describe("repom cnh-registration", () => {
       const m = buildMotoristaFromCnhFields({}, { cpf: "11296552969" });
       expect(m).toEqual({ cpf: "11296552969" });
     });
+
+    it("aceita os aliases largos do wizard (data_validade, seguranca, identidade, uf_expedicao, data_1_habilitacao)", () => {
+      const m = buildMotoristaFromCnhFields(
+        {
+          data_validade: "06/04/2032", // alias de validade
+          seguranca: "51531458216", // alias de codigo_seguranca
+          identidade: "6170658", // alias de rg
+          identidade_orgao: "SSP",
+          identidade_uf: "SC",
+          uf_expedicao: "SC", // alias de uf_emissor
+          data_1_habilitacao: "21/09/2018", // alias de primeira_emissao
+          registro: "07314868241",
+          categoria: "D",
+        },
+        { cpf: "11296552969" },
+      );
+      expect(m).toMatchObject({ rg: "6170658", rg_orgao: "SSP", rg_uf: "SC" });
+      expect(m.cnh).toMatchObject({
+        registro: "07314868241",
+        categoria: "D",
+        validade: "2032-04-06",
+        codigo_seguranca: "51531458216",
+        uf_emissor: "SC",
+        primeira_emissao: "2018-09-21",
+      });
+    });
   });
 
   describe("buildEnderecoFromComprovanteFields (Vision → dados.motorista.endereco)", () => {
