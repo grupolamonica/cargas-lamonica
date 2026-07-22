@@ -3,6 +3,7 @@ import { ClipboardList, FileWarning, Loader2, ShieldX } from "lucide-react";
 import { useState } from "react";
 
 import AdminPagination from "@/components/AdminPagination";
+import { repomBadge, type RepomBadgeTone } from "@/lib/repomProgress";
 import { cn } from "@/lib/utils";
 import { fetchCadastrosIncompletos, type CadastroProblema } from "@/services/readModels";
 
@@ -11,6 +12,13 @@ const AREA_LABEL: Record<string, string> = {
   cavalo: "Cavalo",
   carreta: "Carreta",
   proprietario: "Proprietário",
+};
+
+// Selo do Repom (cadastro via WhatsApp): cor por estado da coleta.
+const REPOM_TONE_CLASSES: Record<RepomBadgeTone, string> = {
+  andamento: "border-sky-200 bg-sky-50 text-sky-700",
+  parou: "border-rose-200 bg-rose-50 text-rose-700",
+  concluido: "border-emerald-200 bg-emerald-50 text-emerald-700",
 };
 
 function tipoClasses(tipo: CadastroProblema["tipo"]) {
@@ -64,14 +72,30 @@ export function CadastrosIncompletosPanel() {
   return (
     <section className="admin-panel overflow-hidden">
       <ul className="divide-y divide-border/60">
-        {items.map((item) => (
+        {items.map((item) => {
+          const repom = repomBadge(item.dados);
+          return (
           <li key={item.id} className="p-4 lg:p-5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0">
-                <p className="font-semibold text-foreground">{item.nome_motorista || "—"}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-semibold text-foreground">{item.nome_motorista || "—"}</p>
+                  {repom ? (
+                    <span
+                      title={repom.aguardando ? `Aguardando: ${repom.aguardando} (via WhatsApp)` : "Cadastro via WhatsApp"}
+                      className={cn(
+                        "inline-flex items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-semibold uppercase tracking-wide",
+                        REPOM_TONE_CLASSES[repom.tone],
+                      )}
+                    >
+                      {repom.label}
+                    </span>
+                  ) : null}
+                </div>
                 <p className="text-xs text-muted-foreground">
                   {item.cpf_motorista || ""}
                   {item.placa_cavalo ? ` · ${item.placa_cavalo}` : ""}
+                  {repom?.aguardando ? ` · aguardando ${repom.aguardando}` : ""}
                 </p>
               </div>
               <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
@@ -103,7 +127,8 @@ export function CadastrosIncompletosPanel() {
               ))}
             </ul>
           </li>
-        ))}
+          );
+        })}
       </ul>
       {meta && meta.totalPages > 1 ? (
         <div className="flex items-center justify-between border-t border-border px-5 py-3">
