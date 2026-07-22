@@ -93,7 +93,7 @@ import { dedupeSystemRowsByLh } from "../../../application/operator-admin/use-ca
 import { readSheetSnapshotLhSet } from "../../../application/operator-admin/use-cases/read-sheet-snapshot-lhs.js";
 import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-admin/use-cases/planilha-availability.js";
 import { fetchSpxScheduleIndex, applySpxSchedule } from "../../../application/operator-admin/use-cases/spx-schedule-overlay.js";
-import { applySpxOperationalStatus } from "../../../application/operator-admin/use-cases/spx-operational-status.js";
+import { applySpxOperationalStatus, fetchSpxStatusIndexFromSnapshot, isSpxMonitorLiveStatusEnabled } from "../../../application/operator-admin/use-cases/spx-operational-status.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 import { attachRouteCodes } from "../../../application/operator-admin/use-cases/route-codes.js";
 import { attachRouteRegistration } from "../../../application/operator-admin/use-cases/attach-route-registration.js";
@@ -972,15 +972,19 @@ export async function resolveSheetMonitorResponse(request) {
         }
       })(),
 
-      // 3) Overlay de status operacional pela Torre (/api/spx/asp, DC-136):
-      //    DESLIGADO. A tradução da Torre TROCA carregamento↔descarga (mapeia o SPX
-      //    "Arrived" — chegou na ORIGEM, esperando CARREGAR — para "AGUARDANDO
-      //    DESCARGA", sem distinguir origem×destino). O status correto vem da
-      //    PLANILHA Shopee (sheet_status), que já traz "AGUARDANDO CARREGAMENTO"
-      //    certo. Então o Monitor NÃO consulta mais a Torre p/ status; usa a
-      //    planilha. spxStatusByLh = null → applySpxOperationalStatus é no-op.
-      //    (Reversível: religar quando a tradução da Torre for corrigida na raiz.)
-      Promise.resolve(null),
+      // 3) Overlay de status operacional AO VIVO do SPX/Shopee, casando por LH ==
+      //    trip_number. Fonte = portal SPX pelo sidecar spx-bot (tab "aceito"), com a
+      //    tradução `spxTripStatusLabel` sobre `trip_status_name` — a MESMA da
+      //    Programação, que distingue origem×destino corretamente (loading→CARREGANDO
+      //    na origem, arrived→AGUARDANDO DESCARGA no destino). NÃO usa mais a Torre
+      //    /api/spx/asp (que colapsava os dois estados — motivo do overlay anterior
+      //    ter sido desligado). Leve: índice memoizado ~90s (a fonte SPX só atualiza
+      //    ~a cada 10min) e o overlay só sobrepõe cargas COM motorista (viagens no
+      //    ASPX). Best-effort: falha → null → mantém o status da planilha.
+      //    Kill-switch: SPX_MONITOR_LIVE_STATUS_ENABLED=false.
+      isSpxMonitorLiveStatusEnabled()
+        ? fetchSpxStatusIndexFromSnapshot({ correlationId }).catch(() => null)
+        : Promise.resolve(null),
 
       // 4) Cargas RESERVADAS por lead da Fila (motorista do portal), por LH — a
       //    planilha dessas linhas está vazia, mas a carga NÃO está fechada: está
