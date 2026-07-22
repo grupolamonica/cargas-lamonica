@@ -88,7 +88,10 @@ export async function fetchAssignableDrivers(opts = {}) {
  *
  * @returns {Promise<{ byNumber: Map<string,{status:number,statusName:string,driver:string}>, truncated:boolean, partial:boolean }>}
  */
-export async function fetchTripIndex({ daysBack = 45, daysForward = 30 } = {}, opts = {}) {
+export async function fetchTripIndex(
+  { daysBack = 45, daysForward = 30, includeConcluido = false, concluidoDaysBack = 20 } = {},
+  opts = {},
+) {
   const station = aspxStationId();
   const tabs = [
     // Planejado — precisa de janela de data. A janela DEVE incluir o FUTURO:
@@ -97,6 +100,11 @@ export async function fetchTripIndex({ daysBack = 45, daysForward = 30 } = {}, o
     // divergência de motorista fica invisível no preview.
     { qt: 1, daysBack, daysForward },
     { qt: 2, daysBack: 0, daysForward: 0 }, // Aceito — ignora a janela; pega em-execução
+    // Concluído (opt-in) — viagens já finalizadas (mudaram p/ a aba histórico). Sem
+    // isso, uma viagem ATRIBUÍDA que já concluiu some do índice → o selo "atribuído
+    // no ASPX" marcava vermelho (falso "não atribuído"). Janela curta p/ ser leve;
+    // só o selo (aspx-assigned) liga isto — accept/assign/preview seguem com 1+2.
+    ...(includeConcluido ? [{ qt: 3, daysBack: concluidoDaysBack, daysForward: 0 }] : []),
   ];
 
   // Abas em PARALELO (timeout menor por aba) — pior caso ~9s em vez de ~24s.

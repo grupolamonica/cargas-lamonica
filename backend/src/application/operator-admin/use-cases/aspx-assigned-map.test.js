@@ -36,10 +36,25 @@ describe("buildAspxAssignedByLh", () => {
     expect(out).toEqual({ LT1: false });
   });
 
-  it("vermelho (false) quando a viagem não está no índice (não atribuída)", async () => {
+  it("CINZA (omitido) quando a viagem não está no índice consultado — não sabemos, NÃO marca vermelho", async () => {
+    // Viagem fora das abas consultadas (ex.: além da janela). Antes marcava false
+    // (vermelho "não atribuído") — falso-negativo: motorista JÁ atribuído aparecia
+    // como não-atribuído. Agora é omitida → selo cinza "não consultado".
     fetchTripIndex.mockResolvedValue(indexOf([]));
     const out = await buildAspxAssignedByLh([{ lh: "LT9", motorista: "JOAO" }]);
-    expect(out).toEqual({ LT9: false });
+    expect("LT9" in out).toBe(false);
+    expect(out).toEqual({});
+  });
+
+  it("consulta também o histórico (Concluído) — viagem atribuída já concluída fica verde", async () => {
+    fetchTripIndex.mockResolvedValue(indexOf([["LT1", "JOAO"]]));
+    const out = await buildAspxAssignedByLh([{ lh: "LT1", motorista: "JOAO" }]);
+    expect(out).toEqual({ LT1: true });
+    // O selo liga o índice com Concluído (includeConcluido) — accept/assign/preview não.
+    expect(fetchTripIndex).toHaveBeenCalledWith(
+      expect.objectContaining({ includeConcluido: true }),
+      expect.anything(),
+    );
   });
 
   it("vermelho (false) quando a carga não tem motorista", async () => {

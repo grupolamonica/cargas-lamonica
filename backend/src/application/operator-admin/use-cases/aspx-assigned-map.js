@@ -7,18 +7,21 @@ export function isSpxTripLh(lh) {
   return /^LT/i.test((lh ?? "").toString().trim());
 }
 
-// Cache curto do índice de viagens do SPX (trip_number → { status, driver }).
-// O sidecar SPX é caro (pagina várias abas); um TTL curto deixa "quase ao vivo"
-// sem martelar a cada consulta. Sobrescrevível por env.
+// Cache do índice de viagens do SPX (trip_number → { status, driver }). O sidecar
+// pagina 3 abas (Planejado+Aceito+Concluído), então é caro; a fonte SPX só atualiza
+// ~a cada 10min, então ~60s deixa "quase ao vivo" sem martelar o portal. Env override.
 const TTL_MS = (() => {
   const s = Number(process.env.SPX_ASSIGN_CACHE_SECONDS);
-  return Number.isFinite(s) && s >= 0 ? s * 1000 : 15_000;
+  return Number.isFinite(s) && s >= 0 ? s * 1000 : 60_000;
 })();
 let _cache = null; // { at: number, byNumber: Map }
 
 async function getTripIndexCached(opts) {
   if (_cache && Date.now() - _cache.at < TTL_MS) return _cache.byNumber;
-  const index = await fetchTripIndex({}, opts);
+  // includeConcluido: viagens ATRIBUÍDAS que já concluíram saem das abas
+  // Planejado/Aceito; sem incluir o histórico, o selo marcava "não atribuído"
+  // (vermelho) por elas simplesmente não estarem no índice consultado.
+  const index = await fetchTripIndex({ includeConcluido: true, concluidoDaysBack: 20 }, opts);
   const byNumber = index?.byNumber instanceof Map ? index.byNumber : new Map();
   _cache = { at: Date.now(), byNumber };
   return byNumber;
@@ -58,7 +61,12 @@ export async function buildAspxAssignedByLh(items, opts = {}) {
     const eff = normNameForMatch(it.motorista || "");
     if (!eff) { out[lh] = false; continue; } // carga sem motorista → não atribuído
     const trip = byNumber.get(lh);
-    const assignedDriver = trip ? normNameForMatch(trip.driver || "") : "";
+    // Viagem FORA do índice consultado (não veio de Planejado/Aceito/Concluído — ex.:
+    // além da janela/páginas): NÃO sabemos o estado → OMITE (selo cinza "não
+    // consultado"), NUNCA marca vermelho. Marcar `false` aqui era o falso-negativo
+    // que fazia motoristas JÁ atribuídos aparecerem como "não atribuídos".
+    if (!trip) continue;
+    const assignedDriver = normNameForMatch(trip.driver || "");
     out[lh] = Boolean(assignedDriver && assignedDriver === eff);
   }
   return out;
