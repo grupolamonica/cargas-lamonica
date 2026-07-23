@@ -529,6 +529,38 @@ async function bootstrap() {
     console.info("[spot-autolaunch] desabilitado via kill-switch (SPOT_AUTOLAUNCH_ENABLED=false)");
   }
 
+  // 4d-bis. DC-279 — Notificação de spot. Varre o feed da Programação e insere uma
+  //     notificação `new_spot` quando surge uma carga spot numa ROTA que o operador
+  //     marcou p/ alertar (programacao_settings.spot_alert_route_keys). O sino do
+  //     operador (polling 30s, presente em toda tela) dispara som + notificação do
+  //     navegador no cliente. Só busca o feed se houver rota marcada (inerte por
+  //     padrão). Kill-switch: SPOT_ALERT_ENABLED=false. Intervalo:
+  //     SPOT_ALERT_INTERVAL_MIN (default 3min — alerta ao vivo; o SPX muda ~10min).
+  if (process.env.SPOT_ALERT_ENABLED !== "false") {
+    const intervalMin = Math.max(1, Number(process.env.SPOT_ALERT_INTERVAL_MIN || 3));
+    let notifyingSpots = false;
+    setInterval(async () => {
+      if (notifyingSpots) return;
+      notifyingSpots = true;
+      try {
+        const { notifyNewSpots } = await import(
+          "./application/operator-admin/use-cases/notify-new-spots.js"
+        );
+        const r = await notifyNewSpots({ correlationId: "spot-alert" });
+        if (r.notified || r.deferred) {
+          console.info(`[spot-alert] ${r.notified} nova(s) carga(s) spot notificada(s) (casaram=${r.matched}, repetidas=${r.skipped}, adiadas=${r.deferred})`);
+        }
+      } catch (err) {
+        console.error("[spot-alert] erro:", err?.message);
+      } finally {
+        notifyingSpots = false;
+      }
+    }, intervalMin * 60 * 1000);
+    console.info(`[spot-alert] timer ativo (intervalo ${intervalMin}min; rotas que alertam definidas na tela de Programação)`);
+  } else {
+    console.info("[spot-alert] desabilitado via kill-switch (SPOT_ALERT_ENABLED=false)");
+  }
+
   // 4e. Expiração de cargas passadas (OPEN → EXPIRED). Sem isso, cargas cujo
   //     carregamento já venceu ficam OPEN no painel do operador (poluindo "ativas"
   //     e criando a impressão de "cargas que não aparecem para o motorista"), embora

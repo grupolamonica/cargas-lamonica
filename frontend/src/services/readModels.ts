@@ -1843,6 +1843,8 @@ export async function runAutoLaunchSpots(): Promise<AutoLaunchResult> {
 
 export interface ProgramacaoSettings {
   spotAutolaunchEnabled: boolean;
+  /** DC-279: rotas (origin_key|destination_key) que disparam alerta de spot. */
+  alertRouteKeys: string[];
   updatedAt: string | null;
 }
 
@@ -1859,6 +1861,16 @@ export async function setSpotAutolaunchEnabled(enabled: boolean): Promise<Progra
     accessToken,
     method: "PATCH",
     body: { spotAutolaunchEnabled: enabled },
+  });
+}
+
+/** DC-279 — define quais rotas cadastradas disparam alerta de spot (compartilhado). */
+export async function setSpotAlertRouteKeys(alertRouteKeys: string[]): Promise<ProgramacaoSettings> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<ProgramacaoSettings>("/api/operator/programacao/settings", {
+    accessToken,
+    method: "PATCH",
+    body: { alertRouteKeys },
   });
 }
 

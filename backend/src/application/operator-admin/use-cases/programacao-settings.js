@@ -15,22 +15,61 @@ function isMissingTable(err) {
   return Boolean(err) && (err.code === "42P01" || /relation .* does not exist/i.test(err.message || ""));
 }
 
-const DEFAULTS = { spotAutolaunchEnabled: true };
+const DEFAULTS = { spotAutolaunchEnabled: true, alertRouteKeys: [] };
+
+// Coluna spot_alert_route_keys (DC-279) pode não existir ainda (migration não
+// rodou) — degradamos para lista vazia sem derrubar a leitura das demais flags.
+function isMissingColumn(err) {
+  return Boolean(err) && (err.code === "42703" || /column .* does not exist/i.test(err.message || ""));
+}
+
+function normalizeRouteKeys(value) {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? (() => {
+          try {
+            const parsed = JSON.parse(value);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        })()
+      : [];
+  const seen = new Set();
+  const out = [];
+  for (const entry of raw) {
+    const key = String(entry ?? "").trim();
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      out.push(key);
+    }
+  }
+  return out;
+}
 
 /** Lê a linha singleton (id=1). Default LIGADO se a tabela/linha não existir. */
 export async function getProgramacaoSettings({ deps = {} } = {}) {
   const run = deps.withPgClient || withPgClient;
-  try {
-    const row = await run((client) =>
+  const readRow = (columns) =>
+    run((client) =>
       client
-        .query(
-          `SELECT spot_autolaunch_enabled, updated_at FROM public.programacao_settings WHERE id = 1`,
-        )
+        .query(`SELECT ${columns} FROM public.programacao_settings WHERE id = 1`)
         .then((r) => r.rows[0] || null),
     );
+  try {
+    let row;
+    try {
+      row = await readRow("spot_autolaunch_enabled, spot_alert_route_keys, updated_at");
+    } catch (err) {
+      // Migration do DC-279 ainda não rodou: relê sem a coluna nova.
+      if (!isMissingColumn(err)) throw err;
+      row = await readRow("spot_autolaunch_enabled, updated_at");
+    }
     if (!row) return { ...DEFAULTS, updatedAt: null };
     return {
       spotAutolaunchEnabled: Boolean(row.spot_autolaunch_enabled),
+      alertRouteKeys: normalizeRouteKeys(row.spot_alert_route_keys),
       updatedAt: row.updated_at ?? null,
     };
   } catch (err) {
@@ -45,7 +84,7 @@ export async function getProgramacaoSettings({ deps = {} } = {}) {
  */
 export async function updateProgramacaoSettings({ patch = {}, operatorId = null, deps = {} } = {}) {
   const run = deps.withPgTransaction || withPgTransaction;
-  return run(async (client) => {
+  await run(async (client) => {
     await client.query(
       `INSERT INTO public.programacao_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`,
     );
@@ -57,14 +96,33 @@ export async function updateProgramacaoSettings({ patch = {}, operatorId = null,
         [patch.spotAutolaunchEnabled, operatorId],
       );
     }
-    const row = await client
-      .query(`SELECT spot_autolaunch_enabled, updated_at FROM public.programacao_settings WHERE id = 1`)
-      .then((r) => r.rows[0] || null);
-    return {
-      spotAutolaunchEnabled: row ? Boolean(row.spot_autolaunch_enabled) : DEFAULTS.spotAutolaunchEnabled,
-      updatedAt: row?.updated_at ?? null,
-    };
+    if (Array.isArray(patch.alertRouteKeys)) {
+      await client.query(
+        `UPDATE public.programacao_settings
+            SET spot_alert_route_keys = $1::jsonb, updated_at = now(), updated_by = $2
+          WHERE id = 1`,
+        [JSON.stringify(normalizeRouteKeys(patch.alertRouteKeys)), operatorId],
+      );
+    }
   });
+  // Estado final lido FORA da transação, pelo leitor tolerante a coluna ausente
+  // (review DC-279 #4): um SELECT da coluna nova DENTRO da txn abortaria a txn se a
+  // migration do DC-279 ainda não tivesse rodado — quebrando o toggle DC-201.
+  return getProgramacaoSettings({ deps });
+}
+
+/**
+ * Conveniência p/ o scanner de notificação de spot (DC-279): quais route keys
+ * o operador marcou p/ alertar. Lista vazia = feature inerte. Erros de leitura
+ * NÃO derrubam o ciclo (retorna []).
+ */
+export async function getSpotAlertRouteKeys({ deps = {} } = {}) {
+  try {
+    const s = await getProgramacaoSettings({ deps });
+    return Array.isArray(s.alertRouteKeys) ? s.alertRouteKeys : [];
+  } catch {
+    return [];
+  }
 }
 
 /**

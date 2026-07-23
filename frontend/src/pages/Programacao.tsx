@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, Loader2, PackagePlus, RefreshCw, Search, Upload, X, Zap } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, BellRing, CheckCircle2, Loader2, PackagePlus, RefreshCw, Search, Upload, X, Zap } from "lucide-react";
 
 import DashboardHeader from "@/components/DashboardHeader";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ import {
   launchCargoFromTrip,
   runAutoLaunchSpots,
   setSpotAutolaunchEnabled,
+  setSpotAlertRouteKeys,
   type ProgramacaoOverview,
   type ProgramacaoRow,
   type ProgramacaoTab,
@@ -321,6 +323,62 @@ export default function Programacao() {
     onError: (e: Error) => toast.error(e.message || "Erro ao alterar o lançamento automático."),
   });
 
+  // DC-279 — rotas cadastradas que disparam alerta de spot (som + notificação).
+  // Reusa a mesma query de settings (getProgramacaoSettings retorna alertRouteKeys).
+  const alertRouteKeys = useMemo(
+    () => autolaunchQuery.data?.alertRouteKeys ?? [],
+    [autolaunchQuery.data],
+  );
+  const [alertModalOpen, setAlertModalOpen] = useState(false);
+  const [alertDraft, setAlertDraft] = useState<Set<string>>(new Set());
+  const [alertSearch, setAlertSearch] = useState("");
+  const alertRoutesMut = useMutation({
+    mutationFn: (keys: string[]) => setSpotAlertRouteKeys(keys),
+    onSuccess: (res) => {
+      queryClient.setQueryData(AUTOLAUNCH_KEY, res);
+      setAlertModalOpen(false);
+      toast.success(
+        res.alertRouteKeys.length
+          ? `Alerta de spot ativo em ${res.alertRouteKeys.length} rota(s).`
+          : "Alerta de spot desativado (nenhuma rota selecionada).",
+      );
+    },
+    onError: (e: Error) => toast.error(e.message || "Erro ao salvar as rotas de alerta."),
+  });
+  // Uma opção por trecho (dedup por origin_key|destination_key), só rotas ativas.
+  const alertRouteOptions = useMemo(() => {
+    const map = new Map<string, { key: string; label: string }>();
+    for (const r of routesQuery.data ?? []) {
+      if (!r.ativa) continue;
+      const key = `${r.origin_key}|${r.destination_key}`;
+      if (key === "|") continue;
+      if (!map.has(key)) map.set(key, { key, label: r.base_route_label || `${r.origem} → ${r.destino}` });
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      a.label.localeCompare(b.label, "pt-BR", { sensitivity: "base" }),
+    );
+  }, [routesQuery.data]);
+  const openAlertModal = () => {
+    // Semeia só com keys ainda presentes nas rotas ativas — rotas desativadas não
+    // ficam presas/invisíveis no set (review DC-279 #10). Salvar reconcilia o estado.
+    const optionKeys = new Set(alertRouteOptions.map((o) => o.key));
+    setAlertDraft(new Set(alertRouteKeys.filter((k) => optionKeys.has(k))));
+    setAlertSearch("");
+    setAlertModalOpen(true);
+  };
+  const toggleAlertRoute = (key: string) =>
+    setAlertDraft((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  // DC-279 — a notificação de spot navega p/ /programacao?lh=<lh>; destacamos a linha.
+  const [searchParams] = useSearchParams();
+  const highlightLh = searchParams.get("lh");
+  const spotTabHandledRef = useRef<string | null>(null);
+
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: PROGRAMACAO_MAIN_KEY });
     queryClient.invalidateQueries({ queryKey: PROGRAMACAO_CONCLUIDO_KEY });
@@ -605,6 +663,24 @@ export default function Programacao() {
     setPage(1);
   }, [tab, agendaSortDir, search, fCliente, fRota, fStatus, carregDe, carregAte, descargaDe, descargaAte, fLancado, fAceito]);
 
+  // DC-279 — ao chegar por ?lh, ativa (uma vez) a aba onde o spot está. Sem isso,
+  // um spot Nestlé ACEITO nunca apareceria, pois a aba default é 'planejado'
+  // (review #7). Só age uma vez por lh — depois o operador troca de aba à vontade.
+  useEffect(() => {
+    if (!highlightLh || spotTabHandledRef.current === highlightLh) return;
+    const target = rows.find((r) => r.lh === highlightLh);
+    if (!target) return; // dados ainda não chegaram; reavalia quando chegarem
+    spotTabHandledRef.current = highlightLh;
+    if (target.tab !== tab) setTab(target.tab);
+  }, [highlightLh, rows, tab]);
+
+  // DC-279 — ao chegar pela notificação (?lh=), rola até a linha destacada (se visível).
+  useEffect(() => {
+    if (!highlightLh) return;
+    const el = document.querySelector(`tr[data-lh="${CSS.escape(highlightLh)}"]`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightLh, pagedRows]);
+
   const hasActiveFilters =
     search.trim().length > 0 ||
     fCliente.length + fRota.length + fStatus.length + fLancado.length + fAceito.length > 0 ||
@@ -680,6 +756,21 @@ export default function Programacao() {
             >
               <Zap className={cn("h-4 w-4", autolaunchOn && "fill-current")} />
               Lançamento automático: {autolaunchOn ? "Ligado" : "Desligado"}
+            </Button>
+            <Button
+              variant="outline"
+              className={cn(
+                "gap-2",
+                alertRouteKeys.length
+                  ? "border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-500/40 dark:text-blue-300 dark:hover:bg-blue-500/10"
+                  : "border-border text-muted-foreground",
+              )}
+              onClick={openAlertModal}
+              disabled={autolaunchQuery.isLoading || routesQuery.isLoading}
+              title="Escolha as rotas que tocam um alerta (som + notificação) quando surge uma carga spot"
+            >
+              <BellRing className="h-4 w-4" />
+              Alertas de spot: {alertRouteKeys.length} rota{alertRouteKeys.length === 1 ? "" : "s"}
             </Button>
             <Button variant="outline" className="gap-2" onClick={() => setImportOpen(true)}>
               <Upload className="h-4 w-4" /> Importar programação
@@ -807,7 +898,15 @@ export default function Programacao() {
               </thead>
               <tbody className="divide-y divide-border/50">
                 {pagedRows.map((r, i) => (
-                  <tr key={`${r.tab}:${r.lh}`} className={cn("align-top transition hover:bg-primary/[0.03]", i % 2 === 1 && "bg-muted/20")}>
+                  <tr
+                    key={`${r.tab}:${r.lh}`}
+                    data-lh={r.lh}
+                    className={cn(
+                      "align-top transition hover:bg-primary/[0.03]",
+                      i % 2 === 1 && "bg-muted/20",
+                      highlightLh && r.lh === highlightLh && "bg-blue-50 ring-2 ring-inset ring-blue-400 dark:bg-blue-500/10",
+                    )}
+                  >
                     <td className="px-3 py-2.5">
                       <div className="font-medium text-foreground">{r.cliente || "—"}</div>
                       <div className="font-mono text-[11px] text-muted-foreground">{r.lh || "—"}</div>
@@ -987,6 +1086,80 @@ export default function Programacao() {
               {autolaunchMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               {autolaunchOn ? "Sim, desligar" : "Sim, ligar"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* DC-279 — Alertas de spot: escolher quais rotas cadastradas "tocam" */}
+      <Dialog open={alertModalOpen} onOpenChange={(o) => !alertRoutesMut.isPending && setAlertModalOpen(o)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Alertas de spot por rota</DialogTitle>
+            <DialogDescription className="pt-1">
+              Escolha as rotas <strong>cadastradas</strong> que devem alertar (som + notificação no
+              computador) quando surgir uma carga spot disponível nelas. Vale para todos os operadores.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              value={alertSearch}
+              onChange={(e) => setAlertSearch(e.target.value)}
+              placeholder="Buscar rota..."
+              className="w-full rounded-xl border border-border/70 bg-background py-2 pl-9 pr-3 text-sm"
+            />
+          </div>
+
+          <div className="mt-1 max-h-[46vh] space-y-1 overflow-y-auto pr-1">
+            {alertRouteOptions.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                Nenhuma rota cadastrada ainda. Cadastre rotas para poder alertar spots.
+              </p>
+            ) : (
+              alertRouteOptions
+                .filter((o) => o.label.toLowerCase().includes(alertSearch.trim().toLowerCase()))
+                .map((o) => {
+                  const checked = alertDraft.has(o.key);
+                  return (
+                    <label
+                      key={o.key}
+                      className={cn(
+                        "flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition",
+                        checked
+                          ? "border-blue-300 bg-blue-50 dark:border-blue-500/40 dark:bg-blue-500/10"
+                          : "border-border/60 hover:bg-muted/40",
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleAlertRoute(o.key)}
+                        className="h-4 w-4 accent-blue-600"
+                      />
+                      <span className="truncate text-foreground">{o.label}</span>
+                    </label>
+                  );
+                })
+            )}
+          </div>
+
+          <DialogFooter className="items-center sm:justify-between">
+            <span className="text-xs text-muted-foreground">{alertDraft.size} rota(s) selecionada(s)</span>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setAlertModalOpen(false)} disabled={alertRoutesMut.isPending}>
+                Cancelar
+              </Button>
+              <Button
+                className="gap-2"
+                onClick={() => alertRoutesMut.mutate(Array.from(alertDraft))}
+                disabled={alertRoutesMut.isPending}
+              >
+                {alertRoutesMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Salvar
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

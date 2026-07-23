@@ -1,10 +1,13 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { Bell, CheckCheck, Trash2 } from "lucide-react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { ensureNotificationPermission, playSpotBeep, showDesktopNotification, unlockSpotAudio } from "@/lib/spotAlert";
 import {
   clearOperatorNotifications,
   fetchOperatorNotifications,
@@ -28,6 +31,7 @@ const KIND_LABEL: Record<string, string> = {
   reconcile_done: "Conciliação Angellira concluída",
   route_need_accept: "Motorista topou chamado de carga",
   route_need_converted: "Candidatura via chamado de carga",
+  new_spot: "Nova carga spot disponível",
 };
 
 const KIND_TINT: Record<string, string> = {
@@ -44,6 +48,7 @@ const KIND_TINT: Record<string, string> = {
   reconcile_done: "bg-sky-500",
   route_need_accept: "bg-teal-500",
   route_need_converted: "bg-emerald-500",
+  new_spot: "bg-blue-600",
 };
 
 function fmtRelative(iso: string) {
@@ -56,8 +61,15 @@ function fmtRelative(iso: string) {
   return new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
 }
 
+function spotHref(metadata: Record<string, unknown> | undefined): string {
+  const lh = metadata && typeof metadata.lh === "string" ? metadata.lh.trim() : "";
+  return lh ? `/programacao?lh=${encodeURIComponent(lh)}` : "/programacao";
+}
+
 export default function NotificationsBell() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
   const { data } = useQuery({
     queryKey: NOTIFICATIONS_KEY,
     queryFn: fetchOperatorNotifications,
@@ -67,6 +79,41 @@ export default function NotificationsBell() {
 
   const items = useMemo<OperatorNotification[]>(() => data?.items ?? [], [data?.items]);
   const unseen = data?.unseenCount ?? 0;
+
+  const goToSpot = (metadata: OperatorNotification["metadata"]) => {
+    setOpen(false);
+    navigate(spotHref(metadata));
+  };
+
+  // DC-279: som + notificação do navegador quando chega uma nova carga spot. Só
+  // roda depois que a query trouxe dados (senão a 1ª leva real seria tratada como
+  // "nova" e tocaria o histórico inteiro — review #11). A 1ª leva COM dados só
+  // registra os IDs (sem alertar); levas seguintes (polling 30s) alertam 1x cada.
+  const alertedSpotIdsRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    const spots = items.filter((n) => n.kind === "new_spot");
+    if (alertedSpotIdsRef.current === null) {
+      alertedSpotIdsRef.current = new Set(spots.map((n) => n.id));
+      return;
+    }
+    const already = alertedSpotIdsRef.current;
+    const fresh = spots.filter((n) => !already.has(n.id) && !n.seen);
+    if (fresh.length === 0) return;
+    fresh.forEach((n) => already.add(n.id));
+
+    playSpotBeep();
+    const first = fresh[0];
+    const openSpot = () => navigate(spotHref(first.metadata));
+    const title = fresh.length === 1 ? first.title : `${fresh.length} novas cargas spot disponíveis`;
+    const body = fresh.length === 1 ? first.body : "Clique para ver e aceitar na Programação";
+    showDesktopNotification({ title, body, tag: first.id, onClick: openSpot });
+    toast.info(title, {
+      description: fresh.length === 1 ? first.body : undefined,
+      duration: 12_000,
+      action: { label: "Ver na Programação", onClick: openSpot },
+    });
+  }, [data, items, navigate]);
 
   const markAllMut = useMutation({
     mutationFn: () => markOperatorNotificationsSeen({ all: true }),
@@ -79,10 +126,16 @@ export default function NotificationsBell() {
 
   return (
     <Popover
-      onOpenChange={(open) => {
-        // Ao ABRIR o popover, marca como vistas depois de 800ms (usuário viu).
-        if (open && unseen > 0) {
-          setTimeout(() => markAllMut.mutate(), 800);
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) {
+          // Abrir o sino é um gesto do usuário — destrava o áudio e pede permissão
+          // de notificação do navegador (DC-279), se ainda não decididas.
+          unlockSpotAudio();
+          void ensureNotificationPermission();
+          // Marca como vistas depois de 800ms (usuário viu).
+          if (unseen > 0) setTimeout(() => markAllMut.mutate(), 800);
         }
       }}
     >
@@ -135,21 +188,50 @@ export default function NotificationsBell() {
             <p className="px-4 py-8 text-center text-sm text-muted-foreground">Nenhuma notificação por enquanto.</p>
           ) : (
             <ul className="divide-y divide-border/60">
-              {items.map((n) => (
-                <li key={n.id} className={cn("relative flex items-start gap-3 px-4 py-3", !n.seen && "bg-primary/5")}>
-                  <span className={cn("mt-1 h-2.5 w-2.5 shrink-0 rounded-full", KIND_TINT[n.kind] ?? "bg-slate-400")} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <p className="truncate text-sm font-medium text-foreground">{n.title}</p>
-                      <span className="shrink-0 text-[10px] text-muted-foreground">{fmtRelative(n.created_at)}</span>
+              {items.map((n) => {
+                // DC-279: a notificação de spot é clicável e leva o operador à
+                // Programação (no spot, via ?lh=) para aceitar pelo fluxo normal.
+                const clickable = n.kind === "new_spot";
+                const openRow = () => goToSpot(n.metadata);
+                return (
+                  <li
+                    key={n.id}
+                    className={cn(
+                      "relative flex items-start gap-3 px-4 py-3",
+                      !n.seen && "bg-primary/5",
+                      clickable && "cursor-pointer transition-colors hover:bg-primary/10",
+                    )}
+                    {...(clickable
+                      ? {
+                          role: "button",
+                          tabIndex: 0,
+                          onClick: openRow,
+                          onKeyDown: (e: React.KeyboardEvent) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              openRow();
+                            }
+                          },
+                        }
+                      : {})}
+                  >
+                    <span className={cn("mt-1 h-2.5 w-2.5 shrink-0 rounded-full", KIND_TINT[n.kind] ?? "bg-slate-400")} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <p className="truncate text-sm font-medium text-foreground">{n.title}</p>
+                        <span className="shrink-0 text-[10px] text-muted-foreground">{fmtRelative(n.created_at)}</span>
+                      </div>
+                      {n.body ? <p className="mt-0.5 truncate text-xs text-muted-foreground">{n.body}</p> : null}
+                      <p className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground/80">
+                        {KIND_LABEL[n.kind] ?? n.kind}
+                      </p>
+                      {clickable ? (
+                        <p className="mt-1 text-[11px] font-semibold text-primary">Abrir na Programação &rarr;</p>
+                      ) : null}
                     </div>
-                    {n.body ? <p className="mt-0.5 truncate text-xs text-muted-foreground">{n.body}</p> : null}
-                    <p className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground/80">
-                      {KIND_LABEL[n.kind] ?? n.kind}
-                    </p>
-                  </div>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
