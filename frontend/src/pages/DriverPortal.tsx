@@ -290,6 +290,9 @@ const DriverPortal = () => {
     // Opcional: ausente no cadastro standalone (sem carga associada).
     cargaId?: string;
     cpf: string;
+    // Telefone informado na tela inicial (cadastro standalone) — prefill do
+    // Step A e, sobretudo, persiste no rascunho p/ alertar quem não concluir.
+    phone?: string;
     horsePlate: string;
     trailerPlates: string[];
     preCheckResponse: PreCheckResponse;
@@ -327,10 +330,11 @@ const DriverPortal = () => {
   // Cadastro avulso: o dialog rodou o pre-check e achou pendências. Abre o
   // wizard completo SEM cargaId — submit persiste carga_id=NULL.
   const handleStandaloneProceed = useCallback(
-    ({ cpf, horsePlate, trailerPlates, preCheckResponse }: StandaloneCadastroProceedArgs) => {
+    ({ cpf, phone, horsePlate, trailerPlates, preCheckResponse }: StandaloneCadastroProceedArgs) => {
       setRegistrationContext({
         // cargaId omitido de propósito — cadastro sem carga.
         cpf,
+        phone,
         horsePlate,
         trailerPlates,
         preCheckResponse,
@@ -1266,6 +1270,7 @@ const DriverPortal = () => {
             };
           })()}
           cpf={registrationContext?.cpf}
+          initialPhone={registrationContext?.phone}
           horsePlate={registrationContext?.horsePlate}
           trailerPlates={registrationContext?.trailerPlates}
           initialPreCheckResponse={registrationContext?.preCheckResponse}

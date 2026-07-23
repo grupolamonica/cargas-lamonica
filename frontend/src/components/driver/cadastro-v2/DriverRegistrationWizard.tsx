@@ -78,6 +78,12 @@ export interface DriverRegistrationWizardProps {
    */
   cpf?: string;
   /**
+   * Telefone (dígitos) informado na tela inicial do cadastro standalone.
+   * Pré-preenche o Step A (A2) — assim persiste no rascunho e permite alertar
+   * quem começar e não concluir. Só semeia quando o A2 ainda está vazio.
+   */
+  initialPhone?: string;
+  /**
    * Resultado do pre-check já executado pelo interceptor do DriverClaimPanel.
    * Quando fornecido, o wizard pula o runPreCheck interno e abre direto na Tela 0.
    */
@@ -269,6 +275,7 @@ export function DriverRegistrationWizard({
   trailerPlates,
   cargaContext,
   cpf,
+  initialPhone,
   initialPreCheckResponse,
   onPreCheckPassed,
   operatorMode,
@@ -291,6 +298,20 @@ export function DriverRegistrationWizard({
   const [stepDData, setStepDData] = useState<StepDData | null>(null);
   const [stepEDataMap, setStepEDataMap] = useState<Record<number, StepEData>>({});
   const [ownerDocFromCrlv, setOwnerDocFromCrlv] = useState<string>("");
+
+  // Prefill do telefone informado na tela inicial (cadastro standalone). Semeia
+  // o A2 SÓ quando ainda está vazio — nunca sobrescreve o que o rascunho/CNH já
+  // preencheu. Como o Step A é auto-salvo no rascunho, o telefone fica
+  // persistido mesmo se o motorista parar o cadastro (base p/ alertá-lo depois).
+  useEffect(() => {
+    const digits = (initialPhone ?? "").replace(/\D/g, "");
+    if (!open || digits.length < 10) return;
+    setStepAData((current) => {
+      const a2 = current?.a2;
+      if (a2 && Array.isArray(a2.telefones) && a2.telefones.length > 0) return current;
+      return { ...(current ?? {}), a2: { telefones: [digits], telefone_primario: digits } } as StepAData;
+    });
+  }, [open, initialPhone]);
   const [currentTrailerIdx, setCurrentTrailerIdx] = useState<number>(0);
   const [collectedCarretaOwners, setCollectedCarretaOwners] = useState<
     CollectedCarretaOwner[]
