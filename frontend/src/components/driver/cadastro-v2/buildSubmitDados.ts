@@ -268,6 +268,34 @@ function buildAnttTitularPayload(
   return payload;
 }
 
+/**
+ * Endereço + comprovante de residência do proprietário (cavalo/carreta).
+ * O backend EXIGE `owner.endereco.comprovante_storage_path` para proprietário
+ * PF (superRefine em dadosSchema). Sem mapear isto, o submit dava 422
+ * ("Payload invalido") MESMO com o comprovante anexado — o wizard coletava em
+ * `ownerEndereco` mas o payload descartava. Só emite quando cep+numero+
+ * logradouro estão presentes (mínimos do enderecoSchema).
+ */
+function buildOwnerEndereco(
+  oe:
+    | { cep?: string; numero?: string; logradouro?: string; bairro?: string; cidade?: string; uf?: string; comprovanteUrl?: string }
+    | undefined,
+  fallbackComprovante?: string,
+): Record<string, unknown> | undefined {
+  if (!oe || !oe.cep || !oe.numero || !oe.logradouro) return undefined;
+  const endereco: Record<string, unknown> = {
+    cep: oe.cep,
+    numero: oe.numero,
+    logradouro: oe.logradouro,
+    bairro: oe.bairro || undefined,
+    cidade: oe.cidade || undefined,
+    uf: oe.uf || undefined,
+  };
+  const comprovante = oe.comprovanteUrl || fallbackComprovante;
+  if (comprovante) endereco.comprovante_storage_path = comprovante;
+  return endereco;
+}
+
 function buildOwnerFromStepC(stepC: StepCData) {
   const tipo = stepC.owner.docType === "cnpj" ? "pj" : "pf";
   const anttTitular = buildAnttTitularPayload(stepC.anttTitular);
@@ -285,10 +313,13 @@ function buildOwnerFromStepC(stepC: StepCData) {
 
   // 2026-05-18 — Refator: banco/PIS/cor_raca/estado_civil migraram para o
   // anttTitularSchema (cavalo). Owner CRLV emite apenas identidade basica.
+  const ownerEndereco = buildOwnerEndereco(stepC.ownerEndereco, stepC.ownerComprovanteStoragePath);
+
   return {
     tipo,
     doc: digitsOnly(stepC.owner.documento),
     nome: stepC.owner.nome,
+    ...(ownerEndereco ? { endereco: ownerEndereco } : {}),
     telefone: stepC.pf?.telefone || undefined,
     rntrc: stepC.antt?.rntrc || undefined,
     rntrc_via: stepC.antt?.rntrc ? ("antt" as const) : undefined,
@@ -342,10 +373,13 @@ function buildOwnerFromCollected(
         : undefined;
     // 2026-05-18 — Refator: banco/PIS/cor_raca/estado_civil migraram para o
     // anttTitularSchema. Owner CRLV carreta emite apenas identidade basica.
+    const ownerEndereco = buildOwnerEndereco(stepE.ownerEndereco, stepE.ownerComprovanteStoragePath);
+
     return {
       tipo,
       doc: digitsOnly(collected.doc),
       nome: stepE.owner?.nome ?? "",
+      ...(ownerEndereco ? { endereco: ownerEndereco } : {}),
       telefone: tipo === "pf" ? stepE.pf?.telefone || undefined : undefined,
       rntrc: stepE.antt?.rntrc || undefined,
       rntrc_via: stepE.antt?.rntrc ? ("antt" as const) : undefined,

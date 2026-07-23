@@ -34,3 +34,49 @@ describe("buildSubmitDados / DC-125 motorista partial", () => {
     expect(dados.cavalo).toEqual({ placa: "NLN8428" });
   });
 });
+
+// Fix do 422 "Payload invalido": o backend exige
+// cavalo_owner.endereco.comprovante_storage_path p/ proprietário PF, mas o
+// endereço/comprovante coletado em stepC.ownerEndereco não era mapeado.
+describe("buildSubmitDados / endereço+comprovante do proprietário", () => {
+  const withPfOwner = (): ConfirmationWizardData =>
+    ({
+      stepA: null,
+      stepB: { ownerIsDriver: false },
+      stepC: {
+        owner: { documento: "77594100697", nome: "NILTON DIAS DE SOUZA", docType: "cpf" },
+        ownerEndereco: {
+          cep: "39404-643",
+          numero: "194",
+          logradouro: "Rua Clemente Barbosa",
+          bairro: "Santa Laura",
+          cidade: "Montes Claros",
+          uf: "MG",
+          comprovanteUrl: "06658670692/x/cavalo_owner_comprovante.jpg",
+        },
+      },
+      stepD: null,
+      stepE: {},
+      collectedCarretaOwners: [],
+      horsePlate: "DYC7B43",
+      cpf: "06658670692",
+    }) as unknown as ConfirmationWizardData;
+
+  it("mapeia ownerEndereco → cavalo_owner.endereco.comprovante_storage_path (PF)", () => {
+    const dados = buildSubmitDados(withPfOwner()) as {
+      cavalo_owner?: { tipo?: string; endereco?: { comprovante_storage_path?: string; cep?: string } };
+    };
+    expect(dados.cavalo_owner?.tipo).toBe("pf");
+    expect(dados.cavalo_owner?.endereco?.cep).toBe("39404-643");
+    expect(dados.cavalo_owner?.endereco?.comprovante_storage_path).toBe(
+      "06658670692/x/cavalo_owner_comprovante.jpg",
+    );
+  });
+
+  it("omite endereco quando o proprietário não tem endereço completo", () => {
+    const data = withPfOwner();
+    (data.stepC as unknown as { ownerEndereco?: unknown }).ownerEndereco = { comprovanteUrl: "so/comprovante.jpg" };
+    const dados = buildSubmitDados(data) as { cavalo_owner?: { endereco?: unknown } };
+    expect(dados.cavalo_owner?.endereco).toBeUndefined();
+  });
+});
