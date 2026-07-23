@@ -19,6 +19,7 @@ import { scanAndEnqueueOutreach } from "./scan-and-enqueue.js";
 import { composeOutreachMessage, normalizeDriverPhone } from "./messages.js";
 import { getDriverOpportunities } from "./get-driver-opportunities.js";
 import { checkAngelliraVigencia } from "./angellira-check.js";
+import { performAngelliraPrecheck } from "../operator-admin/use-cases/angellira/precheck.js";
 import { enqueueDriverOutreach } from "./enqueue.js";
 import { saveWhatsappMessage } from "./whatsapp-messages.js";
 
@@ -525,15 +526,19 @@ export async function createManualOutreach({ cpf, nome, phone, trigger, message 
 }
 
 /**
- * Concilia cadastros com o Angellira: cadastros em 'pendente'/'draft'/'rascunho'
- * cujo motorista JÁ tem cadastro VIGENTE no Angellira são marcados como
- * 'concluido' (somem de "cadastro não finalizado" em todo o sistema).
+ * Concilia cadastros pendentes com o Angellira exigindo os TRÊS
+ * (motorista + cavalo + carreta), via performAngelliraPrecheck:
+ *  - todos os presentes CONFORMES (FOUND) → 'concluido';
+ *  - ALGUM não conforme (NOT_FOUND) → grava o marcador `dados.nao_conformidade`
+ *    (aparece na aba "Não conformidade"; o status segue 'pendente' — não sai da
+ *    fila) — é a migração AUTOMÁTICA dos não-conforme;
+ *  - algum INDISPONÍVEL (Angellira fora do ar) → pula (segue em homologação).
  */
 export async function reconcileRegistrationsWithAngellira() {
   const rows = await withPgClient((client) =>
     client
       .query(
-        `SELECT id, dados->'motorista'->>'cpf' AS cpf, status
+        `SELECT id, dados, status
            FROM public.pending_driver_registrations
           WHERE status IN ('pendente', 'draft', 'rascunho')`,
       )
@@ -544,52 +549,85 @@ export async function reconcileRegistrationsWithAngellira() {
       }),
   );
 
-  // Mapa CPF normalizado → ids das linhas (casa por id no UPDATE, robusto a
-  // formatação e pg-mem-safe: sem regexp_replace na query).
-  const idsByCpf = new Map();
-  for (const r of rows) {
-    const cpf = onlyDigits(r.cpf);
-    if (!/^\d{11}$/.test(cpf)) continue;
-    if (!idsByCpf.has(cpf)) idsByCpf.set(cpf, []);
-    idsByCpf.get(cpf).push(r.id);
-  }
-  const cpfs = [...idsByCpf.keys()];
-  const result = { candidates: rows.length, cpfsChecked: 0, vigentes: 0, updated: 0, unavailable: 0 };
-  if (!cpfs.length) return result;
+  const result = { candidates: rows.length, checked: 0, concluidos: 0, naoConformes: 0, unavailable: 0, updated: 0 };
+  if (!rows.length) return result;
 
-  const vigenteCpfs = [];
-  // Concorrência maior — o Angellira leva 10-25s por CPF; com 8 em paralelo a
-  // varredura de algumas dezenas de CPFs cabe em ~1-2 min (roda em background).
-  const CONCURRENCY = 8;
+  const toConcluir = []; // ids (os 3 conformes)
+  const toMarcar = []; // { id, dados, motivos } — algum não conforme (só status='pendente')
+
+  // O Angellira leva ~10-25s por consulta e o precheck faz 3 em paralelo por
+  // cadastro; limitamos a 4 cadastros simultâneos (~12 consultas) p/ não
+  // martelar a API. Roda em background.
+  const CONCURRENCY = 4;
   let cursor = 0;
   async function worker() {
-    while (cursor < cpfs.length) {
-      const cpf = cpfs[cursor++];
-      const v = await checkAngelliraVigencia(cpf);
-      result.cpfsChecked += 1;
-      if (v.vigente) vigenteCpfs.push(cpf);
-      // status UNAVAILABLE = Angellira fora do ar / timeout — reporta p/ o operador
-      // saber que não deu p/ conferir aquele CPF (não é "não vigente").
-      else if (v.status === "UNAVAILABLE" || v.checked === false) result.unavailable += 1;
+    while (cursor < rows.length) {
+      const row = rows[cursor++];
+      const cpf = onlyDigits(row?.dados?.motorista?.cpf);
+      if (!/^\d{11}$/.test(cpf)) continue; // sem CPF do motorista não dá p/ decidir
+      let pre;
+      try {
+        pre = await performAngelliraPrecheck({ cadastro: row });
+      } catch {
+        result.unavailable += 1;
+        continue;
+      }
+      result.checked += 1;
+      const entities = [
+        { key: "motorista", r: pre.motorista },
+        ...(pre.cavalo ? [{ key: "cavalo", r: pre.cavalo }] : []),
+        ...(pre.carreta ? [{ key: "carreta", r: pre.carreta }] : []),
+      ];
+      // Angellira fora do ar p/ algum → não decide agora (segue em homologação).
+      if (entities.some((e) => e.r?.status === "UNAVAILABLE")) {
+        result.unavailable += 1;
+        continue;
+      }
+      const naoConf = entities.filter((e) => e.r?.status !== "FOUND"); // NOT_FOUND = não conforme
+      if (naoConf.length === 0) {
+        toConcluir.push(row.id); // os 3 conformes
+      } else if (row.status === "pendente" && !(row.dados && typeof row.dados === "object" && row.dados.nao_conformidade)) {
+        toMarcar.push({ id: row.id, dados: row.dados, motivos: naoConf.map((e) => `${e.key} não conforme no Angellira`) });
+      }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, cpfs.length) }, worker));
-  result.vigentes = vigenteCpfs.length;
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, worker));
 
-  const vigenteIds = vigenteCpfs.flatMap((c) => idsByCpf.get(c) || []);
-  if (vigenteIds.length) {
-    const ph = vigenteIds.map((_, i) => `$${i + 1}`).join(",");
+  // Conclui os que fecharam os 3 (só quando ainda pendente/draft/rascunho).
+  if (toConcluir.length) {
+    const ph = toConcluir.map((_, i) => `$${i + 1}`).join(",");
     const { rowCount } = await withPgClient((client) =>
       client.query(
         `UPDATE public.pending_driver_registrations
             SET status = 'concluido'
           WHERE status IN ('pendente', 'draft', 'rascunho')
             AND id IN (${ph})`,
-        vigenteIds,
+        toConcluir,
       ),
     );
-    result.updated = rowCount ?? 0;
+    result.concluidos = rowCount ?? 0;
+    result.updated += rowCount ?? 0;
   }
+
+  // Marca os não-conforme (marcador JSONB; status segue 'pendente' → aba Não
+  // conformidade). Read-modify-write por linha (pg-mem-safe; sem operador ||).
+  const nowIso = new Date().toISOString();
+  for (const { id, dados, motivos } of toMarcar) {
+    const next = { ...(dados && typeof dados === "object" ? dados : {}), nao_conformidade: { at: nowIso, motivos, by: "reconcile" } };
+    const { rowCount } = await withPgClient((client) =>
+      client.query(
+        `UPDATE public.pending_driver_registrations
+            SET dados = $1::jsonb, updated_at = now()
+          WHERE id = $2 AND status = 'pendente'`,
+        [JSON.stringify(next), id],
+      ),
+    );
+    if (rowCount) {
+      result.naoConformes += 1;
+      result.updated += 1;
+    }
+  }
+
   return result;
 }
 
@@ -631,8 +669,8 @@ export async function startReconcileRegistrationsInBackground() {
             `INSERT INTO public.operator_notifications (kind, title, body, metadata)
              VALUES ('reconcile_done', $1, $2, $3::jsonb)`,
             [
-              `Conciliação concluída: ${result.updated} cadastro(s) marcados como concluído`,
-              `${result.vigentes} vigente(s) no Angellira de ${result.cpfsChecked} verificados` +
+              `Conciliação (3 conformes): ${result.concluidos} concluído(s) · ${result.naoConformes} em não conformidade`,
+              `${result.checked} cadastro(s) verificado(s) no Angellira (motorista+cavalo+carreta)` +
                 (result.unavailable ? ` · ${result.unavailable} sem resposta do Angellira` : ""),
               JSON.stringify(result),
             ],

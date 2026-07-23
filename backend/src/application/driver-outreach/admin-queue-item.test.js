@@ -26,6 +26,10 @@ vi.mock("../../infrastructure/whatsapp/evolution-client.js", () => ({
 const { angMock } = vi.hoisted(() => ({ angMock: vi.fn() }));
 vi.mock("./angellira-check.js", () => ({ checkAngelliraVigencia: angMock }));
 
+// Precheck Angellira dos 3 (motorista+cavalo+carreta) — mock p/ o reconcile.
+const { precheckMock } = vi.hoisted(() => ({ precheckMock: vi.fn() }));
+vi.mock("../operator-admin/use-cases/angellira/precheck.js", () => ({ performAngelliraPrecheck: precheckMock }));
+
 const {
   createManualOutreach,
   getOutreachQueueItem,
@@ -174,23 +178,42 @@ describe("outreach queue-item (integração pg-mem)", () => {
     await expect(createManualOutreach({ nome: "X", phone: "123", trigger: "churn" })).rejects.toThrow();
   });
 
-  it("reconcileRegistrationsWithAngellira marca 'concluido' quem já é vigente", async () => {
-    await seedPendingRegistration({ status: "pendente", dados: { motorista: { cpf: "11111111111", nome: "A" } } });
-    await seedPendingRegistration({ status: "draft", dados: { motorista: { cpf: "22222222222", nome: "B" } } });
-    angMock.mockImplementation(async (cpf) => ({ checked: true, vigente: cpf === "11111111111", validUntil: "2026-12-31" }));
+  it("reconcile: 3 conformes → concluido; algum não conforme → marca dados.nao_conformidade (segue pendente); indisponível → pula", async () => {
+    const ok = await seedPendingRegistration({
+      status: "pendente",
+      dados: { motorista: { cpf: "11111111111", nome: "OK" }, cavalo: { placa: "ABC1D23" }, carretas: [{ placa: "XYZ4E56" }] },
+    });
+    const nc = await seedPendingRegistration({
+      status: "pendente",
+      dados: { motorista: { cpf: "22222222222", nome: "NC" }, cavalo: { placa: "DEF2G34" } },
+    });
+    const un = await seedPendingRegistration({
+      status: "pendente",
+      dados: { motorista: { cpf: "33333333333", nome: "UN" } },
+    });
+    precheckMock.mockImplementation(async ({ cadastro }) => {
+      const cpf = cadastro?.dados?.motorista?.cpf;
+      if (cpf === "11111111111") return { motorista: { status: "FOUND" }, cavalo: { status: "FOUND" }, carreta: { status: "FOUND" } };
+      if (cpf === "22222222222") return { motorista: { status: "FOUND" }, cavalo: { status: "NOT_FOUND" } };
+      return { motorista: { status: "UNAVAILABLE" } };
+    });
 
     const r = await reconcileRegistrationsWithAngellira();
-    expect(r.vigentes).toBe(1);
-    expect(r.updated).toBe(1);
+    expect(r.concluidos).toBe(1);
+    expect(r.naoConformes).toBe(1);
+    expect(r.unavailable).toBe(1);
 
-    const { rows } = await query(
-      `SELECT status FROM public.pending_driver_registrations WHERE dados->'motorista'->>'cpf' = '11111111111'`,
-    );
-    expect(rows[0].status).toBe("concluido");
-    const { rows: other } = await query(
-      `SELECT status FROM public.pending_driver_registrations WHERE dados->'motorista'->>'cpf' = '22222222222'`,
-    );
-    expect(other[0].status).toBe("draft");
+    const { rows: rok } = await query(`SELECT status FROM public.pending_driver_registrations WHERE id = $1`, [ok.id]);
+    expect(rok[0].status).toBe("concluido");
+
+    const { rows: rnc } = await query(`SELECT status, dados FROM public.pending_driver_registrations WHERE id = $1`, [nc.id]);
+    expect(rnc[0].status).toBe("pendente"); // não sai da fila durante homologação
+    expect(rnc[0].dados.nao_conformidade).toBeTruthy();
+    expect(rnc[0].dados.nao_conformidade.motivos).toContain("cavalo não conforme no Angellira");
+
+    const { rows: run } = await query(`SELECT status, dados FROM public.pending_driver_registrations WHERE id = $1`, [un.id]);
+    expect(run[0].status).toBe("pendente");
+    expect(run[0].dados?.nao_conformidade).toBeFalsy(); // indisponível NÃO marca não conformidade
   });
 
   it("revalidateOutreachQueueAgainstAngellira cancela cadastro de quem já é vigente", async () => {
