@@ -24,6 +24,7 @@ import {
 
 export interface StandaloneCadastroProceedArgs {
   cpf: string;
+  phone: string;
   horsePlate: string;
   trailerPlates: string[];
   preCheckResponse: PreCheckResponse;
@@ -55,6 +56,7 @@ export function StandaloneCadastroDialog({
   onProceed,
 }: StandaloneCadastroDialogProps) {
   const [cpf, setCpf] = useState("");
+  const [phone, setPhone] = useState("");
   const [horsePlate, setHorsePlate] = useState("");
   const [trailer1, setTrailer1] = useState("");
   const [trailer2, setTrailer2] = useState("");
@@ -64,6 +66,7 @@ export function StandaloneCadastroDialog({
 
   const resetState = () => {
     setCpf("");
+    setPhone("");
     setHorsePlate("");
     setTrailer1("");
     setTrailer2("");
@@ -84,6 +87,12 @@ export function StandaloneCadastroDialog({
     const cpfDigits = onlyDigits(cpf);
     if (!isValidCpf(cpfDigits)) {
       setError("CPF inválido. Confira os 11 dígitos.");
+      return;
+    }
+
+    const phoneDigits = onlyDigits(phone);
+    if (phoneDigits.length < 10 || phoneDigits.length > 11) {
+      setError("Telefone inválido. Informe o DDD + número (ex.: (71) 99999-8888).");
       return;
     }
 
@@ -120,6 +129,7 @@ export function StandaloneCadastroDialog({
 
       onProceed({
         cpf: cpfDigits,
+        phone: phoneDigits,
         horsePlate: horse,
         trailerPlates: trailers,
         preCheckResponse: response,
@@ -187,6 +197,23 @@ export function StandaloneCadastroDialog({
                 onChange={(e) => setCpf(e.target.value)}
                 disabled={loading}
               />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="standalone-phone">Telefone (WhatsApp)</Label>
+              <Input
+                id="standalone-phone"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                placeholder="(00) 00000-0000"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                disabled={loading}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Se o cadastro ficar pela metade, a gente te avisa por aqui quando tiver carga.
+              </p>
             </div>
 
             <div className="space-y-1.5">
