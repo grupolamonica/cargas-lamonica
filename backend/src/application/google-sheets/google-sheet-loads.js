@@ -1338,6 +1338,22 @@ export async function updateSheetMonitorSnapshot({
 
   const isShopee = !source || source === SHEET_SOURCE_SHOPEE;
 
+  // ── Guarda anti-wipe do snapshot ──────────────────────────────────────────
+  // Ponto ÚNICO de escrita do snapshot. O botão "Atualizar planilha" do Monitor
+  // chama esta função DIRETO (sem passar pelo EMPTY_SHEET_GUARD do
+  // syncGoogleSheetLoads). Se o parse veio SEM nenhuma linha usável (0 LHs —
+  // planilha limpa / HTTP 200 em branco / hiccup do Google), NÃO sobrescreve o
+  // snapshot com vazio — senão o Monitor zerava. Lança: o refresh cai no snapshot
+  // cacheado do banco (catch → fall-through) e o sync loga e segue. Nunca há caso
+  // legítimo de a planilha Shopee/Nestlé ficar 100% sem LH em operação normal;
+  // manter o último snapshot bom é o modo de falha seguro.
+  const usableRowCount = rows.filter((r) => r.lh && String(r.lh).trim()).length;
+  if (usableRowCount === 0) {
+    throw new Error(
+      `EMPTY_SNAPSHOT_GUARD: planilha sem linhas usáveis (source=${source}, csvLen=${csvText?.length ?? 0}) — overwrite do snapshot abortado para não zerar o Monitor`,
+    );
+  }
+
   // Persist to DB so future reads are instant.
   // Non-fatal in terms of user experience (rows are still returned), but the
   // caller MUST be able to tell if the save succeeded so it can surface a
@@ -1522,6 +1538,43 @@ export async function syncGoogleSheetLoads({
   const allSheetRowsByLh = new Map(
     allSheetRows.filter((r) => r.lh && r.lh.trim()).map((r) => [r.lh.trim(), r]),
   );
+
+  // ── Guarda anti-planilha-vazia (anti-wipe) ─────────────────────────────────
+  // fetchGoogleSheetCsv só valida o STATUS HTTP, não o CONTEÚDO. Um 200 com CSV
+  // vazio / todas as linhas em branco (planilha limpa, gid/aba errado, hiccup do
+  // Google) fazia o sync tratar TODAS as cargas como "removidas da planilha":
+  // expirava tudo (OPEN→EXPIRED → portal vazio) e sobrescrevia o snapshot com
+  // vazio (Monitor vazio) — foi um incidente real em prod. Se a planilha veio
+  // SEM nenhuma linha usável (0 LHs) MAS existem cargas desta fonte no banco, é
+  // quase certo um fetch falho/branco — ABORTA a parte destrutiva (limpeza +
+  // snapshot) e mantém o último estado bom. Trade-off seguro: se a planilha for
+  // esvaziada DE VERDADE (raríssimo), a limpeza não roda sozinha — melhor
+  // sub-limpar do que apagar tudo. Uma planilha cheia porém toda ALOCADA não cai
+  // aqui (as linhas alocadas têm LH → allSheetRowsByLh > 0).
+  if (allSheetRowsByLh.size === 0 && (existingSheetLoads?.length ?? 0) > 0) {
+    console.error(
+      "[google-sheet-loads] sync ABORTADO (guarda anti-wipe): planilha veio vazia/sem linhas usáveis — mantendo o último estado",
+      {
+        source,
+        existingLoads: existingSheetLoads.length,
+        availableParsed: availableLoads.length,
+        csvLength: csvText?.length ?? 0,
+      },
+    );
+    return {
+      source,
+      skipped: true,
+      reason: "EMPTY_SHEET_GUARD",
+      availableLoadsCount: 0,
+      allocatedCreatedCount: 0,
+      unlinkedLoadsCount: 0,
+      revertedToOpenCount: 0,
+      revivedExpiredCount: 0,
+      skippedInvalidLoadsCount: invalidRows.length,
+      cancelCascadeSwept: 0,
+      sheetUrl,
+    };
+  }
 
   const staleInSheet = [];   // still present in sheet (closed by operator)
   const staleTrulyGone = []; // completely removed from sheet
