@@ -58,6 +58,23 @@ export function getCadastroProblemas(dados, opts = {}) {
   const hoje = opts.hoje instanceof Date ? opts.hoje : new Date();
   const hojeUTC = new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth(), hoje.getUTCDate()));
 
+  // ── Cadastro externo (Angellira/SPX) falhou ao aprovar ──
+  // Marcador gravado pelo handler de aprovação quando o disparo externo falha:
+  // o cadastro NÃO foi aprovado e segue na fila; aparece aqui com o motivo para
+  // o operador conferir e tentar aprovar de novo (o pipeline re-tenta só o que
+  // faltou). Ver resolveOperatorAprovarCadastroResponse.
+  const falhaExterna = dados.cadastro_externo_falhou;
+  if (falhaExterna && typeof falhaExterna === "object") {
+    const alvos = [];
+    if (falhaExterna.angellira && falhaExterna.angellira.ok === false) alvos.push("Angellira");
+    if (falhaExterna.spx && falhaExterna.spx.ok === false) alvos.push("SPX");
+    // Só sinaliza quando de fato há uma integração que falhou (defensivo: um
+    // marcador com tudo OK não deveria existir, mas não vira problema à toa).
+    if (alvos.length) {
+      add(problemas, "geral", "nao_conforme", `Cadastro ${alvos.join(" e ")} falhou ao aprovar — revise e tente aprovar novamente.`);
+    }
+  }
+
   // ── Motorista ──
   const m = dados.motorista;
   // Só cobra o motorista quando ele veio de forma "completa" (tem nome). O

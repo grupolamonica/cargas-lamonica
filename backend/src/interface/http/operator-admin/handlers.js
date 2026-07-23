@@ -2116,7 +2116,14 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
         driverId = authData.user.id;
       }
 
-      // 4. Insere driver_profile
+      // 4. Cria/atualiza o driver_profile — porém INATIVO (active=false) até a
+      //    aprovação de fato acontecer (passo 6a). O portão operacional de
+      //    reservar cargas é `driver_profiles.active` (evaluateDriverEligibility),
+      //    NÃO o status do cadastro; se criássemos active=true aqui e o cadastro
+      //    externo falhasse, o motorista já poderia reservar cargas mesmo sem o
+      //    cadastro de risco aprovado. Perfis já existentes (re-cadastro do mesmo
+      //    CPF) NÃO são desativados no ON CONFLICT (não desativa um motorista já
+      //    operacional por causa de uma nova tentativa) — o passo 6a/6b decide.
       const cavaloPlaca = String(registro.dados?.cavalo?.placa || "").trim() || null;
       const vehicleProfile = cavaloPlaca ? "cavalo" : null;
 
@@ -2126,7 +2133,7 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
             user_id, full_name, phone, document_number,
             vehicle_profile, active, documents_valid
           )
-          VALUES ($1, $2, $3, $4, $5, true, true)
+          VALUES ($1, $2, $3, $4, $5, false, true)
           ON CONFLICT (user_id) DO UPDATE SET
             full_name = EXCLUDED.full_name,
             phone = EXCLUDED.phone,
@@ -2138,51 +2145,12 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
         [driverId, nome || null, telefone, cpfClean, vehicleProfile],
       );
 
-      // 5. Atualiza registro para aprovado
-      await client.query(
-        `UPDATE public.pending_driver_registrations
-         SET status = 'aprovado', reviewed_at = now(), reviewed_by_id = $1
-         WHERE id = $2`,
-        [operatorId, id],
-      );
-
-      // 6. Audit log
-      await insertSecurityAuditEvent(client, {
-        eventType: "operator.cadastro.approved",
-        actorUserId: operatorId,
-        actorRole: "operator",
-        resourceType: "pending_driver_registration",
-        resourceId: id,
-        action: "approve",
-        outcome: "success",
-        requestIp,
-        correlationId,
-        metadata: { driverId, cpf: cpfClean, nome, jobs: requestedJobs },
-      });
-
-      // 6.5. DC-198 — notificação WhatsApp "cadastro aprovado" (lógica pronta,
-      // DESLIGADA por flag até a fundação driver-outreach + Cloud API/DC-176).
-      // Best-effort e não-bloqueante: nunca derruba a aprovação.
-      try {
-        // Só notifica "apto" quando o precheck do modal veio TODO conforme
-        // (Angellira + SPX). A conformidade chega no corpo do request (body.conformidade).
-        const allConforme = Boolean(body?.conformidade?.angellira && body?.conformidade?.spx);
-        const outreach = notifyRegistrationApproved({ nome, telefone, allConforme });
-        if (outreach.reason === "pending_channel") {
-          logStructuredEvent("info", "driver-outreach.registration-approved.ready", {
-            driverId,
-            correlationId,
-            note: "flag on; mensagem pronta, canal de envio ainda nao conectado (foundation/Cloud API pendente)",
-          });
-        }
-      } catch (outreachError) {
-        logStructuredEvent("warn", "driver-outreach.registration-approved.failed", {
-          correlationId,
-          message: outreachError instanceof Error ? outreachError.message : String(outreachError),
-        });
-      }
-
-      // 7. Opcional: dispara pipelines externos (DC-111 / Sprint 1)
+      // 5. Dispara os cadastros externos ANTES de aprovar. Os pipelines são
+      //    idempotentes por etapa (runStep pula jobs já OK), então re-aprovar
+      //    após uma falha parcial re-tenta só o que faltou — NÃO re-cadastra no
+      //    Angellira o que já deu certo (sem duplicar). A conta Supabase + o
+      //    driver_profile já foram criados acima (passos 3-4), necessários p/ o
+      //    dispatch; se não aprovar agora, a retentativa reaproveita a conta.
       let angellira = null;
       if (shouldDispatchAngellira) {
         angellira = await dispatchAngelliraFromApprove({
@@ -2196,10 +2164,108 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
         });
       }
 
+      // 6. Decide a aprovação: SÓ marca 'aprovado' quando TODO cadastro externo
+      //    solicitado deu certo. Se algum falhar (inclui Angellira/SPX fora do
+      //    ar), NÃO aprova — o cadastro SEGUE na fila (status inalterado) e
+      //    grava o marcador `dados.cadastro_externo_falhou` p/ aparecer em
+      //    "Dados incompletos" com o motivo, e o operador retenta.
+      const dispatchRequested = shouldDispatchAngellira || shouldDispatchSpx;
+      const angelliraOk = !shouldDispatchAngellira || angellira?.ok === true;
+      const spxOk = !shouldDispatchSpx || spx?.ok === true;
+      const approved = !dispatchRequested || (angelliraOk && spxOk);
+
+      if (approved) {
+        // 6a. ATIVA o driver_profile (portão operacional) e SÓ DEPOIS marca
+        //     'aprovado'. A ordem importa: withPgClient é autocommit (sem
+        //     transação), então se a conexão cair ENTRE os dois writes, o pior
+        //     caso é `active=true` + status ainda 'pendente' — recuperável na
+        //     retentativa (re-roda o 6a). A ordem inversa deixaria
+        //     'aprovado'+active=false, que o guard 409 ("já aprovado") tornaria
+        //     IRRECUPERÁVEL (motorista aprovado porém bloqueado p/ sempre).
+        await client.query(
+          `UPDATE public.driver_profiles SET active = true, updated_at = now() WHERE user_id = $1`,
+          [driverId],
+        );
+        await client.query(
+          `UPDATE public.pending_driver_registrations
+             SET status = 'aprovado', reviewed_at = now(), reviewed_by_id = $1
+           WHERE id = $2`,
+          [operatorId, id],
+        );
+        await insertSecurityAuditEvent(client, {
+          eventType: "operator.cadastro.approved",
+          actorUserId: operatorId,
+          actorRole: "operator",
+          resourceType: "pending_driver_registration",
+          resourceId: id,
+          action: "approve",
+          outcome: "success",
+          requestIp,
+          correlationId,
+          metadata: { driverId, cpf: cpfClean, nome, jobs: requestedJobs },
+        });
+
+        // 6.5. DC-198 — notificação WhatsApp "cadastro aprovado" (lógica pronta,
+        // DESLIGADA por flag até a fundação driver-outreach + Cloud API/DC-176).
+        // Best-effort e não-bloqueante: nunca derruba a aprovação. Só quando de
+        // fato aprovou.
+        try {
+          const allConforme = Boolean(body?.conformidade?.angellira && body?.conformidade?.spx);
+          const outreach = notifyRegistrationApproved({ nome, telefone, allConforme });
+          if (outreach.reason === "pending_channel") {
+            logStructuredEvent("info", "driver-outreach.registration-approved.ready", {
+              driverId,
+              correlationId,
+              note: "flag on; mensagem pronta, canal de envio ainda nao conectado (foundation/Cloud API pendente)",
+            });
+          }
+        } catch (outreachError) {
+          logStructuredEvent("warn", "driver-outreach.registration-approved.failed", {
+            correlationId,
+            message: outreachError instanceof Error ? outreachError.message : String(outreachError),
+          });
+        }
+      } else {
+        // 6b. NÃO aprova: mantém o status atual (o cadastro segue na fila). Relê
+        //     o `dados` FRESCO (o dispatch levou dezenas de segundos) e grava o
+        //     marcador sem clobberar edição concorrente.
+        const { rows: freshRows } = await client.query(
+          `SELECT dados FROM public.pending_driver_registrations WHERE id = $1`,
+          [id],
+        );
+        const freshDados = freshRows[0]?.dados && typeof freshRows[0].dados === "object" ? freshRows[0].dados : {};
+        freshDados.cadastro_externo_falhou = {
+          at: new Date().toISOString(),
+          angellira: shouldDispatchAngellira
+            ? { ok: angelliraOk, error: angellira?.error?.message ?? (angelliraOk ? null : "Falha no cadastro Angellira.") }
+            : null,
+          spx: shouldDispatchSpx
+            ? { ok: spxOk, error: spx?.error?.message ?? (spxOk ? null : "Falha no cadastro SPX.") }
+            : null,
+        };
+        await client.query(
+          `UPDATE public.pending_driver_registrations SET dados = $1::jsonb, updated_at = now() WHERE id = $2`,
+          [JSON.stringify(freshDados), id],
+        );
+        await insertSecurityAuditEvent(client, {
+          eventType: "operator.cadastro.approve_dispatch_failed",
+          actorUserId: operatorId,
+          actorRole: "operator",
+          resourceType: "pending_driver_registration",
+          resourceId: id,
+          action: "approve",
+          outcome: "failure",
+          requestIp,
+          correlationId,
+          metadata: { driverId, cpf: cpfClean, nome, jobs: requestedJobs, angelliraOk, spxOk },
+        });
+      }
+
       return {
         statusCode: 200,
         payload: {
           ok: true,
+          approved,
           driverId,
           jobs: requestedJobs,
           angellira,

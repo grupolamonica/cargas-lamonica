@@ -346,8 +346,9 @@ function SummaryBanner({ summary }: { summary: "OK" | "PARTIAL" | "ERROR" }) {
       <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50/70 p-3 text-xs text-rose-900">
         <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
         <p>
-          <strong>Falhou.</strong> Nenhuma etapa foi concluída. Veja o erro de cada etapa acima — você pode
-          re-tentar pelo painel "Cadastro externo" na ficha do motorista.
+          <strong>Falhou.</strong> Nenhuma etapa foi concluída, então o cadastro NÃO foi aprovado e continua
+          na fila. Veja o erro de cada etapa acima e clique em <strong>Aprovar</strong> novamente para
+          re-tentar (as etapas que já deram certo são puladas).
         </p>
       </div>
     );
@@ -356,8 +357,9 @@ function SummaryBanner({ summary }: { summary: "OK" | "PARTIAL" | "ERROR" }) {
     <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
       <p>
-        <strong>Parcial.</strong> Algumas etapas falharam. Confira acima quais e re-tente pelo painel
-        "Cadastro externo" na ficha do motorista.
+        <strong>Parcial.</strong> Algumas etapas falharam, então o cadastro NÃO foi aprovado e continua na
+        fila. Confira acima quais e clique em <strong>Aprovar</strong> novamente para re-tentar (o que já
+        deu certo não é refeito).
       </p>
     </div>
   );
