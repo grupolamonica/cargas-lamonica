@@ -327,6 +327,8 @@ const schemaSql = `
     versao_cadastro text,
     observacoes text,
     dados jsonb NOT NULL DEFAULT '{}'::jsonb,
+    reviewed_at timestamptz,
+    reviewed_by_id uuid,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
   );

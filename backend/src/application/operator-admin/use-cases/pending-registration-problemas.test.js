@@ -23,6 +23,31 @@ describe("getCadastroProblemas — aba Dados incompletos", () => {
     expect(isCadastroIncompleto({ motorista: motoristaCompleto() }, { hoje: HOJE })).toBe(false);
   });
 
+  it("marcador cadastro_externo_falhou → problema 'geral' (cai em incompletos com motivo)", () => {
+    const dados = {
+      motorista: motoristaCompleto(),
+      cadastro_externo_falhou: { at: "2026-07-23T00:00:00Z", angellira: { ok: false, error: "x" }, spx: { ok: true, error: null } },
+    };
+    const probs = getCadastroProblemas(dados, { hoje: HOJE });
+    const geral = probs.find((p) => p.area === "geral");
+    expect(geral).toBeTruthy();
+    expect(geral.motivo).toMatch(/Angellira/);
+    expect(geral.motivo).not.toMatch(/SPX/); // SPX estava OK → não lista
+    expect(isCadastroIncompleto(dados, { hoje: HOJE })).toBe(true);
+    // cadastro completo (sem cutoff) mas com a falha externa → bucket incompletos.
+    expect(
+      resolveBucket({ createdAt: "2026-07-20T00:00:00Z", problemas: probs, cutoffIso: "2026-07-13T00:00:00Z" }).bucket,
+    ).toBe("incompletos");
+  });
+
+  it("marcador com as duas integrações OK → NÃO vira problema (defensivo)", () => {
+    const dados = {
+      motorista: motoristaCompleto(),
+      cadastro_externo_falhou: { at: "x", angellira: { ok: true }, spx: { ok: true } },
+    };
+    expect(getCadastroProblemas(dados, { hoje: HOJE })).toEqual([]);
+  });
+
   it("motorista sem CNH/selfie → 2 problemas (comprovante NÃO conta)", () => {
     const dados = {
       motorista: motoristaCompleto({ cnh_url: "", selfie_cnh_url: undefined, comprovante_url: null }),

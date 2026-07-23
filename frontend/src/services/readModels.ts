@@ -2449,9 +2449,13 @@ export async function aprovarCadastro(
   }
   return response.json() as Promise<{
     ok: boolean;
+    // false quando o cadastro externo (Angellira/SPX) solicitado falhou: o
+    // cadastro NÃO foi aprovado e segue na fila para retentar.
+    approved: boolean;
     driverId: string;
     jobs?: string[];
     angellira?: { ok: boolean; results: AngelliraStepResult[]; error?: { code?: string; message?: string } } | null;
+    spx?: { ok: boolean; results?: AngelliraStepResult[]; error?: { code?: string; message?: string } } | null;
   }>;
 }
 

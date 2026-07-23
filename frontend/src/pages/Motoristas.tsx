@@ -991,9 +991,15 @@ const Motoristas = () => {
         // Sem disparo externo: só criação de conta — toast simples.
         toast.success("Motorista aprovado. Conta criada com sucesso.");
         setShowApproveModal(false);
+      } else if (data.approved) {
+        // Disparo externo concluído com sucesso → de fato aprovado.
+        toast.success("Motorista aprovado. Cadastro externo concluído.");
       } else {
-        // Com disparo: o resumo aparece no DispatchProgressModal; toast neutro.
-        toast.success("Motorista aprovado. Veja o progresso do cadastro externo.");
+        // Disparo externo FALHOU → NÃO foi aprovado; segue na fila para retentar.
+        // O erro por etapa aparece no DispatchProgressModal (aberto no onMutate).
+        toast.error(
+          "Cadastro NÃO aprovado: o cadastro no Angellira/SPX falhou. Ele continua na fila (Dados incompletos) — confira o erro e tente aprovar de novo.",
+        );
       }
       queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: MOTORISTAS_QUERY_KEY });

@@ -452,6 +452,13 @@ export async function cadastrarProprietario({
   relationship = 1,
   correlationId,
 }) {
+  // A chave de idempotência PRECISA discriminar o proprietário pelo DOCUMENTO
+  // (não só por tipo PF/PJ). Sem isso, um cadastro com cavalo e carreta de donos
+  // DIFERENTES do mesmo tipo colidiria na mesma chave `...:proprietario:PF` → o
+  // segundo dono receberia a resposta em cache do primeiro e a carreta ficaria
+  // vinculada ao proprietário ERRADO. Espelha a chave de veículo (que inclui a
+  // placa). Fallback p/ `tipo` quando o doc não vier (raro).
+  const ownerDoc = String(payload?.cpf || payload?.cnpj || "").replace(/\D/g, "");
   const { httpStatus, body } = await request({
     method: "POST",
     path: "/api/robo/proprietario_api/iniciar",
@@ -462,7 +469,7 @@ export async function cadastrarProprietario({
       anexos,
       relationship,
     },
-    idempotencyKey: idCadastro ? `${idCadastro}:proprietario:${tipo}` : undefined,
+    idempotencyKey: idCadastro ? `${idCadastro}:proprietario:${ownerDoc || tipo}` : undefined,
     correlationId,
   });
 
