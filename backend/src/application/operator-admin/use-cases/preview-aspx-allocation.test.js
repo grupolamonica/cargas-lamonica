@@ -120,6 +120,38 @@ describe("previewAspxAllocation — só mostra o que muda/diverge", () => {
     expect(res.payload.items[0].divergent).toBe(true);
   });
 
+  it("viagem CONCLUÍDA (status 90) com motorista divergente → OCULTA (não é acionável)", async () => {
+    const res = await previewAspxAllocation({
+      deps: {
+        listCandidates: async () => [CANDIDATES[0]],
+        fetchTrips: async () => [],
+        fetchDrivers: async () => [{ driver_id: 91, name: "JOAO SILVA" }],
+        fetchIndex: async () => ({
+          byNumber: new Map([["LH1", { tripId: 5, status: 90, statusName: "Completed", driver: "OUTRO MOTORISTA" }]]),
+          truncated: false,
+          partial: false,
+        }),
+      },
+    });
+    // Divergência em viagem concluída não conta → nada a mostrar (fica em "done").
+    expect(res.payload.items).toHaveLength(0);
+    expect(res.payload.summary.divergent).toBe(0);
+    expect(res.payload.summary.alreadyAssigned).toBe(1); // done entra no contexto
+  });
+
+  it("consulta o índice INCLUINDO o Concluído (mesma janela do selo)", async () => {
+    const fetchIndex = vi.fn(async () => emptyIndex());
+    await previewAspxAllocation({
+      deps: {
+        listCandidates: async () => [CANDIDATES[0]],
+        fetchTrips: async () => [],
+        fetchDrivers: async () => [],
+        fetchIndex,
+      },
+    });
+    expect(fetchIndex).toHaveBeenCalledWith(expect.objectContaining({ includeConcluido: true }));
+  });
+
   it("tudo em dia → items vazio (nada a alterar)", async () => {
     const res = await previewAspxAllocation({
       deps: {

@@ -48,8 +48,17 @@ function classifyByStatus(status, driver) {
   }
 }
 
-// Loads que o operador alocou no sistema (alloc_*), com motorista efetivo e não
-// canceladas — os candidatos a empurrar pro ASPX.
+// Loads candidatos a empurrar pro ASPX: viagem SPX (LT), com motorista EFETIVO
+// (alocado pelo operador OU vindo da planilha) e não cancelada.
+//
+// O motorista pode vir da PLANILHA (sheet_motorista) sem o operador ter editado no
+// sistema — e mesmo assim a carga pode estar atribuível AGORA no ASPX (viagem na
+// fila status-4). Antes o filtro exigia `alloc_updated_at IS NOT NULL`, o que
+// ESCONDIA essas cargas do modal "Atribuir no ASPX" (sobem no Monitor, mas somem
+// do modal). Agora inclui também as cargas RECENTES/futuras (data >= hoje-4d) —
+// mesmo sem alocação no sistema —, mantendo as alocadas independentemente da data.
+// Histórico antigo (sem alocação e fora da janela) fica de fora p/ não inflar
+// "unknown"/avisos.
 async function defaultListCandidates() {
   return withPgClient(async (client) => {
     const { rows } = await client.query(
@@ -62,11 +71,11 @@ async function defaultListCandidates() {
        FROM public.cargas
        WHERE sheet_lh IS NOT NULL
          AND upper(sheet_lh) LIKE 'LT%'
-         AND alloc_updated_at IS NOT NULL
          AND COALESCE(alloc_motorista, sheet_motorista, '') <> ''
          AND lower(COALESCE(alloc_status, sheet_status, '')) NOT LIKE '%cancel%'
+         AND (alloc_updated_at IS NOT NULL OR data >= CURRENT_DATE - INTERVAL '4 days')
        ORDER BY data DESC, horario DESC, sheet_lh
-       LIMIT 300`,
+       LIMIT 500`,
     );
     return rows;
   });
@@ -93,9 +102,13 @@ function descargaLabel(v) {
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
   return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : s.slice(0, 16);
 }
-// Há divergência de motorista entre o sistema e o ASPX?
+// Há divergência de motorista entre o sistema e o ASPX? Só p/ viagem ATIVA
+// (assigned/in_progress). Viagem concluída (done) NÃO conta — não dá pra trocar
+// motorista de viagem encerrada, e o histórico do ASPX frequentemente diverge do
+// sistema (ruído). Antes "done" entrava aqui; com o índice passando a incluir o
+// Concluído, isso encheria o modal de divergências históricas não-acionáveis.
 function isDivergent(state, systemMotorista, aspxDriver) {
-  if (!["assigned", "in_progress", "done"].includes(state)) return false;
+  if (!["assigned", "in_progress"].includes(state)) return false;
   if (!aspxDriver) return false;
   return normName(aspxDriver) !== normName(systemMotorista);
 }
@@ -137,9 +150,11 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
 
   // Índice de status real: BEST-EFFORT (degradação granular). Se só ele falhar,
   // mantém assign/pending das listas acima; os não-atribuíveis caem em "unknown"
-  // (honesto).
+  // (honesto). Inclui o CONCLUÍDO (mesma janela do selo, PR #262): sem ele, viagens
+  // já concluídas ficavam "unknown/não encontrada no ASPX" (falso) e inflavam o
+  // aviso index_gaps; agora caem em "done" (ocultas, rótulo correto).
   try {
-    index = await getIndex();
+    index = await getIndex({ includeConcluido: true, concluidoDaysBack: 20 });
   } catch {
     indexFailed = true;
   }
