@@ -209,6 +209,46 @@ describe("runAngelliraPipeline / happy path", () => {
   });
 });
 
+describe("runAngelliraPipeline / proprietário do cavalo lê dados.cavalo_owner (DC — caso LEANDRO)", () => {
+  it("dono PF terceiro: usa nome/nascimento/rg de dados.cavalo_owner, não o embutido vazio", async () => {
+    cadastrarProprietario.mockResolvedValue({ ok: true, ownerId: 9001, raw: {} });
+    cadastrarVeiculo.mockResolvedValue({ ok: true, vehicleId: 7001, raw: {} });
+    cadastrarMotorista.mockResolvedValue({ ok: true, driverId: 5001, raw: {} });
+
+    const dados = {
+      ...SAMPLE_DADOS,
+      // cavalo traz só o DOC embutido do dono (owner_doc), SEM owner_nome —
+      // como o wizard v2 grava (o dono rico vai em dados.cavalo_owner).
+      cavalo: { ...SAMPLE_DADOS.cavalo, owner_doc: "77231457304", owner_doc_type: "cpf" },
+      cavalo_owner: {
+        tipo: "pf",
+        doc: "77231457304",
+        nome: "MARIA ROSINETE CHAVES MAIA",
+        data_nascimento: "10/05/1980",
+        rg: "20150379123",
+        rg_orgao: "SSPDS",
+        rg_uf: "CE",
+        nome_mae: "MARIA CHAVES DO MONTE",
+        endereco: { cep: "62961136", logradouro: "Av X", numero: "3900", cidade: "Tabuleiro do Norte", uf: "CE" },
+      },
+    };
+
+    const client = makeFakeClient();
+    await runAngelliraPipeline({
+      client,
+      cadastro: { id: SAMPLE_CADASTRO.id, dados },
+      driverUserId: "22222222-2222-2222-2222-222222222222",
+      operatorId: "33333333-3333-3333-3333-333333333333",
+    });
+
+    const arg = cadastrarProprietario.mock.calls[0][0];
+    expect(arg.tipo).toBe("PF");
+    expect(arg.payload.cpf).toBe("77231457304");
+    expect(arg.payload.nome).toBe("MARIA ROSINETE CHAVES MAIA"); // <- do cavalo_owner, não ""
+    expect(arg.payload.data_nascimento).toBe("10/05/1980"); // birth presente (evita 422 "birth is required")
+  });
+});
+
 describe("runAngelliraPipeline / falha intermediária", () => {
   it("registra ERROR em cavalo mas tenta motorista mesmo assim", async () => {
     cadastrarProprietario.mockResolvedValue({ ok: true, ownerId: 9001, raw: {} });
