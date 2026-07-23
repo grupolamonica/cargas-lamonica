@@ -139,6 +139,7 @@ import {
   resolveOperatorAprovarCadastroResponse,
   resolveOperatorRejeitarCadastroResponse,
   resolveOperatorNaoConformidadeCadastroResponse,
+  resolveOperatorReprocessarCadastroResponse,
   resolveOperatorAngelliraPrecheckResponse,
   resolveOperatorAngelliraCheckOwnerResponse,
   resolveOperatorAngelliraCadastrarResponse,
@@ -449,6 +450,7 @@ export function registerRoutes(app) {
   router.post("/api/operator/cadastros/:id/aprovar", wrap(resolveOperatorAprovarCadastroResponse));
   router.post("/api/operator/cadastros/:id/rejeitar", wrap(resolveOperatorRejeitarCadastroResponse));
   router.post("/api/operator/cadastros/:id/nao-conformidade", wrap(resolveOperatorNaoConformidadeCadastroResponse));
+  router.post("/api/operator/cadastros/:id/reprocessar-documentos", wrap(resolveOperatorReprocessarCadastroResponse));
   // Resgate de rascunho: operador completa e submete em nome do motorista
   router.post("/api/operator/cadastros/:id/submeter", wrap(resolveOperatorSubmitDraftResponse));
 

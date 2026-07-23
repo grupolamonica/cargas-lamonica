@@ -74,6 +74,7 @@ import {
 } from "../../../application/operator-admin/read-models.js";
 import { fetchOperatorAuditLogsReadModel } from "../../../application/operator-admin/use-cases/audit-logs-read-model.js";
 import { fetchPendingDriverRegistrations } from "../../../application/operator-admin/use-cases/pending-driver-registrations-read-model.js";
+import { reprocessCadastroDocuments } from "../../../application/operator-admin/use-cases/reprocess-cadastro-docs.js";
 import { listDraftRegistrations } from "../../../application/operator-admin/use-cases/list-draft-registrations.js";
 import { submitDraftAsOperator } from "../../../application/operator-admin/use-cases/submit-draft-as-operator.js";
 import { updateMonitorAllocation } from "../../../application/operator-admin/use-cases/update-monitor-allocation.js";
@@ -2417,6 +2418,43 @@ export async function resolveOperatorNaoConformidadeCadastroResponse(request) {
 
       return { statusCode: 200, payload: { ok: true, meta: { correlationId } } };
     });
+  });
+}
+
+/**
+ * POST /api/operator/cadastros/:id/reprocessar-documentos
+ * Re-extrai (OCR) os documentos já enviados do cadastro e mescla o resultado no
+ * `dados` (merge não-destrutivo). Best-effort por documento; devolve o `dados`
+ * atualizado + relatório por doc para a UI atualizar o card inline.
+ */
+export async function resolveOperatorReprocessarCadastroResponse(request) {
+  return withOperatorSession(request, "reprocessar-cadastro-docs", async ({ correlationId, requestIp, operatorId, user }) => {
+    assertOperatorAccessLevel(
+      user,
+      "intermediate",
+      "Apenas operadores com acesso intermediário ou avançado podem reprocessar documentos.",
+    );
+
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+
+    const result = await reprocessCadastroDocuments({ id, correlationId, operatorId, requestIp });
+    if (result?.notFound) {
+      return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+    }
+
+    return {
+      statusCode: 200,
+      payload: {
+        ok: true,
+        changed: result.changed,
+        dados: result.dados,
+        report: result.report,
+        meta: { correlationId },
+      },
+    };
   });
 }
 

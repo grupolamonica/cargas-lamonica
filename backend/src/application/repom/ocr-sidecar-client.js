@@ -76,7 +76,7 @@ export function flattenOcrCampos(envelope) {
  * Isolado para permitir mock nos testes.
  *
  * @param {object} p
- * @param {'cnh'|'comprovante-residencia'} p.docType - tipo do documento (endpoint do sidecar)
+ * @param {'cnh'|'comprovante-residencia'|'crlv'|'cartao-cnpj'} p.docType - tipo do documento (endpoint do sidecar)
  * @param {string} p.imagemBase64 - imagem/PDF em base64 (sem prefixo data:)
  * @param {string} p.idCadastro  - id do cadastro (persistência do anexo no sidecar)
  * @param {Record<string,unknown>} [p.extraBody] - campos extras no corpo (ex.: comprovante → { concessionaria })
@@ -196,4 +196,14 @@ export async function extractComprovanteFromMedia({ imagemBase64, idCadastro, co
     correlationId,
     logTag: "ocr.comprovante",
   });
+}
+
+/** CRLV → Infosimples (+fallback Vision), via /api/ocr/crlv. Nunca lança (degradação suave). */
+export async function extractCrlvFromMedia({ imagemBase64, idCadastro, correlationId } = {}) {
+  return extractDocFromMedia({ docType: "crlv", imagemBase64, idCadastro, correlationId, logTag: "ocr.crlv" });
+}
+
+/** Cartão CNPJ → OpenAI Vision, via /api/ocr/cartao-cnpj. Nunca lança (degradação suave). */
+export async function extractCartaoCnpjFromMedia({ imagemBase64, idCadastro, correlationId } = {}) {
+  return extractDocFromMedia({ docType: "cartao-cnpj", imagemBase64, idCadastro, correlationId, logTag: "ocr.cartao-cnpj" });
 }
