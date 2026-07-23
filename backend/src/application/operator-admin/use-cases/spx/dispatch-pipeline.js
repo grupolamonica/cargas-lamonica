@@ -31,6 +31,7 @@ import {
 
 import { performSpxPrecheck } from "./precheck.js";
 import { checkCnhCategoryGate } from "./cnh-category-gate.js";
+import { checkCrlvGate } from "./crlv-gate.js";
 import { mapSpxMotoristaPayload } from "./payload-mapper.js";
 import { generateDossie } from "../unificada/generate-dossie.js";
 import { stageSpxAnexos } from "./spx-anexos-stager.js";
@@ -84,6 +85,15 @@ export async function runSpxPipeline({
       return {
         ok: true, dry_run: true, precheck_status: precheck.status,
         results: [{ step: STEP, status: "BLOCKED", error: catBlockDry }],
+      };
+    }
+    // Gate de CRLV do cavalo (DC-304): placa presente mas CRLV não anexada → o
+    // SPX falharia com 502 opaco. Mostra o bloqueio acionável no preview.
+    const crlvBlockDry = checkCrlvGate(cadastro?.dados);
+    if (crlvBlockDry) {
+      return {
+        ok: true, dry_run: true, precheck_status: precheck.status,
+        results: [{ step: STEP, status: "BLOCKED", error: crlvBlockDry }],
       };
     }
     const { anexosMap, radExpireDate } = await prepareSpxDocs({ client, cadastro, operatorId, correlationId });
@@ -151,6 +161,16 @@ export async function runSpxPipeline({
         });
         await markJobError({ client, jobId, error: catBlock });
         return { ok: false, results: [{ step: STEP, status: "BLOCKED", error: catBlock }] };
+      }
+      // Gate de CRLV do cavalo (DC-304): sem a imagem da CRLV o SPX falha com um
+      // 502 opaco. Barra aqui com mensagem clara p/ o operador anexar e re-disparar.
+      const crlvBlock = checkCrlvGate(cadastro?.dados);
+      if (crlvBlock) {
+        logStructuredEvent("warn", "spx.pipeline.crlv_block", {
+          cadastroId, placa: crlvBlock.placa,
+        });
+        await markJobError({ client, jobId, error: crlvBlock });
+        return { ok: false, results: [{ step: STEP, status: "BLOCKED", error: crlvBlock }] };
       }
     }
 
