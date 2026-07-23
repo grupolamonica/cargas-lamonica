@@ -223,7 +223,13 @@ export function A1Cnh({
         cnh_uf_emissor: extracted.cnh.uf_emissor || undefined,
         cnh_primeira_emissao: extracted.cnh.primeira_emissao || undefined,
       };
-      setData(nextData);
+      // PRESERVA o storage_path: o upload (onDraftPersisted) roda em paralelo ao
+      // OCR e normalmente grava o storage_path ANTES do OCR terminar. Um
+      // setData(nextData) cru substituía o objeto inteiro e APAGAVA o
+      // storage_path já gravado → no envio, dados.motorista.cnh_url ficava vazio
+      // e o cadastro era barrado com "Anexe a CNH" mesmo com o arquivo no Storage.
+      // Mantemos o storage_path atual (funciona nas duas ordens de corrida).
+      setData((current) => ({ ...nextData, storage_path: current.storage_path }));
       setManualMode(false);
       setTileState("success");
       setCpfMismatch(!matches && extractedCpf.length === 11);
