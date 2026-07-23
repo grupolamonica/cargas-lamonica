@@ -92,6 +92,7 @@ import {
   fetchCadastrosPendentes,
   fetchMigratedDocsManifest,
   fetchOperatorDrivers,
+  marcarNaoConformidade,
   rejeitarCadastro,
   type OperatorDriverApplicationItem,
   type OperatorDriverListItem,
@@ -840,7 +841,7 @@ const Motoristas = () => {
   const deferredPendentesSearch = useDeferredValue(pendentesSearch.trim());
   const [pendentesPage, setPendentesPage] = useState(1);
   // DC-196: sub-abas dentro de Pendentes — "revisao" (fila normal) | "erro" (falhas no cadastro externo).
-  const [pendentesSubTab, setPendentesSubTab] = useState<"revisao" | "incompletos" | "erro">("revisao");
+  const [pendentesSubTab, setPendentesSubTab] = useState<"revisao" | "incompletos" | "nao_conformidade" | "erro">("revisao");
   // Ordenação (DC-197): coluna + direção; server-side (a lista é paginada no backend).
   type PendentesSortCol = "nome" | "placa" | "enviado" | "status";
   const [pendentesSort, setPendentesSort] = useState<PendentesSortCol>("enviado");
@@ -919,11 +920,13 @@ const Motoristas = () => {
   // Balde da fila: aba "Dados incompletos" → "incompletos"; aba de revisão →
   // "revisao" só quando o filtro é "pendente" (senão, fluxo normal por status).
   const pendentesBucket =
-    pendentesSubTab === "incompletos"
-      ? "incompletos"
-      : pendentesStatusFilter === "pendente"
-        ? "revisao"
-        : undefined;
+    pendentesSubTab === "nao_conformidade"
+      ? "nao_conformidade"
+      : pendentesSubTab === "incompletos"
+        ? "incompletos"
+        : pendentesStatusFilter === "pendente"
+          ? "revisao"
+          : undefined;
 
   const { data: pendentesData, isLoading: pendentesLoading, isFetching: pendentesFetching, error: pendentesError } = useQuery({
     queryKey: [...PENDENTES_QUERY_KEY, pendentesStatusFilter, deferredPendentesSearch, pendentesPage, pendentesSort, pendentesDir, pendentesBucket],
@@ -1013,6 +1016,19 @@ const Motoristas = () => {
     },
     onError: (error: Error) => {
       toast.error(error.message || "Erro ao rejeitar cadastro.");
+    },
+  });
+
+  const naoConfMutation = useMutation({
+    mutationFn: ({ id, desfazer }: { id: string; desfazer?: boolean }) =>
+      marcarNaoConformidade(id, { desfazer }),
+    onSuccess: (_data, { id, desfazer }) => {
+      toast.success(desfazer ? "Cadastro devolvido à revisão." : "Movido para Não conformidade.");
+      if (selectedPendente?.id === id) setSelectedPendente(null);
+      queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Erro ao mover para não conformidade.");
     },
   });
 
@@ -1273,6 +1289,18 @@ const Motoristas = () => {
               </button>
               <button
                 type="button"
+                onClick={() => setPendentesSubTab("nao_conformidade")}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors",
+                  pendentesSubTab === "nao_conformidade"
+                    ? "bg-orange-600 text-white shadow-sm"
+                    : "bg-muted/50 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <XCircle className="h-3.5 w-3.5" /> Não conformidade
+              </button>
+              <button
+                type="button"
                 onClick={() => setPendentesSubTab("erro")}
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors",
@@ -1287,7 +1315,7 @@ const Motoristas = () => {
 
             {pendentesSubTab === "erro" && <CadastrosComErroPanel />}
 
-            {(pendentesSubTab === "revisao" || pendentesSubTab === "incompletos") && (
+            {(pendentesSubTab === "revisao" || pendentesSubTab === "incompletos" || pendentesSubTab === "nao_conformidade") && (
               <>
             {/* Pendentes section */}
             <section className="admin-panel overflow-hidden p-5 lg:p-6">
@@ -1295,12 +1323,18 @@ const Motoristas = () => {
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/60">Cadastros automáticos</p>
                   <h2 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
-                    {pendentesSubTab === "incompletos" ? "Dados incompletos" : "Revisão de candidatos"}
+                    {pendentesSubTab === "incompletos"
+                      ? "Dados incompletos"
+                      : pendentesSubTab === "nao_conformidade"
+                        ? "Não conformidade"
+                        : "Revisão de candidatos"}
                   </h2>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {pendentesSubTab === "incompletos"
                       ? "Cadastros com dado faltando ou não conforme — revise, complete e aprove/rejeite por aqui."
-                      : "Cadastros enviados pelo formulário público /cadastro aguardando revisão."}
+                      : pendentesSubTab === "nao_conformidade"
+                        ? "Cadastros em homologação que voltaram não conformes no Angellira (motorista, cavalo ou carreta). Seguem em Pendentes até regularizar."
+                        : "Cadastros enviados pelo formulário público /cadastro aguardando revisão."}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
@@ -1551,6 +1585,23 @@ const Motoristas = () => {
                           >
                             <X className="h-4 w-4" />
                             Rejeitar
+                          </button>
+                        ) : null}
+                        {permissions.canApproveMotoristas || permissions.canRejectMotoristas ? (
+                          <button
+                            type="button"
+                            disabled={naoConfMutation.isPending}
+                            onClick={() =>
+                              naoConfMutation.mutate({
+                                id: selectedPendente.id,
+                                desfazer: Boolean(selectedPendente.dados?.nao_conformidade),
+                              })
+                            }
+                            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-orange-300 bg-orange-50 px-4 py-2.5 text-sm font-semibold text-orange-700 hover:bg-orange-100 disabled:opacity-60 transition-colors"
+                            title="Move para a sub-aba Não conformidade (segue em Pendentes; não muda o status)"
+                          >
+                            <XCircle className="h-4 w-4" />
+                            {selectedPendente.dados?.nao_conformidade ? "Devolver à revisão" : "Não conformidade"}
                           </button>
                         ) : null}
                         {!permissions.canApproveMotoristas && !permissions.canRejectMotoristas ? (
