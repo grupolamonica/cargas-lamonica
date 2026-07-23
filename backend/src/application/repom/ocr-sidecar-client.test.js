@@ -61,6 +61,24 @@ describe("repom ocr-sidecar-client", () => {
       expect(flattenOcrCampos({ data: [] })).toEqual({});
       expect(flattenOcrCampos({ data: [{}] })).toEqual({});
     });
+
+    it("varre TODAS as seções (anverso + verso); 1º valor não-vazio vence", () => {
+      const flat = flattenOcrCampos({
+        data: [
+          { campos: { nome: { valor: "FULANO" }, validade: { valor: "" } } }, // anverso; validade vazia aqui
+          { campos: { codigo_seguranca: { valor: "51531458216" }, validade: { valor: "06/04/2032" } } }, // verso
+        ],
+      });
+      // codigo_seguranca do verso é capturado (antes se perdia lendo só data[0])
+      expect(flat).toMatchObject({ nome: "FULANO", codigo_seguranca: "51531458216", validade: "06/04/2032" });
+    });
+
+    it("1º não-vazio vence: seção anterior com valor não é sobrescrita pela seguinte", () => {
+      const flat = flattenOcrCampos({
+        data: [{ campos: { categoria: { valor: "D" } } }, { campos: { categoria: { valor: "AE" } } }],
+      });
+      expect(flat.categoria).toBe("D");
+    });
   });
 
   describe("callOcrSidecar", () => {

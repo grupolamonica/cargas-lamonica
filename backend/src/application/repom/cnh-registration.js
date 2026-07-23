@@ -63,27 +63,44 @@ export function buildMotoristaFromCnhFields(fields, { cpf } = {}) {
     if (v !== null && v !== undefined && v !== "") motorista[k] = v;
   };
 
+  // Aliases largos espelhando o ocrCnh do wizard (Infosimples e Vision v1/v2 usam
+  // chaves diferentes) — sem isso o Repom perdia campos que o wizard captura.
   set("nome", pick("nome"));
   set("data_nascimento", pick("data_nascimento", "nascimento")); // mantém BR (paridade com wizard)
-  set("nome_pai", pick("nome_pai"));
-  set("nome_mae", pick("nome_mae"));
+  set("nome_pai", pick("nome_pai", "pai", "filiacao_pai"));
+  set("nome_mae", pick("nome_mae", "mae", "filiacao_mae"));
   set("naturalidade", pick("naturalidade"));
-  set("rg", pick("rg_numero", "rg"));
-  set("rg_orgao", pick("rg_orgao"));
-  set("rg_uf", pick("rg_uf"));
+  set("rg", pick("rg_numero", "rg", "identidade"));
+  set("rg_orgao", pick("rg_orgao", "identidade_orgao"));
+  set("rg_uf", pick("rg_uf", "identidade_uf"));
 
   const cnh = {};
   const setC = (k, v) => {
     if (v !== null && v !== undefined && v !== "") cnh[k] = v;
   };
-  setC("registro", pick("numero_registro", "registro"));
+  setC("registro", pick("registro", "numero_registro"));
   setC("categoria", pick("categoria"));
-  setC("validade", brDateToIso(pick("validade")));
-  const primeira = brDateToIso(pick("primeira_habilitacao", "primeira_emissao"));
+  setC("validade", brDateToIso(pick("validade", "data_validade", "vencimento")));
+  const primeira = brDateToIso(
+    pick(
+      "primeira_habilitacao",
+      "primeira_emissao",
+      "data_1_habilitacao",
+      "1_habilitacao",
+      "primeira_habilitacao_data",
+      "data_primeira_habilitacao",
+      "data_emissao",
+      "1a_habilitacao",
+      "habilitacao_data",
+    ),
+  );
   if (primeira && primeira !== cnh.validade) setC("primeira_emissao", primeira);
-  setC("codigo_seguranca", pick("codigo_seguranca"));
+  // Nº de segurança: aliases limpos (numéricos). NÃO usamos "seguranca_renach"
+  // (campo combinado "<segurança>\n<renach>") — sem parser dedicado, ele
+  // corromperia o valor; o operador preenche quando faltar.
+  setC("codigo_seguranca", pick("codigo_seguranca", "seguranca", "numero_seguranca"));
   setC("numero_espelho", pick("numero_espelho", "espelho"));
-  setC("uf_emissor", pick("uf_emissor"));
+  setC("uf_emissor", pick("uf_emissor", "uf_expedicao", "uf_emissao", "estado_emissor"));
   if (Object.keys(cnh).length) motorista.cnh = cnh;
 
   return motorista;
