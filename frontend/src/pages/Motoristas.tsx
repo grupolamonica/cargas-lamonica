@@ -48,6 +48,7 @@ import DriverDetailModal, { type DriverDetailModalData } from "@/components/Driv
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
 import { AutoApproveAngelliraCard } from "@/components/operator/AutoApproveAngelliraCard";
 import { CadastrosComErroPanel } from "@/components/operator/CadastrosComErroPanel";
+import { CadastroCamposEditorModal } from "@/components/operator/CadastroCamposEditorModal";
 import { CadastroBotsHealthBanner } from "@/components/operator/CadastroBotsHealthBanner";
 import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
 import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
@@ -887,6 +888,7 @@ const Motoristas = () => {
   const [showApproveModal, setShowApproveModal] = useState(false);
   // Modal de edição de dados do cadastro
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showCamposEditor, setShowCamposEditor] = useState(false);
   const [editDadosJson, setEditDadosJson] = useState("");
   const [editJsonError, setEditJsonError] = useState<string | null>(null);
   // Confirmação de exclusão
@@ -1035,16 +1037,15 @@ const Motoristas = () => {
   const editarDadosMutation = useMutation({
     mutationFn: ({ id, dados }: { id: string; dados: Record<string, unknown> }) =>
       patchCadastroDados(id, dados),
-    onSuccess: (_data, { id }) => {
+    onSuccess: (_data, { id, dados }) => {
       toast.success("Dados do cadastro atualizados.");
       setShowEditModal(false);
+      setShowCamposEditor(false);
       queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
-      // Atualiza dados locais do selectedPendente para refletir a edição imediatamente
+      // Reflete a edição no painel imediatamente (usa o `dados` salvo — vale
+      // tanto pro editor de campos quanto pro editor de JSON cru).
       if (selectedPendente?.id === id) {
-        try {
-          const novosDados = JSON.parse(editDadosJson) as Record<string, unknown>;
-          setSelectedPendente({ ...selectedPendente, dados: novosDados });
-        } catch { /* ignorar */ }
+        setSelectedPendente({ ...selectedPendente, dados });
       }
     },
     onError: (error: Error) => {
@@ -1563,8 +1564,20 @@ const Motoristas = () => {
                       </div>
                     )}
 
+                    {(selectedPendente.status === "pendente" || selectedPendente.status === "em_revisao") &&
+                      (permissions.canApproveMotoristas || permissions.canRejectMotoristas) ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowCamposEditor(true)}
+                          className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Editar dados (corrigir o que veio errado)
+                        </button>
+                      ) : null}
+
                     {(selectedPendente.status === "pendente" || selectedPendente.status === "em_revisao") && (
-                      <div className="mt-5 flex gap-3">
+                      <div className="mt-3 flex gap-3">
                         {permissions.canApproveMotoristas ? (
                           <button
                             type="button"
@@ -1671,6 +1684,17 @@ const Motoristas = () => {
                 )}
                 isSubmitting={aprovarMutation.isPending}
                 onConfirm={(jobs, conformidade) => aprovarMutation.mutate({ id: selectedPendente.id, jobs, conformidade })}
+              />
+            ) : null}
+
+            {/* Editor de CAMPOS (amigável) — corrige dados errados antes de aprovar. */}
+            {selectedPendente ? (
+              <CadastroCamposEditorModal
+                open={showCamposEditor}
+                dados={selectedPendente.dados ?? null}
+                onClose={() => setShowCamposEditor(false)}
+                onSave={(dados) => editarDadosMutation.mutate({ id: selectedPendente.id, dados })}
+                isSaving={editarDadosMutation.isPending}
               />
             ) : null}
 
