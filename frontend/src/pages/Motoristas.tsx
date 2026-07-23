@@ -94,6 +94,7 @@ import {
   fetchMigratedDocsManifest,
   fetchOperatorDrivers,
   marcarNaoConformidade,
+  reprocessarDocsCadastro,
   rejeitarCadastro,
   type OperatorDriverApplicationItem,
   type OperatorDriverListItem,
@@ -1053,6 +1054,33 @@ const Motoristas = () => {
     },
   });
 
+  const reprocessarMutation = useMutation({
+    mutationFn: (id: string) => reprocessarDocsCadastro(id),
+    onSuccess: (data, id) => {
+      const okDocs = data.report.filter((r) => r.ok);
+      const failed = data.report.filter((r) => !r.ok);
+      const camposCount = okDocs.reduce((acc, r) => acc + r.filled.length, 0);
+      if (data.changed) {
+        toast.success(`Documentos reprocessados: ${camposCount} campo(s) atualizado(s) em ${okDocs.length} documento(s).`);
+      } else if (data.report.length === 0) {
+        toast("Nenhum documento anexado para reprocessar.");
+      } else {
+        toast("Reprocessado, mas nada novo foi extraído.");
+      }
+      if (failed.length) {
+        toast.error(`${failed.length} documento(s) não puderam ser lidos: ${failed.map((r) => r.label).join(", ")}.`);
+      }
+      queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
+      // Reflete os dados re-extraídos no painel imediatamente.
+      if (selectedPendente?.id === id) {
+        setSelectedPendente({ ...selectedPendente, dados: data.dados });
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Erro ao reprocessar documentos.");
+    },
+  });
+
   const excluirCadastroMutation = useMutation({
     mutationFn: (id: string) => deleteCadastro(id),
     onSuccess: (_data, id) => {
@@ -1568,11 +1596,27 @@ const Motoristas = () => {
                       (permissions.canApproveMotoristas || permissions.canRejectMotoristas) ? (
                         <button
                           type="button"
+                          disabled={reprocessarMutation.isPending}
                           onClick={() => setShowCamposEditor(true)}
-                          className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+                          className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-60 transition-colors"
+                          title={reprocessarMutation.isPending ? "Aguarde o reprocessamento terminar para editar." : undefined}
                         >
                           <Pencil className="h-3.5 w-3.5" />
                           Editar dados (corrigir o que veio errado)
+                        </button>
+                      ) : null}
+
+                    {(selectedPendente.status === "pendente" || selectedPendente.status === "em_revisao") &&
+                      (permissions.canApproveMotoristas || permissions.canRejectMotoristas) ? (
+                        <button
+                          type="button"
+                          disabled={reprocessarMutation.isPending || editarDadosMutation.isPending || showCamposEditor}
+                          onClick={() => reprocessarMutation.mutate(selectedPendente.id)}
+                          className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-60 transition-colors"
+                          title="Re-extrai (OCR) os documentos já enviados: Infosimples p/ CNH/CRLV, Vision p/ cartão CNPJ/comprovante. Só preenche o que vier; não mexe em placa/documento."
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${reprocessarMutation.isPending ? "animate-spin" : ""}`} />
+                          {reprocessarMutation.isPending ? "Reprocessando documentos…" : "Reprocessar documentos (re-OCR)"}
                         </button>
                       ) : null}
 

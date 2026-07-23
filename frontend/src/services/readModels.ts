@@ -2490,6 +2490,45 @@ export async function marcarNaoConformidade(
   return response.json() as Promise<{ ok: boolean }>;
 }
 
+/** Relatório por documento devolvido pelo reprocessamento. */
+export interface ReprocessDocReport {
+  label: string;
+  kind: string;
+  ok: boolean;
+  provider?: string | null;
+  code?: number | null;
+  message?: string | null;
+  filled: string[];
+}
+
+/**
+ * Reprocessa (re-OCR) os documentos já enviados de um cadastro pendente e mescla
+ * o resultado no `dados` (merge não-destrutivo no backend). Devolve o `dados`
+ * atualizado (para atualizar o card inline) + o relatório por documento.
+ */
+export async function reprocessarDocsCadastro(id: string): Promise<{
+  ok: boolean;
+  changed: boolean;
+  dados: Record<string, unknown>;
+  report: ReprocessDocReport[];
+}> {
+  const accessToken = await getOperatorAccessToken();
+  const response = await fetch(`/api/operator/cadastros/${id}/reprocessar-documentos`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error((body as { message?: string })?.message || "Erro ao reprocessar documentos.");
+  }
+  return response.json() as Promise<{
+    ok: boolean;
+    changed: boolean;
+    dados: Record<string, unknown>;
+    report: ReprocessDocReport[];
+  }>;
+}
+
 // ── Auto-aprovação por vigência no Angellira ────────────────────────────
 export interface AutoApproveAngelliraState {
   ok: boolean;
