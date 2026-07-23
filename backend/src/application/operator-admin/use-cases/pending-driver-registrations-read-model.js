@@ -22,7 +22,11 @@ export async function fetchPendingDriverRegistrations({ status, search, page, pa
   // acionável, trocando só o balde. Delega ao read-model classificado (mesma
   // classificação JS + cutoff, fonte única, derivado — sem mutação). Só pendentes.
   const resolvedBucket =
-    bucket === "incompletos" || bucket === "revisao" ? bucket : excluirIncompletos ? "revisao" : null;
+    bucket === "incompletos" || bucket === "revisao" || bucket === "nao_conformidade"
+      ? bucket
+      : excluirIncompletos
+        ? "revisao"
+        : null;
   if (resolvedBucket) {
     return fetchPendingClassified({ bucket: resolvedBucket, search, page, pageSize, sort, dir, correlationId });
   }

@@ -87,21 +87,37 @@ export async function fetchPendingClassified({ bucket, search, page, pageSize, s
       [MAX_PENDING_SCAN],
     );
 
-    // Classifica + separa nos dois baldes (aplicando a busca livre em JS).
+    // Classifica + separa nos TRÊS baldes (aplicando a busca livre em JS).
+    const wantNaoConf = bucket === "nao_conformidade";
     let countRevisao = 0;
     let countIncompletos = 0;
+    let countNaoConf = 0;
     const selected = [];
     for (const row of rows) {
       if (!matchesSearch(row, term, searchDigits)) continue;
-      const { bucket, problemas } = resolveBucket({
-        createdAt: row.created_at,
-        problemas: getCadastroProblemas(row.dados),
-        cutoffIso,
-      });
-      const isIncompleto = bucket === "incompletos";
-      if (isIncompleto) countIncompletos += 1;
-      else countRevisao += 1;
-      if (isIncompleto === wantIncompletos) {
+      // Marcador MANUAL "não conformidade" (dados.nao_conformidade) tem
+      // prioridade: o operador moveu o cadastro pra essa aba, então ele SAI de
+      // revisão/incompletos e aparece só em "Não conformidade". O status segue
+      // 'pendente' (não some da fila).
+      const isNaoConf = Boolean(row.dados && typeof row.dados === "object" && row.dados.nao_conformidade);
+      let rowBucket;
+      let problemas = [];
+      if (isNaoConf) {
+        rowBucket = "nao_conformidade";
+        countNaoConf += 1;
+      } else {
+        const r = resolveBucket({
+          createdAt: row.created_at,
+          problemas: getCadastroProblemas(row.dados),
+          cutoffIso,
+        });
+        rowBucket = r.bucket;
+        problemas = r.problemas;
+        if (rowBucket === "incompletos") countIncompletos += 1;
+        else countRevisao += 1;
+      }
+      const wanted = wantNaoConf ? "nao_conformidade" : wantIncompletos ? "incompletos" : "revisao";
+      if (rowBucket === wanted) {
         selected.push({ row, problemas });
       }
     }
@@ -120,7 +136,7 @@ export async function fetchPendingClassified({ bucket, search, page, pageSize, s
       return String(b.row.id).localeCompare(String(a.row.id));
     });
 
-    const totalCount = wantIncompletos ? countIncompletos : countRevisao;
+    const totalCount = wantNaoConf ? countNaoConf : wantIncompletos ? countIncompletos : countRevisao;
     const offset = (safePage - 1) * safePageSize;
     const pageRows = selected.slice(offset, offset + safePageSize);
 
@@ -144,7 +160,12 @@ export async function fetchPendingClassified({ bucket, search, page, pageSize, s
       payload: {
         items,
         meta: buildPaginationMeta(safePage, safePageSize, totalCount, MAX_PAGE_SIZE, correlationId),
-        counts: { revisao: countRevisao, incompletos: countIncompletos, total: countRevisao + countIncompletos },
+        counts: {
+          revisao: countRevisao,
+          incompletos: countIncompletos,
+          nao_conformidade: countNaoConf,
+          total: countRevisao + countIncompletos + countNaoConf,
+        },
         truncated: rows.length >= MAX_PENDING_SCAN,
       },
     };

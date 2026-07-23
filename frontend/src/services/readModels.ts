@@ -2252,8 +2252,8 @@ export async function fetchCadastrosPendentes(params: {
   dir?: "asc" | "desc";
   /** Aba "Dados incompletos": esconde da revisão os cadastros com problema. */
   excluirIncompletos?: boolean;
-  /** Balde da fila: "revisao" (default) ou "incompletos" (mesma tabela acionável). */
-  bucket?: "revisao" | "incompletos";
+  /** Balde da fila: "revisao" (default), "incompletos" ou "nao_conformidade". */
+  bucket?: "revisao" | "incompletos" | "nao_conformidade";
 }) {
   const accessToken = await getOperatorAccessToken();
   const query = new URLSearchParams(
@@ -2465,6 +2465,27 @@ export async function rejeitarCadastro(id: string, observacoes?: string) {
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new Error((body as { message?: string })?.message || "Erro ao rejeitar cadastro.");
+  }
+  return response.json() as Promise<{ ok: boolean }>;
+}
+
+/**
+ * Move (ou desfaz) um cadastro para a sub-aba "Não conformidade". Grava um
+ * marcador derivado no JSONB (status segue 'pendente'; não sai da fila).
+ */
+export async function marcarNaoConformidade(
+  id: string,
+  options?: { motivos?: string[]; desfazer?: boolean },
+) {
+  const accessToken = await getOperatorAccessToken();
+  const response = await fetch(`/api/operator/cadastros/${id}/nao-conformidade`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ motivos: options?.motivos ?? [], desfazer: options?.desfazer ?? false }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error((body as { message?: string })?.message || "Erro ao mover para não conformidade.");
   }
   return response.json() as Promise<{ ok: boolean }>;
 }

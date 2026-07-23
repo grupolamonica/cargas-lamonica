@@ -2351,6 +2351,75 @@ export async function resolveOperatorRejeitarCadastroResponse(request) {
   });
 }
 
+/**
+ * Marca/desmarca um cadastro como "Não conformidade" (algum dos 3 —
+ * motorista/cavalo/carreta — voltou não conforme no Angellira). É um MARCADOR
+ * derivado no JSONB (`dados.nao_conformidade`) — o `status` segue 'pendente'
+ * (o cadastro NÃO sai da fila de Pendentes, só muda de sub-aba). `desfazer:true`
+ * remove o marcador (volta pra revisão/incompletos). Reversível.
+ */
+export async function resolveOperatorNaoConformidadeCadastroResponse(request) {
+  return withOperatorSession(request, "nao-conformidade-cadastro", async ({ correlationId, requestIp, operatorId, user }) => {
+    assertOperatorAccessLevel(
+      user,
+      "intermediate",
+      "Apenas operadores com acesso intermediário ou avançado podem mover cadastros para não conformidade.",
+    );
+
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+
+    let body = {};
+    try {
+      body = await parseJsonBody(request);
+    } catch {
+      // body opcional
+    }
+    const desfazer = body?.desfazer === true;
+    const motivos = Array.isArray(body?.motivos)
+      ? body.motivos.map((m) => String(m).trim().slice(0, 200)).filter(Boolean).slice(0, 10)
+      : [];
+
+    return withPgClient(async (client) => {
+      const { rows } = await client.query(
+        `SELECT id, dados FROM public.pending_driver_registrations WHERE id = $1`,
+        [id],
+      );
+      if (!rows.length) {
+        return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+      }
+      const dados = rows[0].dados && typeof rows[0].dados === "object" ? rows[0].dados : {};
+      if (desfazer) {
+        delete dados.nao_conformidade;
+      } else {
+        dados.nao_conformidade = { at: new Date().toISOString(), motivos, by: operatorId };
+      }
+      // NÃO mexe no status (segue 'pendente') — o marcador é que decide a sub-aba.
+      await client.query(
+        `UPDATE public.pending_driver_registrations SET dados = $1::jsonb, updated_at = now() WHERE id = $2`,
+        [JSON.stringify(dados), id],
+      );
+
+      await insertSecurityAuditEvent(client, {
+        eventType: desfazer ? "operator.cadastro.nao_conformidade_revert" : "operator.cadastro.nao_conformidade",
+        actorUserId: operatorId,
+        actorRole: "operator",
+        resourceType: "pending_driver_registration",
+        resourceId: id,
+        action: desfazer ? "update" : "flag",
+        outcome: "success",
+        requestIp,
+        correlationId,
+        metadata: { motivos },
+      });
+
+      return { statusCode: 200, payload: { ok: true, meta: { correlationId } } };
+    });
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Angellira — endpoints granulares para o painel do operador (DC-117).
 //
