@@ -48,7 +48,6 @@ import DriverDetailModal, { type DriverDetailModalData } from "@/components/Driv
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
 import { AutoApproveAngelliraCard } from "@/components/operator/AutoApproveAngelliraCard";
 import { CadastrosComErroPanel } from "@/components/operator/CadastrosComErroPanel";
-import { CadastrosConcluidosPanel } from "@/components/operator/CadastrosConcluidosPanel";
 import { CadastroBotsHealthBanner } from "@/components/operator/CadastroBotsHealthBanner";
 import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
 import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
@@ -715,9 +714,9 @@ const Motoristas = () => {
   // (ex.: card "Cadastros pendentes" → /motoristas?tab=pendentes). Lido só no
   // mount; a navegação interna por abas segue sendo state local.
   const [searchParams] = useSearchParams();
-  const [mainTab, setMainTab] = useState<"motoristas" | "pendentes" | "rascunhos" | "concluidas">(() => {
+  const [mainTab, setMainTab] = useState<"motoristas" | "pendentes" | "rascunhos">(() => {
     const requested = searchParams.get("tab");
-    return requested === "pendentes" || requested === "rascunhos" || requested === "concluidas" ? requested : "motoristas";
+    return requested === "pendentes" || requested === "rascunhos" ? requested : "motoristas";
   });
   const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState("todos");
@@ -1133,26 +1132,11 @@ const Motoristas = () => {
               </span>
             )}
           </button>
-          <button
-            type="button"
-            onClick={() => setMainTab("concluidas")}
-            className={cn(
-              "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors",
-              mainTab === "concluidas"
-                ? "bg-background text-primary shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <CheckCircle2 className="h-4 w-4" />
-            Concluídas
-          </button>
         </div>
       </div>
 
       <main className="min-w-0 space-y-5 p-6 lg:p-8">
-        {mainTab === "concluidas" ? (
-          <CadastrosConcluidosPanel />
-        ) : mainTab === "rascunhos" ? (
+        {mainTab === "rascunhos" ? (
           <section className="admin-panel overflow-hidden p-5 lg:p-6">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
