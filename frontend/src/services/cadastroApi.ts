@@ -226,6 +226,10 @@ function extractPhones(data: ConsultaEnvelope["data"]): string[] {
 const OCR_GENERIC_ERROR = "Não conseguimos ler agora.";
 const OCR_NETWORK_ERROR = "Deu problema do nosso lado.";
 const OCR_WRONG_DOC_ERROR = "Esse não parece o documento certo.";
+// DC-306: a Infosimples às vezes devolve "Link inválido" / "arquivo inválido"
+// (jargão técnico do provedor de OCR) quando não consegue abrir a imagem enviada.
+// O motorista via isso cru e ficava perdido — troca por uma orientação clara.
+const OCR_BAD_FILE_ERROR = "Não conseguimos abrir esse arquivo. Envie outra foto (JPG ou PNG), nítida e sem corte.";
 
 /**
  * Vocabulario tecnico que NUNCA deve chegar ao motorista. Quando detectamos
@@ -241,6 +245,14 @@ const TECHNICAL_PATTERN =
  */
 const WRONG_DOC_HINTS =
   /(?:n[aã]o\s+(?:foi\s+possivel|conseguimos)\s+extrair|sem\s+texto|extra[íi]u\s+0\b|tipo\s+de\s+documento|documento\s+(?:n[aã]o\s+reconhecido|inv[aá]lido))/i;
+
+/**
+ * DC-306 — provedor de OCR (Infosimples) não conseguiu abrir/decodificar o
+ * arquivo enviado: "Link inválido", "arquivo/imagem/URL inválida", "formato não
+ * suportado". Vira uma orientação de reenvio em vez do jargão cru.
+ */
+const BAD_FILE_HINTS =
+  /(?:link|arquivo|imagem|url|foto)\s*inv[aá]lid|formato\s*(?:n[aã]o\s*suportad|inv[aá]lid)|imagem\s*corromp/i;
 
 /**
  * Converte qualquer mensagem (front, backend, sidecar) em algo amigavel
@@ -259,6 +271,9 @@ export function humanizeOcrMessage(message?: string, status?: number): string {
   }
   if (TECHNICAL_PATTERN.test(trimmed)) {
     return status && status >= 500 ? OCR_NETWORK_ERROR : OCR_GENERIC_ERROR;
+  }
+  if (BAD_FILE_HINTS.test(trimmed)) {
+    return OCR_BAD_FILE_ERROR;
   }
   if (WRONG_DOC_HINTS.test(trimmed)) {
     return OCR_WRONG_DOC_ERROR;
@@ -335,7 +350,9 @@ async function ocr(path: string, imagem: string, idCadastro?: string): Promise<S
     ...(idCadastro ? { id_cadastro: idCadastro } : {}),
   });
   if (json.code !== 200) {
-    throw new Error(json.code_message ?? `Erro ${json.code} ao processar documento.`);
+    // DC-306: humaniza a code_message do provedor (ex.: "Link inválido") — o
+    // motorista via jargão cru e não sabia o que fazer.
+    throw new Error(humanizeOcrMessage(json.code_message, json.code));
   }
   return json.data ?? [];
 }
@@ -350,7 +367,7 @@ async function ocrEnvelope(
     ...(idCadastro ? { id_cadastro: idCadastro } : {}),
   });
   if (json.code !== 200) {
-    throw new Error(json.code_message ?? `Erro ${json.code} ao processar documento.`);
+    throw new Error(humanizeOcrMessage(json.code_message, json.code));
   }
   return json;
 }
@@ -837,7 +854,7 @@ export async function ocrComprovante(
     ...(idCadastro ? { id_cadastro: idCadastro } : {}),
   });
   if (json.code !== 200) {
-    throw new Error(json.code_message ?? `Erro ${json.code} ao processar comprovante.`);
+    throw new Error(humanizeOcrMessage(json.code_message, json.code));
   }
   const data = json.data ?? [];
   const v = (...k: string[]) => ocrValor(data, ...k);

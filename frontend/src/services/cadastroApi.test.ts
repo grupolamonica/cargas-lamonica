@@ -52,6 +52,19 @@ describe("humanizeOcrMessage", () => {
     }
   });
 
+  it("DC-306: 'Link inválido' e afins do provedor viram orientação de reenvio", () => {
+    for (const sample of [
+      "Link inválido",
+      "Link invalido",
+      "Arquivo inválido",
+      "Imagem inválida",
+      "URL inválida",
+      "Formato não suportado",
+    ]) {
+      expect(humanizeOcrMessage(sample)).toMatch(/abrir esse arquivo|envie outra foto/i);
+    }
+  });
+
   it("passa mensagens amigaveis curtas em PT-BR intactas", () => {
     expect(humanizeOcrMessage("CPF inválido (11 dígitos).")).toBe(
       "CPF inválido (11 dígitos).",
