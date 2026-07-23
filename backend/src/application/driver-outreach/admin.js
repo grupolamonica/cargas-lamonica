@@ -330,6 +330,16 @@ export async function updateOutreachQueueItem(id, patch = {}) {
     sets.push(`message = $${i++}`);
     vals.push(m.slice(0, 2000));
   }
+  // CPF informado/corrigido pelo operador (ex.: não veio do documento; o motorista
+  // passou por fora): a identidade da linha passa a ser o CPF (driver_key). Isso
+  // corrige opt-out/dedupe, resolução de nome, Angellira e log — antes de disparar.
+  let cpfDigits = null;
+  if (patch.cpf !== undefined && patch.cpf !== null && String(patch.cpf).trim() !== "") {
+    cpfDigits = onlyDigits(patch.cpf);
+    if (cpfDigits.length !== 11) throw new ValidationError("CPF inválido (informe os 11 dígitos).");
+    sets.push(`driver_key = $${i++}`);
+    vals.push(cpfDigits);
+  }
   if (!sets.length) throw new ValidationError("Nada para atualizar.");
   vals.push(id);
   let rows;
@@ -350,6 +360,28 @@ export async function updateOutreachQueueItem(id, patch = {}) {
     throw err;
   }
   if (!rows[0]) throw new ValidationError("Só é possível editar itens que ainda estão pendentes.");
+
+  // Best-effort: registra o CPF↔nome↔telefone em motoristas_historico (casa
+  // canônica que resolveDriverNames/opportunities leem depois). Nunca falha o
+  // update — o essencial (driver_key) já foi persistido acima.
+  const nome = patch.nome !== undefined && patch.nome !== null ? String(patch.nome).trim() : "";
+  if (cpfDigits && nome) {
+    try {
+      await withPgClient((client) =>
+        client.query(
+          `INSERT INTO public.motoristas_historico (cpf, nome, telefone)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (cpf) DO UPDATE
+             SET nome = EXCLUDED.nome,
+                 telefone = COALESCE(EXCLUDED.telefone, public.motoristas_historico.telefone),
+                 updated_at = now()`,
+          [cpfDigits, nome, rows[0].phone || null],
+        ),
+      );
+    } catch (err) {
+      console.warn("[driver-outreach.update.motorista_historico]", err instanceof Error ? err.message : String(err));
+    }
+  }
   return { ok: true, item: rows[0] };
 }
 

@@ -711,25 +711,50 @@ function QueueItemModal({ id, onClose, onChanged }: { id: string | null; onClose
   const [trigger, setTrigger] = useState("");
   const [phone, setPhone] = useState("");
   const [message, setMessage] = useState("");
+  // CPF/nome editáveis — o operador pode inserir o CPF que não foi extraído do
+  // documento (o motorista passou por fora) e corrigir o nome antes de disparar.
+  const [cpf, setCpf] = useState("");
+  const [nome, setNome] = useState("");
 
   const item = data?.item;
+  const origCpf = data?.driver?.cpf || "";
+  const origNome = data?.driver?.nome || "";
   useEffect(() => {
     if (item) {
       setTrigger(item.trigger);
       setPhone(item.phone);
       setMessage(item.message);
     }
+    if (data?.driver) {
+      setCpf(data.driver.cpf || "");
+      setNome(data.driver.nome || "");
+    }
     // Reinicializa quando um item diferente carrega (ou volta do refetch pós-save).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item?.id, item?.trigger, item?.phone, item?.message]);
+  }, [item?.id, item?.trigger, item?.phone, item?.message, data?.driver?.cpf, data?.driver?.nome]);
 
   const editable = item?.status === "pending";
   const dirty = Boolean(
     item &&
       (trigger !== item.trigger ||
         phone.replace(/\D/g, "") !== item.phone.replace(/\D/g, "") ||
-        message !== item.message),
+        message !== item.message ||
+        cpf.replace(/\D/g, "") !== origCpf.replace(/\D/g, "") ||
+        nome.trim() !== origNome.trim()),
   );
+
+  // Payload de update: inclui cpf/nome só quando mudaram (o backend ignora vazio).
+  const buildPatch = () => {
+    const patch: { trigger: string; phone: string; message: string; cpf?: string; nome?: string } = {
+      trigger,
+      phone,
+      message,
+    };
+    const cpfDigits = cpf.replace(/\D/g, "");
+    if (cpfDigits && cpfDigits !== origCpf.replace(/\D/g, "")) patch.cpf = cpfDigits;
+    if (nome.trim() && nome.trim() !== origNome.trim()) patch.nome = nome.trim();
+    return patch;
+  };
 
   const changeTrigger = (t: string) => {
     setTrigger(t);
@@ -743,13 +768,13 @@ function QueueItemModal({ id, onClose, onChanged }: { id: string | null; onClose
   };
 
   const saveMut = useMutation({
-    mutationFn: () => updateOutreachQueueItem(id as string, { trigger, phone, message }),
+    mutationFn: () => updateOutreachQueueItem(id as string, buildPatch()),
     onSuccess: () => { toast.success("Alterações salvas."); refreshItem(); },
     onError: (e: Error) => toast.error(e.message || "Erro ao salvar."),
   });
   const sendMut = useMutation({
     mutationFn: async () => {
-      if (dirty) await updateOutreachQueueItem(id as string, { trigger, phone, message });
+      if (dirty) await updateOutreachQueueItem(id as string, buildPatch());
       return sendOutreachQueueItem(id as string);
     },
     onSuccess: () => { toast.success("Mensagem enviada."); onChanged(); onClose(); },
@@ -777,15 +802,35 @@ function QueueItemModal({ id, onClose, onChanged }: { id: string | null; onClose
           <p className="py-6 text-center text-sm text-destructive">Não foi possível carregar o item.</p>
         ) : (
           <div className="space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Motorista</p>
-                <p className="truncate text-sm font-medium text-foreground">{data.driver?.nome || item.driverKey}</p>
-                {data.driver?.cpf && data.driver?.nome ? (
-                  <p className="font-mono text-[11px] text-muted-foreground">CPF {data.driver.cpf}</p>
-                ) : null}
+                {editable ? (
+                  <div className="mt-1 space-y-1.5">
+                    <Input
+                      value={nome}
+                      onChange={(e) => setNome(e.target.value)}
+                      placeholder="Nome do motorista"
+                      className="h-8 text-sm"
+                    />
+                    <Input
+                      value={cpf}
+                      onChange={(e) => setCpf(e.target.value)}
+                      placeholder="CPF (só números) — informe se não veio do documento"
+                      inputMode="numeric"
+                      className="h-8 font-mono text-sm"
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <p className="truncate text-sm font-medium text-foreground">{data.driver?.nome || item.driverKey}</p>
+                    {data.driver?.cpf && data.driver?.nome ? (
+                      <p className="font-mono text-[11px] text-muted-foreground">CPF {data.driver.cpf}</p>
+                    ) : null}
+                  </>
+                )}
               </div>
-              <span className={cn("inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold", STATUS_TINT[item.status] ?? "")}>
+              <span className={cn("inline-flex shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold", STATUS_TINT[item.status] ?? "")}>
                 {statusLabel(item.status)}{item.retryCount ? ` (${item.retryCount})` : ""}
               </span>
             </div>

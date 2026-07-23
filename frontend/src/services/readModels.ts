@@ -810,7 +810,7 @@ export async function fetchOutreachQueueItem(id: string) {
 
 export async function updateOutreachQueueItem(
   id: string,
-  patch: { trigger?: string; phone?: string; message?: string },
+  patch: { trigger?: string; phone?: string; message?: string; cpf?: string; nome?: string },
 ) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{ ok: boolean }>(

@@ -92,6 +92,22 @@ describe("outreach queue-item (integração pg-mem)", () => {
     await expect(updateOutreachQueueItem(id, { message: "tentativa" })).rejects.toThrow();
   });
 
+  it("updateOutreachQueueItem: CPF informado vira driver_key e registra em motoristas_historico", async () => {
+    // Cenário do operador: CPF não veio do documento → driver_key era o nome.
+    const { id } = await seedPendingOutreach({ driver_key: "joao motorista", phone: "5571988887777" });
+    await updateOutreachQueueItem(id, { cpf: "123.456.789-01", nome: "João Motorista" });
+
+    const row = await getRow(id);
+    expect(row.driver_key).toBe("12345678901"); // identidade agora é o CPF
+    const { rows: mh } = await query(`SELECT nome, telefone FROM public.motoristas_historico WHERE cpf = '12345678901'`);
+    expect(mh[0]).toMatchObject({ nome: "João Motorista", telefone: "5571988887777" });
+  });
+
+  it("updateOutreachQueueItem rejeita CPF com dígitos errados", async () => {
+    const { id } = await seedPendingOutreach({});
+    await expect(updateOutreachQueueItem(id, { cpf: "123" })).rejects.toThrow(/CPF/i);
+  });
+
   it("sendOutreachQueueItemNow envia via Evolution, marca sent e registra no log", async () => {
     sendMock.mockResolvedValue({ ok: true });
     const { id } = await seedPendingOutreach({ message: "Enviar isto." });
