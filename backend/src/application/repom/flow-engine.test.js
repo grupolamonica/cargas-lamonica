@@ -35,12 +35,25 @@ vi.mock("../../infrastructure/openai/openai-client.js", () => ({
 }));
 
 // Fase 3b: OCR (sidecar) e staging (Storage) são externos — mockados.
-const { extractMock, uploadMock } = vi.hoisted(() => ({ extractMock: vi.fn(), uploadMock: vi.fn() }));
-vi.mock("./ocr-sidecar-client.js", () => ({ extractCnhFromMedia: extractMock }));
+const { extractMock, extractComprovanteMock, uploadMock } = vi.hoisted(() => ({
+  extractMock: vi.fn(),
+  extractComprovanteMock: vi.fn(),
+  uploadMock: vi.fn(),
+}));
+vi.mock("./ocr-sidecar-client.js", () => ({
+  extractCnhFromMedia: extractMock,
+  extractComprovanteFromMedia: extractComprovanteMock,
+}));
 vi.mock("../candidatura/use-cases/upload-draft-file.js", () => ({ uploadDraftFile: uploadMock }));
 
-const { handleRepomIncomingMessage, setRepomFlowEnabled, setRepomCnhOcrEnabled, setRepomContinuacaoEnabled, extractCpfFromText } =
-  await import("./flow-engine.js");
+const {
+  handleRepomIncomingMessage,
+  setRepomFlowEnabled,
+  setRepomCnhOcrEnabled,
+  setRepomContinuacaoEnabled,
+  setRepomComprovanteOcrEnabled,
+  extractCpfFromText,
+} = await import("./flow-engine.js");
 const { setRepomAgentEnabled, resetRepomAgentRateLimitForTests } = await import("./agent-orientador.js");
 const { tryReserveCnhCall, resetRepomCnhRateLimitForTests } = await import("./cnh-media.js");
 
@@ -429,6 +442,61 @@ describe("repom flow-engine (integração pg-mem)", () => {
       await reachAskCnh("12345678901", phone);
       return handleRepomIncomingMessage(mediaInbound(phone));
     }
+
+    // Leva até o passo do comprovante (CNH ok → selfie enviada → espera comprovante).
+    async function reachColetaComprovante(phone = "5571988887777") {
+      await reachColetaSelfie(phone);
+      await handleRepomIncomingMessage(mediaInbound(phone)); // selfie → pede comprovante
+    }
+
+    describe("comprovante → OpenAI Vision (extrai endereço; flag própria, best-effort)", () => {
+      it("flag ON: extrai o endereço e grava em dados.motorista.endereco", async () => {
+        await reachColetaComprovante();
+        await setRepomComprovanteOcrEnabled({ enabled: true });
+        extractComprovanteMock.mockResolvedValue({
+          ok: true,
+          fields: { logradouro: "Rua A", numero: "10", bairro: "Centro", cep: "40000-000", municipio_uf: "Salvador - BA" },
+        });
+        const r = await handleRepomIncomingMessage(mediaInbound()); // comprovante
+        expect(r).toMatchObject({ node: "coletando", action: "ask_telefone" });
+        expect(extractComprovanteMock).toHaveBeenCalledTimes(1);
+        const [p] = await pendings();
+        expect(p.dados.motorista.comprovante_url).toBeTruthy();
+        expect(p.dados.motorista.endereco).toMatchObject({ logradouro: "Rua A", cidade: "Salvador", uf: "BA", cep: "40000-000" });
+      });
+
+      it("flag OFF (default): NÃO chama a Vision e não grava endereço (só guarda o comprovante)", async () => {
+        await reachColetaComprovante();
+        const r = await handleRepomIncomingMessage(mediaInbound());
+        expect(r).toMatchObject({ node: "coletando", action: "ask_telefone" });
+        expect(extractComprovanteMock).not.toHaveBeenCalled();
+        const [p] = await pendings();
+        expect(p.dados.motorista.comprovante_url).toBeTruthy();
+        expect(p.dados.motorista.endereco).toBeUndefined();
+      });
+
+      it("flag ON mas Vision falha: guarda o comprovante e AVANÇA (best-effort, nunca trava)", async () => {
+        await reachColetaComprovante();
+        await setRepomComprovanteOcrEnabled({ enabled: true });
+        extractComprovanteMock.mockResolvedValue({ ok: false, requiresUpload: true });
+        const r = await handleRepomIncomingMessage(mediaInbound());
+        expect(r).toMatchObject({ node: "coletando", action: "ask_telefone" });
+        const [p] = await pendings();
+        expect(p.dados.motorista.comprovante_url).toBeTruthy();
+        expect(p.dados.motorista.endereco).toBeUndefined();
+      });
+
+      it("flag ON + Vision ok mas sem campos de endereço: NÃO grava endereco:{} e avança", async () => {
+        await reachColetaComprovante();
+        await setRepomComprovanteOcrEnabled({ enabled: true });
+        extractComprovanteMock.mockResolvedValue({ ok: true, fields: {} }); // leu, mas nada mapeável
+        const r = await handleRepomIncomingMessage(mediaInbound());
+        expect(r).toMatchObject({ node: "coletando", action: "ask_telefone" });
+        const [p] = await pendings();
+        expect(p.dados.motorista.comprovante_url).toBeTruthy();
+        expect(p.dados.motorista.endereco).toBeUndefined(); // guard Object.keys().length
+      });
+    });
 
     it("continuação OFF: CNH boa encerra em 'submitted' (comportamento da Fase 3b, intacto)", async () => {
       await setRepomCnhOcrEnabled({ enabled: true }); // continuação fica OFF (default)
