@@ -319,6 +319,19 @@ export function extractPlacas(dados) {
 }
 
 /**
+ * Extrai o owner do cavalo do objeto RICO `dados.cavalo_owner` (wizard v2 grava
+ * o proprietário terceiro aqui: nome, doc, data_nascimento, filiação, rg,
+ * endereço). Espelha o extractCarretaOwner. O `resolveVehicleOwner` só lê o
+ * owner EMBUTIDO em `dados.cavalo` (owner_doc/owner_nome), que para dono terceiro
+ * traz só o doc — sem nome → o Angellira rejeitava com "name empty". Quando não
+ * há `cavalo_owner` (ex.: o dono é o próprio motorista, buildSubmitDados omite),
+ * retorna null e o caller cai no resolveVehicleOwner (que herda do motorista).
+ */
+export function extractCavaloOwner(dados) {
+  return dados?.cavalo_owner && typeof dados.cavalo_owner === "object" ? dados.cavalo_owner : null;
+}
+
+/**
  * Extrai o owner da carreta (suporta carretas[] ou carreta_owner objeto único).
  */
 export function extractCarretaOwner(dados, idx = 0) {

@@ -30,6 +30,7 @@ import {
   markJobOk,
 } from "./jobs-repository.js";
 import {
+  extractCavaloOwner,
   extractCarretaOwner,
   extractOwnerDocType,
   extractPlacas,
@@ -271,8 +272,10 @@ function restoreStateFromExistingJob(step, existing, state) {
 // ── Steps ────────────────────────────────────────────────────────────────
 
 async function stepProprietarioCavalo(ctx) {
-  // Wizard v2: owner embutido em dados.cavalo (owner_doc/owner_doc_type).
-  const owner = resolveVehicleOwner(ctx.dados, ctx.dados?.cavalo);
+  // 1) objeto rico dados.cavalo_owner (dono terceiro: nome/nascimento/filiação/rg);
+  // 2) fallback p/ owner embutido em dados.cavalo (owner_doc, ou dono == motorista).
+  let owner = extractCavaloOwner(ctx.dados);
+  if (!owner || !owner.doc) owner = resolveVehicleOwner(ctx.dados, ctx.dados?.cavalo);
   if (!owner || !owner.doc) {
     throw new AngelliraBotError({
       code: "OWNER_CAVALO_AUSENTE",
