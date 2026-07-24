@@ -162,8 +162,14 @@ export function mapSpxMotoristaPayload(dados, overrides = {}) {
     license_number: digitsOnly(cnh.registro || cnh.numero),
     license_type,
     license_expire_date: toIsoDate(motorista.cnh_validade || cnh.validade),
+    // Observações do verso (EAR etc.). O wizard persiste em motorista.cnh.observacoes
+    // (nested) e o operador pode preencher no editor; mantém os aliases antigos.
     cnh_remarks: overrides.cnh_remarks
-      ?? parseCnhRemarks(motorista.cnh_observacoes || cnh.observacoes || cnh.observacao || ""),
+      ?? parseCnhRemarks(
+        motorista.cnh_observacoes
+        || motorista.cnh?.observacoes || motorista.cnh?.observacao
+        || cnh.observacoes || cnh.observacao || "",
+      ),
 
     vehicle_type_name,
     license_plate,

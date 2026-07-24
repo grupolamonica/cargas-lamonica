@@ -394,6 +394,10 @@ export type CnhExtracted = {
     uf_emissor: string;
     validade: string;
     primeira_emissao: string;
+    // Observações do verso da CNH (ex.: "EAR" — exerce atividade remunerada).
+    // O SPX exige isso em "CNH Remarks"; sem persistir, o disparo parava no
+    // rascunho. Ver payload-mapper SPX (parseCnhRemarks).
+    observacoes: string;
   };
 };
 
@@ -647,6 +651,8 @@ export async function ocrCnh(
       uf_emissor: v("uf_emissor") || localCnh.uf || v("uf_expedicao", "uf_emissao", "estado_emissor"),
       validade,
       primeira_emissao: primeira,
+      // Observações do verso (EAR etc.) — o SPX usa em "CNH Remarks".
+      observacoes: v("observacoes", "observacao", "obs", "anotacoes", "remarks"),
     },
     idCadastroPasta: env.id_cadastro_pasta,
   };

@@ -137,6 +137,7 @@ export function CadastroCamposEditorModal({
     codigo_seguranca: str(cnh0.codigo_seguranca),
     numero_espelho: str(cnh0.numero_espelho),
     uf_emissor: str(cnh0.uf_emissor),
+    observacoes: str(cnh0.observacoes),
     // Endereço
     cep: str(end0.cep),
     logradouro: str(end0.logradouro),
@@ -156,7 +157,7 @@ export function CadastroCamposEditorModal({
   type FlatKey =
     | "nome" | "cpf" | "data_nascimento" | "telefone" | "rg" | "rg_orgao" | "rg_uf"
     | "nome_pai" | "nome_mae" | "naturalidade"
-    | "registro" | "categoria" | "validade" | "primeira_emissao" | "codigo_seguranca" | "numero_espelho" | "uf_emissor"
+    | "registro" | "categoria" | "validade" | "primeira_emissao" | "codigo_seguranca" | "numero_espelho" | "uf_emissor" | "observacoes"
     | "cep" | "logradouro" | "numero" | "bairro" | "cidade" | "uf";
   const set = (k: FlatKey, v: string) => setF((cur) => ({ ...cur, [k]: v }));
   const setVeic = (which: "cavalo" | number, k: keyof VeiculoForm, v: string) =>
@@ -205,6 +206,7 @@ export function CadastroCamposEditorModal({
     put(cnh, "codigo_seguranca", f.codigo_seguranca);
     put(cnh, "numero_espelho", f.numero_espelho);
     put(cnh, "uf_emissor", f.uf_emissor);
+    put(cnh, "observacoes", f.observacoes);
     if (Object.keys(cnh).length) motorista.cnh = cnh;
     const endereco: Record<string, unknown> = { ...end0 };
     put(endereco, "cep", f.cep);
@@ -319,6 +321,7 @@ export function CadastroCamposEditorModal({
               {mfield("Código de segurança", "codigo_seguranca", { mono: true })}
               {mfield("Nº do espelho", "numero_espelho", { mono: true })}
               {mfield("UF emissor", "uf_emissor", { upper: true })}
+              {mfield("Observações (EAR etc.)", "observacoes", { upper: true, placeholder: "verso da CNH — obrigatório no SPX (ex.: EAR)" })}
             </div>
           </section>
 

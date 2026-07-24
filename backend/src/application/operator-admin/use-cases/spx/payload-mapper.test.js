@@ -114,6 +114,13 @@ describe("mapSpxMotoristaPayload — toIsoDate robusto + cnh_remarks whitelist",
     const p = mapSpxMotoristaPayload({ ...DADOS, motorista: { ...DADOS.motorista, cnh_observacoes: "EAR, BLABLA / CETPP" } });
     expect(p.cnh_remarks).toEqual(["EAR", "CETPP"]);
   });
+  it("cnh_remarks: lê a observação NESTED motorista.cnh.observacoes (wizard v2 persiste aqui)", () => {
+    const p = mapSpxMotoristaPayload({
+      ...DADOS,
+      motorista: { ...DADOS.motorista, cnh: { ...(DADOS.motorista.cnh || {}), observacoes: "EAR" } },
+    });
+    expect(p.cnh_remarks).toEqual(["EAR"]);
+  });
 });
 
 describe("mapSpxMotoristaPayload — overrides do pipeline (anexos + vigência)", () => {
