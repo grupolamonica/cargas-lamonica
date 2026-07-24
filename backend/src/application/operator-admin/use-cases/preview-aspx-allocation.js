@@ -59,18 +59,22 @@ function classifyByStatus(status, driver) {
 // mesmo sem alocação no sistema —, mantendo as alocadas independentemente da data.
 // Histórico antigo (sem alocação e fora da janela) fica de fora p/ não inflar
 // "unknown"/avisos.
+//
+// LH efetivo = COALESCE(sheet_lh, lh_manual): cargas LANÇADAS na Programação (spot
+// SPX) têm o código em `lh_manual` e `sheet_lh` NULL. Sem isso, elas não entravam
+// no modal "Atribuir no ASPX" mesmo sendo viagens SPX reais com motorista — o
+// operador não conseguia empurrá-las pro ASPX.
 async function defaultListCandidates() {
   return withPgClient(async (client) => {
     const { rows } = await client.query(
-      `SELECT sheet_lh, origem, destino, data, horario, sheet_data_descarga,
+      `SELECT COALESCE(sheet_lh, lh_manual) AS sheet_lh, origem, destino, data, horario, sheet_data_descarga,
               COALESCE(alloc_motorista, sheet_motorista, '') AS motorista,
               COALESCE(alloc_cavalo,    sheet_cavalo,    '') AS cavalo,
               COALESCE(alloc_carreta,   sheet_carreta,   '') AS carreta,
               COALESCE(alloc_status,    sheet_status,    '') AS status,
               alloc_pinned
        FROM public.cargas
-       WHERE sheet_lh IS NOT NULL
-         AND upper(sheet_lh) LIKE 'LT%'
+       WHERE upper(COALESCE(sheet_lh, lh_manual)) LIKE 'LT%'
          AND COALESCE(alloc_motorista, sheet_motorista, '') <> ''
          AND lower(COALESCE(alloc_status, sheet_status, '')) NOT LIKE '%cancel%'
          AND (alloc_updated_at IS NOT NULL OR data >= CURRENT_DATE - INTERVAL '4 days')
