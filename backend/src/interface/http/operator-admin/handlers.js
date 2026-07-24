@@ -92,7 +92,7 @@ import { deleteReserva } from "../../../application/operator-admin/use-cases/del
 import { setMonitorAllocationPin } from "../../../application/operator-admin/use-cases/set-monitor-allocation-pin.js";
 import { setMonitorRodoparStatus } from "../../../application/operator-admin/use-cases/set-monitor-rodopar-status.js";
 import { listSystemCargasForMonitor } from "../../../application/operator-admin/use-cases/list-system-cargas-monitor.js";
-import { dedupeSystemRowsByLh } from "../../../application/operator-admin/use-cases/dedupe-monitor-rows.js";
+import { reconcileMonitorDuplicates } from "../../../application/operator-admin/use-cases/dedupe-monitor-rows.js";
 import { readSheetSnapshotLhSet } from "../../../application/operator-admin/use-cases/read-sheet-snapshot-lhs.js";
 import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-admin/use-cases/planilha-availability.js";
 import { fetchSpxScheduleIndex, applySpxSchedule } from "../../../application/operator-admin/use-cases/spx-schedule-overlay.js";
@@ -844,11 +844,15 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, o
   // LH de uma linha da planilha é a MESMA viagem → mostra só a da planilha (fonte
   // de verdade do SPX) e esconde a duplicata do sistema. Cobre a janela de corrida
   // (lançou no sistema antes do sync trazer a viagem) e duplicatas já existentes.
-  const { rows: dedupedSystemRows } = dedupeSystemRowsByLh(sheetRows, systemRows);
+  // Reconcilia planilha ∪ sistema por LH: planilha COM motorista vence (esconde a
+  // duplicata do sistema); planilha SEM motorista + spot LANÇADO (sistema OPEN) →
+  // o spot lançado vence e a linha vazia da planilha é escondida (senão a carga
+  // lançada some do Monitor, mascarada por uma linha de planejamento vazia).
+  const { sheetRows: visibleSheetRows, systemRows: dedupedSystemRows } = reconcileMonitorDuplicates(sheetRows, systemRows);
   // Status operacional REAL do SPX/Shopee (Torre) sobrepõe o status das cargas
   // ALOCADAS, casando por LH (== trip_number). Best-effort: sem índice = no-op.
   const withSpx = (r) => applySpxOperationalStatus(r, { spxStatusByLh, allocByLh });
-  const operational = [...sheetRows.map(withSpx), ...dedupedSystemRows.map(withSpx)].sort(compareMonitorRows);
+  const operational = [...visibleSheetRows.map(withSpx), ...dedupedSystemRows.map(withSpx)].sort(compareMonitorRows);
   const reservas = reservaRows.map((r) => (r.rowKey ? r : { ...r, rowKey: `reserva:${r.lh}`, source: "reserva" }));
   const items = reservas.length ? [...operational, ...reservas] : operational;
   const summary = systemRows.length ? buildSheetSummary(operational) : baseSummary;
