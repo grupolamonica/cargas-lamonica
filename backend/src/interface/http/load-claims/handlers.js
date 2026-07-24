@@ -419,6 +419,7 @@ export async function resolveOperatorPublicLoadLeadsResponse(request) {
 
     return await listOperatorPublicLoadLeads({
       correlationId,
+      scope: parseRevalidateScope(request),
     });
   } catch (error) {
     // Schema-drift 503: inclui Retry-After para polling do operador re-tentar
