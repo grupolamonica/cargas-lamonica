@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { useState } from "react";
+import { Check, Loader2, Paperclip } from "lucide-react";
 
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { onlyDigits } from "@/lib/brazilianValidators";
+import { anexarDocumentoCadastro } from "@/services/readModels";
 
 type Dados = Record<string, unknown>;
 const asObj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
@@ -73,6 +74,12 @@ function mergeOwner(base: Dados, f: OwnerForm): Dados {
   put(out, "nome", f.nome);
   const doc = onlyDigits(f.doc);
   if (doc) out.doc = doc; // doc é chave — só dígitos
+  // tipo (pf/pj) é obrigatório no ownerSchema. Quando o owner nasce do zero (base
+  // sem tipo — proprietário faltante preenchido/anexado agora), deriva do doc:
+  // 14 dígitos = CNPJ (pj), senão CPF (pf). Owner existente mantém o tipo do base.
+  if (!out.tipo && out.doc) {
+    out.tipo = onlyDigits(String(out.doc)).length === 14 ? "pj" : "pf";
+  }
   put(out, "data_nascimento", f.data_nascimento);
   put(out, "rg", f.rg); put(out, "rg_orgao", f.rg_orgao);
   putUf(out, "rg_uf", f.rg_uf);
@@ -83,6 +90,16 @@ function mergeOwner(base: Dados, f: OwnerForm): Dados {
   put(end, "bairro", f.bairro); put(end, "cidade", f.cidade);
   putUf(end, "uf", f.uf);
   if (Object.keys(end).length) out.endereco = end;
+  return out;
+}
+
+/** Sobrepõe em `cur` só os campos NÃO-vazios de `next` (o OCR do anexo atualiza o
+ * que extraiu, mas NÃO apaga o que o operador já digitou e o OCR não trouxe). */
+function overlayNonEmpty<T extends Record<string, string>>(cur: T, next: T): T {
+  const out = { ...cur };
+  (Object.keys(next) as (keyof T)[]).forEach((k) => {
+    if (String(next[k] ?? "").trim()) out[k] = next[k];
+  });
   return out;
 }
 
@@ -98,17 +115,26 @@ function mergeOwner(base: Dados, f: OwnerForm): Dados {
 export function CadastroCamposEditorModal({
   open,
   dados,
+  cadastroId,
   onClose,
   onSave,
   isSaving,
 }: {
   open: boolean;
   dados: Dados | null;
+  cadastroId: string;
   onClose: () => void;
   onSave: (dados: Dados) => void;
   isSaving: boolean;
 }) {
-  const base = useMemo(() => asObj(dados), [dados]);
+  // Cópia de trabalho do `dados`. O "anexar documento" mescla o resultado do OCR
+  // AQUI (não persiste no servidor) e re-preenche a seção afetada; o handleSave
+  // ("Salvar") grava a partir desta cópia — incluindo os novos *_url. O pai monta
+  // este componente SÓ quando aberto (Motoristas.tsx: selectedPendente && showCamposEditor),
+  // então cada abertura remonta com o `dados` ATUAL (reprocessar/editar-JSON já o
+  // atualizam) — sem estado stale entre aberturas.
+  const [workDados, setWorkDados] = useState<Dados>(() => asObj(dados));
+  const base = workDados;
   const m0 = asObj(base.motorista);
   const cnh0 = asObj(m0.cnh);
   const end0 = asObj(m0.endereco);
@@ -148,9 +174,61 @@ export function CadastroCamposEditorModal({
     // Conjuntos
     cavalo: base.cavalo ? veiculoForm(cav0) : null,
     carretas: carretas0.map(veiculoForm),
-    cavaloOwner: cavOwner0 ? ownerForm(cavOwner0) : null,
-    carretaOwners: carretaOwners0.map(ownerForm),
+    // Proprietário do cavalo: exibe sempre que houver cavalo (mesmo sem owner
+    // ainda) — permite anexar o doc faltante do proprietário.
+    cavaloOwner: base.cavalo ? ownerForm(cavOwner0 ?? {}) : null,
+    // Um proprietário POR carreta (mesmo que carreta_owners venha vazio, como no
+    // cadastro migrado do JOSE) — assim a seção aparece pra anexar o doc.
+    carretaOwners: carretas0.map((_, i) => ownerForm(asObj(carretaOwners0[i]))),
   }));
+
+  // ── Anexar documento faltante (OCR + pré-preenchimento) ──────────────────
+  const [attachBusy, setAttachBusy] = useState<string | null>(null);
+  const [attachMsg, setAttachMsg] = useState<{ key: string; ok: boolean; text: string } | null>(null);
+
+  const handleAttach = async (docKind: string, target: string, file: File, key: string) => {
+    setAttachBusy(key);
+    setAttachMsg(null);
+    try {
+      const res = await anexarDocumentoCadastro(cadastroId, { docKind, target, file });
+      const merged = asObj(res.dados);
+      setWorkDados(merged); // passa a valer no handleSave (inclui o novo *_url)
+      // Re-preenche SÓ a seção afetada a partir do dados mesclado (preserva edições
+      // que o operador já fez nas outras seções).
+      setF((cur) => {
+        if (target === "cavalo") {
+          return cur.cavalo ? { ...cur, cavalo: overlayNonEmpty(cur.cavalo, veiculoForm(asObj(merged.cavalo))) } : cur;
+        }
+        const cm = /^carretas\.(\d+)$/.exec(target);
+        if (cm) {
+          const i = Number(cm[1]);
+          return { ...cur, carretas: cur.carretas.map((c, idx) => (idx === i ? overlayNonEmpty(c, veiculoForm(asObj(asArr(merged.carretas)[i]))) : c)) };
+        }
+        if (target === "cavalo_owner") {
+          const ocr = ownerForm(asObj(merged.cavalo_owner));
+          return { ...cur, cavaloOwner: cur.cavaloOwner ? overlayNonEmpty(cur.cavaloOwner, ocr) : ocr };
+        }
+        const om = /^carreta_owners\.(\d+)$/.exec(target);
+        if (om) {
+          const i = Number(om[1]);
+          return { ...cur, carretaOwners: cur.carretaOwners.map((o, idx) => (idx === i ? overlayNonEmpty(o, ownerForm(asObj(asArr(merged.carreta_owners)[i]))) : o)) };
+        }
+        return cur;
+      });
+      const n = res.report?.filled?.length ?? 0;
+      setAttachMsg({
+        key,
+        ok: true,
+        text: res.report?.ok
+          ? `Anexado — ${n} campo(s) preenchido(s). Revise e salve.`
+          : "Anexado (não deu pra ler os campos — preencha à mão e salve).",
+      });
+    } catch (e) {
+      setAttachMsg({ key, ok: false, text: e instanceof Error ? e.message : "Falha ao anexar." });
+    } finally {
+      setAttachBusy(null);
+    }
+  };
 
   // Chaves flat de string (motorista/CNH/endereço). Cavalo/carretas/owners têm
   // setters próprios (setVeic/setOwner).
@@ -222,9 +300,22 @@ export function CadastroCamposEditorModal({
     if (base.cavalo && f.cavalo) next.cavalo = mergeVeiculo(cav0, f.cavalo);
     if (carretas0.length) next.carretas = carretas0.map((c, i) => (f.carretas[i] ? mergeVeiculo(c, f.carretas[i]) : c));
 
-    // ── Proprietários ──
-    if (cavOwner0 && f.cavaloOwner) next.cavalo_owner = mergeOwner(cavOwner0, f.cavaloOwner);
-    if (carretaOwners0.length) next.carreta_owners = carretaOwners0.map((o, i) => (f.carretaOwners[i] ? mergeOwner(o, f.carretaOwners[i]) : o));
+    // ── Proprietários ── (owner pode ter sido CRIADO via anexo — workDados já o
+    // tem; ou preenchido à mão. Merge não-destrutivo a partir do existente.)
+    if (f.cavaloOwner) {
+      const mo = mergeOwner(cavOwner0 ?? {}, f.cavaloOwner);
+      if (Object.keys(mo).length) next.cavalo_owner = mo;
+    }
+    // NUNCA grava owner `{}` vazio (viola ownerSchema.strict — exige tipo/doc/nome):
+    // f.carretaOwners tem 1 entrada POR CARRETA (padding p/ renderizar a seção),
+    // então carretas sem owner real virariam {} — filtra os vazios. (Com no máx. 2
+    // carretas e preenchimento em ordem, sobra sempre o(s) owner(s) real(is) no topo.)
+    if (carretaOwners0.length || f.carretaOwners.some((o) => Object.values(o).some((v) => String(v ?? "").trim()))) {
+      const merged = f.carretaOwners
+        .map((of, i) => mergeOwner(asObj(carretaOwners0[i]), of))
+        .filter((o) => Object.keys(o).length);
+      if (merged.length) next.carreta_owners = merged;
+    }
 
     onSave(next);
   };
@@ -245,6 +336,44 @@ export function CadastroCamposEditorModal({
   const mfield = (label: string, k: FlatKey, opts?: { upper?: boolean; mono?: boolean; placeholder?: string }) =>
     field(label, f[k], (v) => set(k, v), opts);
 
+  // Linha de "anexar documento faltante" (upload + OCR + pré-preenche a seção).
+  const attachControl = (target: string, kinds: { docKind: string; label: string }[]) => (
+    <div className="flex flex-wrap items-center gap-2 pt-1">
+      <span className="text-[11px] text-muted-foreground">Anexar doc faltante:</span>
+      {kinds.map((k) => {
+        const key = `${target}:${k.docKind}`;
+        const busy = attachBusy === key;
+        return (
+          <label
+            key={key}
+            className={`inline-flex cursor-pointer items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium ${
+              busy || isSaving ? "pointer-events-none opacity-60" : "hover:bg-muted"
+            }`}
+          >
+            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Paperclip className="h-3 w-3" />}
+            {k.label}
+            <input
+              type="file"
+              className="hidden"
+              accept="image/*,application/pdf,.heic,.heif"
+              disabled={busy || isSaving}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = ""; // permite re-selecionar o mesmo arquivo
+                if (file) void handleAttach(k.docKind, target, file, key);
+              }}
+            />
+          </label>
+        );
+      })}
+      {attachMsg && attachMsg.key.startsWith(`${target}:`) ? (
+        <span className={`text-[11px] ${attachMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>
+          {attachMsg.text}
+        </span>
+      ) : null}
+    </div>
+  );
+
   const veiculoSection = (title: string, v: VeiculoForm, which: "cavalo" | number) => (
     <section className="space-y-2" key={`veic-${title}`}>
       <p className="text-xs font-semibold uppercase tracking-wide text-primary/60">{title}</p>
@@ -258,6 +387,7 @@ export function CadastroCamposEditorModal({
         {field("Chassi", v.chassi, (val) => setVeic(which, "chassi", val), { mono: true, upper: true })}
         {field("ANTT/RNTRC", v.antt, (val) => setVeic(which, "antt", val), { mono: true })}
       </div>
+      {attachControl(which === "cavalo" ? "cavalo" : `carretas.${which}`, [{ docKind: "crlv", label: "CRLV" }])}
     </section>
   );
 
@@ -281,6 +411,11 @@ export function CadastroCamposEditorModal({
         {field("Cidade", o.cidade, (val) => setOwner(which, "cidade", val))}
         {field("UF", o.uf, (val) => setOwner(which, "uf", val), { upper: true })}
       </div>
+      {attachControl(which === "cavalo" ? "cavalo_owner" : `carreta_owners.${which}`, [
+        { docKind: "owner-cnh", label: "CNH (PF)" },
+        { docKind: "cartao-cnpj", label: "Cartão CNPJ (PJ)" },
+        { docKind: "comprovante", label: "Comprovante" },
+      ])}
     </section>
   );
 
@@ -347,7 +482,7 @@ export function CadastroCamposEditorModal({
           <button
             type="button"
             onClick={onClose}
-            disabled={isSaving}
+            disabled={isSaving || attachBusy !== null}
             className="rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-60"
           >
             Cancelar
@@ -355,7 +490,9 @@ export function CadastroCamposEditorModal({
           <button
             type="button"
             onClick={handleSave}
-            disabled={isSaving}
+            // Bloqueia Salvar enquanto um anexo está em voo — senão o handleSave usaria
+            // o workDados PRÉ-anexo e o *_url do doc recém-anexado se perderia (upload órfão).
+            disabled={isSaving || attachBusy !== null}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60"
           >
             {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}

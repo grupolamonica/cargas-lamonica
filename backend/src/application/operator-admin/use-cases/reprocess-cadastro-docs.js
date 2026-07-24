@@ -226,7 +226,7 @@ async function runExtractor(kind, { imagemBase64, idCadastro, correlationId }) {
 }
 
 /** Monta o `partial` (só campos preenchidos, type-safe, sem chaves protegidas). */
-function buildPartial(kind, fields, dados) {
+export function buildPartial(kind, fields, dados) {
   switch (kind) {
     case "cnh": {
       // Preserva o CPF da sessão; só extrai da CNH se o cadastro estiver sem CPF.
@@ -270,7 +270,7 @@ function deepMergePartial(existing, partial) {
 }
 
 /** Aplica o `partial` no `dados` no caminho `target` (muta `dados`). */
-function applyPartial(dados, target, partial) {
+export function applyPartial(dados, target, partial) {
   if (target === "motorista") {
     dados.motorista = deepMergePartial(dados.motorista, partial);
     return;
@@ -286,6 +286,22 @@ function applyPartial(dados, target, partial) {
   }
   if (target === "cavalo_owner") {
     dados.cavalo_owner = deepMergePartial(dados.cavalo_owner, partial);
+    return;
+  }
+  // Endereço do proprietário (comprovante de residência do owner). Usado pelo
+  // "anexar documento" do operador (o reprocess não planeja comprovante de owner).
+  if (target === "cavalo_owner.endereco") {
+    dados.cavalo_owner = dados.cavalo_owner && typeof dados.cavalo_owner === "object" ? dados.cavalo_owner : {};
+    dados.cavalo_owner.endereco = deepMergePartial(dados.cavalo_owner.endereco, partial);
+    return;
+  }
+  const carretaOwnerEndMatch = target.match(/^carreta_owners\.(\d+)\.endereco$/);
+  if (carretaOwnerEndMatch) {
+    const i = Number(carretaOwnerEndMatch[1]);
+    if (!Array.isArray(dados.carreta_owners)) dados.carreta_owners = [];
+    dados.carreta_owners[i] =
+      dados.carreta_owners[i] && typeof dados.carreta_owners[i] === "object" ? dados.carreta_owners[i] : {};
+    dados.carreta_owners[i].endereco = deepMergePartial(dados.carreta_owners[i].endereco, partial);
     return;
   }
   const carretaMatch = target.match(/^carretas\.(\d+)$/);
@@ -337,8 +353,13 @@ function getEntityAt(dados, target) {
   if (target === "motorista.endereco") return dados?.motorista?.endereco;
   if (target === "cavalo") return dados?.cavalo;
   if (target === "cavalo_owner") return dados?.cavalo_owner;
+  if (target === "cavalo_owner.endereco") return dados?.cavalo_owner?.endereco;
   const cm = target.match(/^carretas\.(\d+)$/);
   if (cm) return Array.isArray(dados?.carretas) ? dados.carretas[Number(cm[1])] : undefined;
+  const coem = target.match(/^carreta_owners\.(\d+)\.endereco$/);
+  if (coem) {
+    return Array.isArray(dados?.carreta_owners) ? dados.carreta_owners[Number(coem[1])]?.endereco : undefined;
+  }
   const om = target.match(/^carreta_owners\.(\d+)$/);
   if (om) return Array.isArray(dados?.carreta_owners) ? dados.carreta_owners[Number(om[1])] : undefined;
   return undefined;
@@ -348,7 +369,7 @@ function getEntityAt(dados, target) {
  * Sanitiza o `partial` contra as restrições do schema, avaliando o estado
  * ATUAL de `dados` (para a regra de criação de endereco). Devolve um novo objeto.
  */
-function sanitizePartial(doc, partial, dados) {
+export function sanitizePartial(doc, partial, dados) {
   const p = { ...partial };
   // rg_uf (motoristaSchema/ownerSchema .length(2)).
   if (p.rg_uf !== undefined && !ufOk(p.rg_uf)) delete p.rg_uf;
@@ -369,7 +390,7 @@ function sanitizePartial(doc, partial, dados) {
 }
 
 /** Lista de chaves preenchidas (para o relatório), achatando 1 nível. */
-function filledKeys(partial) {
+export function filledKeys(partial) {
   const keys = [];
   for (const [k, val] of Object.entries(partial)) {
     if (val && typeof val === "object" && !Array.isArray(val)) {

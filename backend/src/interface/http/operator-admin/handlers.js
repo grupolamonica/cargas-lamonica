@@ -75,6 +75,7 @@ import {
 import { fetchOperatorAuditLogsReadModel } from "../../../application/operator-admin/use-cases/audit-logs-read-model.js";
 import { fetchPendingDriverRegistrations } from "../../../application/operator-admin/use-cases/pending-driver-registrations-read-model.js";
 import { reprocessCadastroDocuments } from "../../../application/operator-admin/use-cases/reprocess-cadastro-docs.js";
+import { attachCadastroDocument } from "../../../application/operator-admin/use-cases/attach-cadastro-doc.js";
 import { listDraftRegistrations } from "../../../application/operator-admin/use-cases/list-draft-registrations.js";
 import { submitDraftAsOperator } from "../../../application/operator-admin/use-cases/submit-draft-as-operator.js";
 import { updateMonitorAllocation } from "../../../application/operator-admin/use-cases/update-monitor-allocation.js";
@@ -2522,6 +2523,81 @@ export async function resolveOperatorReprocessarCadastroResponse(request) {
         changed: result.changed,
         dados: result.dados,
         report: result.report,
+        meta: { correlationId },
+      },
+    };
+  });
+}
+
+const ATTACH_INVALID_MESSAGES = {
+  MISSING_ID: "ID do cadastro é obrigatório.",
+  MISSING_FILE: "Arquivo obrigatório (campo multipart 'file').",
+  BAD_TARGET: "Combinação de documento/alvo inválida. Aceitos (v1): CRLV do cavalo/carretas e CNH/cartão-CNPJ/comprovante dos proprietários.",
+  BAD_SLOT: "Slot derivado não é aceito.",
+  NO_STORAGE_FOLDER: "Não foi possível determinar a pasta de armazenamento (cadastro sem CPF e sem carga).",
+  OWNER_ABSENT: "Anexe primeiro a CNH (PF) ou o cartão-CNPJ (PJ) do proprietário — o comprovante sozinho deixaria o proprietário sem tipo/documento/nome.",
+};
+
+/**
+ * POST /api/operator/cadastros/:id/anexar-documento (multipart/form-data).
+ * Anexa um documento FALTANTE (proprietário/CRLV), OCRa e devolve o `dados`
+ * PRÉ-preenchido — SEM persistir. O editor re-preenche os campos e o
+ * PATCH .../dados do "Salvar" é quem grava.
+ *
+ * Body multipart: file (binário), docKind ('crlv'|'owner-cnh'|'cartao-cnpj'|
+ * 'comprovante'), target ('cavalo'|'carretas.N'|'cavalo_owner'|'carreta_owners.N').
+ */
+export async function resolveOperatorAnexarDocumentoResponse(request) {
+  return withOperatorSession(request, "anexar-cadastro-doc", async ({ correlationId, requestIp, operatorId, user }) => {
+    assertOperatorAccessLevel(
+      user,
+      "intermediate",
+      "Apenas operadores com acesso intermediário ou avançado podem anexar documentos.",
+    );
+
+    if (!request.file || !Buffer.isBuffer(request.file.buffer)) {
+      return { statusCode: 400, payload: { error: "FILE_REQUIRED", message: "Arquivo obrigatório (campo multipart 'file').", meta: { correlationId } } };
+    }
+    const id = getQueryParam(request, "id");
+    if (!id) {
+      return { statusCode: 400, payload: { error: "BadRequest", message: "ID do cadastro é obrigatório.", meta: { correlationId } } };
+    }
+
+    const result = await attachCadastroDocument({
+      id,
+      docKind: request.body?.docKind,
+      target: request.body?.target,
+      file: request.file.buffer,
+      size: request.file.size,
+      contentType: request.file.mimetype,
+      originalFilename: request.file.originalname,
+      correlationId,
+      operatorId,
+      requestIp,
+    });
+
+    if (result?.notFound) {
+      return { statusCode: 404, payload: { error: "NotFound", message: "Cadastro não encontrado.", meta: { correlationId } } };
+    }
+    if (result?.invalid) {
+      return {
+        statusCode: 400,
+        payload: { error: "BadRequest", message: ATTACH_INVALID_MESSAGES[result.invalid] || "Requisição inválida.", meta: { correlationId } },
+      };
+    }
+    if (result?.uploadError) {
+      // Propaga o erro do upload (415 tipo, 413 tamanho, 502 storage).
+      const up = result.uploadError;
+      return { statusCode: up.statusCode, payload: { ...up.payload, meta: { correlationId } } };
+    }
+
+    return {
+      statusCode: 200,
+      payload: {
+        ok: true,
+        dados: result.dados,
+        report: result.report,
+        storage_path: result.storagePath,
         meta: { correlationId },
       },
     };

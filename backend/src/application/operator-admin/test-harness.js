@@ -323,6 +323,7 @@ const schemaSql = `
   CREATE TABLE public.pending_driver_registrations (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     id_cadastro text,
+    carga_id uuid,
     status text NOT NULL DEFAULT 'draft',
     versao_cadastro text,
     observacoes text,
