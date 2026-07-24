@@ -150,6 +150,12 @@ export function buildOwnerFromCartaoCnpjFields(fields) {
   setE("bairro", v("bairro"));
   setE("logradouro", v("logradouro", "endereco"));
   setE("numero", v("numero", "numero_endereco"));
+  // Endereço de CNPJ é frequentemente "S/N" (sem número) — o OCR (Vision) e a
+  // consulta da Receita devolvem o número vazio nesse caso. Como enderecoSchema
+  // exige `numero` (min 1) e o sanitizador descarta o endereço INTEIRO sem ele,
+  // grava "S/N" quando há logradouro mas não veio número — senão cep/logradouro/
+  // cidade/UF (que vieram) são perdidos junto. Ver sanitizeEndereco.
+  if (endereco.logradouro && !endereco.numero) endereco.numero = "S/N";
   if (Object.keys(endereco).length) out.endereco = endereco;
 
   return out;

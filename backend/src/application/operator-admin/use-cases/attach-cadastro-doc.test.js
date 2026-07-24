@@ -137,6 +137,30 @@ describe("attachCadastroDocument (integração pg-mem)", () => {
     expect(r.dados.carreta_owners[0].nome).toBe("TRANSPORTES X LTDA");
   });
 
+  it("Owner cartão-CNPJ com endereço 'S/N': grava endereço completo com numero 'S/N' (não descarta)", async () => {
+    const { id } = await seedPendingRegistration({
+      dados: { motorista: { cpf: "11111111111" }, cavalo: { placa: "ABC1D23" }, cavalo_owner: {} },
+    });
+    // Cartão S/N: OCR/Receita trazem endereço sem número (caso TRANSPORTES VIEIRA E SANTOS).
+    cartaoMock.mockResolvedValue({
+      ok: true,
+      fields: {
+        razao_social: "TRANSPORTES VIEIRA E SANTOS LTDA", cnpj: "65843178000140",
+        cep: "72135180", uf: "DF", municipio: "Brasilia", bairro: "Taguatinga",
+        logradouro: "ST SETOR QI QI 18 LT 52/54", // sem numero
+      },
+    });
+
+    const r = await attachCadastroDocument({ id, docKind: "cartao-cnpj", target: "cavalo_owner", ...baseArgs });
+    // endereço NÃO é descartado — numero vira "S/N" e cep/logradouro/cidade/UF entram.
+    expect(r.dados.cavalo_owner.endereco).toMatchObject({
+      cep: "72135180", uf: "DF", cidade: "Brasilia", bairro: "Taguatinga",
+      logradouro: "ST SETOR QI QI 18 LT 52/54", numero: "S/N",
+    });
+    expect(r.dados.cavalo_owner.doc).toBe("65843178000140");
+    expect(r.dados.cavalo_owner.tipo).toBe("pj");
+  });
+
   it("Owner com doc EXISTENTE: identidade NÃO é sobrescrita (só nome/campos do OCR)", async () => {
     const { id } = await seedPendingRegistration({
       dados: {
