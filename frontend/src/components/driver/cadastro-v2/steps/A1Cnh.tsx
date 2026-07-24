@@ -41,6 +41,8 @@ export interface A1Data {
   cnh_numero_espelho?: string;
   cnh_uf_emissor?: string;
   cnh_primeira_emissao?: string;
+  /** Observações do verso (EAR etc.) — o SPX usa em "CNH Remarks". */
+  cnh_observacoes?: string;
 }
 
 export interface A1DriverProfile {
@@ -222,6 +224,7 @@ export function A1Cnh({
         cnh_numero_espelho: extracted.cnh.numero_espelho || undefined,
         cnh_uf_emissor: extracted.cnh.uf_emissor || undefined,
         cnh_primeira_emissao: extracted.cnh.primeira_emissao || undefined,
+        cnh_observacoes: extracted.cnh.observacoes || undefined,
       };
       // PRESERVA o storage_path: o upload (onDraftPersisted) roda em paralelo ao
       // OCR e normalmente grava o storage_path ANTES do OCR terminar. Um

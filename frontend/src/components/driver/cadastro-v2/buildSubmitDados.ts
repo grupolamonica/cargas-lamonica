@@ -64,6 +64,9 @@ function buildMotorista(data: ConfirmationWizardData) {
       if (a1.cnh_numero_espelho) cnhObj.numero_espelho = a1.cnh_numero_espelho;
       if (a1.cnh_uf_emissor) cnhObj.uf_emissor = a1.cnh_uf_emissor;
       if (a1.cnh_primeira_emissao) cnhObj.primeira_emissao = a1.cnh_primeira_emissao;
+      // Observações do verso (EAR etc.) — o SPX exige em "CNH Remarks"
+      // (parseCnhRemarks lê cnh.observacoes). Sem isso o disparo parava no rascunho.
+      if (a1.cnh_observacoes) cnhObj.observacoes = a1.cnh_observacoes;
       return Object.keys(cnhObj).length > 0 ? cnhObj : undefined;
     })(),
     telefones: a.a2.telefones,
