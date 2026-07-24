@@ -5,6 +5,20 @@ const PLACEHOLDER_VALUES = new Set(["null", "undefined", "invalid date", "nan"])
 
 export type DateDisplayInput = string | Date | null | undefined;
 
+// Data (YYYY-MM-DD) no fuso de São Paulo, opcionalmente deslocada por `offsetDays`.
+// Necessário porque `cargas.data` é wall-clock BRT e new Date().toISOString() (UTC)
+// vira D+1 após ~21h BRT — o que fazia filtros de "hoje" errarem à noite.
+const SAO_PAULO_YMD = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Sao_Paulo",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+export function saoPauloDateIso(offsetDays = 0): string {
+  const instant = new Date(Date.now() + offsetDays * 86_400_000);
+  return SAO_PAULO_YMD.format(instant); // en-CA → "YYYY-MM-DD"
+}
+
 export function parseDisplayDate(value: DateDisplayInput) {
   if (!value) {
     return null;

@@ -13,7 +13,7 @@ import {
   resolveAssignableRouteForCargo,
 } from "@/lib/assignableRoutes";
 import { formatCargoStatusLabel } from "@/lib/cargoStatus";
-import { formatDateOnly, formatScheduleLabel } from "@/lib/dateDisplay";
+import { formatDateOnly, formatScheduleLabel, saoPauloDateIso } from "@/lib/dateDisplay";
 import { resolveCargoPublicationReadiness } from "@/lib/loadPublication";
 import { normalizeOperatorCargoDate, normalizeOperatorCargoTime } from "@/lib/operatorCargoSchedule";
 import { useAuth } from "@/hooks/useAuth";
@@ -216,12 +216,13 @@ const ManageCargas = () => {
   // que tem data de carregamento >= D+0 (frequentemente D+3..D+30), levando o
   // operador a abrir /cargas e ver "0 cargas em exibicao" mesmo com cargas
   // ativas na fila. 90 dias cobre o horizonte operacional sem trazer historico.
-  const [dateFrom, setDateFrom] = useState<string>(() => new Date().toISOString().slice(0, 10));
-  const [dateTo, setDateTo] = useState<string>(() => {
-    const future = new Date();
-    future.setDate(future.getDate() + 90);
-    return future.toISOString().slice(0, 10);
-  });
+  //
+  // FUSO: `cargas.data` é wall-clock de São Paulo (BRT). Usar new Date().toISOString()
+  // (UTC) fazia o "hoje" virar D+1 depois das ~21h BRT (00h UTC), então o dateFrom
+  // default ficava = amanhã e cargas de HOJE (inclusive lançadas) sumiam de /cargas à
+  // noite. `saoPauloDateIso` calcula a data no fuso de São Paulo.
+  const [dateFrom, setDateFrom] = useState<string>(() => saoPauloDateIso(0));
+  const [dateTo, setDateTo] = useState<string>(() => saoPauloDateIso(90));
   const [clienteFilter, setClienteFilter] = useState<string>("");
   const [page, setPage] = useState(1);
   const deferredSearch = useDeferredValue(search);

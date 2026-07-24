@@ -24,21 +24,22 @@ describe("expirePastCargas", () => {
     await closeTestDatabase();
   });
 
-  it("expira OPEN passada (planilha e lançada, DC-271), preserva futura, motorista e recorrente", async () => {
+  it("carga LANÇADA recente NÃO expira (janela de graça — não sai de /cargas/Monitor); planilha/lançada-antiga expira; preserva futura/motorista/recorrente", async () => {
     const hoje = getSaoPauloWallClock().dateIso;
 
-    // 1. sheet carga passada → expira
+    // 1. sheet carga passada → expira (não é lançada; sem janela de graça)
     const pastSheet = await seedCargo({ cliente_id: clienteId, data: "2020-01-01", horario: "08:00", status: "OPEN", sheet_lh: "LT-OLD" });
     // 2. futura → preserva
     const future = await seedCargo({ cliente_id: clienteId, data: "2999-01-01", horario: "08:00", status: "OPEN" });
-    // 3. lançada HOJE (sheet_lh null + lh_manual) c/ horário no passado → DC-271:
-    //    a exceção "o dia todo" foi removida, então AGORA expira como as demais.
+    // 3. lançada HOJE (sheet_lh null + lh_manual) c/ horário no passado → JANELA DE
+    //    GRAÇA: NÃO expira no mesmo dia (fica visível p/ o operador). Pedido: a carga
+    //    lançada não pode SAIR de /cargas e Monitor.
     const launchedToday = await seedCargo({ cliente_id: clienteId, data: hoje, horario: "00:01", status: "OPEN" });
     await query("UPDATE public.cargas SET lh_manual = 'LT-TODAY', sheet_lh = NULL WHERE id = $1", [launchedToday.id]);
-    // 4. lançada HOJE c/ horário no FUTURO → preserva (carregamento ainda não venceu)
+    // 4. lançada FUTURA → preserva
     const launchedFuture = await seedCargo({ cliente_id: clienteId, data: "2999-01-02", horario: "08:00", status: "OPEN" });
     await query("UPDATE public.cargas SET lh_manual = 'LT-FUT', sheet_lh = NULL WHERE id = $1", [launchedFuture.id]);
-    // 5. lançada PASSADA → expira
+    // 5. lançada ANTIGA (2020, muito além da janela de graça) → expira
     const launchedPast = await seedCargo({ cliente_id: clienteId, data: "2020-01-02", horario: "08:00", status: "OPEN" });
     await query("UPDATE public.cargas SET lh_manual = 'LT-PAST', sheet_lh = NULL WHERE id = $1", [launchedPast.id]);
     // 6. recorrente passada → preserva (motor de recorrência cuida)
@@ -49,14 +50,29 @@ describe("expirePastCargas", () => {
 
     const r = await expirePastCargas({ deps });
 
-    expect(r.expired).toBe(3); // pastSheet + launchedToday + launchedPast
+    expect(r.expired).toBe(2); // pastSheet + launchedPast (launchedToday fica na graça)
     expect(await statusOf(pastSheet.id)).toBe("EXPIRED");
-    expect(await statusOf(launchedToday.id)).toBe("EXPIRED");
     expect(await statusOf(launchedPast.id)).toBe("EXPIRED");
+    expect(await statusOf(launchedToday.id)).toBe("OPEN"); // graça: não sai das telas
     expect(await statusOf(future.id)).toBe("OPEN");
     expect(await statusOf(launchedFuture.id)).toBe("OPEN");
     expect(await statusOf(recurring.id)).toBe("OPEN");
     expect(await statusOf(withDriver.id)).toBe("OPEN");
+  });
+
+  it("carga 'a confirmar' (agenda placeholder) NUNCA expira pelo horário — mesmo antiga", async () => {
+    // Placeholder: data=hoje/horario 00:00 (ou até uma data passada) + agenda_a_confirmar.
+    // Sem o guard, expira em ≤15min (00:00 < agora) e some antes de o operador confirmar.
+    const aConfirmarToday = await seedCargo({ cliente_id: clienteId, data: getSaoPauloWallClock().dateIso, horario: "00:00", status: "OPEN" });
+    await query("UPDATE public.cargas SET lh_manual = 'LT-AC1', sheet_lh = NULL, agenda_a_confirmar = true WHERE id = $1", [aConfirmarToday.id]);
+    const aConfirmarOld = await seedCargo({ cliente_id: clienteId, data: "2020-03-01", horario: "00:00", status: "OPEN" });
+    await query("UPDATE public.cargas SET lh_manual = 'LT-AC2', sheet_lh = NULL, agenda_a_confirmar = true WHERE id = $1", [aConfirmarOld.id]);
+
+    const r = await expirePastCargas({ deps });
+
+    expect(await statusOf(aConfirmarToday.id)).toBe("OPEN");
+    expect(await statusOf(aConfirmarOld.id)).toBe("OPEN"); // guard de a_confirmar vence a janela de graça
+    expect(r.expired).toBe(0);
   });
 
   it("expira DRAFT de dia passado (mesmo com motorista), preserva DRAFT de hoje/futuro/recorrente/template", async () => {
