@@ -1,6 +1,23 @@
 import type { SheetMonitorAllocation, SheetMonitorRow } from "@/services/readModels";
 
 /**
+ * Valor EFETIVO de um campo de alocação (motorista/cavalo/carreta) p/ exibição/edição
+ * no Monitor. `??` (nullish), IGUAL ao backend (COALESCE):
+ *  - null/undefined = "sem decisão" (modal "limpar" / sem override) → valor da planilha.
+ *  - ""             = vazio EXPLÍCITO (operador esvaziou num arrasto/troca) → fica vazio.
+ *  - valor          = define.
+ * NUNCA `||`: com `||`, um "" caía pro valor da planilha e a carga de ORIGEM de uma
+ * troca voltava a mostrar o motorista antigo ("sobrescrito"). Fonte única p/ a linha
+ * (mergeAllocIntoRow) e o modal de edição (RowDetailModal).
+ */
+export function effectiveAllocField(
+  allocValue: string | null | undefined,
+  sheetValue: string | null | undefined,
+): string {
+  return allocValue ?? sheetValue ?? "";
+}
+
+/**
  * Sobrepõe a alocação do operador (override `alloc_*`) sobre a linha da planilha no
  * Monitor. Semântica IGUAL à do backend (COALESCE):
  *
@@ -24,13 +41,13 @@ export function mergeAllocIntoRow(
   alloc: SheetMonitorAllocation | undefined,
 ): SheetMonitorRow {
   if (!alloc) return row;
-  const motoristas = alloc.alloc_motorista ?? row.motoristas;
+  const motoristas = effectiveAllocField(alloc.alloc_motorista, row.motoristas);
   const status = alloc.alloc_status || row.status;
   return {
     ...row,
     motoristas,
-    cavalo: alloc.alloc_cavalo ?? row.cavalo,
-    carreta: alloc.alloc_carreta ?? row.carreta,
+    cavalo: effectiveAllocField(alloc.alloc_cavalo, row.cavalo),
+    carreta: effectiveAllocField(alloc.alloc_carreta, row.carreta),
     status,
     tipo: alloc.alloc_tipo || row.tipo,
     pinned: alloc.alloc_pinned ?? false,

@@ -52,7 +52,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { allocEditPolicy, isSpxTrip } from "@/lib/monitorEditPolicy";
 import { computeSwapMoves } from "@/lib/monitorReorder";
-import { mergeAllocIntoRow } from "@/lib/monitorAllocOverlay";
+import { mergeAllocIntoRow, effectiveAllocField } from "@/lib/monitorAllocOverlay";
 import {
   assignAspxAllocations,
   createMonitorCargo,
@@ -2657,11 +2657,13 @@ function RowDetailModal({
   useEffect(() => {
     if (!row) return;
     setAllocForm({
-      // Override vazio ("" OU null) → cai pra planilha (mesma regra da linha): o
-      // modal pré-preenche com o EFETIVO exibido, não com o override vazio.
-      motorista: alloc?.alloc_motorista || row.motoristas || "",
-      cavalo: alloc?.alloc_cavalo || row.cavalo || "",
-      carreta: alloc?.alloc_carreta || row.carreta || "",
+      // effectiveAllocField (`??`, fonte única com o overlay da linha): override "" =
+      // vazio EXPLÍCITO (operador esvaziou num arrasto/troca) → fica VAZIO; null → cai
+      // pra planilha. Com o antigo `||`, a carga esvaziada abria o modal mostrando o
+      // motorista antigo da planilha ("sobrescrito"), inconsistente com a linha.
+      motorista: effectiveAllocField(alloc?.alloc_motorista, row.motoristas),
+      cavalo: effectiveAllocField(alloc?.alloc_cavalo, row.cavalo),
+      carreta: effectiveAllocField(alloc?.alloc_carreta, row.carreta),
       status: alloc?.alloc_status || row.status || "",
       tipo: alloc?.alloc_tipo ?? (row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "") ?? "",
       vinculo: alloc?.alloc_vinculo ?? row.vinculo ?? "",
@@ -2772,8 +2774,8 @@ function RowDetailModal({
   });
 
   // Checklist do veículo (semáforo) por placa EFETIVA (override do operador ?? planilha).
-  const checklistCavalo = (alloc?.alloc_cavalo || row?.cavalo || "").trim();
-  const checklistCarreta = (alloc?.alloc_carreta || row?.carreta || "").trim();
+  const checklistCavalo = effectiveAllocField(alloc?.alloc_cavalo, row?.cavalo).trim();
+  const checklistCarreta = effectiveAllocField(alloc?.alloc_carreta, row?.carreta).trim();
   const checklistPlacas = [checklistCavalo, checklistCarreta].filter(Boolean);
   const vehicleChecklist = useQuery({
     queryKey: ["admin", "vehicle-checklist", checklistCavalo, checklistCarreta],
@@ -2793,15 +2795,15 @@ function RowDetailModal({
   // Trocou o motorista/veículo em relação ao EFETIVO (override ?? planilha)?
   // (mudança só de status/tipo não pede motivo — e não regrava motorista/veículo.)
   const mvChanged =
-    allocForm.motorista !== (alloc?.alloc_motorista || row.motoristas || "") ||
-    allocForm.cavalo !== (alloc?.alloc_cavalo || row.cavalo || "") ||
-    allocForm.carreta !== (alloc?.alloc_carreta || row.carreta || "");
+    allocForm.motorista !== effectiveAllocField(alloc?.alloc_motorista, row.motoristas) ||
+    allocForm.cavalo !== effectiveAllocField(alloc?.alloc_cavalo, row.cavalo) ||
+    allocForm.carreta !== effectiveAllocField(alloc?.alloc_carreta, row.carreta);
 
   const doSave = (descricao = "") => {
     // Motorista EFETIVO (override do operador OU planilha) — usado no guard abaixo.
     // Considera o motorista da planilha também: não dá pra deixar "Disponível" uma
     // carga que a planilha ainda escala (o portal a ofereceria = duplo-booking).
-    const savedMotorista = ((allocEditable ? allocForm.motorista : alloc?.alloc_motorista) || row.motoristas || "").trim();
+    const savedMotorista = effectiveAllocField(allocEditable ? allocForm.motorista : alloc?.alloc_motorista, row.motoristas).trim();
     // "Disponível" reabre a carga pro painel — e só faz sentido SEM motorista. Com
     // motorista, BLOQUEIA: o operador precisa remover o motorista primeiro (regra do
     // usuário: nunca remover o motorista automaticamente, apenas impedir "Disponível").

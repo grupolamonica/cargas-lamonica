@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { mergeAllocIntoRow } from "@/lib/monitorAllocOverlay";
+import { mergeAllocIntoRow, effectiveAllocField } from "@/lib/monitorAllocOverlay";
 import type { SheetMonitorAllocation, SheetMonitorRow } from "@/services/readModels";
 
 const row = (over: Partial<SheetMonitorRow> = {}): SheetMonitorRow =>
@@ -11,6 +11,22 @@ const alloc = (over: Partial<SheetMonitorAllocation> = {}): SheetMonitorAllocati
     alloc_status: null, alloc_tipo: null, alloc_descricao: null, alloc_vinculo: null,
     alloc_pinned: null, alloc_updated_at: null, ...over,
   } as SheetMonitorAllocation);
+
+describe("effectiveAllocField — valor efetivo (linha E modal usam a MESMA fonte)", () => {
+  it('"" (vazio explícito do swap) → fica vazio (não cai pra planilha)', () => {
+    expect(effectiveAllocField("", "DRIVER PLANILHA")).toBe("");
+  });
+  it("null (modal 'limpar' / sem override) → valor da planilha", () => {
+    expect(effectiveAllocField(null, "DRIVER PLANILHA")).toBe("DRIVER PLANILHA");
+    expect(effectiveAllocField(undefined, "DRIVER PLANILHA")).toBe("DRIVER PLANILHA");
+  });
+  it("valor real → define", () => {
+    expect(effectiveAllocField("NOVO", "DRIVER PLANILHA")).toBe("NOVO");
+  });
+  it("tudo nulo → string vazia (nunca undefined — evita input descontrolado)", () => {
+    expect(effectiveAllocField(null, null)).toBe("");
+  });
+});
 
 describe("mergeAllocIntoRow — overlay da alocação sobre a planilha", () => {
   it("sem alocação → linha da planilha inalterada", () => {
