@@ -1700,20 +1700,36 @@ export async function resolveUpdateProgramacaoSettingsResponse(request) {
     },
     async ({ correlationId, operatorId }) => {
       const body = request.body || {};
-      if (typeof body.spotAutolaunchEnabled !== "boolean") {
+      // Patch parcial: aceita spotAutolaunchEnabled (boolean) e/ou alertRouteKeys
+      // (lista de strings — rotas que alertam spot, DC-279). Pelo menos um é obrigatório.
+      const patch = {};
+      if (typeof body.spotAutolaunchEnabled === "boolean") {
+        patch.spotAutolaunchEnabled = body.spotAutolaunchEnabled;
+      }
+      if (Array.isArray(body.alertRouteKeys)) {
+        if (!body.alertRouteKeys.every((k) => typeof k === "string")) {
+          return {
+            statusCode: 400,
+            payload: {
+              error: "INVALID_BODY",
+              message: "alertRouteKeys deve ser uma lista de strings.",
+              meta: { correlationId },
+            },
+          };
+        }
+        patch.alertRouteKeys = body.alertRouteKeys;
+      }
+      if (Object.keys(patch).length === 0) {
         return {
           statusCode: 400,
           payload: {
             error: "INVALID_BODY",
-            message: "spotAutolaunchEnabled (boolean) é obrigatório.",
+            message: "Informe spotAutolaunchEnabled (boolean) e/ou alertRouteKeys (lista).",
             meta: { correlationId },
           },
         };
       }
-      const settings = await updateProgramacaoSettings({
-        patch: { spotAutolaunchEnabled: body.spotAutolaunchEnabled },
-        operatorId: operatorId ?? null,
-      });
+      const settings = await updateProgramacaoSettings({ patch, operatorId: operatorId ?? null });
       return { statusCode: 200, payload: { ...settings, meta: { correlationId } } };
     },
   );
