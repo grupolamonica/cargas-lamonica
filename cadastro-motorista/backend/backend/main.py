@@ -654,11 +654,21 @@ async def _enrich_cartao_cnpj_com_receita(env: dict) -> dict:
             "logradouro": _consulta_valor(cdata, "endereco_logradouro", "logradouro", "endereco"),
             "numero": _consulta_valor(cdata, "endereco_numero", "numero", "numero_endereco"),
         }
+        # Endereço de CNPJ frequentemente é "S/N" (sem número) — a Receita devolve o
+        # número vazio. Como o enderecoSchema exige `numero` (min 1) e o sanitizador
+        # do merge descarta o endereço inteiro sem número, preenche "S/N" quando há
+        # logradouro mas não veio número — senão razão social entra e o endereço todo
+        # (cep/logradouro/cidade/UF) é perdido.
+        if mapped["logradouro"] and not mapped["numero"]:
+            mapped["numero"] = "S/N"
         for k, v in mapped.items():
             if v:
                 campos[k] = {"valor": v, "score": None}
         env.setdefault("header", {})["rf_enriched"] = True
-        log.info("cartao-cnpj: enriquecido com Receita (CNPJ %s)", cnpj)
+        log.info(
+            "cartao-cnpj: enriquecido com Receita (CNPJ %s, endereco=%s)",
+            cnpj, "sim" if mapped["logradouro"] else "nao",
+        )
         return env
     except Exception as exc:  # noqa: BLE001 — nunca deixa o enrich derrubar o OCR
         log.warning("cartao-cnpj: enrich RF excecao inesperada (%s) — mantem OCR", exc)
