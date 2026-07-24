@@ -52,6 +52,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { allocEditPolicy, isSpxTrip } from "@/lib/monitorEditPolicy";
 import { computeSwapMoves } from "@/lib/monitorReorder";
+import { mergeAllocIntoRow } from "@/lib/monitorAllocOverlay";
 import {
   assignAspxAllocations,
   createMonitorCargo,
@@ -3658,37 +3659,11 @@ export default function SheetMonitor() {
   // planilha. Reflete na tabela/contadores o que foi editado no Monitor.
   const items = useMemo(() => {
     if (Object.keys(allocByLh).length === 0) return rawItems;
-    return rawItems.map((row) => {
-      const a = allocByLh[row.lh];
-      if (!a) return row;
-      // Semântica do override (motorista/veículo), IGUAL à do backend (COALESCE):
-      //  - null  → "sem decisão" (modal "limpar") → cai pro valor da planilha (row.*).
-      //  - ""    → vazio EXPLÍCITO (o operador ESVAZIOU: arrasto/troca/cascata) →
-      //            a carga fica SEM motorista, sobrepondo a planilha.
-      //  - valor → define.
-      // Por isso `??` (nullish), NÃO `||`: com `||`, um "" (vazio explícito) caía pro
-      // motorista da planilha — então ao ARRASTAR o motorista de uma carga p/ outra
-      // (troca), a carga de ORIGEM (esvaziada, alloc="") voltava a mostrar o motorista
-      // antigo da planilha ("sobrescrito, não altera o que foi arrastado"), ainda mais
-      // com o write-back da planilha atrasado/quebrado. `??` respeita o vazio explícito.
-      const motoristas = a.alloc_motorista ?? row.motoristas;
-      const status = a.alloc_status || row.status;
-      return {
-        ...row,
-        motoristas,
-        cavalo: a.alloc_cavalo ?? row.cavalo,
-        carreta: a.alloc_carreta ?? row.carreta,
-        status,
-        // `||` (não `??`): um override de tipo VAZIO ("") cai pro tipo da linha
-        // (ex.: "SISTEMA" nas cargas do sistema), consistente com motorista/status
-        // acima — senão editar uma carga lançada zerava o rótulo "SISTEMA".
-        tipo: a.alloc_tipo || row.tipo,
-        pinned: a.alloc_pinned ?? false,
-        rodoparStatus: row.rodoparStatus ?? 0,
-        hasDriver: Boolean(motoristas),
-        isAvailable: !motoristas && !status,
-      };
-    });
+    // Overlay puro/testável (lib/monitorAllocOverlay): `??` p/ motorista/veículo
+    // (vazio explícito "" fica vazio; null volta à planilha) — evita que a origem de
+    // uma troca por arrasto volte a mostrar o motorista antigo. Regressão coberta em
+    // monitorAllocOverlay.test.ts.
+    return rawItems.map((row) => mergeAllocIntoRow(row, allocByLh[row.lh]));
   }, [rawItems, allocByLh]);
 
   // Ref dos itens (status efetivo) p/ os handlers de save/reassign checarem a
