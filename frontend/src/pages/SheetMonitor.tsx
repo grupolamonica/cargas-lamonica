@@ -3661,19 +3661,23 @@ export default function SheetMonitor() {
     return rawItems.map((row) => {
       const a = allocByLh[row.lh];
       if (!a) return row;
-      // Override VAZIO ("" OU null) = "sem decisão" → cai pro valor da planilha
-      // (row.*). Usa `||` (não `??`): um override vazio parado NÃO pode mais ESCONDER
-      // motorista/veículo/status vivos da planilha — a Shopee re-escala/avança a
-      // viagem depois que a alocação foi esvaziada (ex.: cascata de cancelamento).
-      // Só um valor REAL do operador sobrepõe a planilha. (O "" continua sendo o
-      // marcador de "vaga" da cascata NO BACKEND; aqui é só exibição.)
-      const motoristas = a.alloc_motorista || row.motoristas;
+      // Semântica do override (motorista/veículo), IGUAL à do backend (COALESCE):
+      //  - null  → "sem decisão" (modal "limpar") → cai pro valor da planilha (row.*).
+      //  - ""    → vazio EXPLÍCITO (o operador ESVAZIOU: arrasto/troca/cascata) →
+      //            a carga fica SEM motorista, sobrepondo a planilha.
+      //  - valor → define.
+      // Por isso `??` (nullish), NÃO `||`: com `||`, um "" (vazio explícito) caía pro
+      // motorista da planilha — então ao ARRASTAR o motorista de uma carga p/ outra
+      // (troca), a carga de ORIGEM (esvaziada, alloc="") voltava a mostrar o motorista
+      // antigo da planilha ("sobrescrito, não altera o que foi arrastado"), ainda mais
+      // com o write-back da planilha atrasado/quebrado. `??` respeita o vazio explícito.
+      const motoristas = a.alloc_motorista ?? row.motoristas;
       const status = a.alloc_status || row.status;
       return {
         ...row,
         motoristas,
-        cavalo: a.alloc_cavalo || row.cavalo,
-        carreta: a.alloc_carreta || row.carreta,
+        cavalo: a.alloc_cavalo ?? row.cavalo,
+        carreta: a.alloc_carreta ?? row.carreta,
         status,
         // `||` (não `??`): um override de tipo VAZIO ("") cai pro tipo da linha
         // (ex.: "SISTEMA" nas cargas do sistema), consistente com motorista/status

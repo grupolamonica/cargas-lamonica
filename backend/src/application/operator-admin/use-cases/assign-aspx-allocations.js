@@ -21,13 +21,16 @@ function isAspxLinehaul(lh) {
 
 async function defaultListByLhs(lhs) {
   return withPgClient(async (client) => {
+    // LH efetivo = COALESCE(sheet_lh, lh_manual): resolve tanto cargas da planilha
+    // (sheet_lh) quanto LANÇADAS na Programação (lh_manual, sheet_lh NULL) — senão
+    // não dava pra atribuir no ASPX uma carga lançada (viagem SPX real).
     const { rows } = await client.query(
-      `SELECT sheet_lh,
+      `SELECT COALESCE(sheet_lh, lh_manual) AS sheet_lh,
               COALESCE(alloc_motorista, sheet_motorista, '') AS motorista,
               COALESCE(alloc_cavalo,    sheet_cavalo,    '') AS cavalo,
               COALESCE(alloc_carreta,   sheet_carreta,   '') AS carreta
        FROM public.cargas
-       WHERE sheet_lh = ANY($1::text[])`,
+       WHERE sheet_lh = ANY($1::text[]) OR lh_manual = ANY($1::text[])`,
       [lhs],
     );
     return rows;
