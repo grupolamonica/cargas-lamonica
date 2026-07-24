@@ -1328,6 +1328,49 @@ describe("Nestlé header schema — tipo vs vínculo", () => {
   });
 });
 
+describe("parseAllGoogleSheetRows — cabeçalho de carreta tolerante (CARRETA/CARRETA1/CARRETA2)", () => {
+  // Regressão (2026-07-24): a coluna CARRETA foi renomeada para CARRETA1 na
+  // planilha (migração p/ 2ª carreta). O parser lia a placa por nome fixo
+  // "carreta" → a carreta sumia de TODAS as linhas (só a carreta; cavalo/vínculo
+  // e os demais campos, via schema, continuavam). Agora o cabeçalho é resolvido
+  // por apelidos e CARRETA2 (bitrem) é concatenado.
+  const HEADER_BASE = ["LH", "TIPO", "DATA CARREGAMENTO", "DATA DESCARGA", "Motoristas", "CAVALO"];
+  const HEADER_TAIL = ["VINCULO", "ORIGEM", "DESTINO", "STATUS"];
+  const csvWith = (carretaHeaders, carretaValues) =>
+    [
+      "PROGRAMAÇÃO",
+      "",
+      [...HEADER_BASE, ...carretaHeaders, ...HEADER_TAIL].join(","),
+      [
+        "LT1", "SPOT", "20/07/2026 08:00:00", "21/07/2026 08:00:00", "JOAO", "AAA1A11",
+        ...carretaValues, "FROTA", "SAO PAULO-SP", "SALVADOR-BA", "CTE ENVIADO",
+      ].join(","),
+    ].join("\n");
+
+  it("lê a placa quando o cabeçalho foi renomeado de CARRETA para CARRETA1", () => {
+    const rows = parseAllGoogleSheetRows(csvWith(["CARRETA1"], ["EEE2E22"]));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].cavalo).toBe("AAA1A11");
+    expect(rows[0].carreta).toBe("EEE2E22");
+    expect(rows[0].vinculo).toBe("FROTA");
+  });
+
+  it("ainda lê o cabeçalho legado CARRETA", () => {
+    const rows = parseAllGoogleSheetRows(csvWith(["CARRETA"], ["FFF2F22"]));
+    expect(rows[0].carreta).toBe("FFF2F22");
+  });
+
+  it("concatena CARRETA1 + CARRETA2 (bitrem) como 'P1 / P2'", () => {
+    const rows = parseAllGoogleSheetRows(csvWith(["CARRETA1", "CARRETA2"], ["GGG1G11", "GGG2G22"]));
+    expect(rows[0].carreta).toBe("GGG1G11 / GGG2G22");
+  });
+
+  it("com CARRETA2 vazia, não deixa separador ' / ' sobrando", () => {
+    const rows = parseAllGoogleSheetRows(csvWith(["CARRETA1", "CARRETA2"], ["HHH1H11", ""]));
+    expect(rows[0].carreta).toBe("HHH1H11");
+  });
+});
+
 describe("updateSheetMonitorSnapshot", () => {
   function createSnapshotSupabaseClient({ upsertError = null, returnedSyncedAt = null } = {}) {
     const calls = [];

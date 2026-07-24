@@ -917,6 +917,17 @@ export function parseAllGoogleSheetRows(csvText, options = {}) {
     "checklist carreta",
   ]);
 
+  // Cabeçalhos de veículo por NOME TOLERANTE (não exato). A planilha renomeou
+  // CARRETA → CARRETA1 (preparando 2ª carreta / bitrem, junto com CheckList
+  // Carreta1/Carreta2). O parser lia por nome fixo "carreta", então a placa
+  // sumiu de TODAS as linhas — só a carreta (cavalo/vínculo não mudaram). Resolve
+  // o cabeçalho concreto uma vez, aceitando os apelidos; CARRETA2 é lido à parte e
+  // concatenado ("P1 / P2", mesmo formato de bitrem já usado), inerte até existir.
+  const cavaloHeader = findFirstAvailableHeader(headerIndex, ["cavalo", "cavalo1", "cavalo 1"]);
+  const carreta1Header = findFirstAvailableHeader(headerIndex, ["carreta", "carreta1", "carreta 1"]);
+  const carreta2Header = findFirstAvailableHeader(headerIndex, ["carreta2", "carreta 2"]);
+  const vinculoHeader = findFirstAvailableHeader(headerIndex, ["vinculo"]);
+
   const allRows = [];
 
   for (let index = headerRowIndex + 1; index < rows.length; index += 1) {
@@ -941,9 +952,11 @@ export function parseAllGoogleSheetRows(csvText, options = {}) {
       : "";
     const rawValue = valueHeaderName ? getCell(row, headerIndex, valueHeaderName) : "";
 
-    const cavalo = getCell(row, headerIndex, "cavalo");
-    const carreta = getCell(row, headerIndex, "carreta");
-    const vinculo = getCell(row, headerIndex, "vinculo");
+    const cavalo = cavaloHeader ? getCell(row, headerIndex, cavaloHeader) : "";
+    const carreta1 = carreta1Header ? getCell(row, headerIndex, carreta1Header) : "";
+    const carreta2 = carreta2Header ? getCell(row, headerIndex, carreta2Header) : "";
+    const carreta = [carreta1, carreta2].filter((plate) => plate !== "").join(" / ");
+    const vinculo = vinculoHeader ? getCell(row, headerIndex, vinculoHeader) : "";
     const checklistCavalo = getCell(row, headerIndex, "checklist cavalo");
     const checklistCarreta = checklistCarretaHeader
       ? getCell(row, headerIndex, checklistCarretaHeader)
