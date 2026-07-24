@@ -149,9 +149,13 @@ services:
       # Strategy por endpoint (legacy | infosimples-with-vision-fallback | vision-only)
       OCR_CNH_STRATEGY: ${OCR_CNH_STRATEGY:-legacy}
       OCR_CRLV_STRATEGY: ${OCR_CRLV_STRATEGY:-legacy}
-      OCR_CARTAO_CNPJ_STRATEGY: ${OCR_CARTAO_CNPJ_STRATEGY:-legacy}
+      # cartao-CNPJ e comprovante: Infosimples (legacy) genérico não lê bem esses
+      # documentos → default vision-only (GPT-4o). O cartão-CNPJ ainda é
+      # complementado com a consulta autoritativa da Receita (ver
+      # _enrich_cartao_cnpj_com_receita). Precisa do OPENAI_API_KEY no sidecar.
+      OCR_CARTAO_CNPJ_STRATEGY: ${OCR_CARTAO_CNPJ_STRATEGY:-vision-only}
       OCR_RNTRC_STRATEGY: ${OCR_RNTRC_STRATEGY:-vision-only}
-      OCR_COMPROVANTE_STRATEGY: ${OCR_COMPROVANTE_STRATEGY:-legacy}
+      OCR_COMPROVANTE_STRATEGY: ${OCR_COMPROVANTE_STRATEGY:-vision-only}
       OCR_SELFIE_CNH_STRATEGY: ${OCR_SELFIE_CNH_STRATEGY:-vision-only}
       # bind 0.0.0.0 em prod: Traefik (outro container) precisa alcancar uvicorn
       # via network platform_public. Default do app e 127.0.0.1 (loopback-only).
