@@ -1816,8 +1816,10 @@ function groupLeadsForOperator(rows, vinculoMap = new Map()) {
 //      Default 3000ms em produção (fix ativo no deploy, sem precisar setar env).
 //      Forçado a 0 sob teste (VITEST/NODE_ENV=test) p/ não vazar estado de
 //      módulo entre testes. Staleness de 3s é aceitável numa fila de operador.
-let _operatorLeadsInFlight = null;
-let _operatorLeadsCache = { at: 0, payload: null };
+// Cache/single-flight SEPARADOS por escopo (`fila` | `historico`). Sem isso as
+// duas telas — que compartilham este módulo — se sobrescreveriam no cache.
+let _operatorLeadsInFlight = { fila: null, historico: null };
+let _operatorLeadsCache = { fila: { at: 0, payload: null }, historico: { at: 0, payload: null } };
 
 function getOperatorLeadsCacheTtlMs() {
   // Em teste o cache de módulo vazaria entre casos (mutate→list espera dado
@@ -1832,43 +1834,174 @@ function nowMs() {
   return Date.now();
 }
 
-export async function listOperatorPublicLoadLeads({ correlationId } = {}) {
+// `fila` (default) = cargas vivas (não-terminais); `historico` = cargas terminais.
+// A partição passou a ser feita no SERVIDOR: antes o read model reenviava TODAS
+// as reservas (inclusive de cargas já BOOKED/EXPIRED/...) e só o front descartava
+// as terminais no cliente — ~99% das linhas do poll da fila trafegavam à toa.
+function normalizeOperatorLeadsScope(scope) {
+  return scope === "historico" ? "historico" : "fila";
+}
+
+export async function listOperatorPublicLoadLeads({ correlationId, scope } = {}) {
   const resolvedCorrelationId = correlationId || createCorrelationId();
+  const resolvedScope = normalizeOperatorLeadsScope(scope);
   const ttl = getOperatorLeadsCacheTtlMs();
 
-  // 1) micro-cache TTL (só quando habilitado em produção)
-  if (ttl > 0 && _operatorLeadsCache.payload && nowMs() - _operatorLeadsCache.at < ttl) {
+  // 1) micro-cache TTL por escopo (só quando habilitado em produção)
+  const cached = _operatorLeadsCache[resolvedScope];
+  if (ttl > 0 && cached.payload && nowMs() - cached.at < ttl) {
     return {
       statusCode: 200,
-      payload: { ..._operatorLeadsCache.payload, meta: { correlationId: resolvedCorrelationId, cached: true } },
+      payload: { ...cached.payload, meta: { correlationId: resolvedCorrelationId, cached: true } },
     };
   }
 
-  // 2) single-flight: rajada concorrente compartilha 1 query
-  if (_operatorLeadsInFlight) {
-    const shared = await _operatorLeadsInFlight;
+  // 2) single-flight por escopo: rajada concorrente compartilha 1 query
+  if (_operatorLeadsInFlight[resolvedScope]) {
+    const shared = await _operatorLeadsInFlight[resolvedScope];
     return {
       statusCode: 200,
       payload: { ...shared, meta: { correlationId: resolvedCorrelationId, cached: true } },
     };
   }
 
-  _operatorLeadsInFlight = (async () => {
-    const result = await listOperatorPublicLoadLeadsUncached({ correlationId: resolvedCorrelationId });
-    if (ttl > 0) _operatorLeadsCache = { at: nowMs(), payload: result.payload };
+  _operatorLeadsInFlight[resolvedScope] = (async () => {
+    const result = await listOperatorPublicLoadLeadsUncached({
+      correlationId: resolvedCorrelationId,
+      scope: resolvedScope,
+    });
+    if (ttl > 0) _operatorLeadsCache[resolvedScope] = { at: nowMs(), payload: result.payload };
     return result.payload;
   })();
 
   try {
-    const payload = await _operatorLeadsInFlight;
+    const payload = await _operatorLeadsInFlight[resolvedScope];
     return { statusCode: 200, payload };
   } finally {
-    _operatorLeadsInFlight = null;
+    _operatorLeadsInFlight[resolvedScope] = null;
   }
 }
 
-async function listOperatorPublicLoadLeadsUncached({ correlationId }) {
+// 2ª query do read model: cargas OPEN/RESERVED sem lead ativo (grupos vazios da
+// DC-257). Extraída para ser chamada só no escopo `fila` — no histórico ela não
+// tem efeito (o front nunca mostra grupo vazio terminal) e só geraria egress.
+async function fetchEmptyOperatorLoadGroups(client, { activeLoadIds, correlationId }) {
+  let emptyLoadRows;
+  try {
+    const emptyResult = await client.query(
+      `
+        SELECT
+          c.id AS load_id,
+          c.status AS load_status,
+          c.origem AS load_origem,
+          c.destino AS load_destino,
+          c.perfil AS load_perfil,
+          c.data AS load_data,
+          c.horario AS load_horario,
+          c.reserved_public_lead_id AS load_reserved_public_lead_id,
+          c.sheet_lh AS load_sheet_lh,
+          c.sheet_data_carregamento AS load_sheet_data_carregamento,
+          c.sheet_data_descarga AS load_sheet_data_descarga,
+          COALESCE(c.alloc_motorista, c.sheet_motorista) AS load_sheet_motorista,
+          COALESCE(c.alloc_cavalo, c.sheet_cavalo) AS load_sheet_cavalo,
+          COALESCE(c.alloc_carreta, c.sheet_carreta) AS load_sheet_carreta,
+          COALESCE(c.alloc_status, c.sheet_status) AS load_sheet_status,
+          c.alloc_motorista AS load_alloc_motorista,
+          c.alloc_source AS load_alloc_source,
+          c.cliente_id AS load_cliente_id,
+          c.viagem_id AS load_viagem_id,
+          c.ordem_viagem AS load_ordem_viagem,
+          clientes.nome AS load_cliente_nome,
+          clientes.logo_url AS load_cliente_logo_url,
+          cc.status AS pacote_status,
+          cc.valor_total AS pacote_valor_total,
+          cc.version AS pacote_version,
+          pacote_counts.total AS pacote_total_cargas
+        FROM public.cargas AS c
+        LEFT JOIN public.clientes
+          ON clientes.id = c.cliente_id
+        LEFT JOIN public.cargas_casadas AS cc
+          ON cc.id = c.viagem_id
+        LEFT JOIN (
+          SELECT viagem_id, COUNT(*)::int AS total
+          FROM public.cargas
+          WHERE viagem_id IS NOT NULL
+          GROUP BY viagem_id
+        ) AS pacote_counts
+          ON pacote_counts.viagem_id = c.viagem_id
+        LEFT JOIN public.load_public_leads AS active_leads
+          ON active_leads.load_id = c.id
+          AND active_leads.status = ANY($2::text[])
+        WHERE c.status = ANY($1::text[])
+          AND active_leads.id IS NULL
+      `,
+      [["OPEN", "RESERVED"], [PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED]],
+    );
+    emptyLoadRows = emptyResult.rows;
+  } catch (error) {
+    if (
+      isMissingSheetStatusColumn(error) ||
+      isMissingCargasCasadasTable(error) ||
+      isMissingViagemIdColumn(error)
+    ) {
+      logLoadClaimEvent("error", "operator-leads.schema_drift", {
+        correlation_id: correlationId,
+        stage: "empty-loads",
+        pg_code: error?.code || null,
+        pg_message: error?.message || null,
+        pg_detail: error?.detail || null,
+      });
+      throw createOperatorLeadsSchemaDriftError(error);
+    }
+    throw error;
+  }
+
+  return emptyLoadRows
+    .filter((r) => !activeLoadIds.has(r.load_id))
+    .map((r) => ({
+      load: {
+        id: r.load_id,
+        status: r.load_status,
+        origem: r.load_origem,
+        destino: r.load_destino,
+        perfil: r.load_perfil,
+        data: r.load_data,
+        horario: r.load_horario,
+        reservedPublicLeadId: r.load_reserved_public_lead_id,
+        sheetLh: r.load_sheet_lh || null,
+        sheetDataCarregamento: r.load_sheet_data_carregamento || null,
+        sheetDataDescarga: r.load_sheet_data_descarga || null,
+        sheetMotorista: r.load_sheet_motorista || null,
+        sheetCavalo: r.load_sheet_cavalo || null,
+        sheetCarreta: r.load_sheet_carreta || null,
+        sheetStatus: r.load_sheet_status || null,
+        allocatedByOperator: deriveAllocatedByOperator(r),
+        clienteId: r.load_cliente_id || null,
+        clienteNome: r.load_cliente_nome || null,
+        clienteLogoUrl: r.load_cliente_logo_url || null,
+        viagemId: r.load_viagem_id || null,
+        ordemViagem: r.load_ordem_viagem ?? null,
+        pacoteMeta: buildPacoteMeta(r),
+      },
+      queueCount: 0,
+      totalLeads: 0,
+      leads: [],
+    }));
+}
+
+async function listOperatorPublicLoadLeadsUncached({ correlationId, scope }) {
   const resolvedCorrelationId = correlationId || createCorrelationId();
+  const resolvedScope = normalizeOperatorLeadsScope(scope);
+  // Filtro de status da carga aplicado no SERVIDOR ($2 = status terminais):
+  // fila = cargas vivas; historico = cargas terminais. Espelha o recorte que o
+  // front já faz por TERMINAL_LOAD_STATUSES, mas evita trafegar (e descartar no
+  // cliente) as centenas de reservas de cargas já finalizadas a cada poll.
+  // `NOT (... = ANY(...))` em vez de `<> ALL(...)`: equivalente, mas `ALL(array)`
+  // não é suportado pelo harness pg-mem (só `= ANY`).
+  const loadStatusClause =
+    resolvedScope === "historico"
+      ? "cargas.status = ANY($2::text[])"
+      : "NOT (cargas.status = ANY($2::text[]))";
 
   return withPgTransaction(async (client) => {
     let rows;
@@ -1940,9 +2073,10 @@ async function listOperatorPublicLoadLeadsUncached({ correlationId }) {
               ON pacote_counts.viagem_id = cargas.viagem_id
             WHERE leads.status = ANY($1::text[])
               AND (leads.status = 'QUEUED' OR leads.pii_redacted_at IS NULL)
+              AND ${loadStatusClause}
             ORDER BY COALESCE(leads.queued_at, leads.created_at) ASC, leads.created_at ASC, leads.id ASC
           `,
-          [[PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED]],
+          [[PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED], TERMINAL_LOAD_STATUSES_SQL],
         ),
       );
       rows = result.rows;
@@ -2023,117 +2157,26 @@ async function listOperatorPublicLoadLeadsUncached({ correlationId }) {
           ) AS pacote_counts
             ON pacote_counts.viagem_id = cargas.viagem_id
           WHERE leads.status = ANY($1::text[])
+            AND ${loadStatusClause}
           ORDER BY COALESCE(leads.queued_at, leads.created_at) ASC, leads.created_at ASC, leads.id ASC
         `,
-        [[PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED]],
+        [[PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED], TERMINAL_LOAD_STATUSES_SQL],
       );
       rows = fallbackResult.rows;
     }
 
-    // Include OPEN/RESERVED cargas that have no active leads — they should remain
-    // visible in the fila after their last lead is cancelled.
-    const activeLoadIds = new Set(rows.map(r => r.load_id));
-    let emptyLoadRows;
-    try {
-      const emptyResult = await client.query(
-        `
-          SELECT
-            c.id AS load_id,
-            c.status AS load_status,
-            c.origem AS load_origem,
-            c.destino AS load_destino,
-            c.perfil AS load_perfil,
-            c.data AS load_data,
-            c.horario AS load_horario,
-            c.reserved_public_lead_id AS load_reserved_public_lead_id,
-            c.sheet_lh AS load_sheet_lh,
-            c.sheet_data_carregamento AS load_sheet_data_carregamento,
-            c.sheet_data_descarga AS load_sheet_data_descarga,
-            COALESCE(c.alloc_motorista, c.sheet_motorista) AS load_sheet_motorista,
-            COALESCE(c.alloc_cavalo, c.sheet_cavalo) AS load_sheet_cavalo,
-            COALESCE(c.alloc_carreta, c.sheet_carreta) AS load_sheet_carreta,
-            COALESCE(c.alloc_status, c.sheet_status) AS load_sheet_status,
-            c.alloc_motorista AS load_alloc_motorista,
-            c.alloc_source AS load_alloc_source,
-            c.cliente_id AS load_cliente_id,
-            c.viagem_id AS load_viagem_id,
-            c.ordem_viagem AS load_ordem_viagem,
-            clientes.nome AS load_cliente_nome,
-            clientes.logo_url AS load_cliente_logo_url,
-            cc.status AS pacote_status,
-            cc.valor_total AS pacote_valor_total,
-            cc.version AS pacote_version,
-            pacote_counts.total AS pacote_total_cargas
-          FROM public.cargas AS c
-          LEFT JOIN public.clientes
-            ON clientes.id = c.cliente_id
-          LEFT JOIN public.cargas_casadas AS cc
-            ON cc.id = c.viagem_id
-          LEFT JOIN (
-            SELECT viagem_id, COUNT(*)::int AS total
-            FROM public.cargas
-            WHERE viagem_id IS NOT NULL
-            GROUP BY viagem_id
-          ) AS pacote_counts
-            ON pacote_counts.viagem_id = c.viagem_id
-          LEFT JOIN public.load_public_leads AS active_leads
-            ON active_leads.load_id = c.id
-            AND active_leads.status = ANY($2::text[])
-          WHERE c.status = ANY($1::text[])
-            AND active_leads.id IS NULL
-        `,
-        [["OPEN", "RESERVED"], [PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED]],
-      );
-      emptyLoadRows = emptyResult.rows;
-    } catch (error) {
-      if (
-        isMissingSheetStatusColumn(error) ||
-        isMissingCargasCasadasTable(error) ||
-        isMissingViagemIdColumn(error)
-      ) {
-        logLoadClaimEvent("error", "operator-leads.schema_drift", {
-          correlation_id: resolvedCorrelationId,
-          stage: "empty-loads",
-          pg_code: error?.code || null,
-          pg_message: error?.message || null,
-          pg_detail: error?.detail || null,
-        });
-        throw createOperatorLeadsSchemaDriftError(error);
-      }
-      throw error;
-    }
-
-    const emptyGroups = emptyLoadRows
-      .filter(r => !activeLoadIds.has(r.load_id))
-      .map(r => ({
-        load: {
-          id: r.load_id,
-          status: r.load_status,
-          origem: r.load_origem,
-          destino: r.load_destino,
-          perfil: r.load_perfil,
-          data: r.load_data,
-          horario: r.load_horario,
-          reservedPublicLeadId: r.load_reserved_public_lead_id,
-          sheetLh: r.load_sheet_lh || null,
-          sheetDataCarregamento: r.load_sheet_data_carregamento || null,
-          sheetDataDescarga: r.load_sheet_data_descarga || null,
-          sheetMotorista: r.load_sheet_motorista || null,
-          sheetCavalo: r.load_sheet_cavalo || null,
-          sheetCarreta: r.load_sheet_carreta || null,
-          sheetStatus: r.load_sheet_status || null,
-          allocatedByOperator: deriveAllocatedByOperator(r),
-          clienteId: r.load_cliente_id || null,
-          clienteNome: r.load_cliente_nome || null,
-          clienteLogoUrl: r.load_cliente_logo_url || null,
-          viagemId: r.load_viagem_id || null,
-          ordemViagem: r.load_ordem_viagem ?? null,
-          pacoteMeta: buildPacoteMeta(r),
-        },
-        queueCount: 0,
-        totalLeads: 0,
-        leads: [],
-      }));
+    // Grupos vazios (DC-257): cargas OPEN/RESERVED sem lead ativo seguem
+    // visíveis na FILA para alocação direta. No histórico (terminais) não se
+    // aplicam — pulamos a 2ª query inteira (que era trafegada e descartada pelo
+    // cliente a cada poll da fila e do histórico).
+    const activeLoadIds = new Set(rows.map((r) => r.load_id));
+    const emptyGroups =
+      resolvedScope === "fila"
+        ? await fetchEmptyOperatorLoadGroups(client, {
+            activeLoadIds,
+            correlationId: resolvedCorrelationId,
+          })
+        : [];
 
     // Mapa de vínculos (aba "Vinculo" da planilha) para enriquecer os leads com
     // o badge ao lado do nome. Isolado em savepoint: se a tabela ainda não foi

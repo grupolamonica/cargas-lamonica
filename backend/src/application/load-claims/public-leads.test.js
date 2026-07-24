@@ -1063,6 +1063,49 @@ describe.sequential("public load leads", () => {
     expect(alloc.load.sheetMotorista).toBe("JOAO DA SILVA");
   });
 
+  it("scope: fila exclui cargas terminais; historico traz só as terminais", async () => {
+    // Corte de egress: a fila reenviava TODA reserva mesmo de cargas já
+    // finalizadas (BOOKED/EXPIRED/...), e o front descartava no cliente. Agora o
+    // servidor particiona por status da carga.
+    const { id: openId } = await harness.seedLoad();
+    const liveLead = await service.createPublicLoadLeadPreRegistration({
+      loadId: openId,
+      payload: buildPayload(),
+      correlationId: "corr-scope-live",
+    });
+
+    // Candidatura criada enquanto a carga estava OPEN e depois a carga foi BOOKED
+    // (lead "preso" na fila) — é exatamente o que inflava o poll da fila.
+    const { id: bookedId } = await harness.seedLoad();
+    const termLead = await service.createPublicLoadLeadPreRegistration({
+      loadId: bookedId,
+      payload: buildPayload({ cpf: "222.333.444-55", phone: "(11) 97777-6666", horsePlate: "TRM1A23", trailerPlate: "TRM2B34" }),
+      correlationId: "corr-scope-term",
+    });
+    await harness.query("UPDATE public.cargas SET status = 'BOOKED' WHERE id = $1", [bookedId]);
+
+    // Fila (default): só cargas vivas.
+    const fila = await service.listOperatorPublicLoadLeads({ correlationId: "corr-scope-fila" });
+    const filaLoadIds = fila.payload.groups.map((g) => g.load.id);
+    expect(filaLoadIds).toContain(openId);
+    expect(filaLoadIds).not.toContain(bookedId);
+    expect(fila.payload.groups.find((g) => g.load.id === openId).leads.map((l) => l.id)).toContain(
+      liveLead.payload.lead.id,
+    );
+
+    // Histórico: só cargas terminais (e sem a 2ª query de grupos vazios).
+    const historico = await service.listOperatorPublicLoadLeads({
+      correlationId: "corr-scope-hist",
+      scope: "historico",
+    });
+    const histLoadIds = historico.payload.groups.map((g) => g.load.id);
+    expect(histLoadIds).toContain(bookedId);
+    expect(histLoadIds).not.toContain(openId);
+    expect(historico.payload.groups.find((g) => g.load.id === bookedId).leads.map((l) => l.id)).toContain(
+      termLead.payload.lead.id,
+    );
+  });
+
   it("DC-273: alocação direta reserva a carga (sem coluna 'source', trailer '' no lugar de null)", async () => {
     // Regressão dos 2 bugs que davam 500 em prod no createDirectLeadAllocation:
     //   (1) INSERT gravava coluna `source` inexistente em load_public_leads;

@@ -430,7 +430,7 @@ export async function queuePublicLoadLeadViaWhatsApp(loadId: string, leadId: str
   });
 }
 
-export async function fetchOperatorLoadLeads() {
+export async function fetchOperatorLoadLeads(scope: RevalidateScope = "fila") {
   const accessToken = await getOperatorAccessToken();
 
   return requestJson<{
@@ -438,7 +438,7 @@ export async function fetchOperatorLoadLeads() {
     meta: {
       correlationId: string;
     };
-  }>("/api/operator/leads", {
+  }>(`/api/operator/leads?scope=${scope}`, {
     accessToken,
   });
 }

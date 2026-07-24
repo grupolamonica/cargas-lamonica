@@ -220,13 +220,19 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   const autoRevalidateFiredRef = useRef<number>(0);
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
 
+  // `fila` (default) puxa só cargas vivas; `historico` só as terminais. O
+  // servidor agora particiona por status (antes vinha tudo e o front descartava),
+  // então a query key inclui o escopo p/ Fila e Histórico não colidirem no cache.
+  const leadsScope = historicoMode ? "historico" : "fila";
   const { data, error, isLoading, isFetching } = useQuery({
-    queryKey: LEADS_QUERY_KEY,
-    queryFn: fetchOperatorLoadLeads,
+    queryKey: [...LEADS_QUERY_KEY, leadsScope],
+    queryFn: () => fetchOperatorLoadLeads(leadsScope),
     // Backoff: 30s quando ainda não temos dados; 60s estável uma vez que a
     // primeira página renderizou. Reduz ~50% do tráfego de polling no fluxo
     // estável de operador sem perder responsividade no carregamento inicial.
-    refetchInterval: (query) => (query.state.data ? 60_000 : 30_000),
+    // O Histórico (cargas terminais, conjunto grande) NÃO faz auto-poll: abre sob
+    // demanda e revalida por reconexão/refetch manual — não reenvia a lista 24/7.
+    refetchInterval: historicoMode ? false : (query) => (query.state.data ? 60_000 : 30_000),
     refetchIntervalInBackground: false,
     // refetchOnWindowFocus desligado: o polling (60s) + realtime debounced já
     // mantêm a fila fresca. Com focus-refetch ligado, alternar abas dispara
@@ -234,7 +240,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     // ao egress do pooler (incidente 70GB).
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
-    staleTime: 15_000,
+    staleTime: historicoMode ? 5 * 60_000 : 15_000,
     // Retry transient errors (5xx) with exponential backoff. 4xx errors
     // (auth, validation) sao terminais e nao devem ser retentados.
     retry: (failureCount, err) => {
@@ -747,7 +753,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     }
   };
 
-  const revalidateScope = historicoMode ? "historico" : "fila";
+  const revalidateScope = leadsScope;
   const handleRevalidateQueued = async () => {
     try {
       setRevalidating(true);

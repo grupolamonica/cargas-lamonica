@@ -430,6 +430,22 @@ describe("Leads", () => {
     }, { timeout: 5_000 });
   });
 
+  it("historico usa escopo proprio na query key e nao faz auto-poll (corta egress)", () => {
+    render(<Leads historicoMode />);
+
+    const leadsCall = mockUseQuery.mock.calls.find(
+      (c) => (c[0] as { queryKey?: unknown[] })?.queryKey?.[1] === "public-load-leads",
+    )?.[0] as { queryKey: unknown[]; refetchInterval: unknown; staleTime: number };
+
+    // Fila e Historico compartilham o modulo — a query key precisa separar por
+    // escopo, senao as duas telas colidem no cache do TanStack.
+    expect(leadsCall.queryKey).toEqual(["operator", "public-load-leads", "historico"]);
+    // Historico (conjunto grande de cargas terminais) abre sob demanda; sem
+    // auto-poll para nao reenviar a lista pesada a cada 60s enquanto aberto.
+    expect(leadsCall.refetchInterval).toBe(false);
+    expect(leadsCall.staleTime).toBe(5 * 60_000);
+  });
+
   it("mostra banner amarelo de sincronizacao indisponivel quando 503 e ja existem dados", () => {
     // Cenario: polling ja trouxe dados; uma proxima refetch falhou com 503
     // schema-drift. UI mantem os dados antigos visiveis e exibe banner gracioso.
