@@ -1738,10 +1738,14 @@ const Motoristas = () => {
             ) : null}
 
             {/* Editor de CAMPOS (amigável) — corrige dados errados antes de aprovar. */}
-            {selectedPendente ? (
+            {selectedPendente && showCamposEditor ? (
+              // Monta SÓ quando aberto: cada abertura remonta com o selectedPendente.dados
+              // ATUAL (que reprocessar/editar-JSON já atualizam), evitando estado stale.
               <CadastroCamposEditorModal
+                key={selectedPendente.id}
                 open={showCamposEditor}
                 dados={selectedPendente.dados ?? null}
+                cadastroId={selectedPendente.id}
                 onClose={() => setShowCamposEditor(false)}
                 onSave={(dados) => editarDadosMutation.mutate({ id: selectedPendente.id, dados })}
                 isSaving={editarDadosMutation.isPending}

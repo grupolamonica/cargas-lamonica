@@ -140,6 +140,7 @@ import {
   resolveOperatorRejeitarCadastroResponse,
   resolveOperatorNaoConformidadeCadastroResponse,
   resolveOperatorReprocessarCadastroResponse,
+  resolveOperatorAnexarDocumentoResponse,
   resolveOperatorAngelliraPrecheckResponse,
   resolveOperatorAngelliraCheckOwnerResponse,
   resolveOperatorAngelliraCadastrarResponse,
@@ -451,6 +452,26 @@ export function registerRoutes(app) {
   router.post("/api/operator/cadastros/:id/rejeitar", wrap(resolveOperatorRejeitarCadastroResponse));
   router.post("/api/operator/cadastros/:id/nao-conformidade", wrap(resolveOperatorNaoConformidadeCadastroResponse));
   router.post("/api/operator/cadastros/:id/reprocessar-documentos", wrap(resolveOperatorReprocessarCadastroResponse));
+  // Anexar documento faltante (multipart) + OCR + pré-preencher. Não persiste:
+  // devolve o `dados` mesclado; o PATCH .../dados do "Salvar" é quem grava.
+  router.post(
+    "/api/operator/cadastros/:id/anexar-documento",
+    (req, res, next) => {
+      draftFileUpload.single("file")(req, res, (err) => {
+        if (!err) return next();
+        const correlationId = req.correlationId || null;
+        if (err?.code === "LIMIT_FILE_SIZE") {
+          return res.status(413).json({ error: "FILE_TOO_LARGE", message: "Arquivo excede o limite de 8 MB.", meta: { correlationId } });
+        }
+        if (err?.code === "UNSUPPORTED_TYPE") {
+          return res.status(415).json({ error: "UNSUPPORTED_TYPE", message: "Tipo de arquivo não suportado. Use JPEG, PNG, HEIC, HEIF ou PDF.", meta: { correlationId } });
+        }
+        console.warn("[anexar-documento.multer]", { correlationId, code: err?.code, message: err?.message });
+        return res.status(400).json({ error: "BadRequest", message: "Falha ao processar upload multipart.", meta: { correlationId } });
+      });
+    },
+    wrap(resolveOperatorAnexarDocumentoResponse),
+  );
   // Resgate de rascunho: operador completa e submete em nome do motorista
   router.post("/api/operator/cadastros/:id/submeter", wrap(resolveOperatorSubmitDraftResponse));
 

@@ -407,6 +407,10 @@ const ownerSchema = z
     nome_pai: z.string().trim().optional(),
     nome_mae: z.string().trim().optional(),
     naturalidade: z.string().trim().optional(),
+    // Data de nascimento do proprietário PF — a Angellira exige (payload-mapper lê
+    // owner.data_nascimento) e o editor do operador captura. Optional p/ não
+    // quebrar owners PJ / drafts antigos.
+    data_nascimento: z.string().trim().optional(),
     rg: z.string().trim().optional(),
     rg_orgao: z.string().trim().optional(),
     rg_uf: z.string().trim().length(2).optional(),

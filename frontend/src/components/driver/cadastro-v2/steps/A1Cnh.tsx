@@ -152,6 +152,10 @@ export function A1Cnh({
   // que o recorte de um arquivo ANTERIOR (upload em voo) carimbe sobre um arquivo
   // NOVO trocado no meio (ex.: "Trocar arquivo" pós-mismatch de CPF).
   const fileGenRef = useRef(0);
+  // Identidade do último arquivo processado (nome+tamanho) — distingue re-OCR do
+  // MESMO arquivo (preserva recorte/EAR) de uma TROCA de arquivo (não arrasta os
+  // recortes/EAR do arquivo anterior). Ver preservação no setData pós-OCR.
+  const lastFileKeyRef = useRef<string | null>(null);
 
   // 08-21 — Verifica duplicidade quando o CPF extraído/digitado diverge do CPF
   // do motorista autenticado (initialCpf vindo do pre-check). Disparo silencioso
@@ -202,6 +206,9 @@ export function A1Cnh({
 
   const handleFile = async (file: File) => {
     const gen = (fileGenRef.current += 1); // marca esta seleção de arquivo
+    const fileKey = `${file.name}:${file.size}`;
+    const sameFile = lastFileKeyRef.current === fileKey; // re-OCR do mesmo arquivo?
+    lastFileKeyRef.current = fileKey;
     setPreviewName(file.name);
     setTileState("uploading");
     setErrorMessage(undefined);
@@ -242,7 +249,21 @@ export function A1Cnh({
       // storage_path já gravado → no envio, dados.motorista.cnh_url ficava vazio
       // e o cadastro era barrado com "Anexe a CNH" mesmo com o arquivo no Storage.
       // Mantemos o storage_path atual (funciona nas duas ordens de corrida).
-      setData((current) => ({ ...nextData, storage_path: current.storage_path }));
+      // Mesma classe de clobber, estendida aos recortes e ao EAR — MAS só para o
+      // MESMO arquivo: os recortes (cnh_frente_url/cnh_verso_url) são gravados async
+      // DEPOIS do upload (não vêm no nextData), e o EAR (cnh_observacoes) some quando
+      // um re-OCR do mesmo arquivo (fallback Vision, que não recorta e nem sempre lê
+      // o verso) não os retorna → preserva os do OCR anterior. Ao TROCAR de arquivo
+      // (sameFile=false), NÃO arrasta recorte/EAR do arquivo antigo (poderia anexar
+      // dados de OUTra pessoa ao trocar a CNH pós-mismatch de CPF); zera e deixa o
+      // novo OCR/upload repopular.
+      setData((current) => ({
+        ...nextData,
+        storage_path: current.storage_path,
+        cnh_frente_url: sameFile ? current.cnh_frente_url : undefined,
+        cnh_verso_url: sameFile ? current.cnh_verso_url : undefined,
+        cnh_observacoes: nextData.cnh_observacoes ?? (sameFile ? current.cnh_observacoes : undefined),
+      }));
       setManualMode(false);
       setTileState("success");
       setCpfMismatch(!matches && extractedCpf.length === 11);

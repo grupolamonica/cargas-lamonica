@@ -100,7 +100,12 @@ export function buildMotoristaFromCnhFields(fields, { cpf } = {}) {
   // corromperia o valor; o operador preenche quando faltar.
   setC("codigo_seguranca", pick("codigo_seguranca", "seguranca", "numero_seguranca"));
   setC("numero_espelho", pick("numero_espelho", "espelho"));
-  setC("uf_emissor", pick("uf_emissor", "uf_expedicao", "uf_emissao", "estado_emissor"));
+  // uf_emissor: SÓ 2 letras (ownerSchema.cnh.uf_emissor = .length(2)). O OCR pode
+  // devolver o estado por extenso (alias estado_emissor → "SAO PAULO") ou "SP - SP";
+  // gravar isso corromperia o owner e quebraria o re-submit estrito (422). Espelha
+  // a guarda de uf_emplacamento no CRLV.
+  const ufEmissorRaw = pick("uf_emissor", "uf_expedicao", "uf_emissao", "estado_emissor");
+  if (/^[A-Za-z]{2}$/.test(ufEmissorRaw)) setC("uf_emissor", ufEmissorRaw.toUpperCase());
   if (Object.keys(cnh).length) motorista.cnh = cnh;
 
   return motorista;

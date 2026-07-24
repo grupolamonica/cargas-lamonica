@@ -2533,6 +2533,46 @@ export async function reprocessarDocsCadastro(id: string): Promise<{
   }>;
 }
 
+/**
+ * Anexa um documento FALTANTE a um cadastro (proprietário/CRLV), OCRa e devolve
+ * o `dados` PRÉ-preenchido — SEM persistir. O editor re-preenche os campos da
+ * seção e o PATCH .../dados do "Salvar" é quem grava.
+ *
+ * @param docKind 'crlv' | 'owner-cnh' | 'cartao-cnpj' | 'comprovante'
+ * @param target  'cavalo' | 'carretas.N' | 'cavalo_owner' | 'carreta_owners.N'
+ */
+export async function anexarDocumentoCadastro(
+  id: string,
+  { docKind, target, file }: { docKind: string; target: string; file: File },
+): Promise<{
+  ok: boolean;
+  dados: Record<string, unknown>;
+  report: ReprocessDocReport & { storage_path: string };
+  storage_path: string;
+}> {
+  const accessToken = await getOperatorAccessToken();
+  const form = new FormData();
+  form.append("file", file);
+  form.append("docKind", docKind);
+  form.append("target", target);
+  // NÃO setar Content-Type — o browser define o boundary do multipart.
+  const response = await fetch(`/api/operator/cadastros/${id}/anexar-documento`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: form,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error((body as { message?: string })?.message || "Erro ao anexar documento.");
+  }
+  return response.json() as Promise<{
+    ok: boolean;
+    dados: Record<string, unknown>;
+    report: ReprocessDocReport & { storage_path: string };
+    storage_path: string;
+  }>;
+}
+
 // ── Auto-aprovação por vigência no Angellira ────────────────────────────
 export interface AutoApproveAngelliraState {
   ok: boolean;

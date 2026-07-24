@@ -156,6 +156,12 @@ function mergeMotorista(existing, incoming) {
     telefones: Array.isArray(safe.telefones) && safe.telefones.length > 0
       ? safe.telefones
       : base.telefones,
+    // cnh: quando o payload traz um `cnh` (Step A preenchido → captura FRESCA da
+    // CNH), ele é autoritativo e substitui o inteiro; quando ausente (Step A
+    // pulado, motorista já cadastrado) mantém o persistido. Deep-merge aqui
+    // arrastaria observacoes/numero_espelho antigos de uma CNH renovada. A perda
+    // de EAR num re-OCR (fallback Vision) é tratada no wizard (A1Cnh preserva o
+    // cnh_observacoes na sessão), não aqui.
     cnh: safe.cnh || base.cnh,
     rastreador: safe.rastreador || base.rastreador,
   };
