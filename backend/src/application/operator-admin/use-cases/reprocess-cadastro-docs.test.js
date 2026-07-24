@@ -326,5 +326,17 @@ describe("reprocessCadastroDocuments (integração pg-mem)", () => {
       expect(out).not.toHaveProperty("tipo");
       expect(out).not.toHaveProperty("owner_doc_url");
     });
+
+    it("buildOwnerFromCartaoCnpjFields: CNPJ 'S/N' (logradouro sem número) → numero 'S/N' (não perde o endereço)", () => {
+      const out = buildOwnerFromCartaoCnpjFields({
+        razao_social: "TRANSPORTES VIEIRA E SANTOS LTDA",
+        cep: "72135180", uf: "DF", municipio: "Brasilia", bairro: "Taguatinga",
+        logradouro: "ST SETOR QI QI 18 LT 52/54", // numero ausente (cartão S/N)
+      });
+      expect(out.endereco).toMatchObject({
+        cep: "72135180", uf: "DF", cidade: "Brasilia", bairro: "Taguatinga",
+        logradouro: "ST SETOR QI QI 18 LT 52/54", numero: "S/N",
+      });
+    });
   });
 });
