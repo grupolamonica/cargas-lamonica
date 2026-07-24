@@ -45,15 +45,77 @@ export function getBearerToken(authorizationHeader) {
   return matchedToken[1];
 }
 
+// ── Cache curto + single-flight da verificação de token (getUser) ──
+// getUser() roda no GoTrue a CADA request autenticado (= SELECT users/identities/
+// sessions/mfa_amr_claims). Os polls do operador (sino 30s, chat 20s/8s, outreach
+// 15s, fila 60s, programação 90s) disparam vários verifies/min por aba abertos.
+// Um cache curto por token colapsa todos os polls dentro da janela num único
+// getUser(). FAIL-SAFE: verificação com erro NUNCA é cacheada (cai no fluxo normal
+// → 401/403). TTL curto (default 30s) mantém a defasagem de revogação trivial.
+const _tokenVerifyCache = new Map(); // accessToken -> { at, user }
+const _tokenVerifyInFlight = new Map(); // accessToken -> Promise<user|null>
+const TOKEN_VERIFY_CACHE_MAX = 500;
+
+function getTokenVerifyTtlMs() {
+  const raw = Number.parseInt(process.env.AUTH_TOKEN_VERIFY_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
+  return 30_000; // default produção
+}
+
+// Exposto para os testes limparem o estado de módulo entre casos.
+export function __resetAuthTokenVerifyCache() {
+  _tokenVerifyCache.clear();
+  _tokenVerifyInFlight.clear();
+}
+
+async function verifyUserCached(accessToken) {
+  const ttl = getTokenVerifyTtlMs();
+
+  if (ttl > 0) {
+    const cached = _tokenVerifyCache.get(accessToken);
+    if (cached && Date.now() - cached.at < ttl) {
+      return cached.user;
+    }
+    const inFlight = _tokenVerifyInFlight.get(accessToken);
+    if (inFlight) return inFlight;
+  }
+
+  const promise = (async () => {
+    const adminClient = getAdminClient();
+    const {
+      data: { user },
+      error,
+    } = await adminClient.auth.getUser(accessToken);
+
+    if (error || !user) {
+      return null; // fail-safe: não cacheia falha
+    }
+
+    if (ttl > 0) {
+      if (_tokenVerifyCache.size >= TOKEN_VERIFY_CACHE_MAX) _tokenVerifyCache.clear();
+      _tokenVerifyCache.set(accessToken, { at: Date.now(), user });
+    }
+    return user;
+  })();
+
+  if (ttl > 0) {
+    _tokenVerifyInFlight.set(accessToken, promise);
+    try {
+      return await promise;
+    } finally {
+      _tokenVerifyInFlight.delete(accessToken);
+    }
+  }
+
+  return promise;
+}
+
 export async function requireDriverSession(authorizationHeader) {
   const accessToken = getBearerToken(authorizationHeader);
-  const adminClient = getAdminClient();
-  const {
-    data: { user },
-    error,
-  } = await adminClient.auth.getUser(accessToken);
+  const user = await verifyUserCached(accessToken);
 
-  if (error || !user) {
+  if (!user) {
     throw new UnauthorizedError("Could not validate the current driver session.");
   }
 
@@ -71,13 +133,9 @@ export async function requireDriverSession(authorizationHeader) {
 
 export async function requireOperatorSession(authorizationHeader) {
   const accessToken = getBearerToken(authorizationHeader);
-  const adminClient = getAdminClient();
-  const {
-    data: { user },
-    error,
-  } = await adminClient.auth.getUser(accessToken);
+  const user = await verifyUserCached(accessToken);
 
-  if (error || !user) {
+  if (!user) {
     throw new UnauthorizedError("Could not validate the current operator session.");
   }
 
