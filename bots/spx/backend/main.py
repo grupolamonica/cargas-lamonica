@@ -922,6 +922,9 @@ class ImportarMatchedPayload(BaseModel):
     # Fallback quando driver_info não traz city_name/city_id (ex: motorista
     # veio de outra agência e o profile SPX não tem cidade resolvida).
     city_name_fallback: str | None = None
+    # Fallback de CNH Remarks (EAR etc.) do nosso cadastro — só é usado quando o
+    # perfil importado não traz cnh_remarks (campo obrigatório do SPX).
+    cnh_remarks: list[str] | None = None
 
 
 @app.post("/spx/motorista/importar_matched")
@@ -952,6 +955,7 @@ def importar_matched_endpoint(p: ImportarMatchedPayload):
             dry_run=p.dry_run,
             do_draft_save=p.do_draft_save,
             city_name_fallback=p.city_name_fallback,
+            cnh_remarks=p.cnh_remarks,
         )
     except (APIErro, SessaoExpirada) as exc:
         raise HTTPException(status_code=502, detail=str(exc))

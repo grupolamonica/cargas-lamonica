@@ -206,6 +206,9 @@ export async function runSpxPipeline({
         crlvPath: anexosMap.crlv_path || null,
         riskDocPath: anexosMap.risk_doc_path || null,
         radExpireDate,
+        // CNH Remarks (EAR etc.) do nosso cadastro — usado só como fallback
+        // quando o perfil importado não traz (senão o SPX prende em rascunho).
+        cnhRemarks: payload.cnh_remarks,
         dryRun: false,
         // Salva o rascunho ANTES do validate/detail — sem isso a Shopee rejeita com
         // 271626003 mesmo com tudo batendo 1:1 com o OCR (regra confirmada na produção).
