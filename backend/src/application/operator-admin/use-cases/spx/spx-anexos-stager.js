@@ -195,12 +195,14 @@ export async function stageSpxAnexos({
   // CNH do owner-motorista). É o caminho DURÁVEL e o único que funciona no VPS.
   // FALLBACK share local: só migrado SEM docs no Storage (dev/SERVERBD com H:).
   const m = dados?.motorista || {};
-  const temUrls = m.cnh_url || m.cnh_verso_url || m.selfie_cnh_url || dados?.cavalo?.crlv_url;
+  const temUrls = m.cnh_frente_url || m.cnh_url || m.cnh_verso_url || m.selfie_cnh_url || dados?.cavalo?.crlv_url;
   try {
     if (temUrls) {
       const storage = storageFrom(DRAFT_FILE_BUCKET);
       const specs = [
-        { key: "cnh_frente_path", tipo: "cnh_frente", url: m.cnh_url, label: "motorista.cnh_url" },
+        // Frente: prefere o RECORTE (cnh_frente_url); fallback p/ o upload
+        // original (cnh_url) quando o recorte não foi gerado (ex.: OCR via Vision).
+        { key: "cnh_frente_path", tipo: "cnh_frente", url: m.cnh_frente_url || m.cnh_url, label: m.cnh_frente_url ? "motorista.cnh_frente_url" : "motorista.cnh_url" },
         { key: "cnh_verso_path", tipo: "cnh_verso", url: m.cnh_verso_url, label: "motorista.cnh_verso_url" },
         { key: "selfie_path", tipo: "selfie_cnh", url: m.selfie_cnh_url, label: "motorista.selfie_cnh_url" },
         { key: "crlv_path", tipo: "crlv_cavalo", url: dados?.cavalo?.crlv_url, label: "cavalo.crlv_url" },

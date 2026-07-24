@@ -17,6 +17,8 @@ export const DRAFT_FILE_MAX_BYTES = 8 * 1024 * 1024; // 8MB
  */
 export const VALID_DRAFT_SLOTS = new Set([
   "motorista_cnh",
+  "motorista_cnh_frente",
+  "motorista_cnh_verso",
   "motorista_selfie_cnh",
   "motorista_comprovante",
   "cavalo_crlv",
@@ -143,10 +145,14 @@ export async function uploadDraftFile({
   const timestamp = Date.now();
   const newPath = `${ownerKey}/${cargaId}/${slot}_${timestamp}.${ext}`;
   const prefix = `${ownerKey}/${cargaId}`;
-  const slotMatchPrefix = `${slot}_`;
+  // Casa SÓ os arquivos deste slot: `${slot}_<timestamp>.<ext>` (timestamp = dígitos).
+  // NÃO usar startsWith(`${slot}_`): colidiria com slots de mesmo prefixo — limpar
+  // `motorista_cnh` apagaria os recortes `motorista_cnh_frente_*`/`_verso_*`.
+  // (slot vem da allowlist VALID_DRAFT_SLOTS — só [a-z0-9_], seguro no RegExp.)
+  const slotFileRe = new RegExp(`^${slot}_\\d+\\.`);
 
   // ─── Remove arquivos antigos do mesmo slot (best-effort) ─────────────
-  // Lista files do prefix `{ownerKey}/{cargaId}` e filtra por `${slot}_`.
+  // Lista files do prefix `{ownerKey}/{cargaId}` e filtra pelo padrão do slot.
   // Falha aqui NAO bloqueia upload — apenas inflaria storage temporariamente.
   try {
     const { data: existing, error: listError } = await storage.list(prefix, {
@@ -155,7 +161,7 @@ export async function uploadDraftFile({
     });
     if (!listError && Array.isArray(existing) && existing.length > 0) {
       const stalePaths = existing
-        .filter((entry) => entry?.name && entry.name.startsWith(slotMatchPrefix))
+        .filter((entry) => entry?.name && slotFileRe.test(entry.name))
         .map((entry) => `${prefix}/${entry.name}`);
       if (stalePaths.length > 0) {
         const { error: removeError } = await storage.remove(stalePaths);
