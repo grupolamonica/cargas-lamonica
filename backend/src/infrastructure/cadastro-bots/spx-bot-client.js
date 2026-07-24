@@ -432,6 +432,7 @@ export async function importarMatched({
   vehicleOwnerName,
   crlvPath, riskDocPath, radExpireDate,
   cityNameFallback,
+  cnhRemarks,
   dryRun = false, doDraftSave = false,
   idempotencyKey, correlationId,
 }) {
@@ -459,6 +460,9 @@ export async function importarMatched({
       dry_run: dryRun,
       do_draft_save: doDraftSave,
       city_name_fallback: cityNameFallback || null,
+      // Fallback do CNH Remarks (EAR etc.) do nosso cadastro — o bot só usa
+      // quando o perfil importado não trouxe o campo (senão fica em rascunho).
+      cnh_remarks: cnhRemarks && cnhRemarks.length ? cnhRemarks : null,
     },
     idempotencyKey,
     correlationId,

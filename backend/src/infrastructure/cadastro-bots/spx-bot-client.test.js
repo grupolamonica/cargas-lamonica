@@ -4,6 +4,7 @@ import {
   SpxBotError,
   __resetCircuitForTests,
   cadastrarMotorista,
+  importarMatched,
   lookupMotorista,
   status,
 } from "./spx-bot-client.js";
@@ -117,5 +118,42 @@ describe("spx-bot-client / cadastrarMotorista — error mapping", () => {
       code: "SPX_SESSAO_EXPIRADA",
       httpStatus: 401,
     });
+  });
+});
+
+describe("spx-bot-client / importarMatched — cnh_remarks fallback", () => {
+  function bodyOfLastFetch(spy) {
+    return JSON.parse(spy.mock.calls.at(-1)[1].body);
+  }
+
+  it("envia cnh_remarks quando o cadastro tem EAR (perfil importado sem remarks)", async () => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    spy.mockResolvedValueOnce(new Response(
+      JSON.stringify({ ok: true, request_id: 999 }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+    const r = await importarMatched({
+      cpf: "04641182396",
+      driverInfo: { driver_id: 5001, driver_name: "LEANDRO", license_number: "123" },
+      cnhRemarks: ["EAR"],
+      idempotencyKey: "cad-1:spx_motorista",
+    });
+    expect(r.ok).toBe(true);
+    expect(bodyOfLastFetch(spy).cnh_remarks).toEqual(["EAR"]);
+  });
+
+  it("manda cnh_remarks:null quando o cadastro não tem observação (sem sobrescrever locked)", async () => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    spy.mockResolvedValueOnce(new Response(
+      JSON.stringify({ ok: true, request_id: 1000 }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+    await importarMatched({
+      cpf: "04641182396",
+      driverInfo: { driver_id: 5001, driver_name: "LEANDRO", license_number: "123" },
+      cnhRemarks: [],
+      idempotencyKey: "cad-2:spx_motorista",
+    });
+    expect(bodyOfLastFetch(spy).cnh_remarks).toBeNull();
   });
 });

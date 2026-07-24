@@ -1094,6 +1094,10 @@ def importar_motorista_matched(
     do_draft_save: bool = False,
     # Fallback de cidade quando driver_info nao traz city_name/city_id resolvivel
     city_name_fallback: str | None = None,
+    # Fallback de CNH Remarks (EAR etc.) do NOSSO cadastro: usado so quando o
+    # perfil importado da outra agencia nao traz cnh_remarks. Sem isso o campo
+    # obrigatorio do SPX fica vazio e o rascunho nao conclui (submit falha).
+    cnh_remarks: list[str] | None = None,
 ) -> dict[str, Any]:
     """Cria uma driver_request NOSSA reusando um driver_profile existente na Shopee
     que foi detectado via `is_matched=True` no validate/basic.
@@ -1258,7 +1262,9 @@ def importar_motorista_matched(
         license_number=str(driver_info.get("license_number") or ""),
         license_type=int(driver_info.get("license_type") or 0),
         license_expire_date=int(driver_info.get("license_expire_date") or 0),
-        cnh_remarks=driver_info.get("cnh_remarks") or [],
+        # Perfil (locked) tem prioridade; nosso cnh_remarks preenche so quando o
+        # perfil importado veio sem — evita rascunho preso por campo obrigatorio.
+        cnh_remarks=(driver_info.get("cnh_remarks") or cnh_remarks or []),
         # Veiculo: nossos overrides ou do perfil
         vehicle_type=vehicle_type_id,
         license_plate=license_plate,
