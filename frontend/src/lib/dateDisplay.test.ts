@@ -1,4 +1,4 @@
-import { buildDisplayDateTime, formatDateOnly, formatScheduleLabel, formatShortDateTime, parseDisplayDate } from "@/lib/dateDisplay";
+import { buildDisplayDateTime, formatDateOnly, formatScheduleLabel, formatShortDateTime, parseDisplayDate, saoPauloDateIso } from "@/lib/dateDisplay";
 
 describe("dateDisplay", () => {
   it("formats ISO and sheet datetime values without leaking invalid date text", () => {
@@ -57,5 +57,15 @@ describe("dateDisplay", () => {
     expect(formatScheduleLabel("", "—")).toBe("—");
     expect(formatScheduleLabel(null, "—")).toBe("—");
     expect(formatScheduleLabel("undefined", "—")).toBe("—");
+  });
+});
+
+describe("saoPauloDateIso", () => {
+  it("retorna data no formato YYYY-MM-DD", () => {
+    expect(saoPauloDateIso(0)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+  it("offset de dias avança a data (90d > hoje)", () => {
+    expect(saoPauloDateIso(90) > saoPauloDateIso(0)).toBe(true);
+    expect(saoPauloDateIso(0) > saoPauloDateIso(-1)).toBe(true);
   });
 });
