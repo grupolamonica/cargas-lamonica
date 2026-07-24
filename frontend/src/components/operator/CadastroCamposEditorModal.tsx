@@ -216,12 +216,15 @@ export function CadastroCamposEditorModal({
         return cur;
       });
       const n = res.report?.filled?.length ?? 0;
+      // Mostra o motivo REAL do OCR quando não extraiu (ex.: "Vision indisponível",
+      // erro do provedor) — em vez do genérico, ajuda a diagnosticar na hora.
+      const motivo = res.report?.message ? ` (${res.report.message})` : "";
       setAttachMsg({
         key,
         ok: true,
         text: res.report?.ok
           ? `Anexado — ${n} campo(s) preenchido(s). Revise e salve.`
-          : "Anexado (não deu pra ler os campos — preencha à mão e salve).",
+          : `Anexado, mas não deu pra ler os campos${motivo} — preencha à mão e salve.`,
       });
     } catch (e) {
       setAttachMsg({ key, ok: false, text: e instanceof Error ? e.message : "Falha ao anexar." });

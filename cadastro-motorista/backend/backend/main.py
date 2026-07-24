@@ -586,6 +586,85 @@ async def ocr_comprovante_residencia(req: ComprovanteRequest):
         raise _tratar_erro(e, f"ocr/comprovante-{req.concessionaria}")
 
 
+# ── Enriquecimento do cartão-CNPJ com a Receita Federal ──────────────────────
+# O Vision lê o cartão, mas OCR de texto erra campos (razão social/endereço). O
+# NÚMERO do CNPJ, porém, é curto e confiável. Então: Vision extrai o CNPJ e a
+# gente consulta a Receita (Infosimples receita-federal/cnpj) pra sobrescrever
+# razão social + endereço com o dado AUTORITATIVO. Espelha a intenção já
+# documentada no ocr_router ("/cartao-cnpj | GPT-4o Vision | — (RF complementa)").
+
+def _campo_valor(campos: dict, *keys: str) -> str:
+    for k in keys:
+        raw = campos.get(k) if isinstance(campos, dict) else None
+        if raw is None:
+            continue
+        v = raw.get("valor") if isinstance(raw, dict) else raw
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    return ""
+
+
+def _consulta_valor(data: list, *keys: str) -> str:
+    for item in data or []:
+        if not isinstance(item, dict):
+            continue
+        for k in keys:
+            v = item.get(k)
+            if v is not None and str(v).strip():
+                return str(v).strip()
+    return ""
+
+
+async def _enrich_cartao_cnpj_com_receita(env: dict) -> dict:
+    """Complementa o envelope do OCR do cartão-CNPJ com dados da Receita.
+
+    Best-effort: qualquer falha (CNPJ ilegível, consulta fora, exceção) mantém o
+    envelope do OCR intacto — nunca degrada o resultado que o Vision já trouxe.
+    """
+    try:
+        if not isinstance(env, dict) or env.get("code") != 200:
+            return env
+        data = env.get("data") or []
+        if not data or not isinstance(data[0], dict):
+            return env
+        campos = data[0].get("campos")
+        if not isinstance(campos, dict):
+            return env
+        cnpj = "".join(filter(str.isdigit, _campo_valor(campos, "cnpj", "numero_cnpj")))
+        if len(cnpj) != 14:
+            log.info("cartao-cnpj: CNPJ nao legivel no OCR — sem consulta RF")
+            return env
+        try:
+            consulta = await infosimples.consultar("receita-federal/cnpj", {"cnpj": cnpj})
+        except Exception as exc:  # noqa: BLE001 — best-effort, mantém OCR
+            log.warning("cartao-cnpj: consulta RF falhou (%s) — mantem OCR do Vision", exc)
+            return env
+        if not isinstance(consulta, dict) or consulta.get("code") != 200:
+            code = consulta.get("code") if isinstance(consulta, dict) else "?"
+            log.info("cartao-cnpj: consulta RF code=%s — mantem OCR do Vision", code)
+            return env
+        cdata = consulta.get("data") or []
+        mapped = {
+            "cnpj": cnpj,
+            "razao_social": _consulta_valor(cdata, "razao_social", "nome_empresarial", "nome"),
+            "cep": _consulta_valor(cdata, "endereco_cep", "cep", "numero_cep", "normalizado_endereco_cep"),
+            "uf": _consulta_valor(cdata, "endereco_uf", "uf", "estado"),
+            "municipio": _consulta_valor(cdata, "endereco_municipio", "municipio", "cidade", "localidade"),
+            "bairro": _consulta_valor(cdata, "endereco_bairro", "bairro"),
+            "logradouro": _consulta_valor(cdata, "endereco_logradouro", "logradouro", "endereco"),
+            "numero": _consulta_valor(cdata, "endereco_numero", "numero", "numero_endereco"),
+        }
+        for k, v in mapped.items():
+            if v:
+                campos[k] = {"valor": v, "score": None}
+        env.setdefault("header", {})["rf_enriched"] = True
+        log.info("cartao-cnpj: enriquecido com Receita (CNPJ %s)", cnpj)
+        return env
+    except Exception as exc:  # noqa: BLE001 — nunca deixa o enrich derrubar o OCR
+        log.warning("cartao-cnpj: enrich RF excecao inesperada (%s) — mantem OCR", exc)
+        return env
+
+
 @app.post("/api/ocr/cartao-cnpj")
 async def ocr_cartao_cnpj(req: CartaoCNPJRequest):
     """OCR do Comprovante de Inscrição CNPJ (Receita Federal).
@@ -616,12 +695,15 @@ async def ocr_cartao_cnpj(req: CartaoCNPJRequest):
         async def _vision_extract() -> dict:
             return await gpt4o_vision.extract("cartao_cnpj", imagem_para_vision)
 
-        return await ocr_router.route(
+        env = await ocr_router.route(
             "cartao_cnpj",
             primary=_primary_legacy,
             vision=_vision_extract,
             strategy=ocr_router.strategy_for("cartao_cnpj"),
         )
+        # Vision leu o cartão; usa o CNPJ pra buscar razão social/endereço reais
+        # na Receita (a extração de texto do Vision pode errar esses campos).
+        return await _enrich_cartao_cnpj_com_receita(env)
     except Exception as e:
         raise _tratar_erro(e, "ocr/cartao-cnpj")
 
