@@ -205,6 +205,28 @@ describe("uploadDraftFile", () => {
     ]);
   });
 
+  it("(e2) cleanup do slot motorista_cnh NAO apaga os recortes motorista_cnh_frente/verso (prefixo colidente)", async () => {
+    const oldFiles = [
+      { name: "motorista_cnh_111.png" }, // base slot → removido
+      { name: "motorista_cnh_frente_222.jpg" }, // recorte → PRESERVADO
+      { name: "motorista_cnh_verso_333.jpg" }, // recorte → PRESERVADO
+    ];
+    const { client, calls } = makeFakeStorage({ listResult: { data: oldFiles, error: null } });
+
+    await uploadDraftFile({
+      ownerKey: driverUserId,
+      cargaId,
+      slot: "motorista_cnh",
+      file,
+      size: file.length,
+      contentType: "image/png",
+      supabaseClient: client,
+    });
+
+    // Só o arquivo do próprio slot (timestamp puro) é removido; os recortes ficam.
+    expect(calls.removeArgs[0]).toEqual([`${driverUserId}/${cargaId}/motorista_cnh_111.png`]);
+  });
+
   it("(f) contentType nao suportado retorna 415", async () => {
     const { client } = makeFakeStorage();
 
@@ -239,11 +261,13 @@ describe("uploadDraftFile", () => {
     expect(result.payload.error).toBe("FILE_TOO_LARGE");
   });
 
-  it("allowlist VALID_DRAFT_SLOTS contem todos os 21 slots esperados", () => {
-    // 21 = 15 (14 originais + motorista_selfie_cnh, 2026-05-16) + 6 slots do
-    // titular ANTT (cavalo/carreta antt owner cnh+comprovante, 2026-05-20).
-    expect(VALID_DRAFT_SLOTS.size).toBe(21);
+  it("allowlist VALID_DRAFT_SLOTS contem todos os 23 slots esperados", () => {
+    // 23 = 21 (15 + 6 titular ANTT) + 2 recortes da CNH (motorista_cnh_frente/
+    // motorista_cnh_verso, 2026-07-24 — cadastro SPX Driver License frente/verso).
+    expect(VALID_DRAFT_SLOTS.size).toBe(23);
     expect(VALID_DRAFT_SLOTS.has("motorista_cnh")).toBe(true);
+    expect(VALID_DRAFT_SLOTS.has("motorista_cnh_frente")).toBe(true);
+    expect(VALID_DRAFT_SLOTS.has("motorista_cnh_verso")).toBe(true);
     expect(VALID_DRAFT_SLOTS.has("motorista_selfie_cnh")).toBe(true);
     expect(VALID_DRAFT_SLOTS.has("carreta_owner_comprovante_1")).toBe(true);
     expect(VALID_DRAFT_SLOTS.has("cavalo_antt_owner_cnh")).toBe(true);

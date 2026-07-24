@@ -268,6 +268,11 @@ const motoristaSchema = z
     // `string().min(1)` aceitando paths; operator regenera signed URL on
     // demand a partir do storage_path persistido no JSONB.
     cnh_url: z.string().trim().min(1).optional(),
+    // Recortes frente/verso da CNH (Infosimples recorta; wizard persiste no
+    // cadastro-drafts). Usados pelo cadastro SPX (Driver License frente+verso).
+    // cnh_url segue sendo o upload original (Angellira/visualização do operador).
+    cnh_frente_url: z.string().trim().min(1).optional(),
+    cnh_verso_url: z.string().trim().min(1).optional(),
     comprovante_url: z.string().trim().min(1).optional(),
     selfie_cnh_url: z.string().trim().min(1).optional(),
     // Skip-Step-B fix — tag_pedagio + pancary_autodeclaration sao coletados no
@@ -554,6 +559,8 @@ export const candidaturaAnttPrecheckSchema = z
  */
 const VALID_DRAFT_SLOTS_ENUM = z.enum([
   "motorista_cnh",
+  "motorista_cnh_frente",
+  "motorista_cnh_verso",
   "motorista_selfie_cnh",
   "motorista_comprovante",
   "cavalo_crlv",

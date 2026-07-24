@@ -88,6 +88,10 @@ function buildMotorista(data: ConfirmationWizardData) {
     // a3.comprovanteUrl   -> motorista.comprovante_url (endereco)
     // Backend regenera signed URL on demand a partir do path.
     ...(a.a1?.storage_path ? { cnh_url: a.a1.storage_path } : {}),
+    // Recortes frente/verso (Infosimples) — o cadastro SPX usa nos campos
+    // "Driver License". cnh_url segue sendo o upload original.
+    ...(a.a1?.cnh_frente_url ? { cnh_frente_url: a.a1.cnh_frente_url } : {}),
+    ...(a.a1?.cnh_verso_url ? { cnh_verso_url: a.a1.cnh_verso_url } : {}),
     ...(a.a1b?.storageUrl ? { selfie_cnh_url: a.a1b.storageUrl } : {}),
     ...(a.a3?.comprovanteUrl ? { comprovante_url: a.a3.comprovanteUrl } : {}),
     // PLAN-CADASTRO-PARITY — emite filiacao/RG apenas quando preenchido (todos

@@ -1,10 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  base64ToFile,
   humanizeOcrMessage,
   uploadDraftFile,
   type UploadDraftFileResponse,
 } from "./cadastroApi";
+
+describe("base64ToFile", () => {
+  it("decodifica base64 puro e File data URL (recorte da CNH pode vir com prefixo data:)", () => {
+    const puro = base64ToFile("aGVsbG8=", "x.jpg"); // "hello" = 5 bytes
+    expect(puro.size).toBe(5);
+    expect(puro.type).toBe("image/jpeg");
+    // data URL não pode fazer o atob lançar (bug DC — recorte cnh_verso perdido)
+    // e deve decodificar os MESMOS 5 bytes (prefixo removido).
+    const comPrefixo = base64ToFile("data:image/jpeg;base64,aGVsbG8=", "x.jpg");
+    expect(comPrefixo.size).toBe(5);
+  });
+});
 
 describe("humanizeOcrMessage", () => {
   it("retorna fallback amigavel quando msg ausente", () => {

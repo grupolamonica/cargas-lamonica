@@ -602,10 +602,39 @@ function cnhCodigoSeguranca(v: (...k: string[]) => string): string {
   return parseSegurancaRenach(v("seguranca_renach", "numero_seguranca_renach"));
 }
 
+/**
+ * Extrai o recorte (frente/verso) que a Infosimples devolve no envelope da CNH.
+ * As entradas de `data[]` da Infosimples carregam `tipo` (`cnh_frente`/`cnh_verso`)
+ * + `image_base64`. O SPX usa esses recortes nos campos "Driver License" (frente
+ * e verso). Retorna "" quando o recorte não veio (ex.: fallback Vision não recorta).
+ */
+function cnhCropBase64(
+  data: OcrEnvelope["data"],
+  tipo: "cnh_frente" | "cnh_verso",
+): string {
+  for (const entry of (data ?? []) as Array<{ tipo?: string; image_base64?: string }>) {
+    if (entry?.tipo === tipo && typeof entry.image_base64 === "string" && entry.image_base64.trim()) {
+      return entry.image_base64.trim();
+    }
+  }
+  return "";
+}
+
+/** base64 → File. Aceita data URL (`data:image/...;base64,XXX`) OU base64 puro —
+ *  a Infosimples às vezes devolve o recorte com o prefixo data:, que faria o
+ *  atob lançar. Remove o prefixo antes de decodificar. */
+export function base64ToFile(base64: string, filename: string, mime = "image/jpeg"): File {
+  const raw = base64.startsWith("data:") ? base64.slice(base64.indexOf(",") + 1) : base64;
+  const bin = atob(raw);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+  return new File([bytes], filename, { type: mime });
+}
+
 export async function ocrCnh(
   file: File,
   idCadastro?: string,
-): Promise<CnhExtracted & { idCadastroPasta?: string }> {
+): Promise<CnhExtracted & { idCadastroPasta?: string; frenteBase64?: string; versoBase64?: string }> {
   const imagem = await fileToBase64(file);
   const env = await ocrEnvelope("/api/ocr/cnh", imagem, idCadastro);
   const data = env.data ?? [];
@@ -655,6 +684,10 @@ export async function ocrCnh(
       observacoes: v("observacoes", "observacao", "obs", "anotacoes", "remarks"),
     },
     idCadastroPasta: env.id_cadastro_pasta,
+    // Recortes frente/verso (quando a Infosimples recortou) — o SPX usa nos
+    // campos "Driver License". O caller (A1Cnh) sobe pro Storage.
+    frenteBase64: cnhCropBase64(data, "cnh_frente"),
+    versoBase64: cnhCropBase64(data, "cnh_verso"),
   };
 }
 

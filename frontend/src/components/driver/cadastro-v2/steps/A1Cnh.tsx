@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, Clock, XCircle } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ocrCnh } from "@/services/cadastroApi";
+import { ocrCnh, uploadDraftFile, base64ToFile } from "@/services/cadastroApi";
 import { isValidCpf, onlyDigits } from "@/lib/brazilianValidators";
 import { UFS } from "@/lib/ufs";
 
@@ -25,6 +25,10 @@ export interface A1Data {
   ocr_fallback_manual?: boolean;
   /** Path do arquivo persistido no bucket `cadastro-drafts` (slot motorista_cnh). */
   storage_path?: string;
+  /** Recortes frente/verso da CNH (Infosimples) persistidos no cadastro-drafts.
+   *  Usados pelo cadastro SPX (Driver License frente+verso). */
+  cnh_frente_url?: string;
+  cnh_verso_url?: string;
   // 2026-05-18: paridade /cadastro — campos extras que o OCR Infosimples
   // da CNH ja retorna. Preenchidos automaticamente em handleFile; sobem
   // para o wizard via onChange e o StepAMotorista deriva A1cData
@@ -143,6 +147,11 @@ export function A1Cnh({
   // Estado para o fluxo "Adotar CPF da CNH" (Bug 15/05).
   // adoptLoading: bloqueia o botão "Atualizar candidatura para este CPF" durante o POST.
   const [adoptLoading, setAdoptLoading] = useState(false);
+  // Geração do arquivo em processamento: cada handleFile incrementa. Os uploads
+  // assíncronos dos recortes só gravam no estado se a geração não mudou — evita
+  // que o recorte de um arquivo ANTERIOR (upload em voo) carimbe sobre um arquivo
+  // NOVO trocado no meio (ex.: "Trocar arquivo" pós-mismatch de CPF).
+  const fileGenRef = useRef(0);
 
   // 08-21 — Verifica duplicidade quando o CPF extraído/digitado diverge do CPF
   // do motorista autenticado (initialCpf vindo do pre-check). Disparo silencioso
@@ -192,6 +201,7 @@ export function A1Cnh({
   };
 
   const handleFile = async (file: File) => {
+    const gen = (fileGenRef.current += 1); // marca esta seleção de arquivo
     setPreviewName(file.name);
     setTileState("uploading");
     setErrorMessage(undefined);
@@ -236,6 +246,29 @@ export function A1Cnh({
       setManualMode(false);
       setTileState("success");
       setCpfMismatch(!matches && extractedCpf.length === 11);
+
+      // Recortes frente/verso (quando a Infosimples recortou): sobe pro Storage
+      // pro cadastro SPX usar nos campos "Driver License". Best-effort e async —
+      // NÃO bloqueia o OCR nem o passo; sem os recortes, o SPX cai no cnh_url.
+      if (cargaId && (extracted.frenteBase64 || extracted.versoBase64)) {
+        const uploadRecorte = async (
+          b64: string | undefined,
+          slot: "motorista_cnh_frente" | "motorista_cnh_verso",
+          key: "cnh_frente_url" | "cnh_verso_url",
+        ) => {
+          if (!b64) return;
+          try {
+            const r = await uploadDraftFile(base64ToFile(b64, `${slot}.jpg`), slot, cargaId, { cpf, accessToken });
+            // Descarta se o motorista já trocou o arquivo (upload de outra geração).
+            if (fileGenRef.current !== gen) return;
+            setData((current) => ({ ...current, [key]: r.storage_path }));
+          } catch {
+            // best-effort — o stager do SPX usa cnh_url como fallback da frente.
+          }
+        };
+        void uploadRecorte(extracted.frenteBase64, "motorista_cnh_frente", "cnh_frente_url");
+        void uploadRecorte(extracted.versoBase64, "motorista_cnh_verso", "cnh_verso_url");
+      }
     } catch (err) {
       setTileState("failure");
       setErrorMessage(err instanceof Error ? err.message : "Falha ao processar CNH.");

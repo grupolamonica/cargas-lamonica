@@ -76,6 +76,28 @@ describe("stageSpxAnexos / wizard (bucket)", () => {
     // prefixo cadastro-drafts/ removido antes do download
     expect(_downloaded()[0]).toBe("owner/carga/motorista_cnh_1.jpg");
   });
+
+  it("usa os recortes cnh_frente_url/cnh_verso_url quando presentes (SPX Driver License)", async () => {
+    const fetchMock = vi.fn(async () => okResponse({ ok: true, anexo_path: "/sandbox/x", bytes: 9 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { storage, _downloaded } = makeStorageClient();
+    const dados = {
+      motorista: {
+        cnh_url: "owner/carga/motorista_cnh_inteira.jpg", // original (não usado p/ frente quando há recorte)
+        cnh_frente_url: "owner/carga/motorista_cnh_frente_1.jpg",
+        cnh_verso_url: "owner/carga/motorista_cnh_verso_1.jpg",
+      },
+    };
+    const anexos = await stageSpxAnexos({ dados, cadastroId: CADASTRO_ID, storageClient: storage });
+
+    expect(anexos).toEqual({ cnh_frente_path: "/sandbox/x", cnh_verso_path: "/sandbox/x" });
+    const tipos = fetchMock.mock.calls.map((c) => JSON.parse(c[1].body).tipo);
+    expect(tipos).toEqual(["cnh_frente", "cnh_verso"]);
+    // frente veio do RECORTE (cnh_frente_url), não do cnh_url original.
+    expect(_downloaded()).toContain("owner/carga/motorista_cnh_frente_1.jpg");
+    expect(_downloaded()).toContain("owner/carga/motorista_cnh_verso_1.jpg");
+    expect(_downloaded()).not.toContain("owner/carga/motorista_cnh_inteira.jpg");
+  });
 });
 
 describe("stageSpxAnexos / risk_doc", () => {
