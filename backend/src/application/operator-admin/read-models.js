@@ -1657,15 +1657,56 @@ function mapDriverSummaryRowToItem(row, applications) {
   };
 }
 
+// ── Micro-cache TTL + single-flight dos 3 sumários do diretório de motoristas ──
+// Os sumários (registered/public/historico) NÃO dependem de search/source/page — a
+// paginação/busca/dedup é toda em memória depois. O de motoristas_historico lê a
+// tabela INTEIRA a cada request (~1.851 linhas × ~1.831 B). Cachear colapsa a rajada
+// de paginação/busca/tecla e a concorrência de operadores num scan por janela.
+// Mesmo padrão do read model da fila (public-leads.js). Desligado sob teste.
+let _driverSummariesInFlight = null;
+let _driverSummariesCache = { at: 0, rows: null };
+
+function getDriverSummariesCacheTtlMs() {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0;
+  const raw = Number.parseInt(process.env.OPERATOR_DRIVERS_CACHE_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // respeita override (incl. 0)
+  return 30_000; // default produção
+}
+
+async function fetchDriverSummariesCached() {
+  const ttl = getDriverSummariesCacheTtlMs();
+  if (ttl > 0 && _driverSummariesCache.rows && Date.now() - _driverSummariesCache.at < ttl) {
+    return _driverSummariesCache.rows;
+  }
+  if (_driverSummariesInFlight) {
+    return _driverSummariesInFlight;
+  }
+  _driverSummariesInFlight = (async () => {
+    try {
+      const rows = await withPgClient((client) =>
+        Promise.all([
+          fetchOperatorRegisteredDriverSummaries(client),
+          fetchOperatorPublicDriverSummaries(client),
+          fetchOperatorHistoricoDriverSummaries(client),
+        ]),
+      );
+      if (ttl > 0) {
+        _driverSummariesCache = { at: Date.now(), rows };
+      }
+      return rows;
+    } finally {
+      _driverSummariesInFlight = null;
+    }
+  })();
+  return _driverSummariesInFlight;
+}
+
 export async function fetchOperatorDriversListReadModel({ query, correlationId }) {
   const { page, pageSize, offset, maxPageSize, search, source, applicationStatus } = parseOperatorDriversListQuery(query);
 
+  const [registeredSummaryRows, publicSummaryRows, historicoSummaryRows] = await fetchDriverSummariesCached();
+
   return withPgClient(async (client) => {
-    const [registeredSummaryRows, publicSummaryRows, historicoSummaryRows] = await Promise.all([
-      fetchOperatorRegisteredDriverSummaries(client),
-      fetchOperatorPublicDriverSummaries(client),
-      fetchOperatorHistoricoDriverSummaries(client),
-    ]);
     // Cross-reference public leads against registered drivers by CPF or phone.
     // Normalizes CPF to digits-only before comparing so "123.456.789-09" matches "12345678909".
     // Falls back to phone when document_number is absent in driver_profiles.

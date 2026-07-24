@@ -1935,7 +1935,11 @@ async function fetchEmptyOperatorLoadGroups(client, { activeLoadIds, correlation
         WHERE c.status = ANY($1::text[])
           AND active_leads.id IS NULL
       `,
-      [["OPEN", "RESERVED"], [PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED]],
+      // OPEN apenas: o front só renderiza grupo vazio para carga OPEN
+      // (showEmptyOpen exige status==='OPEN'); e RESERVED sem lead ativo é
+      // impossível na prática (RESERVED implica um lead APPROVED). Dropar
+      // RESERVED do scan é behavior-preserving e enxuga o anti-join.
+      [["OPEN"], [PUBLIC_LEAD_STATUS.QUEUED, PUBLIC_LEAD_STATUS.APPROVED]],
     );
     emptyLoadRows = emptyResult.rows;
   } catch (error) {
