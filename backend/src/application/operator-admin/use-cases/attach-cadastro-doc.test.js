@@ -12,17 +12,19 @@ import {
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({ withPgClient, withPgTransaction }));
 
 // OCR sidecar — 4 extractors mockados (nunca lançam).
-const { cnhMock, comprovanteMock, crlvMock, cartaoMock } = vi.hoisted(() => ({
+const { cnhMock, comprovanteMock, crlvMock, cartaoMock, consultaCnpjMock } = vi.hoisted(() => ({
   cnhMock: vi.fn(),
   comprovanteMock: vi.fn(),
   crlvMock: vi.fn(),
   cartaoMock: vi.fn(),
+  consultaCnpjMock: vi.fn(),
 }));
 vi.mock("../../repom/ocr-sidecar-client.js", () => ({
   extractCnhFromMedia: cnhMock,
   extractComprovanteFromMedia: comprovanteMock,
   extractCrlvFromMedia: crlvMock,
   extractCartaoCnpjFromMedia: cartaoMock,
+  consultarCnpjSidecar: consultaCnpjMock,
 }));
 
 // upload-draft-file: mantém VALID_DRAFT_SLOTS/DRAFT_FILE_BUCKET reais e mocka só
@@ -59,6 +61,7 @@ describe("attachCadastroDocument (integração pg-mem)", () => {
     comprovanteMock.mockResolvedValue({ ok: false, requiresUpload: true });
     crlvMock.mockResolvedValue({ ok: false, requiresUpload: true });
     cartaoMock.mockResolvedValue({ ok: false, requiresUpload: true });
+    consultaCnpjMock.mockResolvedValue({ ok: false, error: "not_mocked" });
   });
 
   afterAll(async () => {
@@ -159,6 +162,47 @@ describe("attachCadastroDocument (integração pg-mem)", () => {
     });
     expect(r.dados.cavalo_owner.doc).toBe("65843178000140");
     expect(r.dados.cavalo_owner.tipo).toBe("pj");
+    // OCR já trouxe o endereço → não precisa consultar a Receita.
+    expect(consultaCnpjMock).not.toHaveBeenCalled();
+  });
+
+  it("cartão-CNPJ sem endereço no OCR: consulta a Receita e preenche o endereço (com S/N)", async () => {
+    const { id } = await seedPendingRegistration({
+      dados: { motorista: { cpf: "11111111111" }, cavalo: { placa: "ABC1D23" }, cavalo_owner: {} },
+    });
+    // Vision só leu razão social + CNPJ (sem endereço) → dispara a consulta.
+    cartaoMock.mockResolvedValue({ ok: true, fields: { razao_social: "TRANSPORTES VIEIRA E SANTOS LTDA", cnpj: "65843178000140" } });
+    consultaCnpjMock.mockResolvedValue({
+      ok: true,
+      data: [{
+        razao_social: "TRANSPORTES VIEIRA E SANTOS LTDA",
+        endereco_cep: "72135-180", endereco_uf: "DF", endereco_municipio: "BRASILIA",
+        endereco_bairro: "TAGUATINGA", endereco_logradouro: "ST SETOR QI QI 18 LT 52/54",
+        endereco_numero: "", // S/N
+      }],
+    });
+
+    const r = await attachCadastroDocument({ id, docKind: "cartao-cnpj", target: "cavalo_owner", ...baseArgs });
+    expect(consultaCnpjMock).toHaveBeenCalledWith(expect.objectContaining({ cnpj: "65843178000140" }));
+    expect(r.dados.cavalo_owner.endereco).toMatchObject({
+      cep: "72135-180", uf: "DF", cidade: "BRASILIA", bairro: "TAGUATINGA",
+      logradouro: "ST SETOR QI QI 18 LT 52/54", numero: "S/N",
+    });
+    expect(r.dados.cavalo_owner.doc).toBe("65843178000140");
+  });
+
+  it("cartão-CNPJ sem endereço + consulta falha: report.message traz o motivo (não silencia)", async () => {
+    const { id } = await seedPendingRegistration({
+      dados: { motorista: { cpf: "11111111111" }, cavalo: { placa: "ABC1D23" }, cavalo_owner: {} },
+    });
+    cartaoMock.mockResolvedValue({ ok: true, fields: { razao_social: "X LTDA", cnpj: "65843178000140" } });
+    consultaCnpjMock.mockResolvedValue({ ok: false, code: 612, codeMessage: "CNPJ não encontrado na Receita" });
+
+    const r = await attachCadastroDocument({ id, docKind: "cartao-cnpj", target: "cavalo_owner", ...baseArgs });
+    expect(r.report.message).toContain("Receita indisponível");
+    expect(r.report.message).toContain("CNPJ não encontrado");
+    expect(r.dados.cavalo_owner.endereco).toBeUndefined(); // sem endereço, mas identidade entra
+    expect(r.dados.cavalo_owner.doc).toBe("65843178000140");
   });
 
   it("Owner com doc EXISTENTE: identidade NÃO é sobrescrita (só nome/campos do OCR)", async () => {
