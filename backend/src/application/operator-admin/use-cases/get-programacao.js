@@ -236,10 +236,48 @@ function normalizeNestleRow(o) {
   };
 }
 
+// ── Micro-cache TTL + single-flight das ofertas Nestlé ──
+// A query varre a nestle_ofertas inteira (~2.897 linhas após DISTINCT ON) e roda 2× por
+// ciclo de poll da Programação (main planejado+aceito e concluido) + no scanner de 5 min,
+// ×N operadores. Os dados só mudam quando o coletor Galileu faz upsert (periódico), então
+// um cache curto colapsa todos esses scans concorrentes/duplicados num só por janela.
+// Desligado sob teste (os testes injetam deps.fetchNestleOfertas e nunca batem aqui).
+let _nestleOfertasInFlight = null;
+let _nestleOfertasCache = { at: 0, rows: null };
+
+function getNestleOfertasCacheTtlMs() {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0;
+  const raw = Number.parseInt(process.env.PROGRAMACAO_NESTLE_CACHE_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // respeita override (incl. 0)
+  return 90_000; // default produção (= intervalo de poll da tela)
+}
+
 // Lê as ofertas Nestlé do próprio banco (populadas pelo coletor bots/galileu).
 // Tolerante a tabela ausente (prod sem migration) → []. Sem PostgREST aqui (pg direto),
 // então não há o teto de 1000 linhas.
 async function defaultFetchNestleOfertas() {
+  const ttl = getNestleOfertasCacheTtlMs();
+  if (ttl > 0 && _nestleOfertasCache.rows && Date.now() - _nestleOfertasCache.at < ttl) {
+    return _nestleOfertasCache.rows;
+  }
+  if (_nestleOfertasInFlight) {
+    return _nestleOfertasInFlight;
+  }
+  _nestleOfertasInFlight = (async () => {
+    try {
+      const rows = await fetchNestleOfertasUncached();
+      if (ttl > 0) {
+        _nestleOfertasCache = { at: Date.now(), rows };
+      }
+      return rows;
+    } finally {
+      _nestleOfertasInFlight = null;
+    }
+  })();
+  return _nestleOfertasInFlight;
+}
+
+async function fetchNestleOfertasUncached() {
   return withPgClient(async (client) => {
     try {
       // Dedup por grupo (grupos_id = a viagem); ofertas sem grupo caem no codprogcoleta.
