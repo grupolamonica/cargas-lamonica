@@ -223,7 +223,7 @@ export function CadastroCamposEditorModal({
         key,
         ok: true,
         text: res.report?.ok
-          ? `Anexado — ${n} campo(s) preenchido(s). Revise e salve.`
+          ? `Anexado — ${n} campo(s) preenchido(s).${motivo ? ` Obs:${motivo}` : ""} Revise e salve.`
           : `Anexado, mas não deu pra ler os campos${motivo} — preencha à mão e salve.`,
       });
     } catch (e) {

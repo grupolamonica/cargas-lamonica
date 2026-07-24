@@ -40,6 +40,7 @@ import {
   extractComprovanteFromMedia,
   extractCrlvFromMedia,
   extractCartaoCnpjFromMedia,
+  consultarCnpjSidecar,
 } from "../../repom/ocr-sidecar-client.js";
 import {
   buildPartial,
@@ -161,6 +162,37 @@ function pickDocFromFields(fields, keys) {
   return "";
 }
 
+function fieldStr(obj, ...keys) {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v !== null && v !== undefined && String(v).trim() !== "") return String(v).trim();
+  }
+  return "";
+}
+
+/**
+ * Mapeia a resposta da consulta receita-federal/cnpj (data[]) para as chaves de
+ * campo que o buildOwnerFromCartaoCnpjFields lê. Só devolve o que veio preenchido.
+ * Chaves confirmadas por fixture (cadastro-motorista/cadastroApi.test.ts).
+ */
+function mapCnpjConsultaToFields(data) {
+  const row = Array.isArray(data) ? data[0] : null;
+  if (!row || typeof row !== "object") return {};
+  const out = {};
+  const set = (k, ...aliases) => {
+    const v = fieldStr(row, ...aliases);
+    if (v) out[k] = v;
+  };
+  set("razao_social", "razao_social", "nome_empresarial", "nome");
+  set("cep", "endereco_cep", "cep", "numero_cep", "normalizado_endereco_cep");
+  set("uf", "endereco_uf", "uf", "estado");
+  set("municipio", "endereco_municipio", "municipio", "cidade", "localidade");
+  set("bairro", "endereco_bairro", "bairro");
+  set("logradouro", "endereco_logradouro", "logradouro", "endereco");
+  set("numero", "endereco_numero", "numero", "numero_endereco");
+  return out;
+}
+
 // Mantém só caracteres seguros de path (UUID, CPF, id migrado numérico) — nunca
 // separadores nem '..'. Barra traversal/clobber vindo de valores inesperados.
 const safeSeg = (v) => String(v ?? "").replace(/[^A-Za-z0-9_-]/g, "");
@@ -273,6 +305,34 @@ export async function attachCadastroDocument({
     ocr = { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 
+  // 5b) Cartão-CNPJ: se o OCR não trouxe o ENDEREÇO (o sidecar pode não estar
+  // enriquecendo), busca os dados AUTORITATIVOS na Receita (consulta Node,
+  // observável) usando o CNPJ que o Vision leu, e injeta nos fields. Se a consulta
+  // falhar, registra o motivo no relatório (para de silenciar). Ver
+  // [[cargas-ocr-cartao-cnpj-vision-receita]].
+  let rfNote = null;
+  if (docKind === "cartao-cnpj" && ocr.ok && ocr.fields) {
+    const jaTemEndereco = !!fieldStr(ocr.fields, "logradouro", "endereco");
+    if (!jaTemEndereco) {
+      const cnpj = pickDocFromFields(ocr.fields, ["cnpj", "numero_cnpj", "cnpj_numero"]);
+      if (cnpj.length === 14) {
+        const consulta = await consultarCnpjSidecar({ cnpj, correlationId });
+        if (consulta.ok) {
+          Object.assign(ocr.fields, mapCnpjConsultaToFields(consulta.data));
+          // Confirma que o endereço realmente entrou (consulta pode vir ok mas com
+          // data vazia) — senão avisa o operador em vez de silenciar.
+          rfNote = fieldStr(ocr.fields, "logradouro", "endereco")
+            ? "receita_ok"
+            : "Receita respondeu sem endereço — preencha manualmente";
+        } else {
+          rfNote = `Receita indisponível: ${consulta.codeMessage || consulta.error || "erro desconhecido"}`;
+        }
+      } else {
+        rfNote = "CNPJ não legível para consulta à Receita";
+      }
+    }
+  }
+
   // 6) Merge não-destrutivo do que o OCR extraiu (na cópia).
   let filled = [];
   if (ocr.ok && ocr.fields) {
@@ -320,19 +380,22 @@ export async function attachCadastroDocument({
     // auditoria é best-effort.
   }
 
+  // rfNote de falha da consulta à Receita vira a `message` do relatório (o editor
+  // mostra), mesmo com o OCR ok — assim o operador vê PORQUE o endereço não veio.
+  const rfFailMsg = rfNote && rfNote !== "receita_ok" ? rfNote : null;
   const report = {
     label: `${target}.${docKind}`,
     kind: docKind,
     ok: !!ocr.ok,
     provider: ocr.provider ?? null,
     code: ocr.code ?? null,
-    message: ocr.codeMessage ?? ocr.error ?? null,
+    message: rfFailMsg ?? ocr.codeMessage ?? ocr.error ?? null,
     filled,
     storage_path: storagePath,
   };
 
   logStructuredEvent("info", "operator.attach_doc.done", {
-    id, correlationId, docKind, target: write.mergeTarget, ocrOk: !!ocr.ok, filled: filled.length,
+    id, correlationId, docKind, target: write.mergeTarget, ocrOk: !!ocr.ok, filled: filled.length, rf: rfNote,
   });
 
   return { dados, report, storagePath };
