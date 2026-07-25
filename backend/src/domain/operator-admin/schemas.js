@@ -321,6 +321,15 @@ export function parseOperatorCargoListQuery(query = {}) {
     dateFrom: typeof query.dateFrom === "string" ? query.dateFrom.trim() : "",
     dateTo: typeof query.dateTo === "string" ? query.dateTo.trim() : "",
     clienteId: typeof query.clienteId === "string" ? query.clienteId.trim() : "",
+    // Filtros de trecho/veículo aplicados NO SERVIDOR (antes eram client-side só
+    // sobre a página atual — não achavam cargas nas demais páginas). origem/destino
+    // = substring (ILIKE); perfil = valor canônico ("todos"/vazio = sem filtro).
+    origem: typeof query.origem === "string" ? query.origem.trim() : "",
+    destino: typeof query.destino === "string" ? query.destino.trim() : "",
+    perfil: (() => {
+      const raw = typeof query.perfil === "string" ? query.perfil.trim() : "";
+      return !raw || raw === "todos" ? "" : normalizeVehicleProfile(raw, "");
+    })(),
   };
 }
 
