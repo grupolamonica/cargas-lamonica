@@ -980,6 +980,65 @@ describe("operator-admin service", () => {
     });
   });
 
+  it("não oferta ao motorista carga cuja rota está desativada (ativa=false)", async () => {
+    const cliente = await seedCliente({ nome: "Cliente Rota Inativa" });
+
+    // Carga numa rota ATIVA — pronta e visível.
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Salvador / BA",
+      destino: "Simoes Filho / BA",
+      perfil: "CARRETA",
+      status: "OPEN",
+      is_template: false,
+      data: "2099-04-08",
+      valor: 5000,
+      duracao_horas: 22,
+    });
+    await seedRoute({
+      origem: "Salvador / BA",
+      destino: "Simoes Filho / BA",
+      origin_key: "salvador",
+      destination_key: "simoes filho",
+      duracao_horas: 22,
+      tempo_estimado_horas: 26,
+      ativa: true,
+    });
+
+    // Carga igualmente PRONTA (valor/rota próprios), mas na rota DESATIVADA —
+    // deve sair do portal só por causa do ativa=false.
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Jaboatao dos Guararapes / PE",
+      destino: "Simoes Filho / BA",
+      perfil: "CARRETA",
+      status: "OPEN",
+      is_template: false,
+      data: "2099-04-08",
+      valor: 4800,
+      duracao_horas: 9,
+    });
+    await seedRoute({
+      origem: "Jaboatao dos Guararapes / PE",
+      destino: "Simoes Filho / BA",
+      origin_key: "jaboatao dos guararapes",
+      destination_key: "simoes filho",
+      duracao_horas: 9,
+      tempo_estimado_horas: 9,
+      ativa: false,
+    });
+
+    const response = await service.fetchDriverLoadsReadModel({
+      query: { page: "1", pageSize: "10" },
+      correlationId: "corr-driver-loads-rota-inativa",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const origens = response.payload.items.map((item) => item.origem);
+    expect(origens).toContain("Salvador / BA"); // rota ativa → aparece
+    expect(origens).not.toContain("Jaboatao dos Guararapes / PE"); // rota inativa → oculta
+  });
+
   it("usa os dados padrao da rota para publicar a carga no portal do motorista", async () => {
     const cliente = await seedCliente({ nome: "Cliente Rota Completa" });
 
