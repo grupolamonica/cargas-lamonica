@@ -2325,36 +2325,6 @@ export async function fetchCadastroBotsHealth(): Promise<CadastroBotsHealthRespo
   return requestJson<CadastroBotsHealthResponse>("/api/operator/cadastro-bots/health", { accessToken });
 }
 
-export interface CadastroComErroFalha {
-  target: string;
-  step: string;
-  code: string | null;
-  message: string | null;
-  acao: string | null;
-}
-export interface CadastroComErroItem {
-  id: string;
-  status: string | null;
-  nome_motorista: string | null;
-  cpf_motorista: string | null;
-  placa_cavalo: string | null;
-  n_erros: number;
-  ultimo_erro_at: string | null;
-  falhas: CadastroComErroFalha[];
-}
-export async function fetchCadastrosComErro(params: { origem?: "angellira" | "spx"; page?: number; pageSize?: number }) {
-  const accessToken = await getOperatorAccessToken();
-  const query = new URLSearchParams(
-    Object.entries(params)
-      .filter(([, v]) => v !== undefined && v !== null && v !== "")
-      .map(([k, v]) => [k, String(v)]),
-  ).toString();
-  return requestJson<{ items: CadastroComErroItem[]; meta: PaginationMeta }>(
-    `/api/operator/cadastros-com-erro${query ? `?${query}` : ""}`,
-    { accessToken },
-  );
-}
-
 // ─── Rascunhos de cadastro (draft rescue) ────────────────────────────────────
 
 export type DraftRegistrationItem = {
