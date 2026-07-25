@@ -213,12 +213,14 @@ export async function extractCartaoCnpjFromMedia({ imagemBase64, idCadastro, cor
  * receita-federal/cnpj). Traz os dados AUTORITATIVOS (razão social + endereço).
  * Degrada suave: NUNCA lança. Retorna { ok, data (list), code, codeMessage, error }.
  */
-export async function consultarCnpjSidecar({ cnpj, correlationId } = {}) {
+export async function consultarCnpjSidecar({ cnpj, correlationId, timeoutMs } = {}) {
   const digits = String(cnpj || "").replace(/\D/g, "");
   if (digits.length !== 14) return { ok: false, error: "CNPJ_INVALIDO" };
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), getTimeoutMs());
+  // A consulta receita-federal/cnpj pode demorar bem mais que o OCR (medido ~50s);
+  // aceita um timeout dedicado maior pra não abortar antes de a Receita responder.
+  const timer = setTimeout(() => controller.abort(), timeoutMs || getTimeoutMs());
   try {
     const url = `${getSidecarUrl().replace(/\/$/, "")}/api/consulta/cnpj`;
     const response = await fetch(url, {
