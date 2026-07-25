@@ -47,7 +47,6 @@ import { ExternalValidationPill } from "@/components/ExternalValidationPill";
 import DriverDetailModal, { type DriverDetailModalData } from "@/components/DriverDetailModal";
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
 import { AutoApproveAngelliraCard } from "@/components/operator/AutoApproveAngelliraCard";
-import { CadastrosComErroPanel } from "@/components/operator/CadastrosComErroPanel";
 import { CadastroCamposEditorModal } from "@/components/operator/CadastroCamposEditorModal";
 import { CadastroBotsHealthBanner } from "@/components/operator/CadastroBotsHealthBanner";
 import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
@@ -842,8 +841,8 @@ const Motoristas = () => {
   const [pendentesSearch, setPendentesSearch] = useState("");
   const deferredPendentesSearch = useDeferredValue(pendentesSearch.trim());
   const [pendentesPage, setPendentesPage] = useState(1);
-  // DC-196: sub-abas dentro de Pendentes — "revisao" (fila normal) | "erro" (falhas no cadastro externo).
-  const [pendentesSubTab, setPendentesSubTab] = useState<"revisao" | "incompletos" | "nao_conformidade" | "erro">("revisao");
+  // DC-196: sub-abas dentro de Pendentes — "revisao" (prontos para disparo) | "incompletos" | "nao_conformidade".
+  const [pendentesSubTab, setPendentesSubTab] = useState<"revisao" | "incompletos" | "nao_conformidade">("revisao");
   // Ordenação (DC-197): coluna + direção; server-side (a lista é paginada no backend).
   type PendentesSortCol = "nome" | "placa" | "enviado" | "status";
   const [pendentesSort, setPendentesSort] = useState<PendentesSortCol>("enviado");
@@ -1308,7 +1307,7 @@ const Motoristas = () => {
                     : "bg-muted/50 text-muted-foreground hover:text-foreground",
                 )}
               >
-                Pendentes de revisão
+                Prontos para disparo
               </button>
               <button
                 type="button"
@@ -1334,21 +1333,7 @@ const Motoristas = () => {
               >
                 <XCircle className="h-3.5 w-3.5" /> Não conformidade
               </button>
-              <button
-                type="button"
-                onClick={() => setPendentesSubTab("erro")}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors",
-                  pendentesSubTab === "erro"
-                    ? "bg-rose-600 text-white shadow-sm"
-                    : "bg-muted/50 text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <AlertTriangle className="h-3.5 w-3.5" /> Com erro
-              </button>
             </div>
-
-            {pendentesSubTab === "erro" && <CadastrosComErroPanel />}
 
             {(pendentesSubTab === "revisao" || pendentesSubTab === "incompletos" || pendentesSubTab === "nao_conformidade") && (
               <>
@@ -1362,14 +1347,14 @@ const Motoristas = () => {
                       ? "Dados incompletos"
                       : pendentesSubTab === "nao_conformidade"
                         ? "Não conformidade"
-                        : "Revisão de candidatos"}
+                        : "Prontos para disparo"}
                   </h2>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {pendentesSubTab === "incompletos"
                       ? "Cadastros com dado faltando ou não conforme — revise, complete e aprove/rejeite por aqui."
                       : pendentesSubTab === "nao_conformidade"
                         ? "Cadastros em homologação que voltaram não conformes no Angellira (motorista, cavalo ou carreta). Seguem em Pendentes até regularizar."
-                        : "Cadastros enviados pelo formulário público /cadastro aguardando revisão."}
+                        : "Cadastros revisados e prontos para disparo no Angellira/SPX. Enquanto o Angellira não voltar conforme, seguem aqui em processo."}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
