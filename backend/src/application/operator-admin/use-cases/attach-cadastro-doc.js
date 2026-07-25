@@ -179,22 +179,45 @@ function mapCnpjConsultaToFields(data) {
   const row = Array.isArray(data) ? data[0] : null;
   if (!row || typeof row !== "object") return {};
   const out = {};
-  const set = (k, ...aliases) => {
+  // Infosimples MASCARA campos privados com asteriscos ("*****"/"********") — não
+  // guardar a máscara como se fosse dado.
+  const val = (...aliases) => {
     const v = fieldStr(row, ...aliases);
+    return /^[*\s]+$/.test(v) ? "" : v;
+  };
+  const set = (k, ...aliases) => {
+    const v = val(...aliases);
     if (v) out[k] = v;
   };
+  // Identidade + endereço (o que buildOwnerFromCartaoCnpjFields já lê).
   set("razao_social", "razao_social", "nome_empresarial", "nome");
   // cep: normaliza p/ dígitos — a Receita devolve endereco_cep COM ponto
   // ("72.135-180"), que o sanitizeEndereco rejeita (/^\d{5}-?\d{3}$/) e derruba o
-  // endereço TODO. Usa o normalizado (8 díg) / dígitos do bruto. enderecoSchema
-  // aceita min(8), então "72135180" passa.
-  const cepDigits = onlyDigits(fieldStr(row, "normalizado_endereco_cep", "endereco_cep", "cep", "numero_cep"));
+  // endereço TODO. Usa o normalizado (8 díg). enderecoSchema aceita min(8).
+  const cepDigits = onlyDigits(val("normalizado_endereco_cep", "endereco_cep", "cep", "numero_cep"));
   if (cepDigits.length === 8) out.cep = cepDigits;
   set("uf", "endereco_uf", "uf", "estado");
   set("municipio", "endereco_municipio", "municipio", "cidade", "localidade");
   set("bairro", "endereco_bairro", "bairro");
   set("logradouro", "endereco_logradouro", "logradouro", "endereco");
   set("numero", "endereco_numero", "numero", "numero_endereco");
+  set("complemento", "endereco_complemento", "complemento");
+  // Metadados PJ (form rico do proprietário — todos opcionais no ownerSchema).
+  set("nome_fantasia", "nome_fantasia");
+  set("matriz_filial", "matriz_filial");
+  set("data_abertura", "abertura_data", "normalizado_abertura_data", "data_abertura");
+  set("porte", "porte");
+  set("natureza_juridica", "natureza_juridica");
+  set("atividade_principal", "atividade_economica", "atividade_principal", "cnae_principal");
+  set("atividades_secundarias", "atividade_economica_secundaria");
+  set("email", "email");
+  set("telefone", "telefone");
+  set("ente_federativo", "efr", "ente_federativo");
+  set("situacao_cadastral", "situacao_cadastral", "situacao");
+  set("situacao_cadastral_data", "situacao_cadastral_data");
+  set("situacao_cadastral_motivo", "situacao_cadastral_observacoes", "motivo_situacao_cadastral");
+  set("situacao_especial", "situacao_especial");
+  set("situacao_especial_data", "situacao_especial_data");
   return out;
 }
 

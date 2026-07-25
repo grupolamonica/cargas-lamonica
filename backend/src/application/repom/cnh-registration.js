@@ -106,6 +106,14 @@ export function buildMotoristaFromCnhFields(fields, { cpf } = {}) {
   // a guarda de uf_emplacamento no CRLV.
   const ufEmissorRaw = pick("uf_emissor", "uf_expedicao", "uf_emissao", "estado_emissor");
   if (/^[A-Za-z]{2}$/.test(ufEmissorRaw)) setC("uf_emissor", ufEmissorRaw.toUpperCase());
+  // Resto do bloco CNH (form rico + EAR): vão no cnh.* (.passthrough() nos dois
+  // schemas → seguro; motoristaSchema.cnh e ownerSchema.cnh aceitam). estado_emissor
+  // é texto livre ("PORTO FELIZ - SP"); NÃO cabe em uf_emissor (2 letras).
+  setC("observacoes", pick("observacoes", "observacao", "obs", "anotacoes", "remarks")); // EAR etc.
+  setC("orgao_emissor", pick("orgao_emissor", "orgao_expedidor"));
+  setC("estado_emissor", pick("estado_emissor", "local_emissao"));
+  setC("numero_prontuario", pick("numero_prontuario", "prontuario", "renach"));
+  setC("data_emissao", brDateToIso(pick("data_emissao_cnh", "emissao_cnh")));
   if (Object.keys(cnh).length) motorista.cnh = cnh;
 
   return motorista;

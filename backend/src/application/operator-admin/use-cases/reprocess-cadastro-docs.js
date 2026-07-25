@@ -136,8 +136,28 @@ export function buildVeiculoFromCrlvFields(fields) {
 export function buildOwnerFromCartaoCnpjFields(fields) {
   const v = pickFrom(fields);
   const out = {};
-  const razao = v("razao_social", "nome_empresarial", "nome");
-  if (razao) out.nome = razao;
+  const set = (k, val) => {
+    if (val) out[k] = val;
+  };
+  set("nome", v("razao_social", "nome_empresarial", "nome"));
+  // Metadados PJ (form rico do proprietário) — todos opcionais no ownerSchema.
+  // NUNCA toca doc/tipo/owner_doc_url (identidade/roteamento).
+  set("nome_fantasia", v("nome_fantasia"));
+  set("matriz_filial", v("matriz_filial"));
+  set("data_abertura", v("data_abertura", "abertura_data"));
+  set("porte", v("porte"));
+  set("natureza_juridica", v("natureza_juridica"));
+  set("atividade_principal", v("atividade_principal", "atividade_economica", "cnae_principal"));
+  set("atividades_secundarias", v("atividades_secundarias"));
+  set("email", v("email"));
+  set("telefone", v("telefone"));
+  set("ente_federativo", v("ente_federativo", "efr"));
+  set("situacao_cadastral", v("situacao_cadastral", "situacao"));
+  set("situacao_cadastral_data", v("situacao_cadastral_data"));
+  set("situacao_cadastral_motivo", v("situacao_cadastral_motivo"));
+  set("situacao_especial", v("situacao_especial"));
+  set("situacao_especial_data", v("situacao_especial_data"));
+  set("inscricao_estadual", v("inscricao_estadual"));
 
   const endereco = {};
   const setE = (k, val) => {
@@ -150,6 +170,7 @@ export function buildOwnerFromCartaoCnpjFields(fields) {
   setE("bairro", v("bairro"));
   setE("logradouro", v("logradouro", "endereco"));
   setE("numero", v("numero", "numero_endereco"));
+  setE("complemento", v("complemento"));
   // Endereço de CNPJ é frequentemente "S/N" (sem número) — o OCR (Vision) e a
   // consulta da Receita devolvem o número vazio nesse caso. Como enderecoSchema
   // exige `numero` (min 1) e o sanitizador descarta o endereço INTEIRO sem ele,
@@ -168,8 +189,15 @@ export function buildOwnerFromCartaoCnpjFields(fields) {
  */
 export function buildOwnerFromCnhFields(fields) {
   const person = buildMotoristaFromCnhFields(fields, { cpf: "" });
-  delete person.cpf; // owner tem `doc`, não `cpf`
-  delete person.data_nascimento; // ownerSchema (strict) não possui esse campo
+  delete person.cpf; // owner usa `doc`, não `cpf`
+  // data_nascimento agora É aceito no ownerSchema (Angellira PF exige) — mantém.
+  const v = pickFrom(fields);
+  const setP = (k, val) => {
+    if (val) person[k] = val;
+  };
+  setP("apelido", v("apelido"));
+  setP("sexo", v("sexo", "genero"));
+  setP("nacionalidade", v("nacionalidade"));
   return person;
 }
 

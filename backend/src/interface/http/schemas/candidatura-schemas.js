@@ -439,6 +439,27 @@ const ownerSchema = z
     // PLAN-CADASTRO-PARITY — paridade com /cadastro (proprietario PJ extras).
     inscricao_estadual: z.string().trim().optional(),
     isento_ie: z.boolean().optional(),
+    // PF extras (paridade com o OCR da CNH — form rico do proprietário PF). O
+    // resto dos dados da CNH vive no bloco `cnh` acima (.passthrough()).
+    apelido: z.string().trim().optional(),
+    sexo: z.string().trim().optional(),
+    nacionalidade: z.string().trim().optional(),
+    // PJ extras (paridade com a consulta receita-federal/cnpj — cartão CNPJ). Todos
+    // opcionais/informativos; capturados pra o form rico do proprietário PJ.
+    nome_fantasia: z.string().trim().optional(),
+    matriz_filial: z.string().trim().optional(),
+    data_abertura: z.string().trim().optional(),
+    porte: z.string().trim().optional(),
+    natureza_juridica: z.string().trim().optional(),
+    atividade_principal: z.string().trim().optional(),
+    atividades_secundarias: z.string().trim().optional(),
+    email: z.string().trim().optional(),
+    ente_federativo: z.string().trim().optional(),
+    situacao_cadastral: z.string().trim().optional(),
+    situacao_cadastral_data: z.string().trim().optional(),
+    situacao_cadastral_motivo: z.string().trim().optional(),
+    situacao_especial: z.string().trim().optional(),
+    situacao_especial_data: z.string().trim().optional(),
     // 19/05 — storage_path do documento do proprietario (CNH PF ou cartao
     // CNPJ PJ) persistido no bucket `cadastro-drafts`. Operator regenera
     // signed URL on demand.
