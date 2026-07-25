@@ -370,6 +370,10 @@ async function fetchDriverLoadsReadModelUncached({ query, correlationId }) {
     const routeCatalogMetricsByLoadId = await fetchRouteCatalogMetricsByLoadId(client, itemRows);
     const routeLabelByLoadId = buildRouteLabelMap(itemRows);
     const publishableRows = itemRows
+      // Rota desativada no catálogo (ativa=false) NÃO é ofertada ao motorista:
+      // "desativar a rota" passa a tirar a carga do ar. Carga sem rota casada
+      // (metrics null) ou com rota ativa é mantida.
+      .filter((row) => routeCatalogMetricsByLoadId.get(row.id)?.ativa !== false)
       .map((row) => buildDriverLoadPublicationState(row, routeCatalogMetricsByLoadId.get(row.id), routeLabelByLoadId.get(row.id)))
       .filter((entry) => entry.isReady)
       .map((entry) => entry.row);
@@ -462,6 +466,8 @@ export async function fetchDriverLoadFacets({ correlationId }) {
       const routeCatalogMetricsByLoadId = await fetchRouteCatalogMetricsByLoadId(client, rows);
       const routeLabelByLoadId = buildRouteLabelMap(rows);
       return rows
+        // Consistente com a lista: rota desativada não conta pros facetes.
+        .filter((row) => routeCatalogMetricsByLoadId.get(row.id)?.ativa !== false)
         .map((row) => buildDriverLoadPublicationState(row, routeCatalogMetricsByLoadId.get(row.id), routeLabelByLoadId.get(row.id)))
         .filter((entry) => entry.isReady)
         .map((entry) => entry.row);

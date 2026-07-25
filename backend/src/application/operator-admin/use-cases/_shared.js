@@ -159,7 +159,8 @@ export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
           perfil_padrao,
           eixos,
           valor_padrao,
-          bonus_padrao
+          bonus_padrao,
+          ativa
         FROM public.route_metrics_cache
         WHERE origin_key = ANY($1::text[])
           AND destination_key = ANY($2::text[])
@@ -215,6 +216,10 @@ export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
           eixos: parseNullableNumber(row.eixos),
           valor_padrao: value,
           bonus_padrao: bonus,
+          // Estado da rota no catálogo. Usado pelo portal do motorista para NÃO
+          // ofertar cargas de rota desativada (ativa=false) — "desativar rota"
+          // passa a tirar a carga do ar. NULL/ausente = tratado como ativa.
+          ativa: row.ativa,
         },
       });
     });
