@@ -222,6 +222,17 @@ export function CadastroCamposEditorModal({
     carretaOwners: carretas0.map((_, i) => ownerForm(asObj(carretaOwners0[i]))),
   }));
 
+  // "Mesmo proprietário para todos os veículos": quando ligado, o dono do CAVALO
+  // é aplicado a cavalo + todas as carretas (owner_doc dos veículos + objeto de
+  // proprietário), evitando anexar em cada slot e o mismatch owner_doc≠owner que
+  // derruba o disparo (Angellira reaproveita o dono do cavalo p/ as carretas).
+  // Init: já está como dono único? (todas as carretas com o mesmo owner_doc do cavalo).
+  const [mesmoDono, setMesmoDono] = useState<boolean>(() => {
+    const cavDoc = onlyDigits(str(cav0.owner_doc));
+    return carretas0.length > 0 && !!cavDoc
+      && carretas0.every((c) => onlyDigits(str(asObj(c).owner_doc)) === cavDoc);
+  });
+
   // ── Anexar documento faltante (OCR + pré-preenchimento) ──────────────────
   const [attachBusy, setAttachBusy] = useState<string | null>(null);
   const [attachMsg, setAttachMsg] = useState<{ key: string; ok: boolean; text: string } | null>(null);
@@ -353,9 +364,22 @@ export function CadastroCamposEditorModal({
       const mo = mergeOwner(cavOwner0 ?? {}, f.cavaloOwner);
       if (ownerGravavel(mo)) next.cavalo_owner = mo;
     }
-    // f.carretaOwners tem 1 entrada POR CARRETA (padding p/ renderizar a seção),
-    // então carretas sem owner real seriam descartadas pelo mesmo filtro de doc.
-    if (carretaOwners0.length || f.carretaOwners.some((o) => Object.values(o).some((v) => String(v ?? "").trim()))) {
+    if (mesmoDono && carretas0.length && ownerGravavel(asObj(next.cavalo_owner))) {
+      // "Mesmo dono": o proprietário do cavalo vale p/ todos. Propaga o owner_doc
+      // dele pros veículos (cavalo + carretas) — senão o disparo dá OWNER_NAO_
+      // CADASTRADO (veículo aponta um doc; dono cadastrado é outro) — e espelha o
+      // objeto de proprietário em cada carreta (o Angellira reaproveita o do cavalo).
+      const ownerObj = asObj(next.cavalo_owner);
+      const ownerDoc = onlyDigits(String(ownerObj.doc));
+      const ownerType = ownerDoc.length === 14 ? "cnpj" : "cpf";
+      const stampVeic = (veh: unknown): Dados => ({ ...asObj(veh), owner_doc: ownerDoc, owner_doc_type: ownerType });
+      if (base.cavalo) next.cavalo = stampVeic(next.cavalo ?? cav0);
+      // next.carretas já foi setado acima (carretas0.length é verdadeiro aqui).
+      next.carretas = asArr(next.carretas).map(stampVeic);
+      next.carreta_owners = carretas0.map(() => ({ ...ownerObj }));
+    } else if (carretaOwners0.length || f.carretaOwners.some((o) => Object.values(o).some((v) => String(v ?? "").trim()))) {
+      // Donos independentes por carreta. f.carretaOwners tem 1 entrada POR CARRETA
+      // (padding); carretas sem owner real são descartadas pelo filtro de doc.
       const merged = f.carretaOwners
         .map((of, i) => mergeOwner(asObj(carretaOwners0[i]), of))
         .filter(ownerGravavel);
@@ -590,8 +614,25 @@ export function CadastroCamposEditorModal({
 
           {f.cavalo ? veiculoSection("Cavalo", f.cavalo, "cavalo") : null}
           {f.carretas.map((c, i) => veiculoSection(f.carretas.length > 1 ? `Carreta ${i + 1}` : "Carreta", c, i))}
+          {f.carretaOwners.length > 0 ? (
+            <label className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-foreground">
+              <input
+                type="checkbox"
+                checked={mesmoDono}
+                onChange={(e) => setMesmoDono(e.target.checked)}
+                disabled={isSaving}
+                className="h-4 w-4"
+              />
+              <span>
+                <strong>Mesmo proprietário para todos os veículos</strong> (cavalo + carretas). Preencha/anexe o dono
+                uma vez no <em>Proprietário do cavalo</em> — ele é aplicado às carretas automaticamente.
+              </span>
+            </label>
+          ) : null}
           {f.cavaloOwner ? ownerSection("Proprietário do cavalo", f.cavaloOwner, "cavalo") : null}
-          {f.carretaOwners.map((o, i) => ownerSection(f.carretaOwners.length > 1 ? `Proprietário da carreta ${i + 1}` : "Proprietário da carreta", o, i))}
+          {mesmoDono
+            ? null
+            : f.carretaOwners.map((o, i) => ownerSection(f.carretaOwners.length > 1 ? `Proprietário da carreta ${i + 1}` : "Proprietário da carreta", o, i))}
         </div>
 
         <div className="mt-4 flex justify-end gap-2 border-t border-border pt-4">
