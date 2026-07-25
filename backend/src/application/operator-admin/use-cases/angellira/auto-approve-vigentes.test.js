@@ -41,15 +41,20 @@ import {
 } from "./auto-approve-vigentes.js";
 
 const TODAY = "2026-07-17";
-const VIGENTE = { status: "FOUND", validUntil: "2026-11-03" }; // Conforme + validade futura
-const VIGENTE_HOJE = { status: "FOUND", validUntil: "2026-07-17" }; // validade == hoje (>=)
-const VENCIDO = { status: "FOUND", validUntil: "2026-01-01" }; // Conforme porém vencido
-const SEM_VALIDADE = { status: "FOUND", validUntil: null };
+const VIGENTE = { status: "FOUND", validUntil: "2026-11-03", statusText: "Conforme" }; // Conforme + validade futura
+const VIGENTE_HOJE = { status: "FOUND", validUntil: "2026-07-17", statusText: "Conforme" }; // validade == hoje (>=)
+const VENCIDO = { status: "FOUND", validUntil: "2026-01-01", statusText: "Conforme" }; // Conforme porém vencido
+const SEM_VALIDADE = { status: "FOUND", validUntil: null, statusText: "Conforme" };
+// FOUND com validade futura MAS ainda em homologação (rótulo != "Conforme"):
+// é o caso que o backend tratava como conforme (bug) e o robô/unificada não.
+const HOMOLOGADORA = { status: "FOUND", validUntil: "2026-11-03", statusText: "Homologadora" };
+const NAO_CONFORME = { status: "FOUND", validUntil: "2026-11-03", statusText: "Não Conforme" };
+const SEM_STATUSTEXT = { status: "FOUND", validUntil: "2026-11-03", statusText: null };
 const NAO_CADASTRADO = { status: "NOT_FOUND" };
 const INDISPONIVEL = { status: "UNAVAILABLE" };
 
 describe("isAngelliraVigente", () => {
-  it("vigente quando FOUND e validade >= hoje", () => {
+  it("vigente quando FOUND, Conforme e validade >= hoje", () => {
     expect(isAngelliraVigente(VIGENTE, TODAY)).toBe(true);
     expect(isAngelliraVigente(VIGENTE_HOJE, TODAY)).toBe(true);
   });
@@ -61,6 +66,14 @@ describe("isAngelliraVigente", () => {
     expect(isAngelliraVigente(INDISPONIVEL, TODAY)).toBe(false);
     expect(isAngelliraVigente(null, TODAY)).toBe(false);
     expect(isAngelliraVigente(undefined, TODAY)).toBe(false);
+  });
+
+  it("NÃO vigente quando FOUND+validade mas ainda em homologação/não conforme (rótulo != Conforme)", () => {
+    // Root cause do JOSE EDUARDO: homologadora chegava FOUND com validade e era
+    // tratada como conforme (GR unificada em branco). Agora exige "Conforme".
+    expect(isAngelliraVigente(HOMOLOGADORA, TODAY)).toBe(false);
+    expect(isAngelliraVigente(NAO_CONFORME, TODAY)).toBe(false);
+    expect(isAngelliraVigente(SEM_STATUSTEXT, TODAY)).toBe(false);
   });
 });
 
@@ -154,6 +167,21 @@ describe("evaluateConjuntoConforme", () => {
     expect(v.conforme).toBe(false);
     expect(v.motivo).toBe("cavalo");
   });
+
+  it("BLOQUEIA quando o motorista está em homologação (FOUND+validade mas rótulo != Conforme)", () => {
+    const v = evaluateConjuntoConforme({ motorista: HOMOLOGADORA, cavalo: cavalo(VIGENTE), carretas: [] }, TODAY);
+    expect(v.conforme).toBe(false);
+    expect(v.motivo).toBe("motorista");
+  });
+
+  it("BLOQUEIA quando a carreta ainda está em homologação (não conclui o conjunto)", () => {
+    const v = evaluateConjuntoConforme(
+      { motorista: VIGENTE, cavalo: cavalo(VIGENTE), carretas: [carreta(HOMOLOGADORA)] },
+      TODAY,
+    );
+    expect(v.conforme).toBe(false);
+    expect(v.motivo).toBe("carreta");
+  });
 });
 
 describe("runRevertNonConformeAutoApproved (remediação)", () => {
@@ -222,5 +250,21 @@ describe("runRevertNonConformeAutoApproved (remediação)", () => {
     expect(s.aRevertar).toBe(0);
     expect(s.reverted).toBe(0);
     expect(canned.updateParams).toHaveLength(0);
+  });
+
+  it("REVERTE cadastro em homologação aprovado pela regra antiga (FOUND+validade, rótulo != Conforme)", async () => {
+    // Remediação do bug: um conjunto todo FOUND com validade, mas o motorista
+    // ainda em HOMOLOGADORA (não Conforme), foi auto-aprovado pela regra antiga.
+    // Agora volta para pendente.
+    canned.driver.set("11111111111", HOMOLOGADORA);
+    canned.plate.set("CAV0001", VIGENTE);
+    canned.approvedRows = [{ id: "r1", dados: mkDados("11111111111", "CAV0001") }];
+
+    const s = await runRevertNonConformeAutoApproved({ apply: true });
+
+    expect(s.conformes).toBe(0);
+    expect(s.aRevertar).toBe(1);
+    expect(s.reverted).toBe(1);
+    expect([...canned.updateParams[0][2]]).toEqual(["r1"]);
   });
 });

@@ -178,7 +178,7 @@ describe("outreach queue-item (integração pg-mem)", () => {
     await expect(createManualOutreach({ nome: "X", phone: "123", trigger: "churn" })).rejects.toThrow();
   });
 
-  it("reconcile: 3 conformes → concluido; algum não conforme → marca dados.nao_conformidade (segue pendente); indisponível → pula", async () => {
+  it("reconcile: 3 Conformes → concluido; NOT_FOUND → marca nao_conformidade (segue pendente); em homologação (FOUND != Conforme) → segue pendente sem marcar; indisponível → pula", async () => {
     const ok = await seedPendingRegistration({
       status: "pendente",
       dados: { motorista: { cpf: "11111111111", nome: "OK" }, cavalo: { placa: "ABC1D23" }, carretas: [{ placa: "XYZ4E56" }] },
@@ -191,10 +191,16 @@ describe("outreach queue-item (integração pg-mem)", () => {
       status: "pendente",
       dados: { motorista: { cpf: "33333333333", nome: "UN" } },
     });
+    const homolog = await seedPendingRegistration({
+      status: "pendente",
+      dados: { motorista: { cpf: "44444444444", nome: "HOMOLOG" }, cavalo: { placa: "HOM4L05" } },
+    });
     precheckMock.mockImplementation(async ({ cadastro }) => {
       const cpf = cadastro?.dados?.motorista?.cpf;
-      if (cpf === "11111111111") return { motorista: { status: "FOUND" }, cavalo: { status: "FOUND" }, carreta: { status: "FOUND" } };
-      if (cpf === "22222222222") return { motorista: { status: "FOUND" }, cavalo: { status: "NOT_FOUND" } };
+      // Conforme só quando o RÓTULO do portal (statusText) é "Conforme".
+      if (cpf === "11111111111") return { motorista: { status: "FOUND", statusText: "Conforme" }, cavalo: { status: "FOUND", statusText: "Conforme" }, carreta: { status: "FOUND", statusText: "Conforme" } };
+      if (cpf === "22222222222") return { motorista: { status: "FOUND", statusText: "Conforme" }, cavalo: { status: "NOT_FOUND" } };
+      if (cpf === "44444444444") return { motorista: { status: "FOUND", statusText: "Homologadora" }, cavalo: { status: "FOUND", statusText: "Conforme" } };
       return { motorista: { status: "UNAVAILABLE" } };
     });
 
@@ -207,13 +213,19 @@ describe("outreach queue-item (integração pg-mem)", () => {
     expect(rok[0].status).toBe("concluido");
 
     const { rows: rnc } = await query(`SELECT status, dados FROM public.pending_driver_registrations WHERE id = $1`, [nc.id]);
-    expect(rnc[0].status).toBe("pendente"); // não sai da fila durante homologação
+    expect(rnc[0].status).toBe("pendente"); // não sai da fila
     expect(rnc[0].dados.nao_conformidade).toBeTruthy();
     expect(rnc[0].dados.nao_conformidade.motivos).toContain("cavalo não conforme no Angellira");
 
     const { rows: run } = await query(`SELECT status, dados FROM public.pending_driver_registrations WHERE id = $1`, [un.id]);
     expect(run[0].status).toBe("pendente");
     expect(run[0].dados?.nao_conformidade).toBeFalsy(); // indisponível NÃO marca não conformidade
+
+    // Em homologação (FOUND mas rótulo != Conforme): NÃO conclui, NÃO marca não
+    // conformidade — segue pendente/em processo até o portal virar "Conforme".
+    const { rows: rhom } = await query(`SELECT status, dados FROM public.pending_driver_registrations WHERE id = $1`, [homolog.id]);
+    expect(rhom[0].status).toBe("pendente");
+    expect(rhom[0].dados?.nao_conformidade).toBeFalsy();
   });
 
   it("revalidateOutreachQueueAgainstAngellira cancela cadastro de quem já é vigente", async () => {

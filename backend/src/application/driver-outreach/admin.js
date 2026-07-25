@@ -20,6 +20,7 @@ import { composeOutreachMessage, normalizeDriverPhone } from "./messages.js";
 import { getDriverOpportunities } from "./get-driver-opportunities.js";
 import { checkAngelliraVigencia } from "./angellira-check.js";
 import { performAngelliraPrecheck } from "../operator-admin/use-cases/angellira/precheck.js";
+import { isStatusTextConforme } from "../operator-admin/use-cases/angellira/conformidade.js";
 import { enqueueDriverOutreach } from "./enqueue.js";
 import { saveWhatsappMessage } from "./whatsapp-messages.js";
 
@@ -527,12 +528,15 @@ export async function createManualOutreach({ cpf, nome, phone, trigger, message 
 
 /**
  * Concilia cadastros pendentes com o Angellira exigindo os TRÊS
- * (motorista + cavalo + carreta), via performAngelliraPrecheck:
- *  - todos os presentes CONFORMES (FOUND) → 'concluido';
- *  - ALGUM não conforme (NOT_FOUND) → grava o marcador `dados.nao_conformidade`
+ * (motorista + cavalo + carreta), via performAngelliraPrecheck, olhando o
+ * RÓTULO REAL do portal (`statusText` = status.description):
+ *  - todos FOUND E "Conforme" → 'concluido';
+ *  - ALGUM NOT_FOUND (não cadastrado) → grava o marcador `dados.nao_conformidade`
  *    (aparece na aba "Não conformidade"; o status segue 'pendente' — não sai da
  *    fila) — é a migração AUTOMÁTICA dos não-conforme;
- *  - algum INDISPONÍVEL (Angellira fora do ar) → pula (segue em homologação).
+ *  - algum FOUND mas ainda em HOMOLOGAÇÃO (rótulo != "Conforme") → pula (segue
+ *    'pendente'/em processo, SEM marcar não conformidade) até virar Conforme;
+ *  - algum INDISPONÍVEL (Angellira fora do ar) → pula (reavalia depois).
  */
 export async function reconcileRegistrationsWithAngellira() {
   const rows = await withPgClient((client) =>
@@ -583,12 +587,27 @@ export async function reconcileRegistrationsWithAngellira() {
         result.unavailable += 1;
         continue;
       }
-      const naoConf = entities.filter((e) => e.r?.status !== "FOUND"); // NOT_FOUND = não conforme
-      if (naoConf.length === 0) {
-        toConcluir.push(row.id); // os 3 conformes
-      } else if (row.status === "pendente" && !(row.dados && typeof row.dados === "object" && row.dados.nao_conformidade)) {
+      // Classifica cada componente com o RÓTULO REAL do portal (statusText):
+      //  - NOT_FOUND                         → não conforme (não cadastrado);
+      //  - FOUND mas rótulo != "Conforme"    → ainda em HOMOLOGAÇÃO (em processo);
+      //  - FOUND + "Conforme"                → conforme.
+      // Só conclui quando os TRÊS estão Conforme. Em homologação NÃO é "não
+      // conformidade" — segue pendente (em processo), sem marcador, até virar
+      // Conforme. Antes, bastava FOUND (ignorava o rótulo) e concluía cedo demais.
+      const naoConf = entities.filter((e) => e.r?.status === "NOT_FOUND");
+      const emHomologacao = entities.filter(
+        (e) => e.r?.status === "FOUND" && !isStatusTextConforme(e.r?.statusText),
+      );
+      if (naoConf.length === 0 && emHomologacao.length === 0) {
+        toConcluir.push(row.id); // os 3 Conformes
+      } else if (
+        naoConf.length > 0 &&
+        row.status === "pendente" &&
+        !(row.dados && typeof row.dados === "object" && row.dados.nao_conformidade)
+      ) {
         toMarcar.push({ id: row.id, dados: row.dados, motivos: naoConf.map((e) => `${e.key} não conforme no Angellira`) });
       }
+      // else: só em homologação (nenhum NOT_FOUND) → não faz nada; segue pendente.
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, worker));
