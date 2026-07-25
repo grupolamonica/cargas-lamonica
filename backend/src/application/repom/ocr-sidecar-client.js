@@ -207,3 +207,39 @@ export async function extractCrlvFromMedia({ imagemBase64, idCadastro, correlati
 export async function extractCartaoCnpjFromMedia({ imagemBase64, idCadastro, correlationId } = {}) {
   return extractDocFromMedia({ docType: "cartao-cnpj", imagemBase64, idCadastro, correlationId, logTag: "ocr.cartao-cnpj" });
 }
+
+/**
+ * Consulta CNPJ na Receita via sidecar (POST /api/consulta/cnpj → Infosimples
+ * receita-federal/cnpj). Traz os dados AUTORITATIVOS (razão social + endereço).
+ * Degrada suave: NUNCA lança. Retorna { ok, data (list), code, codeMessage, error }.
+ */
+export async function consultarCnpjSidecar({ cnpj, correlationId } = {}) {
+  const digits = String(cnpj || "").replace(/\D/g, "");
+  if (digits.length !== 14) return { ok: false, error: "CNPJ_INVALIDO" };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), getTimeoutMs());
+  try {
+    const url = `${getSidecarUrl().replace(/\/$/, "")}/api/consulta/cnpj`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getSidecarAuthHeaders() },
+      body: JSON.stringify({ cnpj: digits }),
+      signal: controller.signal,
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      return { ok: false, code: body?.code ?? response.status, codeMessage: body?.code_message ?? `HTTP ${response.status}`, error: "HTTP_ERROR" };
+    }
+    const code = body?.code ?? null;
+    if (code !== 200) {
+      return { ok: false, code, codeMessage: body?.code_message ?? null };
+    }
+    return { ok: true, code, data: Array.isArray(body?.data) ? body.data : [] };
+  } catch (err) {
+    console.warn(`[repom.consulta.cnpj] ${correlationId || "-"} consulta indisponível:`, err instanceof Error ? err.message : String(err));
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
