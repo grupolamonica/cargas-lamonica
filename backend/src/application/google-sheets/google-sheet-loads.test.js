@@ -1015,6 +1015,63 @@ describe("google sheet loads sync", () => {
     expect(staleInSheetCall.params[1]).toContain(openId);
   });
 
+  it("aposenta a gêmea LANÇADA (lh_manual) quando a viagem já está tomada na planilha", async () => {
+    // SAMPLE_CSV: LT0Q4402267J1 tem motorista "Antonio" (tomada); as outras
+    // linhas estão sem motorista. A reconciliação deve mirar só as tomadas.
+    const supabaseClient = createSupabaseMock();
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+
+    await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    const reconcileCall = pgQueryCalls.find(
+      (c) => c.sql.includes("c.lh_manual = ANY($1::text[])") && c.sql.includes("public.load_public_leads"),
+    );
+    expect(reconcileCall).toBeTruthy();
+    // Expira a gêmea lançada (some do portal) e cancela candidaturas ativas (fila fantasma).
+    expect(reconcileCall.sql).toContain("status = 'EXPIRED'");
+    expect(reconcileCall.sql).toContain("status = 'CANCELLED'");
+    // Só age sobre a carga do SISTEMA (sheet_lh NULL) ainda viva (não-terminal).
+    expect(reconcileCall.sql).toContain("c.sheet_lh IS NULL");
+    expect(reconcileCall.sql).toContain("c.status NOT IN ('EXPIRED', 'CANCELLED', 'COMPLETED', 'FAILED')");
+    // Alvo = LHs tomadas na planilha (motorista preenchido).
+    expect(reconcileCall.params[0]).toContain("LT0Q4402267J1");
+    expect(reconcileCall.params[0]).not.toContain("LT0Q4302267L1");
+    expect(reconcileCall.params[1]).toBe("shopee");
+  });
+
+  it("não roda a reconciliação de gêmeas quando nenhuma linha da planilha tem motorista", async () => {
+    const csvNoTaken = SAMPLE_CSV.replace(",Antonio,", ",,");
+    const supabaseClient = createSupabaseMock();
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(csvNoTaken)),
+      text: vi.fn().mockResolvedValue(csvNoTaken),
+    });
+
+    await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    const reconcileCall = pgQueryCalls.find((c) => c.sql.includes("c.lh_manual = ANY($1::text[])"));
+    expect(reconcileCall).toBeUndefined();
+  });
+
   it("excludes RESERVED from the truly-gone batch but still expires OPEN when the row is removed", async () => {
     const reservedGoneId = createSheetLoadId("LT-GONE-RSVD");
     const openGoneId = createSheetLoadId("LT-GONE-OPEN");
