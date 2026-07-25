@@ -1731,6 +1731,98 @@ export async function syncGoogleSheetLoads({
     );
   }
 
+  // ── Reconciliação da GÊMEA LANÇADA superada pela planilha ────────────────────
+  // Uma mesma viagem pode virar DUAS cargas: (1) a LANÇADA na Programação
+  // (lh_manual preenchido, sheet_lh NULL, id aleatório) e, depois, (2) a da
+  // PLANILHA (sheet_lh = LH, id determinístico createSheetLoadId). O dedup por
+  // lh_manual/sheet_lh no lançamento só cobre o que já existe NAQUELE instante —
+  // quando a viagem chega à planilha DEPOIS de lançada, ninguém aposenta a gêmea
+  // lançada. Ela continua fantasma: OPEN/RESERVED, visível ao motorista (regra de
+  // carga lançada: dia inteiro) e aceitando candidatura, enquanto o Monitor mostra
+  // a linha da planilha (com o motorista real) e o dedup esconde a lançada. Editar
+  // o horário atinge só a lançada (→ /motorista), nunca o Monitor/planilha.
+  //
+  // A planilha é a fonte de verdade de alocação: quando a viagem aparece TOMADA
+  // (motorista preenchido), aposentamos a gêmea lançada — expira a carga (some do
+  // portal, para de aceitar candidatura) e cancela as candidaturas ativas (limpa a
+  // fila fantasma). Idempotente/self-healing: os já-terminais são filtrados, então
+  // syncs seguintes viram no-op. Best-effort: nunca derruba o sync.
+  const takenSheetLhs = Array.from(
+    new Set(
+      allSheetRows
+        .filter((row) => row.lh?.trim() && (row.motoristas || "").trim() !== "")
+        .map((row) => row.lh.trim()),
+    ),
+  );
+  if (takenSheetLhs.length > 0) {
+    try {
+      const reconcileResult = await withPgClient((pgClient) =>
+        pgClient.query(
+          `
+            WITH twins AS (
+              SELECT c.id
+                FROM public.cargas c
+               WHERE c.lh_manual = ANY($1::text[])
+                 AND c.sheet_lh IS NULL
+                 AND COALESCE(c.is_template, false) = false
+                 AND c.status NOT IN ('EXPIRED', 'CANCELLED', 'COMPLETED', 'FAILED')
+                 -- Só gêmeas de hoje/futuro: as passadas já não aparecem ao
+                 -- motorista (regra data >= hoje) e reescrever candidaturas
+                 -- históricas mudaria relatórios sem necessidade.
+                 AND c.data >= (now() AT TIME ZONE 'America/Sao_Paulo')::date
+            ),
+            cancelled_leads AS (
+              UPDATE public.load_public_leads l
+                 SET status = 'CANCELLED', updated_at = now()
+               WHERE l.load_id IN (SELECT id FROM twins)
+                 AND l.status IN ('PRE_REGISTERED', 'QUEUED', 'APPROVED')
+              RETURNING l.id, l.load_id
+            ),
+            lead_events AS (
+              INSERT INTO public.load_public_lead_events
+                (load_id, lead_id, event_type, event_payload_json, actor_type, actor_id)
+              SELECT cl.load_id, cl.id, 'CANCELLED',
+                     jsonb_build_object('reason', 'superseded_by_sheet_allocation', 'source', $2::text),
+                     'system', 'sheet-sync-twin-reconcile'
+                FROM cancelled_leads cl
+              RETURNING 1
+            ),
+            expired_twins AS (
+              UPDATE public.cargas c
+                 SET status = 'EXPIRED',
+                     reserved_public_lead_id = NULL,
+                     reserved_at = NULL,
+                     reserved_until = NULL,
+                     updated_at = now()
+               WHERE c.id IN (SELECT id FROM twins)
+              RETURNING c.id
+            )
+            SELECT
+              (SELECT count(*) FROM expired_twins)::int  AS twins_expired,
+              (SELECT count(*) FROM cancelled_leads)::int AS leads_cancelled
+          `,
+          [takenSheetLhs, source],
+        ),
+      );
+
+      const stats = reconcileResult?.rows?.[0] ?? {};
+      const twinsExpired = Number(stats.twins_expired ?? 0);
+      const leadsCancelled = Number(stats.leads_cancelled ?? 0);
+      if (twinsExpired > 0 || leadsCancelled > 0) {
+        console.info(
+          `[google-sheet-loads] ${twinsExpired} carga(s) lançada(s) aposentada(s) por já estarem tomadas na planilha (gêmea) — ${leadsCancelled} candidatura(s) fantasma cancelada(s)`,
+          { twinsExpired, leadsCancelled, source },
+        );
+      }
+    } catch (reconcileError) {
+      // Isolado: a reconciliação de gêmeas nunca deve derrubar o sync.
+      console.error("[google-sheet-loads] reconciliação de gêmeas lançadas falhou (isolada)", {
+        source,
+        message: reconcileError?.message,
+      });
+    }
+  }
+
   // "Puxar tudo da planilha" (fontes com pullAllRows, ex.: Nestlé): cria carga
   // BOOKED para as linhas JÁ ALOCADAS (motorista/status) que ainda não existem
   // como carga — nem entraram como disponíveis nesta rodada. Assim /cargas
