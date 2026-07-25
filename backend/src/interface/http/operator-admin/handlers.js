@@ -115,7 +115,10 @@ import {
   updateProgramacaoSettings,
 } from "../../../application/operator-admin/use-cases/programacao-settings.js";
 import { DOC_TIPOS, listAvailableMigratedDocs, readLocalProdDocAsDataUri } from "../../../application/operator-admin/use-cases/migrated-docs/prod-docs-share.js";
-import { candidaturaSubmitSchema } from "../schemas/candidatura-schemas.js";
+import {
+  buildMissingFieldsMessage,
+  candidaturaSubmitSchema,
+} from "../schemas/candidatura-schemas.js";
 import { DRAFT_FILE_BUCKET } from "../../../application/candidatura/use-cases/upload-draft-file.js";
 import { ensureDriverLoadsSheetFresh } from "../public-loads/handlers.js";
 import { fetchDriverFlowMetrics } from "../../../domain/operator-admin/driver-flow-metrics.js";
@@ -3250,7 +3253,17 @@ export async function resolveOperatorSubmitDraftResponse(request) {
       parsedInput = candidaturaSubmitSchema.parse({ dados: body?.dados });
     } catch (err) {
       if (err instanceof ZodError) {
-        return zodErrorToHttpResponse(err, correlationId);
+        // Paridade com o submit do motorista: cita QUAL campo/seção faltou em
+        // vez do genérico "Payload invalido para a operacao solicitada." — sem
+        // isso o operador não conseguia diagnosticar por que o resgate falhava.
+        const baseResponse = zodErrorToHttpResponse(err, correlationId);
+        const friendlyMessage = buildMissingFieldsMessage(
+          baseResponse.payload.issues || [],
+        );
+        return {
+          statusCode: baseResponse.statusCode,
+          payload: { ...baseResponse.payload, message: friendlyMessage },
+        };
       }
       throw err;
     }

@@ -31,13 +31,18 @@ function buildMotorista(data: ConfirmationWizardData) {
   // — migração de schema é task separada.
   const b = data.stepB;
   const a6 = b?.a6;
+  // id_equipamento é OPCIONAL no wizard (A6Rastreador "Mais opções"); mínimo
+  // viável = empresa+login+senha. Emitir `id_rastreador: ""` quebrava o backend
+  // (rastreadorSchema.id_rastreador). Só inclui quando preenchido.
   const rastreador =
     a6 && a6.possui === "sim" && a6.rastreador
       ? {
           empresa: a6.rastreador.empresa,
           login: a6.rastreador.login,
           senha: a6.rastreador.senha,
-          id_rastreador: a6.rastreador.id_equipamento,
+          ...(a6.rastreador.id_equipamento && a6.rastreador.id_equipamento.trim()
+            ? { id_rastreador: a6.rastreador.id_equipamento }
+            : {}),
         }
       : undefined;
 
@@ -280,8 +285,11 @@ function buildAnttTitularPayload(
  * O backend EXIGE `owner.endereco.comprovante_storage_path` para proprietário
  * PF (superRefine em dadosSchema). Sem mapear isto, o submit dava 422
  * ("Payload invalido") MESMO com o comprovante anexado — o wizard coletava em
- * `ownerEndereco` mas o payload descartava. Só emite quando cep+numero+
- * logradouro estão presentes (mínimos do enderecoSchema).
+ * `ownerEndereco` mas o payload descartava. Só emite quando cep+numero estão
+ * presentes — logradouro NÃO é exigido (o gate do endereço do dono no wizard
+ * pede cep+numero+cidade+uf, e o ViaCEP nem sempre retorna a rua); o backend
+ * torna `logradouro` opcional. Exigi-lo aqui descartava o endereço+comprovante
+ * de donos PF que preencheram tudo menos a rua → 422.
  */
 function buildOwnerEndereco(
   oe:
@@ -289,11 +297,11 @@ function buildOwnerEndereco(
     | undefined,
   fallbackComprovante?: string,
 ): Record<string, unknown> | undefined {
-  if (!oe || !oe.cep || !oe.numero || !oe.logradouro) return undefined;
+  if (!oe || !oe.cep || !oe.numero) return undefined;
   const endereco: Record<string, unknown> = {
     cep: oe.cep,
     numero: oe.numero,
-    logradouro: oe.logradouro,
+    ...(oe.logradouro ? { logradouro: oe.logradouro } : {}),
     bairro: oe.bairro || undefined,
     cidade: oe.cidade || undefined,
     uf: oe.uf || undefined,

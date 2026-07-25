@@ -317,3 +317,66 @@ describe("candidatura-schemas — paridade /cadastro (PLAN-CADASTRO-PARITY)", ()
     expect(result.success).toBe(true);
   });
 });
+
+// ── 2026-07-25 — Regressão LEANDRO: resgate do operador batia em 422 genérico.
+// Causa: (a) rastreador exigia id_rastreador; (b) enderecoSchema exigia
+// logradouro — ambos OPCIONAIS no wizard. ─────────────────────────────────
+describe("candidatura-schemas — rastreador id opcional + endereco sem logradouro (regressão LEANDRO)", () => {
+  it("rastreador SEM id_rastreador é aceito (id é opcional no wizard)", () => {
+    const payload = {
+      cargaId: "carga-1",
+      dados: {
+        motorista: {
+          ...BASE_MOTORISTA,
+          rastreador: { empresa: "Sascar", login: "user", senha: "pass" },
+        },
+        cavalo: BASE_CAVALO,
+        carretas: [],
+      },
+    };
+    const result = candidaturaSubmitSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+  });
+
+  it("rastreador com id_rastreador vazio ('') ainda REJEITA (se presente, deve ser não-vazio)", () => {
+    const payload = {
+      cargaId: "carga-1",
+      dados: {
+        motorista: {
+          ...BASE_MOTORISTA,
+          rastreador: { empresa: "Sascar", login: "user", senha: "pass", id_rastreador: "" },
+        },
+        cavalo: BASE_CAVALO,
+        carretas: [],
+      },
+    };
+    const result = candidaturaSubmitSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+  });
+
+  it("owner PF com endereco SEM logradouro mas COM comprovante é aceito", () => {
+    const payload = {
+      cargaId: "carga-1",
+      dados: {
+        motorista: BASE_MOTORISTA,
+        cavalo: BASE_CAVALO,
+        cavalo_owner: {
+          tipo: "pf",
+          doc: "12345678901",
+          nome: "Maria Oliveira",
+          endereco: {
+            cep: "01310100",
+            numero: "1000",
+            cidade: "Sao Paulo",
+            uf: "SP",
+            // logradouro ausente (ViaCEP não retornou a rua)
+            comprovante_storage_path: "cadastro-drafts/owner-cavalo/comprov.jpg",
+          },
+        },
+        carretas: [],
+      },
+    };
+    const result = candidaturaSubmitSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+  });
+});

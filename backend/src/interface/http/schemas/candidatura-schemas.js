@@ -203,7 +203,11 @@ const enderecoSchema = z
   .object({
     cep: z.string().trim().min(8).max(9),
     numero: z.string().trim().min(1),
-    logradouro: z.string().trim().min(1),
+    // 2026-07-25 — logradouro OPCIONAL. O gate de conclusão do endereço do
+    // proprietário no wizard (StepC/StepE) exige apenas cep+numero+cidade+uf
+    // (+ comprovante p/ PF), NÃO o logradouro (ViaCEP nem sempre retorna a rua).
+    // O `.min(1)` barrava donos PF sem logradouro mesmo com comprovante anexado.
+    logradouro: z.string().trim().min(1).optional(),
     bairro: z.string().trim().optional(),
     cidade: z.string().trim().optional(),
     uf: z.string().trim().length(2).optional(),
@@ -231,7 +235,11 @@ const rastreadorSchema = z
     empresa: z.string().trim().min(1),
     login: z.string().trim().min(1),
     senha: z.string().trim().min(1),
-    id_rastreador: z.string().trim().min(1),
+    // 2026-07-25 — ID do equipamento é OPCIONAL. O wizard (A6Rastreador) moveu
+    // esse campo para "Mais opções (opcional)" — mínimo viável = empresa+login+
+    // senha. O `.min(1)` rejeitava (422) motoristas com rastreador mas sem ID
+    // (comum). O serializer omite quando vazio; aqui só valida se presente.
+    id_rastreador: z.string().trim().min(1).optional(),
   })
   .strict();
 
