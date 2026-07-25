@@ -91,6 +91,43 @@ function getSpxErrorInfo(code?: string): { label: string; hint: string | null } 
   return SPX_ERROR_LABELS[code] ?? { label: code, hint: null };
 }
 
+// ── Status HONESTO do SPX (rótulo, não gate) ─────────────────────────────────
+// O job do SPX volta status "OK" para QUALQUER etapa que não deu erro —
+// inclusive um cadastro NOVO que ficou salvo como RASCUNHO aguardando a
+// aprovação da Shopee (save_draft cria a request mas o SPX não submete). Antes,
+// o painel pintava "Cadastrado com sucesso" nesses casos, mascarando que o
+// motorista ainda está em processamento no portal. Aqui derivamos um rótulo
+// fiel ao estado real, SEM alterar o gate de aprovação do cadastro.
+//
+// "apto" (aprovado/ativo na NOSSA agência) é a ÚNICA evidência positiva que
+// temos no momento do disparo — as etapas abaixo. Todo o resto que volta OK é
+// rascunho/solicitação aguardando aprovação. O poller (agendado) reavalia via
+// precheck e vira "apto" quando o SPX passa a devolver IS_MATCHED_NOSSA.
+const SPX_ETAPAS_APTO = new Set(["ja_cadastrado_nossa_agencia", "reativado"]);
+
+const SPX_ETAPA_LABELS: Record<string, string> = {
+  ja_cadastrado_nossa_agencia: "Já cadastrado e ativo na nossa agência SPX.",
+  reativado:                   "Motorista reativado na nossa agência SPX.",
+  importado:                   "Perfil importado — solicitação criada, aguardando aprovação da Shopee.",
+  request_pendente:            "Solicitação pendente no SPX — aguardando aprovação da Shopee.",
+  completo:                    "Rascunho enviado ao SPX — aguardando aprovação da Shopee.",
+};
+
+type SpxOutcome = "APTO" | "RASCUNHO" | "PROCESSANDO" | "ERRO" | "PENDENTE" | "NONE";
+
+function spxEtapaOf(job: ExternalRegistrationJob | null | undefined): string {
+  const etapa = job?.response?.etapa;
+  return typeof etapa === "string" ? etapa : "";
+}
+
+export function deriveSpxOutcome(job: ExternalRegistrationJob | null | undefined): SpxOutcome {
+  if (!job) return "NONE";
+  if (job.status === "IN_PROGRESS") return "PROCESSANDO";
+  if (job.status === "ERROR") return "ERRO";
+  if (job.status === "OK") return SPX_ETAPAS_APTO.has(spxEtapaOf(job)) ? "APTO" : "RASCUNHO";
+  return "PENDENTE";
+}
+
 /**
  * Painel de cadastro externo (Angellira + SPX/Shopee).
  * Mostra status por etapa, botões contextuais e mensagens amigáveis para o operador.
@@ -143,6 +180,10 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
     if (s === "OK") return "OK" as const;
     return "PENDING" as const;
   }, [spxMotoristaJob]);
+
+  // Rótulo honesto: distingue "apto" (aprovado na nossa agência) de "rascunho"
+  // (enviado, aguardando aprovação da Shopee). Não altera nenhum gate.
+  const spxOutcome = useMemo(() => deriveSpxOutcome(spxMotoristaJob), [spxMotoristaJob]);
 
   // Detecta se SPX tem motorista em outra agência (IS_MATCHED_OUTRA) para mudar label do botão
   const spxMatchedOutra = spxVerifyResult?.text.includes("outra agência");
@@ -342,10 +383,13 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
       <div className="mt-3 rounded-xl border border-border bg-background p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
-            <StatusBadge status={spxStatus} />
+            <SpxStatusBadge outcome={spxOutcome} />
             <span className="shrink-0 font-semibold text-foreground">SPX / Shopee</span>
-            {spxStatus === "IN_PROGRESS" && (
+            {spxOutcome === "PROCESSANDO" && (
               <span className="text-[10px] text-amber-700 animate-pulse">Processando…</span>
+            )}
+            {spxOutcome === "RASCUNHO" && (
+              <span className="text-[10px] text-amber-700">aguardando aprovação da Shopee</span>
             )}
           </div>
           <div className="flex shrink-0 gap-1.5">
@@ -453,6 +497,8 @@ function VerifyResultBanner({ type, text }: { type: "ok" | "warn" | "info" | "er
 
 function SpxJobRow({ job }: { job: ExternalRegistrationJob }) {
   const status = job.status;
+  const outcome = deriveSpxOutcome(job);
+  const etapaLabel = SPX_ETAPA_LABELS[spxEtapaOf(job)] ?? null;
   const error = job.error as
     | { code?: string; message?: string; acao?: string; retcode?: number | null; httpStatus?: number | null }
     | null
@@ -461,12 +507,15 @@ function SpxJobRow({ job }: { job: ExternalRegistrationJob }) {
   return (
     <div className={cn(
       "flex items-start gap-2 rounded-lg border px-2.5 py-2 text-xs",
-      status === "OK"          && "border-emerald-200 bg-emerald-50/40",
+      // OK+apto = verde; OK+rascunho = âmbar (ainda não é "cadastrado").
+      outcome === "APTO"       && "border-emerald-200 bg-emerald-50/40",
+      outcome === "RASCUNHO"   && "border-amber-200 bg-amber-50/40",
       status === "ERROR"       && "border-rose-200 bg-rose-50/40",
       status === "IN_PROGRESS" && "border-amber-200 bg-amber-50/40",
       status === "PENDING"     && "border-border bg-background",
     )}>
-      <StatusDot status={status} />
+      {/* Bolinha âmbar quando é rascunho (aguardando aprovação), não verde. */}
+      <StatusDot status={outcome === "RASCUNHO" ? "IN_PROGRESS" : status} />
       <div className="flex-1 min-w-0">
         <p className="flex items-center gap-1.5 font-medium text-foreground">
           <UserRound className="h-3.5 w-3.5" />
@@ -496,8 +545,15 @@ function SpxJobRow({ job }: { job: ExternalRegistrationJob }) {
             ) : null}
           </div>
         ) : null}
-        {status === "OK" ? (
-          <p className="mt-0.5 text-[10px] text-emerald-700 font-medium">Cadastrado com sucesso</p>
+        {outcome === "APTO" ? (
+          <p className="mt-0.5 text-[10px] text-emerald-700 font-medium">
+            Cadastrado com sucesso (apto){etapaLabel ? ` — ${etapaLabel}` : ""}
+          </p>
+        ) : null}
+        {outcome === "RASCUNHO" ? (
+          <p className="mt-0.5 text-[10px] text-amber-700 font-medium">
+            Em processamento no SPX — {etapaLabel ?? "rascunho enviado, aguardando aprovação da Shopee."}
+          </p>
         ) : null}
       </div>
     </div>
@@ -605,6 +661,25 @@ function StatusBadge({ status }: { status: "OK" | "ERROR" | "IN_PROGRESS" | "PEN
     PENDING:     { color: "border-slate-300 bg-slate-100 text-slate-700",      icon: <AlertCircle className="h-3 w-3" />,   label: "PENDENTE" },
     NONE:        { color: "border-border bg-muted text-muted-foreground",      icon: <AlertCircle className="h-3 w-3" />,   label: "NÃO INICIADO" },
   }[status];
+  return (
+    <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase", cfg.color)}>
+      {cfg.icon}
+      {cfg.label}
+    </span>
+  );
+}
+
+// Badge honesto do SPX: separa "apto" (aprovado/ativo na nossa agência) de
+// "rascunho/em processamento" (enviado, aguardando aprovação da Shopee).
+function SpxStatusBadge({ outcome }: { outcome: SpxOutcome }) {
+  const cfg = {
+    APTO:        { color: "border-emerald-300 bg-emerald-100 text-emerald-800", icon: <CheckCircle2 className="h-3 w-3" />,             label: "APTO" },
+    RASCUNHO:    { color: "border-amber-300 bg-amber-100 text-amber-800",       icon: <AlertCircle className="h-3 w-3" />,              label: "EM PROCESSAMENTO" },
+    PROCESSANDO: { color: "border-amber-300 bg-amber-100 text-amber-800",       icon: <Loader2 className="h-3 w-3 animate-spin" />,     label: "PROCESSANDO" },
+    ERRO:        { color: "border-rose-300 bg-rose-100 text-rose-800",          icon: <XCircle className="h-3 w-3" />,                  label: "COM ERRO" },
+    PENDENTE:    { color: "border-slate-300 bg-slate-100 text-slate-700",       icon: <AlertCircle className="h-3 w-3" />,              label: "PENDENTE" },
+    NONE:        { color: "border-border bg-muted text-muted-foreground",       icon: <AlertCircle className="h-3 w-3" />,              label: "NÃO INICIADO" },
+  }[outcome];
   return (
     <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase", cfg.color)}>
       {cfg.icon}
