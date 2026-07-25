@@ -55,17 +55,44 @@ function mergeVeiculo(base: Dados, f: VeiculoForm): Dados {
 // filiacao/rg/naturalidade) + endereço. NÃO edita tipo, owner_doc_url,
 // antt_titular, dados_bancarios, rntrc — preservados.
 type OwnerForm = {
-  nome: string; doc: string; data_nascimento: string;
+  tipo: string; nome: string; doc: string;
+  // PJ (cartão-CNPJ / consulta Receita)
+  nome_fantasia: string; inscricao_estadual: string; matriz_filial: string; data_abertura: string;
+  porte: string; natureza_juridica: string; atividade_principal: string; atividades_secundarias: string;
+  email: string; telefone: string; ente_federativo: string;
+  situacao_cadastral: string; situacao_cadastral_data: string; situacao_cadastral_motivo: string;
+  situacao_especial: string; situacao_especial_data: string;
+  // PF (CNH)
+  apelido: string; data_nascimento: string; sexo: string; nacionalidade: string;
   rg: string; rg_orgao: string; rg_uf: string; nome_pai: string; nome_mae: string; naturalidade: string;
-  cep: string; logradouro: string; numero: string; bairro: string; cidade: string; uf: string;
+  cnh_categoria: string; cnh_registro: string; cnh_numero_prontuario: string; cnh_validade: string;
+  cnh_primeira_emissao: string; cnh_codigo_seguranca: string; cnh_orgao_emissor: string;
+  cnh_uf_emissor: string; cnh_estado_emissor: string; cnh_observacoes: string; cnh_data_emissao: string;
+  // Endereço
+  cep: string; logradouro: string; numero: string; complemento: string; bairro: string; cidade: string; uf: string;
 };
 function ownerForm(o: Dados): OwnerForm {
   const end = asObj(o.endereco);
+  const cnh = asObj(o.cnh);
   return {
-    nome: str(o.nome), doc: str(o.doc), data_nascimento: str(o.data_nascimento),
+    tipo: str(o.tipo), nome: str(o.nome), doc: str(o.doc),
+    nome_fantasia: str(o.nome_fantasia), inscricao_estadual: str(o.inscricao_estadual),
+    matriz_filial: str(o.matriz_filial), data_abertura: str(o.data_abertura), porte: str(o.porte),
+    natureza_juridica: str(o.natureza_juridica), atividade_principal: str(o.atividade_principal),
+    atividades_secundarias: str(o.atividades_secundarias), email: str(o.email), telefone: str(o.telefone),
+    ente_federativo: str(o.ente_federativo), situacao_cadastral: str(o.situacao_cadastral),
+    situacao_cadastral_data: str(o.situacao_cadastral_data), situacao_cadastral_motivo: str(o.situacao_cadastral_motivo),
+    situacao_especial: str(o.situacao_especial), situacao_especial_data: str(o.situacao_especial_data),
+    apelido: str(o.apelido), data_nascimento: str(o.data_nascimento), sexo: str(o.sexo), nacionalidade: str(o.nacionalidade),
     rg: str(o.rg), rg_orgao: str(o.rg_orgao), rg_uf: str(o.rg_uf),
     nome_pai: str(o.nome_pai), nome_mae: str(o.nome_mae), naturalidade: str(o.naturalidade),
-    cep: str(end.cep), logradouro: str(end.logradouro), numero: str(end.numero),
+    cnh_categoria: str(cnh.categoria), cnh_registro: str(cnh.registro),
+    cnh_numero_prontuario: str(cnh.numero_prontuario ?? cnh.numero_espelho),
+    cnh_validade: str(cnh.validade), cnh_primeira_emissao: str(cnh.primeira_emissao),
+    cnh_codigo_seguranca: str(cnh.codigo_seguranca), cnh_orgao_emissor: str(cnh.orgao_emissor),
+    cnh_uf_emissor: str(cnh.uf_emissor), cnh_estado_emissor: str(cnh.estado_emissor),
+    cnh_observacoes: str(cnh.observacoes), cnh_data_emissao: str(cnh.data_emissao),
+    cep: str(end.cep), logradouro: str(end.logradouro), numero: str(end.numero), complemento: str(end.complemento),
     bairro: str(end.bairro), cidade: str(end.cidade), uf: str(end.uf),
   };
 }
@@ -74,21 +101,34 @@ function mergeOwner(base: Dados, f: OwnerForm): Dados {
   put(out, "nome", f.nome);
   const doc = onlyDigits(f.doc);
   if (doc) out.doc = doc; // doc é chave — só dígitos
-  // tipo (pf/pj) é obrigatório no ownerSchema. Quando o owner nasce do zero (base
-  // sem tipo — proprietário faltante preenchido/anexado agora), deriva do doc:
-  // 14 dígitos = CNPJ (pj), senão CPF (pf). Owner existente mantém o tipo do base.
-  if (!out.tipo && out.doc) {
-    out.tipo = onlyDigits(String(out.doc)).length === 14 ? "pj" : "pf";
-  }
-  put(out, "data_nascimento", f.data_nascimento);
-  put(out, "rg", f.rg); put(out, "rg_orgao", f.rg_orgao);
-  putUf(out, "rg_uf", f.rg_uf);
+  // tipo (pf/pj, obrigatório no ownerSchema): o selecionado no form vence; senão
+  // deriva do doc (14 = CNPJ). Owner sem doc + sem escolha fica sem tipo (não cria
+  // owner só com tipo — handleSave dropa vazio).
+  if (f.tipo === "pf" || f.tipo === "pj") out.tipo = f.tipo;
+  else if (!out.tipo && out.doc) out.tipo = onlyDigits(String(out.doc)).length === 14 ? "pj" : "pf";
+  // PJ (metadados da Receita)
+  put(out, "nome_fantasia", f.nome_fantasia); put(out, "inscricao_estadual", f.inscricao_estadual);
+  put(out, "matriz_filial", f.matriz_filial); put(out, "data_abertura", f.data_abertura); put(out, "porte", f.porte);
+  put(out, "natureza_juridica", f.natureza_juridica); put(out, "atividade_principal", f.atividade_principal);
+  put(out, "atividades_secundarias", f.atividades_secundarias); put(out, "email", f.email); put(out, "telefone", f.telefone);
+  put(out, "ente_federativo", f.ente_federativo); put(out, "situacao_cadastral", f.situacao_cadastral);
+  put(out, "situacao_cadastral_data", f.situacao_cadastral_data); put(out, "situacao_cadastral_motivo", f.situacao_cadastral_motivo);
+  put(out, "situacao_especial", f.situacao_especial); put(out, "situacao_especial_data", f.situacao_especial_data);
+  // PF
+  put(out, "apelido", f.apelido); put(out, "data_nascimento", f.data_nascimento); put(out, "sexo", f.sexo); put(out, "nacionalidade", f.nacionalidade);
+  put(out, "rg", f.rg); put(out, "rg_orgao", f.rg_orgao); putUf(out, "rg_uf", f.rg_uf);
   put(out, "nome_pai", f.nome_pai); put(out, "nome_mae", f.nome_mae); put(out, "naturalidade", f.naturalidade);
+  // PF — bloco CNH (preserva as chaves existentes; uf_emissor só 2 letras).
+  const cnh: Dados = { ...asObj(base.cnh) };
+  put(cnh, "categoria", f.cnh_categoria); put(cnh, "registro", f.cnh_registro); put(cnh, "numero_prontuario", f.cnh_numero_prontuario);
+  put(cnh, "validade", f.cnh_validade); put(cnh, "primeira_emissao", f.cnh_primeira_emissao); put(cnh, "codigo_seguranca", f.cnh_codigo_seguranca);
+  put(cnh, "orgao_emissor", f.cnh_orgao_emissor); putUf(cnh, "uf_emissor", f.cnh_uf_emissor); put(cnh, "estado_emissor", f.cnh_estado_emissor);
+  put(cnh, "observacoes", f.cnh_observacoes); put(cnh, "data_emissao", f.cnh_data_emissao);
+  if (Object.keys(cnh).length) out.cnh = cnh;
   // endereço: preserva comprovante_storage_path e demais chaves.
   const end: Dados = { ...asObj(base.endereco) };
-  put(end, "cep", f.cep); put(end, "logradouro", f.logradouro); put(end, "numero", f.numero);
-  put(end, "bairro", f.bairro); put(end, "cidade", f.cidade);
-  putUf(end, "uf", f.uf);
+  put(end, "cep", f.cep); put(end, "logradouro", f.logradouro); put(end, "numero", f.numero); put(end, "complemento", f.complemento);
+  put(end, "bairro", f.bairro); put(end, "cidade", f.cidade); putUf(end, "uf", f.uf);
   if (Object.keys(end).length) out.endereco = end;
   return out;
 }
@@ -305,18 +345,20 @@ export function CadastroCamposEditorModal({
 
     // ── Proprietários ── (owner pode ter sido CRIADO via anexo — workDados já o
     // tem; ou preenchido à mão. Merge não-destrutivo a partir do existente.)
+    // SÓ grava owner com `doc` válido (>=11 díg). ownerSchema.strict exige
+    // doc+nome+tipo — um owner só com `tipo` (operador tocou no seletor e não
+    // preencheu) passaria o Object.keys>0 e quebraria (422) no re-submit.
+    const ownerGravavel = (o: Dados) => onlyDigits(String(o.doc ?? "")).length >= 11;
     if (f.cavaloOwner) {
       const mo = mergeOwner(cavOwner0 ?? {}, f.cavaloOwner);
-      if (Object.keys(mo).length) next.cavalo_owner = mo;
+      if (ownerGravavel(mo)) next.cavalo_owner = mo;
     }
-    // NUNCA grava owner `{}` vazio (viola ownerSchema.strict — exige tipo/doc/nome):
     // f.carretaOwners tem 1 entrada POR CARRETA (padding p/ renderizar a seção),
-    // então carretas sem owner real virariam {} — filtra os vazios. (Com no máx. 2
-    // carretas e preenchimento em ordem, sobra sempre o(s) owner(s) real(is) no topo.)
+    // então carretas sem owner real seriam descartadas pelo mesmo filtro de doc.
     if (carretaOwners0.length || f.carretaOwners.some((o) => Object.values(o).some((v) => String(v ?? "").trim()))) {
       const merged = f.carretaOwners
         .map((of, i) => mergeOwner(asObj(carretaOwners0[i]), of))
-        .filter((o) => Object.keys(o).length);
+        .filter(ownerGravavel);
       if (merged.length) next.carreta_owners = merged;
     }
 
@@ -394,33 +436,104 @@ export function CadastroCamposEditorModal({
     </section>
   );
 
-  const ownerSection = (title: string, o: OwnerForm, which: "cavalo" | number) => (
-    <section className="space-y-2" key={`owner-${title}`}>
-      <p className="text-xs font-semibold uppercase tracking-wide text-primary/60">{title}</p>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {field("Nome / Razão social", o.nome, (val) => setOwner(which, "nome", val))}
-        {field("CPF/CNPJ", o.doc, (val) => setOwner(which, "doc", val), { mono: true, placeholder: "só números" })}
-        {field("Data de nascimento", o.data_nascimento, (val) => setOwner(which, "data_nascimento", val), { placeholder: "DD/MM/AAAA (exigido no Angellira p/ PF)" })}
-        {field("RG", o.rg, (val) => setOwner(which, "rg", val))}
-        {field("Órgão emissor (RG)", o.rg_orgao, (val) => setOwner(which, "rg_orgao", val))}
-        {field("UF do RG", o.rg_uf, (val) => setOwner(which, "rg_uf", val), { upper: true })}
-        {field("Nome do pai", o.nome_pai, (val) => setOwner(which, "nome_pai", val))}
-        {field("Nome da mãe", o.nome_mae, (val) => setOwner(which, "nome_mae", val))}
-        {field("Naturalidade", o.naturalidade, (val) => setOwner(which, "naturalidade", val))}
-        {field("CEP", o.cep, (val) => setOwner(which, "cep", val), { mono: true })}
-        {field("Logradouro", o.logradouro, (val) => setOwner(which, "logradouro", val))}
-        {field("Número", o.numero, (val) => setOwner(which, "numero", val))}
-        {field("Bairro", o.bairro, (val) => setOwner(which, "bairro", val))}
-        {field("Cidade", o.cidade, (val) => setOwner(which, "cidade", val))}
-        {field("UF", o.uf, (val) => setOwner(which, "uf", val), { upper: true })}
-      </div>
-      {attachControl(which === "cavalo" ? "cavalo_owner" : `carreta_owners.${which}`, [
-        { docKind: "owner-cnh", label: "CNH (PF)" },
-        { docKind: "cartao-cnpj", label: "Cartão CNPJ (PJ)" },
-        { docKind: "comprovante", label: "Comprovante" },
-      ])}
-    </section>
-  );
+  const ownerSection = (title: string, o: OwnerForm, which: "cavalo" | number) => {
+    const of = (label: string, k: keyof OwnerForm, opts?: { upper?: boolean; mono?: boolean; placeholder?: string }) =>
+      field(label, o[k], (val) => setOwner(which, k, val), opts);
+    // Modo PF/PJ: o tipo escolhido; senão deriva do documento (14 díg = PJ).
+    const mode: "pf" | "pj" = o.tipo === "pj" ? "pj" : o.tipo === "pf" ? "pf" : (onlyDigits(o.doc).length === 14 ? "pj" : "pf");
+    const target = which === "cavalo" ? "cavalo_owner" : `carreta_owners.${which}`;
+    return (
+      <section className="space-y-2" key={`owner-${title}`}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-primary/60">{title}</p>
+          <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            Tipo:
+            <select
+              value={mode}
+              onChange={(e) => setOwner(which, "tipo", e.target.value)}
+              disabled={isSaving}
+              className="h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+            >
+              <option value="pf">Pessoa Física (CNH)</option>
+              <option value="pj">Pessoa Jurídica (CNPJ)</option>
+            </select>
+          </label>
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {of("Nome / Razão social", "nome")}
+          {of("CPF / CNPJ", "doc", { mono: true, placeholder: "só números" })}
+          {mode === "pj" ? (
+            <>
+              {of("Nome fantasia", "nome_fantasia")}
+              {of("Inscrição estadual", "inscricao_estadual", { mono: true })}
+              {of("Matriz / Filial", "matriz_filial")}
+              {of("Data de abertura", "data_abertura")}
+              {of("Porte", "porte")}
+              {of("Natureza jurídica", "natureza_juridica")}
+              {of("Atividade principal (CNAE)", "atividade_principal")}
+              {of("Atividades secundárias", "atividades_secundarias")}
+              {of("E-mail", "email")}
+              {of("Telefone", "telefone", { mono: true })}
+              {of("Ente federativo (EFR)", "ente_federativo")}
+              {of("Situação cadastral", "situacao_cadastral")}
+              {of("Data da situação cadastral", "situacao_cadastral_data")}
+              {of("Motivo da situação", "situacao_cadastral_motivo")}
+              {of("Situação especial", "situacao_especial")}
+              {of("Data da situação especial", "situacao_especial_data")}
+            </>
+          ) : (
+            <>
+              {of("Apelido", "apelido")}
+              {of("Data de nascimento", "data_nascimento", { placeholder: "DD/MM/AAAA (exigido no Angellira p/ PF)" })}
+              {of("Sexo", "sexo")}
+              {of("Nacionalidade", "nacionalidade")}
+              {of("RG", "rg")}
+              {of("Órgão emissor (RG)", "rg_orgao")}
+              {of("UF do RG", "rg_uf", { upper: true })}
+              {of("Nome do pai", "nome_pai")}
+              {of("Nome da mãe", "nome_mae")}
+              {of("Naturalidade", "naturalidade")}
+            </>
+          )}
+        </div>
+        {mode === "pf" ? (
+          <div className="space-y-1">
+            <p className="text-[11px] font-medium text-primary/50">CNH do proprietário</p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {of("Categoria", "cnh_categoria", { upper: true })}
+              {of("Nº de registro", "cnh_registro", { mono: true })}
+              {of("Nº do prontuário", "cnh_numero_prontuario", { mono: true })}
+              {of("Validade", "cnh_validade", { placeholder: "AAAA-MM-DD" })}
+              {of("1ª habilitação", "cnh_primeira_emissao", { placeholder: "AAAA-MM-DD" })}
+              {of("Código de segurança", "cnh_codigo_seguranca", { mono: true })}
+              {of("Órgão emissor / UF", "cnh_orgao_emissor")}
+              {of("UF emissora", "cnh_uf_emissor", { upper: true })}
+              {of("Estado emissor (cidade/UF)", "cnh_estado_emissor")}
+              {of("Observações (EAR etc.)", "cnh_observacoes", { upper: true })}
+              {of("Data de emissão", "cnh_data_emissao", { placeholder: "AAAA-MM-DD" })}
+            </div>
+          </div>
+        ) : null}
+        <div className="space-y-1">
+          <p className="text-[11px] font-medium text-primary/50">Endereço</p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {of("CEP", "cep", { mono: true })}
+            {of("Logradouro", "logradouro")}
+            {of("Número", "numero")}
+            {of("Complemento", "complemento")}
+            {of("Bairro", "bairro")}
+            {of("Cidade", "cidade")}
+            {of("UF", "uf", { upper: true })}
+          </div>
+        </div>
+        {attachControl(target, [
+          { docKind: "owner-cnh", label: "CNH (PF)" },
+          { docKind: "cartao-cnpj", label: "Cartão CNPJ (PJ)" },
+          { docKind: "comprovante", label: "Comprovante" },
+        ])}
+      </section>
+    );
+  };
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
