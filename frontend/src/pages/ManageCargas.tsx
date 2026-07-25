@@ -18,7 +18,7 @@ import { resolveCargoPublicationReadiness } from "@/lib/loadPublication";
 import { normalizeOperatorCargoDate, normalizeOperatorCargoTime } from "@/lib/operatorCargoSchedule";
 import { useAuth } from "@/hooks/useAuth";
 import { canWriteMonetaryValues } from "@/lib/operatorAccess";
-import { VEHICLE_PROFILE_OPTIONS, normalizeVehicleProfile, formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
+import { VEHICLE_PROFILE_OPTIONS, formatVehicleProfileLabel } from "@/lib/vehicleProfiles";
 import {
   createOperatorCargo,
   deleteOperatorCargo,
@@ -275,7 +275,7 @@ const ManageCargas = () => {
     isFetching: cargasFetching,
     isLoading: cargasLoading,
   } = useQuery({
-    queryKey: [...CARGAS_QUERY_KEY, deferredSearch.trim(), deferredStatusFilter, deferredVisibilityFilter, deferredSourceFilter, deferredDateFrom, deferredDateTo, deferredClienteFilter, page],
+    queryKey: [...CARGAS_QUERY_KEY, deferredSearch.trim(), deferredStatusFilter, deferredVisibilityFilter, deferredSourceFilter, deferredOrigemFilter.trim(), deferredDestinoFilter.trim(), deferredPerfilFilter, deferredDateFrom, deferredDateTo, deferredClienteFilter, page],
     queryFn: () =>
       fetchOperatorCargas({
         page: String(page),
@@ -286,6 +286,10 @@ const ManageCargas = () => {
         source: deferredSourceFilter,
         dateFrom: deferredDateFrom,
         dateTo: deferredDateTo,
+        // origem/destino/perfil vão pro servidor (varrem todas as cargas, não só a página).
+        ...(deferredOrigemFilter.trim() ? { origem: deferredOrigemFilter.trim() } : {}),
+        ...(deferredDestinoFilter.trim() ? { destino: deferredDestinoFilter.trim() } : {}),
+        ...(deferredPerfilFilter && deferredPerfilFilter !== "todos" ? { perfil: deferredPerfilFilter } : {}),
         ...(deferredClienteFilter ? { clienteId: deferredClienteFilter } : {}),
       }),
     ...ADMIN_CARGAS_QUERY_OPTIONS,
@@ -340,32 +344,10 @@ const ManageCargas = () => {
       toast.error("Erro ao carregar rotas do catálogo");
     }
   }, [routesError]);
-  const rawCargas = useMemo(() => cargasResponse?.items ?? [], [cargasResponse?.items]);
-  // Filtros client-side para origem/destino/perfil. Data \u00e9 filtrada no server
-  // (read-model), ent\u00e3o o contador `totalCount` j\u00e1 bate com o per\u00edodo escolhido.
-  const cargas = useMemo(() => {
-    const origem = deferredOrigemFilter.trim().toLowerCase();
-    const destino = deferredDestinoFilter.trim().toLowerCase();
-    // Usa normalizeVehicleProfile para que aliases (BITRUCK<->BITREM,
-    // CARRETA EXPRESSA<->CARRETA_EXPRESSA) batam corretamente entre filtro e cargo.
-    const perfilCanonical = deferredPerfilFilter === "todos" ? null : normalizeVehicleProfile(deferredPerfilFilter);
-
-    if (!origem && !destino && !perfilCanonical) {
-      return rawCargas;
-    }
-
-    return rawCargas.filter((cargo) => {
-      if (origem && !(cargo.origem || "").toLowerCase().includes(origem)) return false;
-      if (destino && !(cargo.destino || "").toLowerCase().includes(destino)) return false;
-      if (perfilCanonical && normalizeVehicleProfile(cargo.perfil) !== perfilCanonical) return false;
-      return true;
-    });
-  }, [
-    rawCargas,
-    deferredOrigemFilter,
-    deferredDestinoFilter,
-    deferredPerfilFilter,
-  ]);
+  // origem/destino/perfil agora s\u00e3o filtrados NO SERVIDOR (o read-model recebe os
+  // params e varre TODAS as cargas, n\u00e3o s\u00f3 a p\u00e1gina de 12). A lista j\u00e1 vem
+  // filtrada \u2014 e o contador `totalCount` passa a refletir os filtros de trecho.
+  const cargas = useMemo(() => cargasResponse?.items ?? [], [cargasResponse?.items]);
   const cargasMeta = cargasResponse?.meta || {
     page,
     pageSize: PAGE_SIZE,
@@ -739,6 +721,7 @@ const ManageCargas = () => {
                 <option value={OPEN_STATUS}>Abertas</option>
                 <option value={DRAFT_STATUS}>Rascunhos</option>
                 <option value="todos">Todas (inclui hist\u00f3rico)</option>
+                <option value="EXPIRED">Expiradas</option>
               </select>
 
               <select

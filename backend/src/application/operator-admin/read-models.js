@@ -528,7 +528,7 @@ function isCargoAwaitingPublicationData(row, routeCatalogMetrics) {
 }
 
 export async function fetchOperatorCargoListReadModel({ query, correlationId }) {
-  const { page, pageSize, offset, maxPageSize, search, status, driverVisibility, source, dateFrom, dateTo, clienteId } = parseOperatorCargoListQuery(query);
+  const { page, pageSize, offset, maxPageSize, search, status, driverVisibility, source, dateFrom, dateTo, clienteId, origem, destino, perfil } = parseOperatorCargoListQuery(query);
   const usePendingDataFilter = status === "aguardando_dados";
 
   const buildCargoFilterContext = ({ supportsOptionalColumns }) => {
@@ -617,6 +617,25 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
     if (clienteId) {
       values.push(clienteId);
       clauses.push(`cargas.cliente_id = $${index}::uuid`);
+      index += 1;
+    }
+
+    // Trecho/veículo NO SERVIDOR (varre todas as cargas, não só a página atual).
+    // origem/destino = substring case-insensitive sobre o texto exibido na carga.
+    if (origem) {
+      values.push(`%${origem}%`);
+      clauses.push(`cargas.origem ILIKE $${index}`);
+      index += 1;
+    }
+    if (destino) {
+      values.push(`%${destino}%`);
+      clauses.push(`cargas.destino ILIKE $${index}`);
+      index += 1;
+    }
+    // perfil já vem canônico do parse; cargas.perfil é armazenado canônico.
+    if (perfil) {
+      values.push(perfil);
+      clauses.push(`cargas.perfil = $${index}`);
       index += 1;
     }
 

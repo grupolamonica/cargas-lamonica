@@ -79,6 +79,64 @@ describe("operator-admin read models", () => {
     expect(response.payload.meta.totalCount).toBe(1);
   });
 
+  it("filtra origem/destino/perfil no SERVIDOR (varre todas as cargas, não só a página)", async () => {
+    const cliente = await seedCliente({ nome: "Cliente Filtro Trecho" });
+
+    // 15 cargas "Salvador" + 1 "Ilheus". Com pageSize pequeno, a de Ilheus fica
+    // fora da página 1 — o filtro server-side tem que achá-la mesmo assim (o bug
+    // antigo filtrava só as 12 linhas da página no cliente).
+    for (let i = 0; i < 15; i += 1) {
+      await seedCargo({
+        cliente_id: cliente.id,
+        origem: "Salvador / BA",
+        destino: "Campinas / SP",
+        perfil: "CARRETA",
+        status: "OPEN",
+        sheet_lh: null,
+      });
+    }
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Ilheus / BA",
+      destino: "Vitoria / ES",
+      perfil: "CARRETA_EXPRESSA",
+      status: "OPEN",
+      sheet_lh: null,
+    });
+
+    // origem (substring, case-insensitive) com página pequena → acha a de Ilheus.
+    const byOrigem = await readModels.fetchOperatorCargoListReadModel({
+      query: { page: "1", pageSize: "5", status: "OPEN", origem: "ilheus" },
+      correlationId: "corr-origem",
+    });
+    expect(byOrigem.payload.meta.totalCount).toBe(1);
+    expect(byOrigem.payload.items).toHaveLength(1);
+    expect(byOrigem.payload.items[0]).toMatchObject({ origem: "Ilheus / BA" });
+
+    // destino.
+    const byDestino = await readModels.fetchOperatorCargoListReadModel({
+      query: { page: "1", pageSize: "5", status: "OPEN", destino: "vitoria" },
+      correlationId: "corr-destino",
+    });
+    expect(byDestino.payload.meta.totalCount).toBe(1);
+    expect(byDestino.payload.items[0]).toMatchObject({ destino: "Vitoria / ES" });
+
+    // perfil canônico → só a CARRETA_EXPRESSA.
+    const byPerfil = await readModels.fetchOperatorCargoListReadModel({
+      query: { page: "1", pageSize: "5", status: "OPEN", perfil: "CARRETA_EXPRESSA" },
+      correlationId: "corr-perfil",
+    });
+    expect(byPerfil.payload.meta.totalCount).toBe(1);
+    expect(byPerfil.payload.items[0]).toMatchObject({ perfil: "CARRETA_EXPRESSA" });
+
+    // perfil="todos" = sem filtro (todas as 16 OPEN).
+    const noPerfil = await readModels.fetchOperatorCargoListReadModel({
+      query: { page: "1", pageSize: "50", status: "OPEN", perfil: "todos" },
+      correlationId: "corr-noperfil",
+    });
+    expect(noPerfil.payload.meta.totalCount).toBe(16);
+  });
+
   it("expoe codigo_viagem na lista de cargas (contrato usado pelo Editar Carga)", async () => {
     const cliente = await seedCliente({ nome: "Cliente Codigo Viagem" });
 
