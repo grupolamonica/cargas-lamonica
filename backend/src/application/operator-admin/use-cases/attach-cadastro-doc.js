@@ -184,7 +184,12 @@ function mapCnpjConsultaToFields(data) {
     if (v) out[k] = v;
   };
   set("razao_social", "razao_social", "nome_empresarial", "nome");
-  set("cep", "endereco_cep", "cep", "numero_cep", "normalizado_endereco_cep");
+  // cep: normaliza p/ dígitos — a Receita devolve endereco_cep COM ponto
+  // ("72.135-180"), que o sanitizeEndereco rejeita (/^\d{5}-?\d{3}$/) e derruba o
+  // endereço TODO. Usa o normalizado (8 díg) / dígitos do bruto. enderecoSchema
+  // aceita min(8), então "72135180" passa.
+  const cepDigits = onlyDigits(fieldStr(row, "normalizado_endereco_cep", "endereco_cep", "cep", "numero_cep"));
+  if (cepDigits.length === 8) out.cep = cepDigits;
   set("uf", "endereco_uf", "uf", "estado");
   set("municipio", "endereco_municipio", "municipio", "cidade", "localidade");
   set("bairro", "endereco_bairro", "bairro");
@@ -305,31 +310,29 @@ export async function attachCadastroDocument({
     ocr = { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 
-  // 5b) Cartão-CNPJ: se o OCR não trouxe o ENDEREÇO (o sidecar pode não estar
-  // enriquecendo), busca os dados AUTORITATIVOS na Receita (consulta Node,
-  // observável) usando o CNPJ que o Vision leu, e injeta nos fields. Se a consulta
-  // falhar, registra o motivo no relatório (para de silenciar). Ver
+  // 5b) Cartão-CNPJ: o Vision serve SÓ pra ler o número do CNPJ; os dados (razão
+  // social + endereço) vêm da consulta AUTORITATIVA da Receita (Infosimples
+  // receita-federal/cnpj). SEMPRE consulta (não pular quando o Vision leu um
+  // pedaço de endereço — o Vision erra, e a consulta é a fonte de verdade). Os
+  // campos da Receita SOBRESCREVEM os do OCR. Se falhar, o motivo vai pro
+  // relatório (observável). A consulta da Receita pode demorar (~50s medido), por
+  // isso timeout dedicado maior — senão abortava e o endereço não vinha. Ver
   // [[cargas-ocr-cartao-cnpj-vision-receita]].
   let rfNote = null;
   if (docKind === "cartao-cnpj" && ocr.ok && ocr.fields) {
-    const jaTemEndereco = !!fieldStr(ocr.fields, "logradouro", "endereco");
-    if (!jaTemEndereco) {
-      const cnpj = pickDocFromFields(ocr.fields, ["cnpj", "numero_cnpj", "cnpj_numero"]);
-      if (cnpj.length === 14) {
-        const consulta = await consultarCnpjSidecar({ cnpj, correlationId });
-        if (consulta.ok) {
-          Object.assign(ocr.fields, mapCnpjConsultaToFields(consulta.data));
-          // Confirma que o endereço realmente entrou (consulta pode vir ok mas com
-          // data vazia) — senão avisa o operador em vez de silenciar.
-          rfNote = fieldStr(ocr.fields, "logradouro", "endereco")
-            ? "receita_ok"
-            : "Receita respondeu sem endereço — preencha manualmente";
-        } else {
-          rfNote = `Receita indisponível: ${consulta.codeMessage || consulta.error || "erro desconhecido"}`;
-        }
+    const cnpj = pickDocFromFields(ocr.fields, ["cnpj", "numero_cnpj", "cnpj_numero"]);
+    if (cnpj.length === 14) {
+      const consulta = await consultarCnpjSidecar({ cnpj, correlationId, timeoutMs: 90_000 });
+      if (consulta.ok) {
+        Object.assign(ocr.fields, mapCnpjConsultaToFields(consulta.data));
+        rfNote = fieldStr(ocr.fields, "logradouro", "endereco")
+          ? "receita_ok"
+          : "Receita respondeu sem endereço — preencha manualmente";
       } else {
-        rfNote = "CNPJ não legível para consulta à Receita";
+        rfNote = `Receita indisponível: ${consulta.codeMessage || consulta.error || "erro desconhecido"}`;
       }
+    } else {
+      rfNote = "CNPJ não legível para consulta à Receita";
     }
   }
 

@@ -140,55 +140,37 @@ describe("attachCadastroDocument (integração pg-mem)", () => {
     expect(r.dados.carreta_owners[0].nome).toBe("TRANSPORTES X LTDA");
   });
 
-  it("Owner cartão-CNPJ com endereço 'S/N': grava endereço completo com numero 'S/N' (não descarta)", async () => {
+  it("cartão-CNPJ: SEMPRE consulta a Receita (Vision só lê o CNPJ) e os dados autoritativos VENCEM", async () => {
     const { id } = await seedPendingRegistration({
       dados: { motorista: { cpf: "11111111111" }, cavalo: { placa: "ABC1D23" }, cavalo_owner: {} },
     });
-    // Cartão S/N: OCR/Receita trazem endereço sem número (caso TRANSPORTES VIEIRA E SANTOS).
+    // Vision leu CNPJ + um endereço PARCIAL/ERRADO — a consulta deve rodar mesmo assim e sobrescrever.
     cartaoMock.mockResolvedValue({
       ok: true,
-      fields: {
-        razao_social: "TRANSPORTES VIEIRA E SANTOS LTDA", cnpj: "65843178000140",
-        cep: "72135180", uf: "DF", municipio: "Brasilia", bairro: "Taguatinga",
-        logradouro: "ST SETOR QI QI 18 LT 52/54", // sem numero
-      },
+      fields: { razao_social: "NOME ERRADO DO VISION", cnpj: "65843178000140", logradouro: "RUA ERRADA" },
     });
-
-    const r = await attachCadastroDocument({ id, docKind: "cartao-cnpj", target: "cavalo_owner", ...baseArgs });
-    // endereço NÃO é descartado — numero vira "S/N" e cep/logradouro/cidade/UF entram.
-    expect(r.dados.cavalo_owner.endereco).toMatchObject({
-      cep: "72135180", uf: "DF", cidade: "Brasilia", bairro: "Taguatinga",
-      logradouro: "ST SETOR QI QI 18 LT 52/54", numero: "S/N",
-    });
-    expect(r.dados.cavalo_owner.doc).toBe("65843178000140");
-    expect(r.dados.cavalo_owner.tipo).toBe("pj");
-    // OCR já trouxe o endereço → não precisa consultar a Receita.
-    expect(consultaCnpjMock).not.toHaveBeenCalled();
-  });
-
-  it("cartão-CNPJ sem endereço no OCR: consulta a Receita e preenche o endereço (com S/N)", async () => {
-    const { id } = await seedPendingRegistration({
-      dados: { motorista: { cpf: "11111111111" }, cavalo: { placa: "ABC1D23" }, cavalo_owner: {} },
-    });
-    // Vision só leu razão social + CNPJ (sem endereço) → dispara a consulta.
-    cartaoMock.mockResolvedValue({ ok: true, fields: { razao_social: "TRANSPORTES VIEIRA E SANTOS LTDA", cnpj: "65843178000140" } });
+    // Resposta REAL da Receita (receita-federal/cnpj): cep COM ponto + normalizado + numero "S/N".
     consultaCnpjMock.mockResolvedValue({
       ok: true,
       data: [{
         razao_social: "TRANSPORTES VIEIRA E SANTOS LTDA",
-        endereco_cep: "72135-180", endereco_uf: "DF", endereco_municipio: "BRASILIA",
-        endereco_bairro: "TAGUATINGA", endereco_logradouro: "ST SETOR QI QI 18 LT 52/54",
-        endereco_numero: "", // S/N
+        endereco_cep: "72.135-180", normalizado_endereco_cep: "72135180",
+        endereco_uf: "DF", endereco_municipio: "BRASILIA", endereco_bairro: "TAGUATINGA",
+        endereco_logradouro: "ST SETOR QI QI 18 LT 52/54", endereco_numero: "S/N",
       }],
     });
 
     const r = await attachCadastroDocument({ id, docKind: "cartao-cnpj", target: "cavalo_owner", ...baseArgs });
+    // Consulta SEMPRE roda (mesmo com o Vision tendo lido "logradouro") — o guard foi removido.
     expect(consultaCnpjMock).toHaveBeenCalledWith(expect.objectContaining({ cnpj: "65843178000140" }));
+    // Dados da Receita VENCEM os do Vision; CEP normalizado (sem ponto); numero "S/N".
+    expect(r.dados.cavalo_owner.nome).toBe("TRANSPORTES VIEIRA E SANTOS LTDA");
     expect(r.dados.cavalo_owner.endereco).toMatchObject({
-      cep: "72135-180", uf: "DF", cidade: "BRASILIA", bairro: "TAGUATINGA",
+      cep: "72135180", uf: "DF", cidade: "BRASILIA", bairro: "TAGUATINGA",
       logradouro: "ST SETOR QI QI 18 LT 52/54", numero: "S/N",
     });
     expect(r.dados.cavalo_owner.doc).toBe("65843178000140");
+    expect(r.dados.cavalo_owner.tipo).toBe("pj");
   });
 
   it("cartão-CNPJ sem endereço + consulta falha: report.message traz o motivo (não silencia)", async () => {
