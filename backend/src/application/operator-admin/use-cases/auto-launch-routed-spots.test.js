@@ -8,6 +8,7 @@ function row(lh, o = {}) {
     lh,
     tab: o.tab ?? "planejado",
     source: o.source ?? "spx-direct",
+    acceptanceStatus: o.acceptanceStatus ?? null,
     motorista: o.motorista ?? "",
     podeLancar: o.podeLancar ?? (o.tab === "planejado"),
     isLinehaul: o.isLinehaul ?? true,
@@ -93,6 +94,20 @@ describe("autoLaunchRoutedSpots (DC-201)", () => {
     expect(deps.getProgramacao).toHaveBeenCalledWith(
       expect.objectContaining({ tabs: ["planejado", "aceito"] }),
     );
+  });
+
+  it("passa accepted p/ o launch: só ACEITA (acceptance_status=1 ou aba aceito) = true", async () => {
+    const rows = [
+      row("LT-PLAN"), // planejado, acceptance null → NÃO aceita → só portal
+      row("LT-ACC1", { acceptanceStatus: 1 }), // planejado mas ACEITA → planilha
+      row("NES-A", { tab: "aceito", source: "nestle-galileu", podeLancar: true }), // Nestlé aceita → planilha
+    ];
+    const deps = makeDeps({ rows, routedLhs: new Set(["LT-PLAN", "LT-ACC1", "NES-A"]) });
+    await autoLaunchRoutedSpots({ deps });
+    const byLh = (lh) => deps.launchCargoFromTrip.mock.calls.map((c) => c[0]).find((a) => a.lh === lh);
+    expect(byLh("LT-PLAN").accepted).toBe(false);
+    expect(byLh("LT-ACC1").accepted).toBe(true);
+    expect(byLh("NES-A").accepted).toBe(true);
   });
 
   it("não aceita no SPX — só lança (nenhuma chamada de accept envolvida)", async () => {

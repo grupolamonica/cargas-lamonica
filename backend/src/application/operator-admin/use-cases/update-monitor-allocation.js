@@ -262,10 +262,14 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
   // Write-back best-effort pra planilha (espelho) — FORA da transação e SEM
   // await. Quando vai cascatear, o write-back fica por conta da cascata (que
   // sabe os valores relocados) — evita gravar o valor antigo e depois corrigir.
-  // Carga do SISTEMA (lh_manual, sem sheet_lh) NÃO tem linha própria na planilha
-  // para espelhar — pular evita escrever "" e apagar o motorista/placa vivos da
-  // linha da planilha homônima (o operador enxerga o snapshot, não sheet_*).
-  if (!willCascade && !result.isSystemCargo) {
+  //
+  // UPDATE-ONLY (sem createIfMissing): preenche o motorista/veículo na linha do LH
+  // SE ela já existir na planilha. A "linha-casca" de uma carga do sistema é criada
+  // no LANÇAMENTO (só se a viagem estiver ACEITA — launch-cargo-from-trip/aceite);
+  // aqui a alocação só a preenche. Carga do sistema NÃO-aceita não tem linha → o
+  // write-back é no-op (não cria) — assim ela nunca aparece na planilha via Monitor.
+  // (Cancelamento continua indo pela cascata: willCascade.)
+  if (!willCascade) {
     void writeAllocationsToSheet([{ lh, ...result.effective }]).catch(() => {});
   }
 
