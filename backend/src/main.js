@@ -590,6 +590,41 @@ async function bootstrap() {
     console.info(`[expire-past-cargas] timer ativo (intervalo ${intervalMin}min)`);
   }
 
+  // 4f. Sync ASPX → sistema/planilha (DC-316 no backend). Puxa da Torre /api/spx/asp
+  //     por LH: status (regras DC-316 — CTE da planilha, resto do ASPX), motorista,
+  //     cavalo, carreta e datas de carregamento/descarga (sob os gates do DC-316).
+  //     Grava os espelhos em cargas.sheet_* + escreve de volta na planilha (write-back).
+  //     OPT-IN (default DESLIGADO): só liga com ASPX_STATUS_RECONCILE_ENABLED=true —
+  //     depende do Apps Script de write-back gravar a coluna STATUS (col L) e do
+  //     congelamento Shopee (DC-308) estar liberado. Intervalo:
+  //     ASPX_STATUS_RECONCILE_INTERVAL_MIN (default 3min).
+  if (process.env.ASPX_STATUS_RECONCILE_ENABLED === "true") {
+    const intervalMin = Math.max(1, Number(process.env.ASPX_STATUS_RECONCILE_INTERVAL_MIN || 3));
+    let reconcilingAspx = false;
+    setInterval(async () => {
+      if (reconcilingAspx) return;
+      reconcilingAspx = true;
+      try {
+        const { reconcileAspxStatus } = await import(
+          "./application/operator-admin/use-cases/reconcile-aspx-status.js"
+        );
+        const r = await reconcileAspxStatus();
+        if (r.updated) {
+          console.info(
+            `[reconcile-aspx-status] ${r.updated} carga(s) sincronizada(s) com o ASPX (${r.sheetWrites} na planilha; ${r.checked} verificada(s))`,
+          );
+        }
+      } catch (err) {
+        console.error("[reconcile-aspx-status] erro:", err?.message);
+      } finally {
+        reconcilingAspx = false;
+      }
+    }, intervalMin * 60 * 1000);
+    console.info(`[reconcile-aspx-status] timer ativo (intervalo ${intervalMin}min)`);
+  } else {
+    console.info("[reconcile-aspx-status] desabilitado (defina ASPX_STATUS_RECONCILE_ENABLED=true para ligar)");
+  }
+
   // 5. Iniciar HTTP server
   const server = app.listen(PORT, () => {
     console.log(`[lamonica-backend] Servidor ouvindo em http://localhost:${PORT}`);

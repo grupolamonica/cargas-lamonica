@@ -14,8 +14,16 @@ em tempo real.
 - Ligado **apenas** se `GOOGLE_SHEET_WRITEBACK_URL` estiver setado (senão no-op).
 - Escreve o valor **efetivo** (`alloc_* ?? sheet_*`) nas colunas Motoristas/CAVALO/CARRETA
   (E/F/G) da linha do LH; `status` (L) e `vínculo` (H) só quando enviados. `""` limpa a célula.
-- Wired em `update-monitor-allocation.js` (inline/modal) e
-  `reassign-monitor-allocations.js` (arrastar), **após** o commit no banco.
+- No **update** também grava `dataCarregamento` (C), `dataDescarga` (D), `origem` (I) e
+  `destino` (J) quando enviados — usado pelo **sync de status ASPX** (`reconcile-aspx-status.js`,
+  DC-316; ver [DC-316-aspx-status-backend.md](./DC-316-aspx-status-backend.md)).
+- Wired em `update-monitor-allocation.js` (inline/modal), `reassign-monitor-allocations.js`
+  (arrastar) e `reconcile-aspx-status.js` (sync ASPX), **após** o commit no banco.
+
+> **Reimplante necessário para o sync ASPX:** a versão anterior do `doPost` só gravava
+> datas/origem/destino no **create**. O bloco `if (!u.createOnly)` abaixo passou a gravar
+> C/D/I/J também no **update** — recole e reimplante (**Nova versão**) antes de ligar
+> `ASPX_STATUS_RECONCILE_ENABLED=true`. Status + motorista/cavalo/carreta já funcionavam.
 
 ### Modos por `update` (carga do SISTEMA lançada na Programação — `lh_manual`)
 
@@ -94,6 +102,11 @@ function doPost(e) {
           sheet.getRange(row, COL.MOTORISTA, 1, 3).setValues([[u.motorista||"", u.cavalo||"", u.carreta||""]]);
           if ("status"  in u) sheet.getRange(row, COL.STATUS ).setValue(u.status ||"");
           if ("vinculo" in u) sheet.getRange(row, COL.VINCULO).setValue(u.vinculo||"");
+          // Sync de status ASPX (DC-316): datas + origem/destino no UPDATE, condicionais.
+          if ("dataCarregamento" in u) sheet.getRange(row, COL.CARREG  ).setValue(u.dataCarregamento||"");
+          if ("dataDescarga"     in u) sheet.getRange(row, COL.DESCARGA).setValue(u.dataDescarga||"");
+          if ("origem"           in u) sheet.getRange(row, COL.ORIGEM  ).setValue(u.origem ||"");
+          if ("destino"          in u) sheet.getRange(row, COL.DESTINO ).setValue(u.destino||"");
           updated++;
         }
       } else if (u.createIfMissing || u.createOnly) {
