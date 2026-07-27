@@ -14,8 +14,18 @@ em tempo real.
 - Ligado **apenas** se `GOOGLE_SHEET_WRITEBACK_URL` estiver setado (senão no-op).
 - Escreve o valor **efetivo** (`alloc_* ?? sheet_*`) nas colunas Motoristas/CAVALO/CARRETA
   (E/F/G) da linha do LH. `""` limpa a célula.
-- Wired em `update-monitor-allocation.js` (inline/modal) e
-  `reassign-monitor-allocations.js` (arrastar), **após** o commit no banco.
+- Colunas opcionais, **condicionais à chave**: `status` → **STATUS (col L)**;
+  `dataCarregamento` → **DATA CARREGAMENTO (col C)**; `dataDescarga` → **DATA DESCARGA
+  (col D)**. Um update sem essas chaves NÃO toca essas colunas. Editar só a alocação
+  no Monitor continua escrevendo apenas E/F/G. As datas são usadas pelo sync ASPX (DC-316).
+- Wired em `update-monitor-allocation.js` (inline/modal), `reassign-monitor-allocations.js`
+  (arrastar) e no sync de **status operacional ASPX** (`reconcile-aspx-status.js`, DC-316 —
+  ver [DC-316-aspx-status-backend.md](./DC-316-aspx-status-backend.md)), **após** o commit no banco.
+
+> **Atenção — reimplante obrigatório para o status ASPX:** o `reconcile-aspx-status`
+> depende do `doPost` abaixo gravar a coluna **STATUS (col L)**. A versão antiga só
+> escrevia E/F/G e **descartava** `status`/`vinculo`. Recole o script abaixo e
+> reimplante (**Nova versão**) antes de ligar `ASPX_STATUS_RECONCILE_ENABLED=true`.
 
 ## Latência / não-bloqueante (importante)
 
@@ -47,8 +57,11 @@ Na planilha alvo: **Extensões → Apps Script**, cole o script abaixo (troque o
 > atualiza o app publicado).
 
 ```javascript
-const DATA_GID = 438306494;             // gid da aba de dados
-const SECRET   = "TROQUE-ESTE-SEGREDO"; // == GOOGLE_SHEET_WRITEBACK_SECRET
+const DATA_GID    = 438306494;           // gid da aba de dados (SHOPEE)
+const SECRET      = "TROQUE-ESTE-SEGREDO"; // == GOOGLE_SHEET_WRITEBACK_SECRET
+const STATUS_COL  = 12;                  // coluna L (STATUS) — confira na sua aba
+const DT_CARREG_COL = 3;                 // coluna C (DATA CARREGAMENTO)
+const DT_DESC_COL   = 4;                 // coluna D (DATA DESCARGA)
 
 function doPost(e) {
   try {
@@ -65,7 +78,14 @@ function doPost(e) {
       // Busca indexada server-side (NÃO lê a coluna inteira) — ~10x mais rápido.
       const cell = lhRange.createTextFinder(lh).matchEntireCell(true).findNext();
       if (!cell) return;
-      sheet.getRange(cell.getRow(), 5, 1, 3).setValues([[u.motorista || "", u.cavalo || "", u.carreta || ""]]); // E,F,G
+      const row = cell.getRow();
+      sheet.getRange(row, 5, 1, 3).setValues([[u.motorista || "", u.cavalo || "", u.carreta || ""]]); // E,F,G
+      // Condicionais: só grava a coluna quando o backend manda a chave — assim uma
+      // edição de alocação (sem 'status') NÃO re-rotula status/datas sem querer.
+      var has = function (k) { return Object.prototype.hasOwnProperty.call(u, k); };
+      if (has("status"))           sheet.getRange(row, STATUS_COL).setValue(u.status || "");            // col L
+      if (has("dataCarregamento")) sheet.getRange(row, DT_CARREG_COL).setValue(u.dataCarregamento || ""); // col C
+      if (has("dataDescarga"))     sheet.getRange(row, DT_DESC_COL).setValue(u.dataDescarga || "");        // col D
       updated++;
     });
     return out_({ ok:true, updated });

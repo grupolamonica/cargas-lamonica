@@ -56,7 +56,7 @@ export function isSheetWritebackEnabled(source) {
 }
 
 /**
- * @param {Array<{lh:string, source?:string, motorista?:string, cavalo?:string, carreta?:string, status?:string, vinculo?:string}>} updates
+ * @param {Array<{lh:string, source?:string, motorista?:string, cavalo?:string, carreta?:string, status?:string, vinculo?:string, dataCarregamento?:string, dataDescarga?:string}>} updates
  * @param {{ fetchImpl?: typeof fetch, log?: (level:string,event:string,data:object)=>void }} [opts]
  */
 export async function writeAllocationsToSheet(updates, { fetchImpl = globalThis.fetch, log } = {}) {
@@ -77,10 +77,13 @@ export async function writeAllocationsToSheet(updates, { fetchImpl = globalThis.
       carreta: (u.carreta ?? "").toString(),
     };
     if (!item.lh) continue;
-    // status (col de status) e vinculo são opcionais: só vão quando o caller manda
-    // a chave — assim uma edição sem esses campos não sobrescreve a coluna.
+    // status/vinculo/datas são opcionais: só vão quando o caller manda a chave —
+    // assim uma edição sem esses campos não sobrescreve a coluna. As datas
+    // (carregamento/descarga) são usadas pelo sync de status ASPX (DC-316).
     if ("status" in u) item.status = (u.status ?? "").toString();
     if ("vinculo" in u) item.vinculo = (u.vinculo ?? "").toString();
+    if ("dataCarregamento" in u) item.dataCarregamento = (u.dataCarregamento ?? "").toString();
+    if ("dataDescarga" in u) item.dataDescarga = (u.dataDescarga ?? "").toString();
     const source = normSource(u.source);
     if (!groups.has(source)) groups.set(source, []);
     groups.get(source).push(item);
