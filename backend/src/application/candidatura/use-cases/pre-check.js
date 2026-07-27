@@ -1,5 +1,6 @@
 import { validatePublicLeadPreRegistration } from "../../load-claims/public-lead-validation.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
+import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 
 // Iter #7 — janela de busca para duplicate detection no pre-check.
 // Cadastros enviados ha menos de 30 dias na mesma (CPF, horsePlate) sao
@@ -35,7 +36,7 @@ function resolveVehicleTypeFromTrailerCount(trailerCount) {
  * na etapa correta. CPF nao encontrado nas bases ASPX/Angellira (sync parou
  * ou motorista realmente novo) e cadastrado via etapa "Dados do motorista".
  */
-function buildDriverPendency(driverSummary) {
+function buildDriverPendency(driverSummary, { hasLocalCadastro } = {}) {
   const angellira = driverSummary?.angelira || {};
   const aspx = driverSummary?.aspx || {};
 
@@ -47,6 +48,22 @@ function buildDriverPendency(driverSummary) {
       label: "Cadastre seu CPF para candidatar-se",
       description:
         "Nao encontramos seu CPF nas bases ASPX e Angellira. Preencha a etapa 'Dados do motorista' do cadastro.",
+    };
+  }
+
+  // RF001 (PRD): existe no Angellira/ASPX MAS ainda NAO tem cadastro completo no
+  // NOSSO portal (nunca passou pelo nosso banco / nao temos os documentos). A
+  // existencia externa so REAPROVEITA dados — nao conclui. Forca a etapa do
+  // motorista para complementar campos + enviar os documentos obrigatorios.
+  if (!hasLocalCadastro) {
+    return {
+      step: "A",
+      reason: "LOCAL_REGISTRATION_REQUIRED",
+      label: "Complete seu cadastro no Portal",
+      description:
+        "Encontramos seu cadastro em nossa base. Para concluir seu cadastro no Portal e " +
+        "atender aos requisitos operacionais, e necessario complementar algumas informacoes " +
+        "e enviar os documentos obrigatorios.",
     };
   }
 
@@ -119,7 +136,7 @@ function buildPlateExpiryLabel({ plate, daysUntilExpiry, validUntil }) {
  * - status FOUND + daysUntilExpiry > 20 -> completo
  * - status UNAVAILABLE -> pula (nao bloqueia o motorista por indisponibilidade externa)
  */
-function classifyPlate({ plateResult, plate, step, candidateSubmittedAt }) {
+function classifyPlate({ plateResult, plate, step, candidateSubmittedAt, hasLocalCadastro = true }) {
   if (plateResult.status === "NOT_FOUND") {
     // Iter #10: Step B = cavalo, Step D = carreta. Descricao orienta o
     // motorista para a etapa correta do wizard ("Cavalo" vs "Carreta") em
@@ -138,6 +155,9 @@ function classifyPlate({ plateResult, plate, step, candidateSubmittedAt }) {
 
   if (plateResult.status === "UNAVAILABLE") {
     // Sem dado disponivel — nao bloqueia nem certifica como completo.
+    // NOTA RF001: se o Angellira estiver fora p/ esta placa, NAO forcamos o
+    // anexo (mesmo sem cadastro local) — priorizamos nao travar o motorista por
+    // indisponibilidade externa. O CRLV ainda e cobrado nas outras placas/etapas.
     return {};
   }
 
@@ -191,6 +211,24 @@ function classifyPlate({ plateResult, plate, step, candidateSubmittedAt }) {
           daysUntilExpiry,
           validUntil: plateResult.validUntil,
         }),
+      },
+    };
+  }
+
+  // RF001: veiculo vigente no Angellira normalmente vira "completo" (pula o
+  // upload). Mas se o MOTORISTA nao tem cadastro completo no nosso portal, nao
+  // temos o CRLV digitalizado — entao exigimos o anexo mesmo estando vigente.
+  if (!hasLocalCadastro) {
+    const vehicleKind = step === "B" ? "cavalo" : "carreta";
+    return {
+      pendencia: {
+        step,
+        plate,
+        reason: "LOCAL_REGISTRATION_REQUIRED",
+        daysUntilExpiry,
+        validUntil: plateResult.validUntil || null,
+        label: `Anexe o documento (CRLV) do ${vehicleKind} — placa ${plate}`,
+        description: `Precisamos do CRLV do veiculo ${plate} para concluir seu cadastro no Portal.`,
       },
     };
   }
@@ -269,7 +307,13 @@ export async function candidaturaPreCheck({
   const pendencias = [];
   const completos = [];
 
-  const driverPendency = buildDriverPendency(summary.driver);
+  // RF001: a existencia no Angellira/ASPX NAO conclui o cadastro se o motorista
+  // nunca completou o cadastro no NOSSO portal (nao temos os documentos). Esse
+  // sinal decide se as etapas (motorista + veiculos) sao forcadas mesmo quando
+  // o dado externo esta "em dia".
+  const hasLocalCadastro = await hasCompleteLocalCadastro({ cpf: driverCpf, correlationId });
+
+  const driverPendency = buildDriverPendency(summary.driver, { hasLocalCadastro });
   if (driverPendency) {
     pendencias.push(driverPendency);
   }
@@ -295,6 +339,7 @@ export async function candidaturaPreCheck({
       plate,
       step,
       candidateSubmittedAt,
+      hasLocalCadastro,
     });
 
     if (pendencia) {
@@ -340,6 +385,50 @@ export async function candidaturaPreCheck({
   }
 
   return { pendencias, completos };
+}
+
+/**
+ * RF001 — O motorista JA tem um cadastro COMPLETO no nosso portal?
+ *
+ * "Completo" = existe um `pending_driver_registrations` desse CPF com status
+ * `aprovado` ou `concluido` — ou seja, ja passou pelo wizard e enviou os
+ * documentos (a aprovacao exige os anexos). Um cadastro apenas `pendente`/
+ * `rejeitado`/`draft` NAO conta (ainda nao esta completo/documentado), e a
+ * existencia no Angellira/ASPX tambem NAO conta (e base externa, sem nossos
+ * documentos). Usado para decidir se as etapas do wizard sao forcadas.
+ *
+ * Fail-open: se o DB falhar, retorna `true` (degrada para o comportamento
+ * atual — nao forca o fluxo por erro transitorio; e durante uma queda de DB o
+ * resto do fluxo/submit tambem estaria degradado). Emite evento estruturado
+ * `...local-cadastro-check.db_error` para observabilidade (detectar fail-open
+ * sustentado — janela em que o gate RF001 fica bypassado).
+ *
+ * @returns {Promise<boolean>}
+ */
+async function hasCompleteLocalCadastro({ cpf, correlationId } = {}) {
+  const digits = String(cpf || "").replace(/\D/g, "");
+  if (digits.length !== 11) return false; // sem CPF valido → trata como novo (forca fluxo)
+  try {
+    return await withPgClient(async (client) => {
+      const { rows } = await client.query(
+        `
+          SELECT 1
+          FROM public.pending_driver_registrations
+          WHERE regexp_replace(COALESCE(dados->'motorista'->>'cpf', ''), '\\D', '', 'g') = $1
+            AND status IN ('aprovado', 'concluido')
+          LIMIT 1
+        `,
+        [digits],
+      );
+      return rows.length > 0;
+    });
+  } catch (err) {
+    logStructuredEvent("warn", "candidatura.pre-check.local-cadastro-check.db_error", {
+      correlationId: correlationId || null,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return true; // fail-open: degrada p/ comportamento atual (nao forca por erro de DB)
+  }
 }
 
 /**

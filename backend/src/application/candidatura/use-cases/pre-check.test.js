@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockValidatePublicLeadPreRegistration, mockPgClient } = vi.hoisted(() => {
+const { mockValidatePublicLeadPreRegistration, mockPgClient, canned } = vi.hoisted(() => {
   const mockPgClient = { query: vi.fn() };
   return {
     mockValidatePublicLeadPreRegistration: vi.fn(),
     mockPgClient,
+    // Estado controlavel das 2 queries de pre-check.js:
+    //  - hasLocalCadastro (RF001): motorista JA tem cadastro completo (aprovado/concluido)?
+    //  - duplicate/duplicateError (iter #7): duplicate-check.
+    canned: { hasLocalCadastro: true, localCadastroError: false, duplicate: null, duplicateError: false },
   };
 });
 
@@ -12,8 +16,8 @@ vi.mock("../../load-claims/public-lead-validation.js", () => ({
   validatePublicLeadPreRegistration: mockValidatePublicLeadPreRegistration,
 }));
 
-// Iter #7 — pre-check.js agora consulta o DB para duplicate detection.
-// Default: nao retorna duplicates. Testes especificos override.
+// pre-check.js consulta o DB em 2 pontos: hasCompleteLocalCadastro (RF001) e o
+// duplicate-check (iter #7). O mock roteia por SQL.
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({
   withPgClient: async (cb) => cb(mockPgClient),
 }));
@@ -24,8 +28,23 @@ import { candidaturaPreCheckSchema } from "../../../interface/http/schemas/candi
 describe("candidaturaPreCheck", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: duplicate-check query retorna 0 rows.
-    mockPgClient.query.mockResolvedValue({ rows: [], rowCount: 0 });
+    // Default: motorista JA tem cadastro local (preserva os testes de vigencia),
+    // sem duplicate.
+    canned.hasLocalCadastro = true;
+    canned.localCadastroError = false;
+    canned.duplicate = null;
+    canned.duplicateError = false;
+    mockPgClient.query.mockImplementation(async (sql) => {
+      const s = String(sql);
+      // RF001 — hasCompleteLocalCadastro (status IN ('aprovado','concluido')).
+      if (s.includes("'aprovado'") && s.includes("'concluido'")) {
+        if (canned.localCadastroError) throw new Error("pg down (local-cadastro)");
+        return canned.hasLocalCadastro ? { rows: [{ one: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      }
+      // duplicate-check.
+      if (canned.duplicateError) throw new Error("pg down");
+      return canned.duplicate ? { rows: [canned.duplicate], rowCount: 1 } : { rows: [], rowCount: 0 };
+    });
   });
 
   it("retorna pendencias vazias e 3 completos quando motorista + cavalo + 2 carretas estao validos com vigencia > 20 dias", async () => {
@@ -398,17 +417,12 @@ describe("candidaturaPreCheck", () => {
       });
 
       const dupCreated = new Date(Date.now() - 5 * 24 * 3600 * 1000);
-      mockPgClient.query.mockResolvedValueOnce({
-        rows: [
-          {
-            id: "existing-row-1",
-            status: "em_analise",
-            created_at: dupCreated,
-            carga_id: "carga-X",
-          },
-        ],
-        rowCount: 1,
-      });
+      canned.duplicate = {
+        id: "existing-row-1",
+        status: "em_analise",
+        created_at: dupCreated,
+        carga_id: "carga-X",
+      };
 
       const result = await candidaturaPreCheck({
         driverCpf: "12345678901",
@@ -432,7 +446,7 @@ describe("candidaturaPreCheck", () => {
           plates: [],
         },
       });
-      mockPgClient.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // canned.duplicate = null (default) → sem duplicate.
 
       const result = await candidaturaPreCheck({
         driverCpf: "12345678901",
@@ -452,7 +466,7 @@ describe("candidaturaPreCheck", () => {
           plates: [],
         },
       });
-      mockPgClient.query.mockRejectedValueOnce(new Error("pg down"));
+      canned.duplicateError = true; // duplicate-check joga → pre-check nao pode quebrar
 
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -466,6 +480,99 @@ describe("candidaturaPreCheck", () => {
       expect(result.pendencias.find((p) => p.reason === "DUPLICATE_PENDING_REGISTRATION")).toBeUndefined();
       expect(warnSpy).toHaveBeenCalled();
       warnSpy.mockRestore();
+    });
+  });
+
+  // ── RF001 — existir no Angellira NAO conclui sem cadastro local ────────────
+  describe("RF001 — sem cadastro local completo forca o fluxo", () => {
+    it("motorista no Angellira mas SEM cadastro local → pendencia step A LOCAL_REGISTRATION_REQUIRED", async () => {
+      canned.hasLocalCadastro = false;
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: {
+          driver: { angelira: { found: true }, aspx: { found: true } },
+          plates: [],
+        },
+      });
+
+      const result = await candidaturaPreCheck({
+        driverCpf: "12345678901",
+        horsePlate: "ABC1D23",
+        trailerPlates: [],
+        correlationId: "rf001-A",
+      });
+
+      const p = result.pendencias.find((x) => x.reason === "LOCAL_REGISTRATION_REQUIRED" && x.step === "A");
+      expect(p).toBeDefined();
+      expect(p.description).toMatch(/documentos obrigatorios/i);
+    });
+
+    it("SEM cadastro local → veiculo vigente vira pendencia de anexo (nao completo)", async () => {
+      canned.hasLocalCadastro = false;
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: {
+          driver: { angelira: { found: true }, aspx: { found: true } },
+          plates: [
+            { field: "horsePlate", status: "FOUND", found: true, validUntil: "2030-01-01" },
+          ],
+        },
+      });
+
+      const result = await candidaturaPreCheck({
+        driverCpf: "12345678901",
+        horsePlate: "ABC1D23",
+        trailerPlates: [],
+        correlationId: "rf001-B",
+      });
+
+      expect(result.completos).toEqual([]); // NAO cai em completos
+      const plate = result.pendencias.find((x) => x.plate === "ABC1D23");
+      expect(plate).toMatchObject({ step: "B", reason: "LOCAL_REGISTRATION_REQUIRED" });
+      expect(plate.label).toMatch(/CRLV/);
+    });
+
+    it("fail-open: erro de DB no check de cadastro local NAO força o fluxo (degrada p/ comportamento atual)", async () => {
+      canned.localCadastroError = true; // a query de hasCompleteLocalCadastro joga
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: {
+          driver: { angelira: { found: true }, aspx: { found: true } },
+          plates: [
+            { field: "horsePlate", status: "FOUND", found: true, validUntil: "2030-01-01" },
+          ],
+        },
+      });
+
+      const result = await candidaturaPreCheck({
+        driverCpf: "12345678901",
+        horsePlate: "ABC1D23",
+        trailerPlates: [],
+        correlationId: "rf001-failopen",
+      });
+
+      // fail-open → trata como se tivesse cadastro → nao gera LOCAL_REGISTRATION_REQUIRED.
+      expect(result.pendencias.find((x) => x.reason === "LOCAL_REGISTRATION_REQUIRED")).toBeUndefined();
+      expect(result.completos).toEqual(expect.arrayContaining([expect.objectContaining({ plate: "ABC1D23" })]));
+    });
+
+    it("COM cadastro local → veiculo vigente segue em completos (nao força)", async () => {
+      canned.hasLocalCadastro = true;
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: {
+          driver: { angelira: { found: true }, aspx: { found: true } },
+          plates: [
+            { field: "horsePlate", status: "FOUND", found: true, validUntil: "2030-01-01" },
+          ],
+        },
+      });
+
+      const result = await candidaturaPreCheck({
+        driverCpf: "12345678901",
+        horsePlate: "ABC1D23",
+        trailerPlates: [],
+        correlationId: "rf001-C",
+      });
+
+      expect(result.pendencias.find((x) => x.reason === "LOCAL_REGISTRATION_REQUIRED")).toBeUndefined();
+      expect(result.completos).toEqual(expect.arrayContaining([expect.objectContaining({ plate: "ABC1D23" })]));
     });
   });
 });
