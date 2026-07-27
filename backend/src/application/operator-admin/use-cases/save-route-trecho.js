@@ -2,11 +2,10 @@ import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { ValidationError } from "../../../domain/load-claims/errors.js";
 import {
-  normalizeClientName,
   isMissingRouteCatalogColumnsError,
   resolveRouteMetricsIfNeeded,
 } from "./_shared.js";
-import { createRouteLookupKeys } from "../../../domain/operator-admin/route-utils.js";
+import { createRouteLookupKeys, buildRouteCatalogKeys } from "../../../domain/operator-admin/route-utils.js";
 import { normalizeVehicleProfile } from "../../../domain/vehicle-profiles.js";
 
 /**
@@ -31,8 +30,9 @@ export async function saveRouteTrecho({ operatorId, payload, requestIp, correlat
       throw new ValidationError("Nao foi possivel salvar a rota sem distancia e duracao.");
     }
 
-    const originKey = normalizeClientName(payload.origem).replace(/\s+/g, " ");
-    const destinationKey = normalizeClientName(payload.destino).replace(/\s+/g, " ");
+    // Chave canônica (mesma do matching carga→rota) — evita rota duplicada por
+    // grafia (/UF, caixa, espaços). Ver route-utils.buildRouteCatalogKeys.
+    const { originKey, destinationKey } = buildRouteCatalogKeys(payload.origem, payload.destino);
     const tempoEstimadoHoras = payload.tempo_estimado_horas ?? resolvedMetrics.duracao_horas;
     const warnings = [];
 

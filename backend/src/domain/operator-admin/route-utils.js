@@ -120,6 +120,22 @@ export function canonicalizeRouteLookupLocation(value) {
   return normalizedValue;
 }
 
+// Chaves de gravação do catálogo de rotas (route_metrics_cache). Usa a MESMA
+// canonicalização do matching carga→rota (canonicalizeRouteLookupLocation), de
+// modo que a chave ARMAZENADA seja idêntica à chave primária de BUSCA. Isso
+// alinha a unique (origin_key, destination_key, perfil, eixos) ao trecho real e
+// impede entradas paralelas por grafia — com/sem sufixo de UF ("/BA"), caixa,
+// espaços ao redor da barra, sufixos operacionais ("-03") ou apelidos de cidade.
+// Antes daqui cada tela gravava normalizeClientName (que mantinha o "/UF"),
+// gerando 2 linhas para o mesmo trecho (a "estreita" com /UF do operador e a
+// "ampla" canônica do seed) — a origem das rotas duplicadas.
+export function buildRouteCatalogKeys(origin, destination) {
+  return {
+    originKey: canonicalizeRouteLookupLocation(origin),
+    destinationKey: canonicalizeRouteLookupLocation(destination),
+  };
+}
+
 export function createRouteLookupKeys(origin, destination) {
   const originKey = normalizeRouteLocation(origin);
   const destinationKey = normalizeRouteLocation(destination);

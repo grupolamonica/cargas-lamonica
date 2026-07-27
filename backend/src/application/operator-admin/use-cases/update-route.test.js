@@ -8,7 +8,7 @@ import {
   seedUser,
   withPgTransaction,
 } from "../test-harness.js";
-import { normalizeClientName } from "./_shared.js";
+import { buildRouteCatalogKeys } from "../../../domain/operator-admin/route-utils.js";
 
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({ withPgTransaction }));
 
@@ -43,8 +43,7 @@ describe("updateOperatorRoute", () => {
   it("editar rota para um trecho+perfil+eixos que ja existe → ConflictError 409 (nao 500 opaco)", async () => {
     const origem = "CAMPO GRANDE / MS";
     const destino = "Simoes Filho / BA";
-    const okey = normalizeClientName(origem).replace(/\s+/g, " ");
-    const dkey = normalizeClientName(destino).replace(/\s+/g, " ");
+    const { originKey: okey, destinationKey: dkey } = buildRouteCatalogKeys(origem, destino);
     // Rota B ja ocupa (okey, dkey, CARRETA, 0).
     await seedRoute({ origin_key: okey, destination_key: dkey, origem, destino, perfil_padrao: "CARRETA" });
     // Rota A (trecho diferente) que vamos tentar mover para o trecho de B.
