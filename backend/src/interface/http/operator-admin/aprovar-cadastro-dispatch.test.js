@@ -53,6 +53,14 @@ vi.mock("../../../application/operator-admin/use-cases/spx/dispatch-pipeline.js"
   runSpxPipeline: spxPipelineMock,
 }));
 
+// Gate de conformidade do Angellira (checkConjuntoConformeNow) — o disparo só
+// REGISTRA; a aprovação exige o conjunto voltar "Conforme". Controlável.
+const { conformeCheckMock } = vi.hoisted(() => ({ conformeCheckMock: vi.fn() }));
+vi.mock("../../../application/operator-admin/use-cases/angellira/auto-approve-vigentes.js", async (orig) => ({
+  ...(await orig()),
+  checkConjuntoConformeNow: conformeCheckMock,
+}));
+
 const { resolveOperatorAprovarCadastroResponse } = await import("./handlers.js");
 
 function req(id, jobs) {
@@ -96,6 +104,8 @@ describe("aprovar × disparo do cadastro externo (integração pg-mem)", () => {
     createUserMock.mockResolvedValue({ data: { user: { id: DRIVER_ID } }, error: null });
     angelliraPipelineMock.mockResolvedValue({ ok: true, results: [] });
     spxPipelineMock.mockResolvedValue({ ok: true, results: [] });
+    // Default: conjunto Conforme (não bloqueia os casos que testam OK).
+    conformeCheckMock.mockResolvedValue({ verdict: { conforme: true, motivo: null }, components: {} });
   });
 
   afterAll(async () => {
@@ -112,14 +122,53 @@ describe("aprovar × disparo do cadastro externo (integração pg-mem)", () => {
     expect(angelliraPipelineMock).not.toHaveBeenCalled();
   });
 
-  it("disparo Angellira OK → aprova e ATIVA o profile", async () => {
+  it("disparo Angellira OK + conjunto CONFORME → aprova e ATIVA o profile", async () => {
     const id = await seedCadastro();
     angelliraPipelineMock.mockResolvedValue({ ok: true, results: [{ step: "motorista", status: "OK", external_id: "x", error: null }] });
+    conformeCheckMock.mockResolvedValue({ verdict: { conforme: true, motivo: null }, components: {} });
     const res = await resolveOperatorAprovarCadastroResponse(req(id, ["angellira"]));
     expect(res.payload.approved).toBe(true);
     expect(res.payload.angellira.ok).toBe(true);
+    expect(res.payload.angelliraConforme).toBe(true);
     expect((await statusOf(id)).status).toBe("aprovado");
     expect(await profileActive()).toBe(true);
+  });
+
+  it("disparo Angellira OK mas EM HOMOLOGAÇÃO (não Conforme) → NÃO aprova; pendente SEM marcar falha; profile INATIVO", async () => {
+    const id = await seedCadastro();
+    angelliraPipelineMock.mockResolvedValue({ ok: true, results: [{ step: "motorista", status: "OK", external_id: "x", error: null }] });
+    conformeCheckMock.mockResolvedValue({
+      verdict: { conforme: false, motivo: "motorista" },
+      components: { motorista: { statusText: "Homologadora" } },
+    });
+    const res = await resolveOperatorAprovarCadastroResponse(req(id, ["angellira"]));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.payload.approved).toBe(false); // ainda não Conforme
+    expect(res.payload.emHomologacao).toBe(true);
+    expect(res.payload.angelliraStatus?.status?.motorista).toBe("Homologadora");
+    const row = await statusOf(id);
+    expect(row.status).toBe("pendente"); // segue em pendentes
+    // Homologação NÃO é falha — não marca "Dados incompletos".
+    expect(row.dados.cadastro_externo_falhou).toBeFalsy();
+    expect(await profileActive()).toBe(false); // ainda não operacional
+  });
+
+  it("verificação de conformidade LANÇA EXCEÇÃO → falha real (marcador), NÃO 'em homologação'; profile INATIVO", async () => {
+    const id = await seedCadastro();
+    angelliraPipelineMock.mockResolvedValue({ ok: true, results: [{ step: "motorista", status: "OK", external_id: "x", error: null }] });
+    conformeCheckMock.mockRejectedValue(new Error("angellira lookup network error"));
+    const res = await resolveOperatorAprovarCadastroResponse(req(id, ["angellira"]));
+
+    expect(res.payload.approved).toBe(false);
+    expect(res.payload.emHomologacao).toBe(false); // erro de verificação != homologadora
+    const row = await statusOf(id);
+    expect(row.status).toBe("pendente");
+    // Vira "Dados incompletos" com o erro da verificação (não some silenciosamente).
+    expect(row.dados.cadastro_externo_falhou).toBeTruthy();
+    expect(row.dados.cadastro_externo_falhou.angellira.ok).toBe(false);
+    expect(row.dados.cadastro_externo_falhou.angellira.error).toMatch(/conformidade/i);
+    expect(await profileActive()).toBe(false);
   });
 
   it("disparo Angellira FALHA → NÃO aprova; pendente + marcador + profile INATIVO", async () => {

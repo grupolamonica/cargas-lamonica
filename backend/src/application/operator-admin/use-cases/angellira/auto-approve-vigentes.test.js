@@ -38,6 +38,7 @@ import {
   extractConjuntoPlacas,
   evaluateConjuntoConforme,
   runRevertNonConformeAutoApproved,
+  checkConjuntoConformeNow,
 } from "./auto-approve-vigentes.js";
 
 const TODAY = "2026-07-17";
@@ -266,5 +267,45 @@ describe("runRevertNonConformeAutoApproved (remediação)", () => {
     expect(s.aRevertar).toBe(1);
     expect(s.reverted).toBe(1);
     expect([...canned.updateParams[0][2]]).toEqual(["r1"]);
+  });
+});
+
+describe("checkConjuntoConformeNow (gate da aprovação manual)", () => {
+  const dados = (cpf, cavaloPlaca, carretaPlacas = []) => ({
+    motorista: { cpf },
+    cavalo: cavaloPlaca ? { placa: cavaloPlaca } : undefined,
+    carretas: carretaPlacas.map((p) => ({ placa: p })),
+  });
+
+  beforeEach(() => {
+    canned.driver = new Map();
+    canned.plate = new Map();
+  });
+
+  it("conjunto todo Conforme → verdict.conforme = true", async () => {
+    canned.driver.set("11111111111", VIGENTE);
+    canned.plate.set("CAV0001", VIGENTE);
+    canned.plate.set("CAR0001", VIGENTE);
+    const r = await checkConjuntoConformeNow(dados("11111111111", "CAV0001", ["CAR0001"]));
+    expect(r.verdict.conforme).toBe(true);
+    // expõe o rótulo real por componente p/ a resposta HTTP
+    expect(r.components.motorista.statusText).toBe("Conforme");
+  });
+
+  it("motorista em homologação (FOUND, rótulo != Conforme) → NÃO conforme, motivo motorista", async () => {
+    canned.driver.set("11111111111", HOMOLOGADORA);
+    canned.plate.set("CAV0001", VIGENTE);
+    const r = await checkConjuntoConformeNow(dados("11111111111", "CAV0001"));
+    expect(r.verdict.conforme).toBe(false);
+    expect(r.verdict.motivo).toBe("motorista");
+    expect(r.components.motorista.statusText).toBe("Homologadora");
+  });
+
+  it("componente indisponível → { indisponivel: true } (não decide como conforme)", async () => {
+    canned.driver.set("11111111111", VIGENTE);
+    canned.plate.set("CAV0001", INDISPONIVEL);
+    const r = await checkConjuntoConformeNow(dados("11111111111", "CAV0001"));
+    expect(r.indisponivel).toBe(true);
+    expect(r.verdict).toBeUndefined();
   });
 });

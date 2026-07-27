@@ -993,6 +993,24 @@ const Motoristas = () => {
       } else if (data.approved) {
         // Disparo externo concluído com sucesso → de fato aprovado.
         toast.success("Motorista aprovado. Cadastro externo concluído.");
+      } else if (data.emHomologacao) {
+        // Disparou OK, mas o conjunto do Angellira ainda NÃO voltou "Conforme"
+        // (em homologação). NÃO é falha — segue em "Prontos para disparo".
+        const st = data.angelliraStatus;
+        const motivoTxt = st?.indisponivel
+          ? "Angellira indisponível no momento"
+          : st?.motivo === "motorista"
+            ? "o motorista ainda não está Conforme"
+            : st?.motivo === "cavalo" || st?.motivo === "cavalo_ausente"
+              ? "o cavalo ainda não está Conforme"
+              : st?.motivo === "carreta"
+                ? "a carreta ainda não está Conforme"
+                : "o conjunto ainda não voltou Conforme";
+        toast.info(
+          `Cadastro disparado no Angellira — em homologação (${motivoTxt}). ` +
+            "Segue em 'Prontos para disparo'; aprove de novo quando o Angellira voltar Conforme.",
+          { duration: 8000 },
+        );
       } else {
         // Disparo externo FALHOU → NÃO foi aprovado; segue na fila para retentar.
         // O erro por etapa aparece no DispatchProgressModal (aberto no onMutate).

@@ -74,6 +74,7 @@ import {
 } from "../../../application/operator-admin/read-models.js";
 import { fetchOperatorAuditLogsReadModel } from "../../../application/operator-admin/use-cases/audit-logs-read-model.js";
 import { fetchPendingDriverRegistrations } from "../../../application/operator-admin/use-cases/pending-driver-registrations-read-model.js";
+import { checkConjuntoConformeNow } from "../../../application/operator-admin/use-cases/angellira/auto-approve-vigentes.js";
 import { reprocessCadastroDocuments } from "../../../application/operator-admin/use-cases/reprocess-cadastro-docs.js";
 import { attachCadastroDocument } from "../../../application/operator-admin/use-cases/attach-cadastro-doc.js";
 import { listDraftRegistrations } from "../../../application/operator-admin/use-cases/list-draft-registrations.js";
@@ -2172,15 +2173,48 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
         });
       }
 
-      // 6. Decide a aprovação: SÓ marca 'aprovado' quando TODO cadastro externo
-      //    solicitado deu certo. Se algum falhar (inclui Angellira/SPX fora do
-      //    ar), NÃO aprova — o cadastro SEGUE na fila (status inalterado) e
-      //    grava o marcador `dados.cadastro_externo_falhou` p/ aparecer em
-      //    "Dados incompletos" com o motivo, e o operador retenta.
+      // 5.5. Gate de CONFORMIDADE do Angellira (DC — fluxo "disparar → pendentes
+      //      até Conforme"). O disparo só REGISTRA o conjunto; o portal fica em
+      //      HOMOLOGADORA (rótulo != "Conforme") antes de aprovar. Consulta agora
+      //      o conjunto (motorista+cavalo+carretas) e só considera Angellira
+      //      "aprovável" quando TODOS voltam Conforme. Homologadora/indisponível
+      //      → NÃO aprova agora (segue em pendentes); o operador re-clica quando
+      //      o portal virar Conforme. Espelha a régua canônica do auto-approve.
+      let angelliraConforme = false;
+      let angelliraConformeCheck = null; // { verdict?, indisponivel?, circuitOpen?, components?, error? }
+      if (shouldDispatchAngellira && angellira?.ok === true) {
+        try {
+          angelliraConformeCheck = await checkConjuntoConformeNow(registro.dados, { correlationId });
+          angelliraConforme = Boolean(angelliraConformeCheck?.verdict?.conforme);
+        } catch (err) {
+          // ERRO ao consultar (throw inesperado) → NÃO é "homologadora"; é FALHA
+          // de verificação. Marca com erro p/ virar falha real (6b) e não deixar
+          // o operador re-clicando com "em homologação" enganoso pra sempre.
+          angelliraConformeCheck = { error: err instanceof Error ? err.message : String(err) };
+          angelliraConforme = false;
+        }
+      }
+      // Erro (throw) na verificação de conformidade ≠ homologadora: vira falha real.
+      const angelliraConformeCheckErrored = Boolean(angelliraConformeCheck?.error);
+
+      // 6. Decide a aprovação: SÓ marca 'aprovado' quando o Angellira solicitado
+      //    voltar CONFORME (não basta o disparo ter registrado) e o SPX
+      //    solicitado não ter falhado. Homologadora / falha / indisponível →
+      //    NÃO aprova; o cadastro SEGUE na fila (status inalterado). Grava o
+      //    marcador `dados.cadastro_externo_falhou` em FALHA real (disparo OU
+      //    erro na verificação); homologadora/indisponível não é falha (o status
+      //    real aparece no painel via "Verificar").
       const dispatchRequested = shouldDispatchAngellira || shouldDispatchSpx;
-      const angelliraOk = !shouldDispatchAngellira || angellira?.ok === true;
+      const angelliraDispatchOk = !shouldDispatchAngellira || angellira?.ok === true;
+      const angelliraOk = !shouldDispatchAngellira || (angellira?.ok === true && angelliraConforme);
       const spxOk = !shouldDispatchSpx || spx?.ok === true;
       const approved = !dispatchRequested || (angelliraOk && spxOk);
+      // Falha real do Angellira = disparo falhou OU a verificação de conformidade
+      // lançou exceção (indisponível/circuit-open NÃO conta — é "aguardando").
+      const angelliraFalhou = shouldDispatchAngellira && (!angelliraDispatchOk || angelliraConformeCheckErrored);
+      // Homologação = disparou OK, sem erro de verificação, mas ainda não Conforme.
+      const angelliraEmHomologacao =
+        shouldDispatchAngellira && angelliraDispatchOk && !angelliraConformeCheckErrored && !angelliraConforme;
 
       if (approved) {
         // 6a. ATIVA o driver_profile (portão operacional) e SÓ DEPOIS marca
@@ -2233,10 +2267,11 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
             message: outreachError instanceof Error ? outreachError.message : String(outreachError),
           });
         }
-      } else {
-        // 6b. NÃO aprova: mantém o status atual (o cadastro segue na fila). Relê
-        //     o `dados` FRESCO (o dispatch levou dezenas de segundos) e grava o
-        //     marcador sem clobberar edição concorrente.
+      } else if (angelliraFalhou || (shouldDispatchSpx && !spxOk)) {
+        // 6b. FALHA REAL (Angellira/SPX fora do ar, erro no disparo OU erro ao
+        //     verificar a conformidade): mantém o status atual (segue na fila) e
+        //     grava o marcador p/ "Dados incompletos". Relê o `dados` FRESCO (o
+        //     dispatch levou dezenas de segundos) e grava sem clobberar edição.
         const { rows: freshRows } = await client.query(
           `SELECT dados FROM public.pending_driver_registrations WHERE id = $1`,
           [id],
@@ -2245,7 +2280,14 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
         freshDados.cadastro_externo_falhou = {
           at: new Date().toISOString(),
           angellira: shouldDispatchAngellira
-            ? { ok: angelliraOk, error: angellira?.error?.message ?? (angelliraOk ? null : "Falha no cadastro Angellira.") }
+            ? {
+                ok: angelliraDispatchOk && !angelliraConformeCheckErrored,
+                error: !angelliraDispatchOk
+                  ? (angellira?.error?.message ?? "Falha no cadastro Angellira.")
+                  : angelliraConformeCheckErrored
+                    ? `Falha ao verificar conformidade no Angellira: ${angelliraConformeCheck.error}`
+                    : null,
+              }
             : null,
           spx: shouldDispatchSpx
             ? { ok: spxOk, error: spx?.error?.message ?? (spxOk ? null : "Falha no cadastro SPX.") }
@@ -2265,7 +2307,25 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
           outcome: "failure",
           requestIp,
           correlationId,
-          metadata: { driverId, cpf: cpfClean, nome, jobs: requestedJobs, angelliraOk, spxOk },
+          metadata: { driverId, cpf: cpfClean, nome, jobs: requestedJobs, angelliraDispatchOk, angelliraConforme, angelliraConformeCheckErrored, spxOk },
+        });
+      } else {
+        // 6c. EM HOMOLOGAÇÃO: o disparo do Angellira REGISTROU o conjunto, mas o
+        //     portal ainda não voltou "Conforme". NÃO é falha — não marca "Dados
+        //     incompletos" nem clobbera o `dados`. Segue em pendentes até virar
+        //     Conforme (o operador re-clica "Aprovar"; o status real aparece no
+        //     painel via "Verificar"). Só registra auditoria.
+        await insertSecurityAuditEvent(client, {
+          eventType: "operator.cadastro.approve_aguardando_conforme",
+          actorUserId: operatorId,
+          actorRole: "operator",
+          resourceType: "pending_driver_registration",
+          resourceId: id,
+          action: "approve",
+          outcome: "pending",
+          requestIp,
+          correlationId,
+          metadata: { driverId, cpf: cpfClean, nome, jobs: requestedJobs, motivo: angelliraConformeCheck?.verdict?.motivo ?? null, indisponivel: Boolean(angelliraConformeCheck?.indisponivel) },
         });
       }
 
@@ -2278,11 +2338,38 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
           jobs: requestedJobs,
           angellira,
           spx,
+          // Conformidade do Angellira (fluxo "disparar → pendentes até Conforme").
+          angelliraConforme: shouldDispatchAngellira ? angelliraConforme : null,
+          emHomologacao: angelliraEmHomologacao,
+          angelliraStatus: angelliraEmHomologacao ? summarizeAngelliraConformeCheck(angelliraConformeCheck) : null,
           meta: { correlationId },
         },
       };
     });
   });
+}
+
+/**
+ * Compacta o resultado de `checkConjuntoConformeNow` para a resposta HTTP do
+ * aprovar — expõe o rótulo REAL do portal por componente (motorista/cavalo/
+ * carretas) + o motivo, para o painel informar "em homologação · <status>".
+ */
+function summarizeAngelliraConformeCheck(check) {
+  if (!check) return null;
+  if (check.circuitOpen) return { conforme: false, indisponivel: true, motivo: "circuit_open", status: null };
+  const c = check.components || {};
+  return {
+    conforme: Boolean(check.verdict?.conforme),
+    indisponivel: Boolean(check.indisponivel),
+    motivo: check.verdict?.motivo ?? (check.indisponivel ? "angellira_indisponivel" : null),
+    status: {
+      motorista: c.motorista?.statusText ?? null,
+      cavalo: c.cavalo?.rec?.statusText ?? null,
+      carretas: Array.isArray(c.carretas)
+        ? c.carretas.map((x) => ({ placa: x.placa, statusText: x.rec?.statusText ?? null }))
+        : [],
+    },
+  };
 }
 
 /**
