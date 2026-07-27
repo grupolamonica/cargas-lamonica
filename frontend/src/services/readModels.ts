@@ -1911,6 +1911,7 @@ export async function launchCargoFromTrip(input: {
   horarioDescarga?: string;
   nome?: string;
   perfil?: string;
+  accepted?: boolean;
 }): Promise<LaunchCargoResult> {
   const accessToken = await getOperatorAccessToken();
   return requestJson<LaunchCargoResult>("/api/operator/programacao/launch", {

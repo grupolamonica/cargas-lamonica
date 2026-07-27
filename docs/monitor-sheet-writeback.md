@@ -13,9 +13,26 @@ em tempo real.
   planilha falhar, a edição já está salva e só logamos um aviso.
 - Ligado **apenas** se `GOOGLE_SHEET_WRITEBACK_URL` estiver setado (senão no-op).
 - Escreve o valor **efetivo** (`alloc_* ?? sheet_*`) nas colunas Motoristas/CAVALO/CARRETA
-  (E/F/G) da linha do LH. `""` limpa a célula.
+  (E/F/G) da linha do LH; `status` (L) e `vínculo` (H) só quando enviados. `""` limpa a célula.
 - Wired em `update-monitor-allocation.js` (inline/modal) e
   `reassign-monitor-allocations.js` (arrastar), **após** o commit no banco.
+
+### Modos por `update` (carga do SISTEMA lançada na Programação — `lh_manual`)
+
+Uma carga do sistema entra na planilha como **"linha-casca"** (LH + rota + agenda,
+**sem** motorista) e só quando a viagem está **ACEITA** (SPX `acceptance_status=1`
+ou Nestlé na aba Aceito). O motorista é preenchido depois pela alocação do Monitor.
+Cada `update` pode carregar uma flag:
+
+- **(padrão)** — preenche a linha do LH (E/F/G + status/vínculo). Alocação do Monitor.
+- **`createOnly`** — cria a linha se o LH **não** existe; se **já** existe, **não toca**
+  (não apaga o motorista já preenchido). Usado no **lançamento** (`launch-cargo-from-trip.js`,
+  manual + auto DC-201) e no **aceite** (`accept-aspx-trips.js`), passando a linha completa
+  (`lh, tipo, dataCarregamento, dataDescarga, origem, destino`).
+- **`createIfMissing`** — preenche se existe, senão cria (variante create-or-fill).
+
+Carga do sistema **não-aceita** nunca entra na planilha: o lançamento não escreve, e a
+alocação do Monitor é **update-only** (no-op quando a linha não existe).
 
 ## Latência / não-bloqueante (importante)
 
@@ -47,8 +64,12 @@ Na planilha alvo: **Extensões → Apps Script**, cole o script abaixo (troque o
 > atualiza o app publicado).
 
 ```javascript
+// Colunas: A=LH B=TIPO C=DATA CARREGAMENTO D=DATA DESCARGA E=Motoristas F=CAVALO
+//          G=CARRETA H=VINCULO I=Origem J=Destino L=STATUS
 const DATA_GID = 438306494;             // gid da aba de dados
 const SECRET   = "TROQUE-ESTE-SEGREDO"; // == GOOGLE_SHEET_WRITEBACK_SECRET
+
+const COL = { LH:1, TIPO:2, CARREG:3, DESCARGA:4, MOTORISTA:5, CAVALO:6, CARRETA:7, VINCULO:8, ORIGEM:9, DESTINO:10, STATUS:12 };
 
 function doPost(e) {
   try {
@@ -57,19 +78,51 @@ function doPost(e) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheets().filter(s => s.getSheetId() === DATA_GID)[0];
     if (!sheet) return out_({ ok:false, error:"aba (gid) nao encontrada" });
-    const lhRange = sheet.getRange(1, 1, sheet.getLastRow(), 1); // coluna A (LH)
-    let updated = 0;
+    const lastRow = sheet.getLastRow();
+    const lhRange = sheet.getRange(1, 1, lastRow, 1); // coluna A (LH)
+    let updated = 0, created = 0;
     (body.updates || []).forEach(u => {
       const lh = String(u.lh || "").trim();
       if (!lh) return;
       // Busca indexada server-side (NÃO lê a coluna inteira) — ~10x mais rápido.
       const cell = lhRange.createTextFinder(lh).matchEntireCell(true).findNext();
-      if (!cell) return;
-      sheet.getRange(cell.getRow(), 5, 1, 3).setValues([[u.motorista || "", u.cavalo || "", u.carreta || ""]]); // E,F,G
-      updated++;
+      if (cell) {
+        // createOnly = só criar (lançamento/aceite) → NÃO toca a linha existente
+        // (não apaga o motorista já preenchido pelo Monitor). Senão, preenche.
+        if (!u.createOnly) {
+          const row = cell.getRow();
+          sheet.getRange(row, COL.MOTORISTA, 1, 3).setValues([[u.motorista||"", u.cavalo||"", u.carreta||""]]);
+          if ("status"  in u) sheet.getRange(row, COL.STATUS ).setValue(u.status ||"");
+          if ("vinculo" in u) sheet.getRange(row, COL.VINCULO).setValue(u.vinculo||"");
+          updated++;
+        }
+      } else if (u.createIfMissing || u.createOnly) {
+        // LH NÃO existe → cria na 1ª linha com LH (col A) em branco, linha completa.
+        const rowIdx = firstBlankLhRow_(sheet, lastRow);
+        sheet.getRange(rowIdx, COL.LH).setValue(lh);
+        if ("tipo"             in u) sheet.getRange(rowIdx, COL.TIPO    ).setValue(u.tipo||"");
+        if ("dataCarregamento" in u) sheet.getRange(rowIdx, COL.CARREG  ).setValue(u.dataCarregamento||"");
+        if ("dataDescarga"     in u) sheet.getRange(rowIdx, COL.DESCARGA).setValue(u.dataDescarga||"");
+        sheet.getRange(rowIdx, COL.MOTORISTA, 1, 3).setValues([[u.motorista||"", u.cavalo||"", u.carreta||""]]);
+        if ("vinculo" in u) sheet.getRange(rowIdx, COL.VINCULO).setValue(u.vinculo||"");
+        if ("origem"  in u) sheet.getRange(rowIdx, COL.ORIGEM ).setValue(u.origem ||"");
+        if ("destino" in u) sheet.getRange(rowIdx, COL.DESTINO).setValue(u.destino||"");
+        sheet.getRange(rowIdx, COL.STATUS).setValue(u.status||""); // status vazio se sem motorista
+        created++;
+      }
     });
-    return out_({ ok:true, updated });
+    return out_({ ok:true, updated, created });
   } catch (err) { return out_({ ok:false, error:String(err) }); }
+}
+
+// 1ª linha (após o cabeçalho) com a coluna A (LH) em branco; senão, a próxima linha nova.
+function firstBlankLhRow_(sheet, lastRow) {
+  if (lastRow < 2) return 2;
+  const colA = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (let i = 0; i < colA.length; i++) {
+    if (String(colA[i][0] || "").trim() === "") return i + 2;
+  }
+  return lastRow + 1;
 }
 function out_(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 ```

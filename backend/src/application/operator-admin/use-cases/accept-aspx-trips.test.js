@@ -88,6 +88,63 @@ describe("acceptAspxTrips", () => {
     expect(spy).toHaveBeenCalledTimes(1); // só LT1
   });
 
+  it("aceite REAL de LH com carga do sistema lançada → escreve linha-casca (createOnly) na planilha", async () => {
+    process.env.SPX_ACCEPT_WRITE_ENABLED = "true";
+    const acceptSpy = vi.fn().mockResolvedValue({ retcode: 0 });
+    const writeSpy = vi.fn(async () => ({ ok: true }));
+    // withPgClient devolve a carga do sistema (lh_manual) correspondente ao LH aceito.
+    const withPgClient = async (fn) =>
+      fn({
+        query: async () => ({
+          rows: [
+            {
+              lh_manual: "LT1",
+              sheet_source: null,
+              origem: "A / SP",
+              destino: "B / BA",
+              sheet_data_carregamento: "2026-08-05T14:00",
+              sheet_data_descarga: null,
+            },
+          ],
+        }),
+      });
+    const res = await acceptAspxTrips({
+      lhs: ["LT1"],
+      operatorId: "op",
+      deps: {
+        acceptTrip: acceptSpy,
+        fetchIndex: async () => indexWith([["LT1", { tripId: 501 }]]),
+        withPgClient,
+        writeAllocationsToSheet: writeSpy,
+      },
+    });
+    expect(res.payload.summary.accepted).toBe(1);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const arg = writeSpy.mock.calls[0][0][0];
+    expect(arg.lh).toBe("LT1");
+    expect(arg.createOnly).toBe(true);
+    expect(arg.motorista).toBe("");
+    expect(arg.dataCarregamento).toBe("05/08/2026 14:00");
+  });
+
+  it("aceite em dry_run (kill switch off) → NÃO escreve na planilha (nem consulta o banco)", async () => {
+    const acceptSpy = vi.fn().mockResolvedValue({ dry_run: true });
+    const writeSpy = vi.fn(async () => ({ ok: true }));
+    const withPgClient = vi.fn(async (fn) => fn({ query: async () => ({ rows: [] }) }));
+    await acceptAspxTrips({
+      lhs: ["LT1"],
+      operatorId: "op",
+      deps: {
+        acceptTrip: acceptSpy,
+        fetchIndex: async () => indexWith([["LT1", { tripId: 501 }]]),
+        withPgClient,
+        writeAllocationsToSheet: writeSpy,
+      },
+    });
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(withPgClient).not.toHaveBeenCalled();
+  });
+
   it("sidecar fora do ar na resolução por LH → propaga erro (nada enviado)", async () => {
     const spy = vi.fn();
     await expect(

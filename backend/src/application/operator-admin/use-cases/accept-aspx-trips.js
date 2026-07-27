@@ -1,5 +1,7 @@
 import { recordSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { ValidationError } from "../../../domain/load-claims/errors.js";
+import { withPgClient } from "../../../infrastructure/pg/postgres.js";
+import { writeAllocationsToSheet, buildSystemCargoShellRow } from "../../google-sheets/sheet-writeback.js";
 import {
   fetchTripIndex,
   acceptTrip,
@@ -108,6 +110,41 @@ export async function acceptAspxTrips({
     skipped: results.filter((r) => r.state === "skipped").length,
     error: results.filter((r) => r.state === "error").length,
   };
+
+  // Linha-casca na planilha: uma viagem ACEITA agora que JÁ foi lançada como carga do
+  // sistema (lh_manual) deve aparecer na planilha — fecha o caso DC-201 "lançou spot
+  // não-aceito, aceitou depois" (o auto-lançamento não relança o já-lançado). `createOnly`
+  // cria a linha se o LH não existir e NÃO toca a existente (não apaga motorista). Best-
+  // effort: o aceite não falha por causa da planilha; só corre quando houve aceite REAL
+  // (dry_run não entra). key só é LH nos itens resolvidos por LH (isAspxLinehaul filtra).
+  const acceptedLhs = results.filter((r) => r.state === "accepted" && isAspxLinehaul(r.key)).map((r) => r.key);
+  if (acceptedLhs.length > 0) {
+    try {
+      const runPg = deps.withPgClient || withPgClient;
+      const writeSheet = deps.writeAllocationsToSheet || writeAllocationsToSheet;
+      const { rows } = await runPg((client) =>
+        client.query(
+          `SELECT lh_manual, sheet_source, origem, destino, sheet_data_carregamento, sheet_data_descarga
+             FROM public.cargas
+            WHERE lh_manual = ANY($1) AND sheet_lh IS NULL`,
+          [acceptedLhs],
+        ),
+      );
+      const shells = rows.map((c) =>
+        buildSystemCargoShellRow({
+          lh: c.lh_manual,
+          source: c.sheet_source,
+          origem: c.origem,
+          destino: c.destino,
+          carregamentoLabel: c.sheet_data_carregamento,
+          descargaLabel: c.sheet_data_descarga,
+        }),
+      );
+      if (shells.length > 0) void writeSheet(shells).catch(() => {});
+    } catch {
+      /* best-effort: aceite não falha por causa da planilha */
+    }
+  }
 
   await recordSecurityAuditEvent({
     eventType: "operator.cargo.aspx_accept",

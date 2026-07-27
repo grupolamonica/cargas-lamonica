@@ -29,12 +29,13 @@ import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { ValidationError } from "../../../domain/load-claims/errors.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 import { findClientIdByName, findSheetClientId, fetchRouteCatalogMetricsByLoadId } from "./_shared.js";
+import { writeAllocationsToSheet, buildSystemCargoShellRow } from "../../google-sheets/sheet-writeback.js";
 
 /**
  * @param {{
  *   lh: string, origem: string, destino: string,
  *   data: string, horario?: string, nome?: string, perfil?: string,
- *   clienteNome?: string|null,
+ *   clienteNome?: string|null, accepted?: boolean,
  *   operatorId?: string|null, correlationId?: string, deps?: object
  * }} args
  * @returns {Promise<{ statusCode: number, payload: object }>}
@@ -49,11 +50,16 @@ export async function launchCargoFromTrip({
   horarioDescarga,
   perfil,
   clienteNome = null,
+  // ACEITA (acceptance_status=1 no SPX, ou Nestlé na aba Aceito): só carga aceita é
+  // "puxada" pra planilha no lançamento (linha-casca). Não-aceita é lançada no portal
+  // normalmente, mas NÃO vai pra planilha (fica de fora até ser aceita — ver aceite).
+  accepted = false,
   operatorId = null,
   correlationId,
   deps = {},
 } = {}) {
   const run = deps.withPgClient || withPgClient;
+  const writeSheet = deps.writeAllocationsToSheet || writeAllocationsToSheet;
 
   const lhTrim = String(lh || "").trim();
   if (!lhTrim) throw new ValidationError("LH da viagem é obrigatório para lançar a carga.");
@@ -83,7 +89,7 @@ export async function launchCargoFromTrip({
       ? `${dataDescarga}T${/^\d{2}:\d{2}/.test(String(horarioDescarga || "")) ? String(horarioDescarga).slice(0, 5) : "00:00"}`
       : null;
 
-  return run(async (client) => {
+  const result = await run(async (client) => {
     // Métricas da rota (valor/bônus/distância/duração) do catálogo — resolvidas
     // server-side (bypassa a RLS operator-only de route_metrics_cache) e persistidas
     // NA carga p/ o portal (anon) conseguir lê-las. Sem rota cadastrada → tudo null
@@ -98,6 +104,24 @@ export async function launchCargoFromTrip({
     const bonusValue = routeMetrics?.bonus_padrao ?? null;
     const distanciaValue = routeMetrics?.distancia_km ?? null;
     const duracaoValue = routeMetrics?.duracao_horas ?? null;
+
+    // Cliente/fonte da carga: Nestlé (Projeto Galileu) → cliente "Nestle"; senão Shopee.
+    // Detecção: hint clienteNome OU o lh casa uma oferta em nestle_ofertas. Resolvido
+    // ANTES do dedup p/ o write-back da linha-casca rotear a fonte certa (shopee vs
+    // nestle) tanto no caminho novo quanto no já-existente.
+    let isNestle = String(clienteNome ?? "").toLowerCase() === "nestle";
+    if (!isNestle) {
+      try {
+        const { rows: nst } = await client.query(
+          "SELECT 1 FROM public.nestle_ofertas WHERE grupos_id = $1 OR codembarque = $1 OR codprogcoleta = $1 LIMIT 1",
+          [lhTrim],
+        );
+        isNestle = nst.length > 0;
+      } catch (err) {
+        if (err?.code !== "42P01") throw err; // tabela ausente → trata como não-Nestlé
+      }
+    }
+    const source = isNestle ? "nestle" : "shopee";
 
     // Dedup: o LH pode já existir como carga da planilha (sheet_lh, sync online) OU
     // como carga já lançada aqui (lh_manual). Em ambos os casos devolve a existente.
@@ -145,25 +169,14 @@ export async function launchCargoFromTrip({
           cargo: { id: ex.id, status: ex.status },
           meta: { correlationId },
         },
+        // Linha-casca só p/ a NOSSA carga do sistema (lh_manual, sem sheet_lh) — nunca
+        // p/ carga da planilha (o sync já a mantém). Fira o write-back mesmo no
+        // já-existente: cobre o caso "lançou não-aceito, agora relançou aceito".
+        _source: source,
+        _writeShell: ex.lh_manual === lhTrim && ex.sheet_lh == null,
       };
     }
 
-    // Cliente da carga: Nestlé (fonte Projeto Galileu) resolve o cliente "Nestle";
-    // caso contrário o padrão Shopee. Detecção: hint explícito clienteNome OU o lh
-    // (codembarque "B101…"/codprogcoleta) casa uma oferta em nestle_ofertas — assim
-    // não depende de prefixo no código da viagem.
-    let isNestle = String(clienteNome ?? "").toLowerCase() === "nestle";
-    if (!isNestle) {
-      try {
-        const { rows: nst } = await client.query(
-          "SELECT 1 FROM public.nestle_ofertas WHERE grupos_id = $1 OR codembarque = $1 OR codprogcoleta = $1 LIMIT 1",
-          [lhTrim],
-        );
-        isNestle = nst.length > 0;
-      } catch (err) {
-        if (err?.code !== "42P01") throw err; // tabela ausente → trata como não-Nestlé
-      }
-    }
     const clienteId = isNestle
       ? await findClientIdByName(client, clienteNome || "Nestle")
       : await findSheetClientId(client);
@@ -196,6 +209,28 @@ export async function launchCargoFromTrip({
         clienteId,
         meta: { correlationId },
       },
+      _source: source,
+      _writeShell: true,
     };
   });
+
+  // Linha-casca na planilha — só p/ carga do SISTEMA (lh_manual) e só quando a viagem
+  // está ACEITA (acceptance_status=1 / Nestlé aba Aceito). `createOnly` cria a linha se
+  // o LH não existir e NÃO toca a existente (não apaga motorista já preenchido pelo
+  // Monitor). Best-effort, fora do fluxo principal: carga da planilha (sheet_lh) e
+  // carga não-aceita não escrevem aqui.
+  if (accepted && result._writeShell) {
+    void writeSheet([
+      buildSystemCargoShellRow({
+        lh: lhTrim,
+        source: result._source,
+        origem: origemTrim,
+        destino: destinoTrim,
+        carregamentoLabel,
+        descargaLabel: descargaValue,
+      }),
+    ]).catch(() => {});
+  }
+
+  return { statusCode: result.statusCode, payload: result.payload };
 }

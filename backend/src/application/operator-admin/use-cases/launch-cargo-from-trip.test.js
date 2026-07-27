@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   closeTestDatabase,
@@ -110,5 +110,53 @@ describe("launchCargoFromTrip", () => {
 
   it("rejeita LH vazio", async () => {
     await expect(launchCargoFromTrip({ ...validTrip, lh: "  ", deps })).rejects.toThrow();
+  });
+
+  // ── Linha-casca na planilha (só quando ACEITA) ───────────────────────────
+  it("accepted=true (nova carga do sistema) → escreve linha-casca (createOnly, sem motorista)", async () => {
+    await seedCliente({ nome: "Shopee" });
+    const writeSpy = vi.fn(async () => ({ ok: true }));
+    const res = await launchCargoFromTrip({
+      ...validTrip,
+      accepted: true,
+      correlationId: "c-acc",
+      deps: { withPgClient, writeAllocationsToSheet: writeSpy },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const arg = writeSpy.mock.calls[0][0][0];
+    expect(arg.lh).toBe("LT1ABC");
+    expect(arg.createOnly).toBe(true);
+    expect(arg.motorista).toBe(""); // lançamento não tem motorista
+    expect(arg.origem).toBe("SAO PAULO SP");
+    expect(arg.destino).toBe("CAMPINAS SP");
+    expect(arg.dataCarregamento).toBe("20/07/2026 08:00"); // ISO → formato da planilha
+    expect(arg.source).toBe("shopee");
+  });
+
+  it("não aceita (accepted ausente) → NÃO escreve na planilha (só portal)", async () => {
+    await seedCliente({ nome: "Shopee" });
+    const writeSpy = vi.fn(async () => ({ ok: true }));
+    const res = await launchCargoFromTrip({
+      ...validTrip,
+      correlationId: "c-noacc",
+      deps: { withPgClient, writeAllocationsToSheet: writeSpy },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepted=true mas carga da PLANILHA (sheet_lh) → NÃO escreve casca (o sync já cobre)", async () => {
+    await seedCliente({ nome: "Shopee" });
+    await seedCargo({ sheet_lh: "LT1ABC", status: "OPEN", origem: "X", destino: "Y" });
+    const writeSpy = vi.fn(async () => ({ ok: true }));
+    const res = await launchCargoFromTrip({
+      ...validTrip,
+      accepted: true,
+      correlationId: "c-sheet",
+      deps: { withPgClient, writeAllocationsToSheet: writeSpy },
+    });
+    expect(res.payload.alreadyExists).toBe(true);
+    expect(writeSpy).not.toHaveBeenCalled();
   });
 });

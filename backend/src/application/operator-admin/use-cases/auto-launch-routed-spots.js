@@ -100,6 +100,9 @@ export async function autoLaunchRoutedSpots({ correlationId, maxPerRun = DEFAULT
         dataDescarga: r.dataDescarga ?? undefined,
         horarioDescarga: r.horarioDescarga ?? undefined,
         nome: r.nome || undefined,
+        // Só ACEITA (SPX acceptance_status=1 ou Nestlé na aba Aceito) vira linha-casca
+        // na planilha. Spots Planejado não-aceitos continuam indo só pro portal.
+        accepted: r.acceptanceStatus === 1 || r.tab === "aceito",
         correlationId,
         deps,
       });
