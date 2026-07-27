@@ -243,6 +243,16 @@ const rastreadorSchema = z
   })
   .strict();
 
+const dadosBancariosSchema = z
+  .object({
+    banco_compe: z.string().trim().min(1),
+    banco_nome: z.string().trim().min(1),
+    agencia: z.string().trim().min(1),
+    conta: z.string().trim().min(1),
+    tipo: z.enum(["corrente", "poupanca"]),
+  })
+  .strict();
+
 const motoristaSchema = z
   .object({
     nome: z.string().trim().min(2),
@@ -256,6 +266,17 @@ const motoristaSchema = z
     rg: z.string().trim().optional(),
     rg_orgao: z.string().trim().optional(),
     rg_uf: z.string().trim().length(2).optional(),
+    // FASE 3 (Rodopar) — dados complementares do motorista (card A4). Todos
+    // OPCIONAIS no schema para nao quebrar re-submit de cadastro legado / fluxo
+    // com Step A pulado; a obrigatoriedade e imposta no gate do wizard (frontend)
+    // quando o Step A roda. Mapeamento p/ os codigos do Rodopar acontece no
+    // disparo (Fase 4).
+    sexo: z.enum(["masculino", "feminino"]).optional(),
+    estado_civil: z.string().trim().optional(),
+    cor_raca: z.string().trim().optional(),
+    pis: z.string().trim().optional(),
+    rg_data: z.string().trim().optional(),
+    dados_bancarios: dadosBancariosSchema.optional(),
     // cnh: passthrough — aceita chaves extras (categoria, validade, registro,
     // codigo_seguranca, numero_espelho, uf_emissor, primeira_emissao). As
     // chaves extras vem de paridade com /cadastro (PLAN-CADASTRO-PARITY).
@@ -296,16 +317,6 @@ const motoristaSchema = z
   .strict();
 
 const ownerDocTypeEnum = z.enum(["cpf", "cnpj"]);
-
-const dadosBancariosSchema = z
-  .object({
-    banco_compe: z.string().trim().min(1),
-    banco_nome: z.string().trim().min(1),
-    agencia: z.string().trim().min(1),
-    conta: z.string().trim().min(1),
-    tipo: z.enum(["corrente", "poupanca"]),
-  })
-  .strict();
 
 const veiculoCoreSchema = {
   placa: plateSchema,

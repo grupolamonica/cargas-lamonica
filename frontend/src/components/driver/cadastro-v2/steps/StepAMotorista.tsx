@@ -10,6 +10,7 @@ import { A1Cnh, type A1Data } from "./A1Cnh";
 import { A1bSelfie, type A1bSelfieData } from "./A1bSelfie";
 import { A2Telefone, type A2Data } from "./A2Telefone";
 import { A3Endereco, type A3Data } from "./A3Endereco";
+import { A4Complementares, isA4Complete, type A4Data } from "./A4Complementares";
 
 export interface StepADriverProfile {
   document_number: string;
@@ -22,6 +23,10 @@ export interface StepAData {
   a1b: A1bSelfieData;
   a2: A2Data;
   a3: A3Data;
+  // a4 = dados complementares (Rodopar). Opcional no tipo p/ não quebrar
+  // construtores legados (draft restore / skip); o gate do Step A exige quando
+  // a etapa realmente roda.
+  a4?: A4Data;
 }
 
 export interface StepAMotoristaProps {
@@ -60,12 +65,13 @@ type Validity = {
   a1b: boolean;
   a2: boolean;
   a3: boolean;
+  a4: boolean;
 };
 
 // 2026-05-18 — A1c (dados pessoais + RG) deixou de ser sub-card. Os campos
 // vivem inline em A1 (CNH) atrás de um ProgressiveSection colapsado por
 // default. Stepper agora tem 4 cards: CNH, Selfie, Telefone, Endereço.
-const SUB_KEYS = ["a1", "a1b", "a2", "a3"] as const;
+const SUB_KEYS = ["a1", "a1b", "a2", "a3", "a4"] as const;
 type SubKey = (typeof SUB_KEYS)[number];
 
 function formatPhoneMask(value: string): string {
@@ -110,6 +116,7 @@ function StepAMotoristaImpl({
   const [a1bData, setA1bData] = useState<A1bSelfieData | undefined>(value?.a1b);
   const [a2Data, setA2Data] = useState<A2Data | undefined>(value?.a2);
   const [a3Data, setA3Data] = useState<A3Data | undefined>(value?.a3);
+  const [a4Data, setA4Data] = useState<A4Data | undefined>(value?.a4);
   const [validity, setValidity] = useState<Validity>(() => ({
     a1: Boolean(value?.a1?.cpf && isValidCpf(value.a1.cpf) && value.a1.nome),
     a1b: Boolean(value?.a1b?.fileName),
@@ -121,6 +128,7 @@ function StepAMotoristaImpl({
         value.a3.cidade?.trim() &&
         value.a3.uf?.trim(),
     ),
+    a4: isA4Complete(value?.a4),
   }));
 
   // Hidratacao tardia do draft (fluxo publico apos F5 — GET /draft/me?cpf=XXX
@@ -170,6 +178,19 @@ function StepAMotoristaImpl({
         setA3Data(value.a3);
       }
     }
+    if (value.a4 && value.a4 !== a4Data) {
+      // A4 é manual (sem OCR): só hidrata quando o draft tem conteúdo e o local
+      // ainda está vazio — evita loop com o onChange que propaga a4 pra cima.
+      const incomingHasContent = Boolean(
+        value.a4.sexo || value.a4.estado_civil || value.a4.cor_raca || value.a4.pis || value.a4.banco?.bank || value.a4.rg_data,
+      );
+      const localHasContent = Boolean(
+        a4Data?.sexo || a4Data?.estado_civil || a4Data?.cor_raca || a4Data?.pis || a4Data?.banco?.bank || a4Data?.rg_data,
+      );
+      if (incomingHasContent && !localHasContent) {
+        setA4Data(value.a4);
+      }
+    }
     // 2026-05-26 — Removida setValidity sticky aqui. Causava oscillação:
     // setValidityFor (do A2Telefone.onValid / A3Endereco.onValid) competia
     // com este setValidity, e cada parent re-render disparava este effect
@@ -183,10 +204,11 @@ function StepAMotoristaImpl({
         current.a1 ||
         Boolean(value.a1?.cpf && isValidCpf(value.a1.cpf) && value.a1.nome);
       const hydratedA1b = current.a1b || Boolean(value.a1b?.fileName);
-      if (hydratedA1 === current.a1 && hydratedA1b === current.a1b) {
+      const hydratedA4 = current.a4 || isA4Complete(value.a4);
+      if (hydratedA1 === current.a1 && hydratedA1b === current.a1b && hydratedA4 === current.a4) {
         return current;
       }
-      return { ...current, a1: hydratedA1, a1b: hydratedA1b };
+      return { ...current, a1: hydratedA1, a1b: hydratedA1b, a4: hydratedA4 };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
@@ -196,6 +218,7 @@ function StepAMotoristaImpl({
     a1b: useRef<HTMLDivElement | null>(null),
     a2: useRef<HTMLDivElement | null>(null),
     a3: useRef<HTMLDivElement | null>(null),
+    a4: useRef<HTMLDivElement | null>(null),
   };
 
   const setValidityFor = useCallback((key: SubKey, valid: boolean) => {
@@ -249,10 +272,23 @@ function StepAMotoristaImpl({
     if (a1bData && a1bData.fileName) partial.a1b = a1bData;
     if (a2Data && a2Data.telefone_primario) partial.a2 = a2Data;
     if (a3Data && (a3Data.cep || a3Data.comprovanteUrl)) partial.a3 = a3Data;
+    // a4: propaga quando há QUALQUER campo preenchido (manual, sem OCR) — inclui
+    // estado_civil/cor_raca/rg_data p/ não perder preenchimento parcial no reload.
+    if (
+      a4Data &&
+      (a4Data.sexo ||
+        a4Data.estado_civil ||
+        a4Data.cor_raca ||
+        a4Data.pis ||
+        a4Data.rg_data ||
+        a4Data.banco?.bank)
+    ) {
+      partial.a4 = a4Data;
+    }
     if (Object.keys(partial).length > 0) {
       onChangeFn(partial);
     }
-  }, [a1Data, a1bData, a2Data, a3Data]);
+  }, [a1Data, a1bData, a2Data, a3Data, a4Data]);
 
   // Summaries exibidos quando o card está em `completed`.
   const a1Summary = a1Data?.nome ? a1Data.nome : undefined;
@@ -264,6 +300,7 @@ function StepAMotoristaImpl({
   const a2Summary = a2Data?.telefone_primario ? "Telefone salvo" : undefined;
   const a3Summary =
     a3Data?.cidade && a3Data.uf ? `${a3Data.cidade} / ${a3Data.uf}` : undefined;
+  const a4Summary = isA4Complete(a4Data) ? "Dados complementares preenchidos" : undefined;
 
   const handleContinue = () => {
     if (!allValid) {
@@ -277,7 +314,7 @@ function StepAMotoristaImpl({
       return;
     }
 
-    if (!a1Data || !a1bData || !a2Data || !a3Data) {
+    if (!a1Data || !a1bData || !a2Data || !a3Data || !a4Data) {
       // Defesa em profundidade — se valid=true entao os dados estao preenchidos
       return;
     }
@@ -287,6 +324,7 @@ function StepAMotoristaImpl({
       a1b: a1bData,
       a2: a2Data,
       a3: a3Data,
+      a4: a4Data,
     });
   };
 
@@ -309,7 +347,7 @@ function StepAMotoristaImpl({
               <div ref={refs.a1}>
                 <WizardStepCard
                   position={1}
-                  total={4}
+                  total={5}
                   title="CNH do motorista"
                   description="Envie a foto da sua CNH para preencher os dados."
                   summary={a1Summary}
@@ -337,7 +375,7 @@ function StepAMotoristaImpl({
               <div ref={refs.a1b}>
                 <WizardStepCard
                   position={2}
-                  total={4}
+                  total={5}
                   title="Selfie com a CNH"
                   description="Foto sua segurando a CNH (confirma identidade)."
                   summary={a1bSummary}
@@ -363,7 +401,7 @@ function StepAMotoristaImpl({
               <div ref={refs.a2}>
                 <WizardStepCard
                   position={3}
-                  total={4}
+                  total={5}
                   title="Contato WhatsApp"
                   description="Número que recebe as notificações da Lamônica."
                   summary={a2Summary}
@@ -387,7 +425,7 @@ function StepAMotoristaImpl({
               <div ref={refs.a3}>
                 <WizardStepCard
                   position={4}
-                  total={4}
+                  total={5}
                   title="Endereço"
                   description="CEP, número e comprovante."
                   summary={a3Summary}
@@ -401,6 +439,29 @@ function StepAMotoristaImpl({
                     cargaId={cargaId}
                     cpf={cpf}
                     accessToken={accessToken}
+                  />
+                </WizardStepCard>
+              </div>
+            ),
+          },
+          {
+            id: "a4",
+            isCompleted: validity.a4,
+            render: ({ status, onActivate }) => (
+              <div ref={refs.a4}>
+                <WizardStepCard
+                  position={5}
+                  total={5}
+                  title="Dados complementares"
+                  description="Sexo, estado civil, cor/raça, PIS, banco e data do RG."
+                  summary={a4Summary}
+                  status={status}
+                  onActivate={onActivate}
+                >
+                  <A4Complementares
+                    value={a4Data}
+                    onChange={setA4Data}
+                    onValid={(valid) => setValidityFor("a4", valid)}
                   />
                 </WizardStepCard>
               </div>
