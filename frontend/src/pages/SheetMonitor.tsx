@@ -1625,26 +1625,59 @@ function AllocCell({ row, enriched, aspxAssigned, cavaloChecklist, carretaCheckl
       </div>
     );
   }
-  // Carga do SISTEMA — motorista/veículo exibidos read-only aqui; a edição (de
-  // tudo: status/LH/rota/agenda/motorista/placa) é feita pelo modal ao clicar na
-  // linha. Evita o keying por LH do editor inline (cargas do sistema têm LH livre).
+  // Carga do SISTEMA — MESMO layout visual das linhas da planilha (nome + placa
+  // alinhados + selos A/S/C/R + checklist + marcador de estado). A edição (tudo:
+  // status/LH/rota/agenda/motorista/placa) segue pelo MODAL ao clicar na linha —
+  // NÃO há edição inline aqui (cargas do sistema têm LH livre; o editor inline
+  // keia por LH). O clique borbulha para a linha (sem stopPropagation) → modal.
   if (row.source === "sistema") {
+    const pinned = !!row.pinned;
     return (
-      <div className="flex items-start gap-1.5 border-l-2 border-sky-400 pl-2">
-        <div className="min-w-0 flex-1">
-          {row.motoristas ? (
-            <span className="truncate text-xs font-medium text-foreground">{row.motoristas}</span>
-          ) : (
-            <span className="text-xs text-muted-foreground/50">—</span>
-          )}
-          {row.cavalo && (
-            <div className="truncate text-[0.62rem] text-muted-foreground">
-              {row.cavalo}{row.carreta ? ` · ${row.carreta}` : ""}
-            </div>
-          )}
-          <span className="mt-0.5 inline-flex items-center gap-1 text-[0.58rem] font-semibold text-sky-600 dark:text-sky-400">
-            clique p/ editar
+      <div className="group/alloc flex items-center gap-1">
+        {/* Slot esquerdo de largura fixa: alinha o nome com as linhas da planilha
+            (que têm a alça de arrasto/fixar aqui). Sistema não arrasta/edita inline. */}
+        {pinned ? (
+          <span
+            aria-label="Alocação fixada"
+            title="Fixado: motorista e veículo travados nesta carga"
+            className="mt-0.5 shrink-0 p-0.5 text-amber-500"
+          >
+            <Pin className="h-3.5 w-3.5 fill-current" />
           </span>
+        ) : (
+          <span aria-hidden className="mt-0.5 shrink-0 p-0.5">
+            <span className="block h-3.5 w-3.5" />
+          </span>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            {row.motoristas ? (
+              <span className="w-[46%] shrink-0 truncate text-xs font-medium text-foreground" title={row.motoristas}>{row.motoristas}</span>
+            ) : (
+              <span className="w-[46%] shrink-0 truncate text-xs text-muted-foreground/50">Sem motorista</span>
+            )}
+            <span
+              className="w-[116px] shrink-0 truncate font-mono text-[0.6rem] text-muted-foreground"
+              title={row.cavalo ? `${row.cavalo}${row.carreta ? ` · ${row.carreta}` : ""}` : undefined}
+            >
+              {row.cavalo ? `${row.cavalo}${row.carreta ? ` · ${row.carreta}` : ""}` : ""}
+            </span>
+            <span className="flex shrink-0 items-center gap-1.5">
+              {row.motoristas && <DriverChecks enriched={enriched} aspxRelevant={isSpxTrip(row.lh)} assigned={aspxAssigned} />}
+              <VehicleChecks enriched={enriched} hasCavalo={Boolean(row.cavalo)} hasCarreta={Boolean(row.carreta)} />
+              <VehicleChecklistIcons cavalo={row.cavalo} carreta={row.carreta} cavaloChecklist={cavaloChecklist} carretaChecklist={carretaChecklist} />
+              <span
+                className="flex h-3 w-3 shrink-0 items-center justify-center"
+                title={pinned ? "Fixado nesta carga (motorista/veículo travados)" : aspxAssigned === true ? "Motorista atribuído no ASPX" : undefined}
+              >
+                {pinned ? (
+                  <Pin className="h-3 w-3 fill-current text-amber-500" />
+                ) : aspxAssigned === true ? (
+                  <UserCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                ) : null}
+              </span>
+            </span>
+          </div>
         </div>
       </div>
     );
