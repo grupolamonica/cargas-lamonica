@@ -11,6 +11,7 @@ import { withPgClient } from "../../../../infrastructure/pg/postgres.js";
 import { lookupAngelliraDriverByCpf, lookupAngelliraPlate } from "../../../../infrastructure/angellira/angellira-client.js";
 import { insertSecurityAuditEvent } from "../../../../infrastructure/security-audit.js";
 import { logStructuredEvent } from "../../../../infrastructure/security-log.js";
+import { isStatusTextConforme } from "./conformidade.js";
 
 export const AUTO_APPROVE_SETTING_KEY = "auto_approve_angellira";
 // Mesmo marcador usado na aprovação em lote de 09/07/2026 — permite reverter
@@ -39,12 +40,17 @@ function digitsOnly(value) {
 }
 
 /**
- * Um resultado do Angellira (motorista OU placa) está VIGENTE?
- * Regra canônica: status FOUND + validade (validUntil) >= hoje (fuso SP).
- * NOT_FOUND ("não cadastrado"), vencido e UNAVAILABLE ⇒ NÃO vigente.
+ * Um resultado do Angellira (motorista OU placa) está VIGENTE E CONFORME?
+ * Regra canônica: status FOUND + rótulo do portal "Conforme" + validade
+ * (validUntil) >= hoje (fuso SP).
+ * NOT_FOUND ("não cadastrado"), HOMOLOGADORA/em análise (statusText != Conforme),
+ * vencido e UNAVAILABLE ⇒ NÃO vigente. O check de `statusText` alinha o Node ao
+ * robô Angellira e à unificada (que exigem literalmente "Conforme") — antes o
+ * backend ignorava o rótulo e tratava homologadora como conforme (GR em branco).
  */
 export function isAngelliraVigente(rec, today) {
   if (!rec || rec.status !== "FOUND") return false;
+  if (!isStatusTextConforme(rec.statusText)) return false;
   const validUntil = rec.validUntil ? String(rec.validUntil).slice(0, 10) : null;
   return Boolean(validUntil && validUntil >= today);
 }
