@@ -15,20 +15,23 @@
 //  2. Casa por LH == cargas.sheet_lh (só cargas Shopee têm sheet_lh).
 //  3. STATUS: aplica shouldUpdateAspxStatus (regras DC-316) sobre o status ATUAL da
 //     planilha (cargas.sheet_status).
-//  4. DADOS: aplica o gate do DC-316 (shouldUpdateAspxData) sobre o status atual —
-//     motorista/cavalo/carreta só em AGUARDANDO CARREGAMENTO/CARREGADO.
-//  5. Grava os espelhos no sistema (cargas.sheet_status/sheet_motorista/sheet_cavalo/
-//     sheet_carreta) e escreve de volta na planilha (write-back). NÃO toca alloc_* —
-//     override manual do operador é preservado e continua vencendo na exibição.
+//  4. DADOS: aplica os gates do DC-316 (shouldUpdateAspxData) sobre o status atual —
+//     motorista/cavalo/carreta e origem/destino em AGUARDANDO CARREGAMENTO/CARREGADO;
+//     datas também em AGUARDANDO CHEGAR NO CLIENTE.
+//  5. Sistema: grava os espelhos cargas.sheet_status/sheet_motorista/sheet_cavalo/
+//     sheet_carreta. Planilha (write-back): status (col L) + motorista/cavalo/carreta
+//     (E/F/G) + datas (col C/D) + origem/destino (col I/J). NÃO toca alloc_* — override
+//     manual do operador é preservado e continua vencendo na exibição.
 //
-// FORA de escopo (consciente):
-//  - datas: `cargas.sheet_data_*` é rótulo denormalizado ISO ('YYYY-MM-DDTHH:MM') e o
-//    ASPX devolve outro formato — sincronizá-lo quebraria a convenção; o Monitor já
-//    mostra as datas do ASPX ao vivo (applySpxSchedule). Tratar à parte se necessário.
-//  - origem/destino: sobrescrever arriscaria o casamento de rota (route_metrics_cache).
-//  - push ao portal Shopee (ShopeeOpsLib é capacidade da planilha).
-// O status + motorista/cavalo/carreta já casam com o Apps Script publicado (PR #322),
-// que grava STATUS (col L) + E/F/G no update — sem reimplante.
+// Por que datas + origem/destino vão SÓ para a planilha (não para colunas do sistema):
+//  - datas: o sync RE-LÊ e normaliza a data da planilha (formatBrazilianDateTimeLabel)
+//    para cargas.sheet_data_*; gravar direto brigaria com esse formato. O Monitor já
+//    mostra as datas do ASPX ao vivo (applySpxSchedule).
+//  - origem/destino: o sync NÃO copia Origem/Destino da planilha para cargas.origem/
+//    destino (só atualiza colunas sheet_*), então a rota do catálogo fica intacta.
+//
+// PRECISA reimplantar o Apps Script (PR #322 só grava datas/origem/destino no CREATE;
+// no update grava status + E/F/G). Sem push ao portal Shopee (ShopeeOpsLib é da planilha).
 
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import {
@@ -147,12 +150,24 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
         const item = {
           lh,
           source: row.sheet_source ?? null,
+          // Sinaliza ao write-back que este é um update de sync ASPX → encaminha
+          // datas/origem/destino (col C/D/I/J) numa linha EXISTENTE (sem criar/tocar tipo).
+          syncExtras: true,
           motorista: (gate.dados && asp.motorista ? asp.motorista : (row.alloc_motorista || row.sheet_motorista || "")).toString(),
           cavalo: (gate.dados && asp.cavalo ? asp.cavalo : (row.alloc_cavalo || row.sheet_cavalo || "")).toString(),
           carreta: (gate.dados && asp.carreta ? asp.carreta : (row.alloc_carreta || row.sheet_carreta || "")).toString(),
         };
         // status é condicional: o Apps Script (PR #322) só grava col L quando a chave vem.
         if (statusChanged) item.status = asp.status;
+        // Datas (col C/D) sob o gate `datas`; origem/destino (col I/J) sob o gate `dados`.
+        // Vão SÓ para a PLANILHA (write-back) — NÃO gravamos sheet_data_*/cargas.origem no
+        // sistema: o sync normaliza a data ao reler a planilha e as colunas de rota
+        // (cargas.origem/destino) não são tocadas pelo sync (fica seguro p/ o catálogo).
+        // Piggyback: só entram quando algo já mudou (status/motorista/placas) nesta carga.
+        if (gate.datas && asp.dataCarregamento) item.dataCarregamento = asp.dataCarregamento;
+        if (gate.datas && asp.dataDescarga) item.dataDescarga = asp.dataDescarga;
+        if (gate.dados && asp.origem) item.origem = asp.origem;
+        if (gate.dados && asp.destino) item.destino = asp.destino;
         sheetUpdates.push(item);
       }
 

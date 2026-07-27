@@ -30,41 +30,48 @@ planilha por write-back.
    - Anti-regressão: demais status não sobrescrevem `CTE ENVIADO` nem descarga.
    - Status vazio: só aceita `AGUARDANDO CARREGAMENTO` ou `CARREGADO`.
    - Efeito líquido: **`CTE EM EMISSÃO`/`CTE ENVIADO` vêm da planilha; o resto do ASPX**.
-4. **DADOS — gate (DC-316 Bloco 2)** `shouldUpdateAspxData(statusAtual).dados`:
-   - motorista/cavalo/carreta: só em `AGUARDANDO CARREGAMENTO`/`CARREGADO`.
+4. **DADOS — gates (DC-316 Bloco 2)** `shouldUpdateAspxData(statusAtual)`:
+   - motorista/cavalo/carreta e **origem/destino**: só em `AGUARDANDO CARREGAMENTO`/`CARREGADO`.
+   - **datas** (carregamento/descarga): também em `AGUARDANDO CHEGAR NO CLIENTE`.
 5. **Sistema**: grava os espelhos `cargas.sheet_status/sheet_motorista/sheet_cavalo/
-   sheet_carreta`. **Não toca `alloc_*`** — o override manual do operador é preservado e
-   continua vencendo na exibição do Monitor (`COALESCE(alloc_*, sheet_*)`).
-6. **Planilha**: write-back — STATUS (col L, condicional) + motorista/cavalo/carreta
-   (E/F/G, sempre o valor **efetivo** p/ não apagar a célula). Best-effort. **Casa com o
-   Apps Script publicado (PR #322)**, que já grava esses campos no update — **sem reimplante**.
+   sheet_carreta`. **Não toca `alloc_*`** (override do operador vence na exibição) nem
+   `cargas.sheet_data_*`/`cargas.origem/destino` (ver abaixo).
+6. **Planilha** (write-back, best-effort): STATUS (col L) + motorista/cavalo/carreta (E/F/G,
+   sempre o **efetivo** p/ não apagar a célula) + **datas (col C/D)** + **origem/destino
+   (col I/J)**. Datas/origem/destino fazem *piggyback*: só vão quando algo (status/placas)
+   já mudou na carga.
 
-## Fora de escopo (consciente)
+## Por que datas e origem/destino vão SÓ para a planilha
 
-- **datas (carregamento/descarga)**: NÃO sincronizadas. `cargas.sheet_data_*` é rótulo
-  denormalizado ISO (`YYYY-MM-DDTHH:MM`) e o ASPX devolve outro formato — sincronizá-lo
-  quebraria a convenção. O Monitor já mostra as datas do ASPX ao vivo (`applySpxSchedule`).
-- **origem/destino**: NÃO sincronizados — sobrescrevê-los arriscaria o casamento de rota
-  do catálogo (`route_metrics_cache`).
-- **Push ao portal Shopee**: o backend não chama `ShopeeOpsLib.updateTripStatus`.
-- **Overlay antigo de status ao vivo (spx-bot)**: desligue com
-  `SPX_MONITOR_LIVE_STATUS_ENABLED=false` para o Monitor exibir esta regra sem o
-  vocabulário do spx-bot por cima do CTE.
+- **datas**: o sync **re-lê e normaliza** a data da planilha (`formatBrazilianDateTimeLabel`
+  → `cargas.sheet_data_*`), então gravar direto brigaria com esse formato. O Monitor já
+  mostra as datas do ASPX ao vivo (`applySpxSchedule`); a planilha recebe o valor cru do ASPX.
+- **origem/destino**: o sync **não** copia Origem/Destino da planilha para `cargas.origem/
+  destino` (o UPDATE de carga existente só mexe em colunas `sheet_*`), então o **casamento
+  de rota do catálogo fica intacto**. A planilha (e o snapshot do Monitor) refletem o ASPX.
 
-> datas e origem/destino podem ser tratados à parte depois, com o cuidado de formato/rota.
+Fora de escopo mesmo: **push ao portal Shopee** (`ShopeeOpsLib` é da planilha). E o
+**overlay antigo de status ao vivo (spx-bot)** — desligue com
+`SPX_MONITOR_LIVE_STATUS_ENABLED=false` para o Monitor exibir esta regra sem o vocabulário
+do spx-bot por cima do CTE.
 
 ## Rollout (ordem)
 
-1. Garantir `GOOGLE_SHEET_WRITEBACK_URL` + `TORRE_SPX_ASP_API_KEY`/`TORRE_API_KEY` setados
-   (já OK em prod). **Não precisa reimplantar o Apps Script** — o publicado (PR #322) já
-   grava STATUS (col L) + motorista/cavalo/carreta no update.
-2. Confirmar que o **congelamento Shopee (DC-308)** foi liberado.
-3. (Recomendado) `SPX_MONITOR_LIVE_STATUS_ENABLED=false`.
-4. Ligar `ASPX_STATUS_RECONCILE_ENABLED=true` (intervalo `ASPX_STATUS_RECONCILE_INTERVAL_MIN`,
-   default 3min) e mergear/deployar o backend.
+1. **Reimplantar o Apps Script** (`doPost`) gravando datas/origem/destino (C/D/I/J) também
+   no **update** — "Nova versão" (ver [monitor-sheet-writeback.md](./monitor-sheet-writeback.md)).
+   Status + motorista/cavalo/carreta já funcionavam sem isso; só datas/origem/destino exigem.
+2. Garantir `GOOGLE_SHEET_WRITEBACK_URL` + `TORRE_SPX_ASP_API_KEY`/`TORRE_API_KEY` (já OK em prod).
+3. Confirmar que o **congelamento Shopee (DC-308)** foi liberado.
+4. (Recomendado) `SPX_MONITOR_LIVE_STATUS_ENABLED=false`.
+5. Ligar `ASPX_STATUS_RECONCILE_ENABLED=true` (intervalo `..._INTERVAL_MIN`, default 3min)
+   e mergear/deployar o backend.
+
+> O backend pode subir ANTES do reimplante do Apps Script: o job manda as chaves de
+> datas/origem/destino e o script antigo simplesmente as ignora no update (status +
+> motorista/cavalo/carreta seguem funcionando). Datas/origem/destino passam a valer
+> assim que o `doPost` novo for reimplantado.
 
 ## Não é necessário
 
 - **Migration**: as colunas `cargas.sheet_*` já existem.
-- **Reimplante do Apps Script**: o publicado (PR #322) já cobre status + motorista/cavalo/carreta.
 - **Mudança no read model**: o Monitor já lê `COALESCE(alloc_status, sheet_status)`.

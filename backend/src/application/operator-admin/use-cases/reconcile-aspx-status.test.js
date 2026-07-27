@@ -67,8 +67,8 @@ describe("reconcileAspxStatus (DC-316 completo)", () => {
     expect((await rowOf(carga.id)).sheet_status).toBe("AGUARDANDO CARREGAMENTO");
   });
 
-  it("sob o gate (AGUARDANDO CARREGAMENTO): sincroniza status + motorista/placas (datas fora de escopo)", async () => {
-    const carga = await seedCargo({ cliente_id: clienteId, sheet_lh: "LT-100" });
+  it("sob o gate (AGUARDANDO CARREGAMENTO): sincroniza status + motorista/placas + datas + origem/destino na planilha", async () => {
+    const carga = await seedCargo({ cliente_id: clienteId, sheet_lh: "LT-100", origem: "Rota / Catalogo", destino: "Rota / Catalogo" });
     await setSheetFields(carga.id, {
       sheet_status: "AGUARDANDO CARREGAMENTO",
       sheet_source: "shopee",
@@ -81,7 +81,8 @@ describe("reconcileAspxStatus (DC-316 completo)", () => {
       deps: baseDeps(
         [aspRow({
           lh: "LT-100", status: "CARREGADO", driver: "[9] JOAO DA SILVA",
-          plate: "ABC1D23,XYZ9Z88", etaO: "2026-07-27 08:00", etaD: "2026-07-28 10:00",
+          plate: "ABC1D23,XYZ9Z88", etaO: "27/07/2026 08:00", etaD: "28/07/2026 10:00",
+          stO: "[HUB] Sao Paulo", stD: "[DEST] Salvador",
         })],
         { writeAllocationsToSheet: async (u) => { writes.push(...u); return { ok: true, updated: u.length }; } },
       ),
@@ -89,17 +90,22 @@ describe("reconcileAspxStatus (DC-316 completo)", () => {
 
     expect(r).toMatchObject({ ok: true, checked: 1, updated: 1, sheetWrites: 1 });
     const row = await rowOf(carga.id);
+    // Sistema: espelha status + motorista/placas (NÃO datas/origem/destino).
     expect(row.sheet_status).toBe("CARREGADO");
     expect(row.sheet_motorista).toBe("JOAO DA SILVA");
     expect(row.sheet_cavalo).toBe("ABC1D23");
     expect(row.sheet_carreta).toBe("XYZ9Z88");
+    // cargas.origem/destino (rota do catálogo) NÃO é tocado.
+    expect((await query("SELECT origem, destino FROM public.cargas WHERE id = $1", [carga.id])).rows[0]).toMatchObject({
+      origem: "Rota / Catalogo", destino: "Rota / Catalogo",
+    });
+    // Planilha (write-back): tudo, incl. datas + origem/destino limpos do "[...]".
     expect(writes[0]).toMatchObject({
       lh: "LT-100", source: "shopee", status: "CARREGADO",
       motorista: "JOAO DA SILVA", cavalo: "ABC1D23", carreta: "XYZ9Z88",
+      dataCarregamento: "27/07/2026 08:00", dataDescarga: "28/07/2026 10:00",
+      origem: "Sao Paulo", destino: "Salvador",
     });
-    // datas NÃO sincronizam (fora de escopo — convenção ISO em sheet_data_*)
-    expect(writes[0].dataCarregamento).toBeUndefined();
-    expect(writes[0].dataDescarga).toBeUndefined();
   });
 
   it("gate FECHADO (AGUARDANDO DESCARGA): só o status muda; motorista/datas NÃO; write-back não apaga motorista", async () => {
@@ -114,7 +120,7 @@ describe("reconcileAspxStatus (DC-316 completo)", () => {
     const writes = [];
     const r = await reconcileAspxStatus({
       deps: baseDeps(
-        [aspRow({ lh: "LT-DE", status: "DESCARREGANDO", driver: "[1] OUTRO", plate: "NEW1A11,NEW2B22", etaO: "2026-07-27 09:00" })],
+        [aspRow({ lh: "LT-DE", status: "DESCARREGANDO", driver: "[1] OUTRO", plate: "NEW1A11,NEW2B22", etaO: "27/07/2026 09:00", stO: "[X] Nova" })],
         { writeAllocationsToSheet: async (u) => { writes.push(...u); return { ok: true, updated: u.length }; } },
       ),
     });
@@ -123,9 +129,11 @@ describe("reconcileAspxStatus (DC-316 completo)", () => {
     const row = await rowOf(carga.id);
     expect(row.sheet_status).toBe("DESCARREGANDO"); // descarga permitida a partir de descarga
     expect(row.sheet_motorista).toBe("MOTORISTA VIVO"); // gate fechado → não troca motorista
-    // write-back manda o motorista EFETIVO atual (não vazio) + status; sem chaves de data
+    // write-back manda o motorista EFETIVO atual (não vazio) + status; SEM datas/origem/destino
     expect(writes[0]).toMatchObject({ lh: "LT-DE", status: "DESCARREGANDO", motorista: "MOTORISTA VIVO", cavalo: "VIV0A00" });
     expect(writes[0].dataCarregamento).toBeUndefined();
+    expect(writes[0].origem).toBeUndefined();
+    expect(writes[0].destino).toBeUndefined();
   });
 
   it("CTE ENVIADO vem da planilha: ASPX não regride para CARREGADO (nada muda, sem write)", async () => {

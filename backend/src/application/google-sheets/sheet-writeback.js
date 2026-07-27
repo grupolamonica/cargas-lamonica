@@ -113,15 +113,19 @@ export async function writeAllocationsToSheet(updates, { fetchImpl = globalThis.
     // a chave — assim uma edição sem esses campos não sobrescreve a coluna.
     if ("status" in u) item.status = (u.status ?? "").toString();
     if ("vinculo" in u) item.vinculo = (u.vinculo ?? "").toString();
-    // Carga do SISTEMA (lh_manual): campos de linha completa p/ o Apps Script CRIAR a
-    // linha. Dois modos: `createIfMissing` cria-ou-preenche; `createOnly` cria só se o
-    // LH não existir e NÃO toca a linha existente (não apaga motorista já preenchido) —
-    // é o usado no LANÇAMENTO (a alocação vem depois pelo Monitor). Só encaminhados
-    // quando o caller os manda; uma edição normal (LH da planilha) não os carrega.
-    if (u.createIfMissing || u.createOnly) {
+    // Campos de linha completa (datas/origem/destino + tipo) só são encaminhados sob um
+    // sinal explícito — uma edição normal do Monitor NÃO os toca (mesmo que traga a chave):
+    //   - `createIfMissing`/`createOnly`: CRIAÇÃO de linha-casca (lançamento/aceite) — inclui tipo.
+    //   - `syncExtras`: sync de status ASPX (DC-316) num update de linha existente — datas +
+    //     origem/destino (col C/D/I/J), SEM tipo e SEM flag de create.
+    if (u.createIfMissing || u.createOnly || u.syncExtras) {
       if (u.createIfMissing) item.createIfMissing = true;
       if (u.createOnly) item.createOnly = true;
-      for (const k of ["tipo", "dataCarregamento", "dataDescarga", "origem", "destino"]) {
+      const isCreate = u.createIfMissing || u.createOnly;
+      const keys = isCreate
+        ? ["tipo", "dataCarregamento", "dataDescarga", "origem", "destino"]
+        : ["dataCarregamento", "dataDescarga", "origem", "destino"];
+      for (const k of keys) {
         if (k in u) item[k] = (u[k] ?? "").toString();
       }
     }

@@ -113,6 +113,29 @@ describe("sheet-writeback", () => {
     expect("tipo" in body.updates[1]).toBe(false);
   });
 
+  it("syncExtras (sync ASPX / DC-316) encaminha datas/origem/destino num UPDATE — sem tipo, sem create flag", async () => {
+    process.env[URL_KEY] = TEST_URL;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true, updated: 1 }));
+    await writeAllocationsToSheet(
+      [{
+        lh: "LT-ASPX-1", motorista: "M", cavalo: "C", carreta: "R", status: "CARREGADO",
+        syncExtras: true, tipo: "IGNORAR", dataCarregamento: "27/07/2026 08:00",
+        dataDescarga: "28/07/2026 10:00", origem: "Sao Paulo", destino: "Salvador",
+      }],
+      { fetchImpl },
+    );
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.updates[0]).toEqual({
+      lh: "LT-ASPX-1", motorista: "M", cavalo: "C", carreta: "R", status: "CARREGADO",
+      dataCarregamento: "27/07/2026 08:00", dataDescarga: "28/07/2026 10:00",
+      origem: "Sao Paulo", destino: "Salvador",
+    });
+    // syncExtras é só controle (não vai pro fio); tipo é só create; sem createOnly → update path.
+    expect("syncExtras" in body.updates[0]).toBe(false);
+    expect("tipo" in body.updates[0]).toBe(false);
+    expect("createOnly" in body.updates[0]).toBe(false);
+  });
+
   it("createOnly encaminha os campos de linha (linha-casca do lançamento/aceite)", async () => {
     process.env[URL_KEY] = TEST_URL;
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true, updated: 0, created: 1 }));
