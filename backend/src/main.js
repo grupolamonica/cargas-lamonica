@@ -374,6 +374,40 @@ async function bootstrap() {
     console.info("[auto-approve-angellira] desabilitado (AUTO_APPROVE_ANGELLIRA_JOB=false)");
   }
 
+  // 4c-bis. Poller de "apto" do SPX — job periódico. Reavalia cadastros com SPX
+  //     em RASCUNHO (importado/request_pendente/completo) e promove p/ "apto"
+  //     quando a Shopee aprova (precheck IS_MATCHED_NOSSA). Mesmo padrão do
+  //     auto-approve: só age com o interruptor `app_settings.auto_apto_spx.enabled`
+  //     LIGADO (default DESLIGADO). SPX_APTO_POLL_JOB=false desliga o timer.
+  if (process.env.SPX_APTO_POLL_JOB !== "false") {
+    let spxAptoPollRunning = false;
+    const spxIntervalMin = Number(process.env.SPX_APTO_POLL_INTERVAL_MIN || 15);
+    const spxIntervalMs = Math.max(1, spxIntervalMin) * 60 * 1000;
+    const spxBatch = Math.max(1, Number(process.env.SPX_APTO_POLL_BATCH || 25));
+
+    setInterval(async () => {
+      if (spxAptoPollRunning) return;
+      spxAptoPollRunning = true;
+      try {
+        const { getSpxAptoPollSetting, runSpxAptoPoll } = await import(
+          "./application/operator-admin/use-cases/spx/apto-poller.js"
+        );
+        const { enabled } = await getSpxAptoPollSetting();
+        if (!enabled) return; // interruptor desligado — no-op
+        const summary = await runSpxAptoPoll({ limit: spxBatch, apply: true, trigger: "timer" });
+        if (summary?.aptos > 0) {
+          console.info(`[spx-apto-poll] promoveu ${summary.aptos} de ${summary.checked} rascunho(s) verificado(s)`);
+        }
+      } catch (err) {
+        console.error("[spx-apto-poll] erro:", err?.message);
+      } finally {
+        spxAptoPollRunning = false;
+      }
+    }, spxIntervalMs);
+  } else {
+    console.info("[spx-apto-poll] desabilitado (SPX_APTO_POLL_JOB=false)");
+  }
+
   // 4d. Driver-outreach — worker + scanner SEMPRE iniciados; ficam no-op quando
   //     o envio está desligado nas settings do banco (controladas pela tela do
   //     operador). Assim liga/desliga sem redeploy. Escape hatch:
