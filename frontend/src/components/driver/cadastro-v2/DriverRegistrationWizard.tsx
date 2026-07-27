@@ -1440,6 +1440,10 @@ export function DriverRegistrationWizard({
         const inPendencias = response.pendencias.find(
           (p) => p.plate?.toUpperCase().replace(/[^A-Z0-9]/g, "") === targetPlate,
         );
+        // SÓ EXPIRING/EXPIRED contam como "já registrado" (encontrada, mas
+        // renovando). NÃO inclua LOCAL_REGISTRATION_REQUIRED aqui: essa pendência
+        // (RF001) significa justamente que precisamos do CRLV — tratá-la como
+        // "registrada" pularia o upload e reabriria o furo do PRD.
         if (inPendencias && (inPendencias.reason === "EXPIRING" || inPendencias.reason === "EXPIRED")) {
           return { alreadyRegistered: true, daysUntilExpiry: inPendencias.daysUntilExpiry };
         }
