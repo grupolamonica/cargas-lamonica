@@ -63,8 +63,53 @@ describe("mergeAllocIntoRow — overlay da alocação sobre a planilha", () => {
     expect(r.tipo).toBe("SISTEMA");
   });
 
-  it("status real do operador (alloc_status) sobrepõe", () => {
+  it("status real do operador (alloc_status) sobrepõe quando NÃO há SPX ao vivo", () => {
     const r = mergeAllocIntoRow(row({ status: "CARREGANDO" }), alloc({ alloc_status: "AGUARDANDO CARREGAMENTO" }));
+    expect(r.status).toBe("AGUARDANDO CARREGAMENTO");
+  });
+});
+
+describe("mergeAllocIntoRow — SPX ao vivo é autoritativo sobre alloc_status (fix do congelamento)", () => {
+  it("spxStatus presente VENCE um alloc_status congelado (não remascara com o valor da atribuição)", () => {
+    // Bug: alloc_status foi gravado "AGUARDANDO CHEGAR NO CLIENTE" no instante da
+    // atribuição; o SPX já avançou p/ CARREGADO. O front deve mostrar o SPX ao vivo.
+    const r = mergeAllocIntoRow(
+      row({ status: "CARREGADO", spxStatus: "CARREGADO", motoristas: "JOAO" }),
+      alloc({ alloc_motorista: "JOAO", alloc_status: "AGUARDANDO CHEGAR NO CLIENTE" }),
+    );
+    expect(r.status).toBe("CARREGADO");
+  });
+
+  it("spxStatus presente sem alloc_status → mostra o SPX ao vivo", () => {
+    const r = mergeAllocIntoRow(
+      row({ status: "AGUARDANDO DESCARGA", spxStatus: "AGUARDANDO DESCARGA", motoristas: "JOAO" }),
+      alloc({ alloc_motorista: "JOAO", alloc_status: null }),
+    );
+    expect(r.status).toBe("AGUARDANDO DESCARGA");
+  });
+
+  it("terminal LOCAL do operador (CANCELADO) é preservado mesmo com SPX ao vivo", () => {
+    const r = mergeAllocIntoRow(
+      row({ status: "CARREGADO", spxStatus: "CARREGADO", motoristas: "JOAO" }),
+      alloc({ alloc_motorista: "JOAO", alloc_status: "CANCELADO" }),
+    );
+    expect(r.status).toBe("CANCELADO");
+  });
+
+  it("no-show / desistiu também são preservados sobre o SPX", () => {
+    expect(
+      mergeAllocIntoRow(row({ status: "CARREGADO", spxStatus: "CARREGADO" }), alloc({ alloc_status: "NO SHOW" })).status,
+    ).toBe("NO SHOW");
+    expect(
+      mergeAllocIntoRow(row({ status: "CARREGADO", spxStatus: "CARREGADO" }), alloc({ alloc_status: "MOTORISTA DESISTIU" })).status,
+    ).toBe("MOTORISTA DESISTIU");
+  });
+
+  it("SEM spxStatus (não-SPX ou sidecar fora do ar) → alloc_status volta a valer", () => {
+    const r = mergeAllocIntoRow(
+      row({ status: "CTE ENVIADO" }),
+      alloc({ alloc_status: "AGUARDANDO CARREGAMENTO" }),
+    );
     expect(r.status).toBe("AGUARDANDO CARREGAMENTO");
   });
 });
