@@ -1164,6 +1164,15 @@ export interface SheetMonitorRow {
   lh: string;
   tipo: string | null;
   status: string;
+  /**
+   * Status operacional AO VIVO do SPX (Torre), anexado pelo backend
+   * (applySpxOperationalStatus) SOMENTE quando a carga tem motorista alocado e o
+   * LH casa uma viagem SPX. Presente = o SPX é AUTORITATIVO sobre este status: o
+   * overlay do front (mergeAllocIntoRow) NÃO pode remascará-lo com um alloc_status
+   * congelado no instante da atribuição. Ausente (não-SPX, sem motorista, ou
+   * sidecar fora do ar) → o override alloc_status volta a valer.
+   */
+  spxStatus?: string | null;
   motoristas: string;
   /** Cliente da carga (planilha → cliente da planilha, ex. Shopee; sistema → cliente_id→nome). */
   cliente?: string | null;

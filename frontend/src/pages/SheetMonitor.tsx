@@ -1406,10 +1406,16 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
       toast.error("Esta carga tem motorista. Remova o motorista antes de deixá-la Disponível.");
       return;
     }
+    // Status só vai quando o operador REALMENTE mudou (mesmo gate do #186 no
+    // AllocEditDialog). O campo vem pré-preenchido com o status EXIBIDO (row.status =
+    // SPX ao vivo p/ viagens SPX); reenviá-lo sem mudança gravava esse eco do SPX em
+    // alloc_status e o "congelava", escondendo o avanço real do SPX depois. Omitir →
+    // o backend preserva o alloc_status atual (has("status")=false; schema opcional).
+    const statusChanged = form.status.trim() !== (row.status ?? "").trim();
     mutation.mutate({
       cargoId: row.cargoId,
       lh: form.lh.trim(),
-      status: form.status.trim(),
+      ...(statusChanged ? { status: form.status.trim() } : {}),
       tipo: form.tipo.trim(),
       origem: form.origem.trim(),
       destino: form.destino.trim(),
@@ -2850,7 +2856,13 @@ function RowDetailModal({
     // — depois a planilha avançava (ex.: CTE ENVIADO) e o override velho mascarava
     // o valor real (bug do LT0Q7F02AY781). Omitir → o backend preserva o
     // alloc_status atual (null = segue refletindo a planilha).
-    const initialStatus = alloc?.alloc_status ?? row.status ?? "";
+    // IMPORTANTE: usa `||` (não `??`) p/ CASAR o prefill do form (linha ~2692:
+    // `alloc?.alloc_status || row.status`). Com `??`, quando alloc_status era ""
+    // (vazio explícito), o baseline virava "" mas o campo ficava pré-preenchido com
+    // row.status (SPX ao vivo) → statusChanged dava FALSO-POSITIVO e persistia o SPX
+    // daquele instante em alloc_status ao mudar QUALQUER outro campo (ex.: vínculo),
+    // "congelando" o status. Alinhados, editar só o vínculo não reenvia o status.
+    const initialStatus = alloc?.alloc_status || row.status || "";
     const statusChanged = allocForm.status !== initialStatus;
     saveAllocation.mutate({
       lh: row.lh,

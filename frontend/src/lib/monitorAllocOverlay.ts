@@ -31,8 +31,11 @@ export function effectiveAllocField(
  *    (esvaziada, alloc="") voltava a mostrar o motorista antigo da planilha
  *    ("sobrescrito, não altera o que foi arrastado"). Este helper trava o `??`.
  *
- *  - status/tipo → `||`: NÃO entram no swap; vazio cai pro valor da linha (status vivo
- *    do SPX; tipo "SISTEMA" nas cargas lançadas).
+ *  - status → SPX autoritativo: se o backend anexou `row.spxStatus` (carga com motorista +
+ *    LH SPX ao vivo), ele VENCE o alloc_status (que "congelava" no instante da atribuição).
+ *    Sem spxStatus → `||`: alloc_status vence, senão o status vivo da linha. Terminal local
+ *    (cancelado/no-show) do operador é preservado mesmo sobre o SPX.
+ *  - tipo → `||`: NÃO entra no swap; vazio cai pro valor da linha ("SISTEMA" nas lançadas).
  *
  * Puro/testável. `alloc` ausente → devolve a linha inalterada.
  */
@@ -42,7 +45,18 @@ export function mergeAllocIntoRow(
 ): SheetMonitorRow {
   if (!alloc) return row;
   const motoristas = effectiveAllocField(alloc.alloc_motorista, row.motoristas);
-  const status = alloc.alloc_status || row.status;
+  // Status operacional: quando o backend anexou o status AO VIVO do SPX (`spxStatus`,
+  // só em cargas com motorista + LH que casa uma viagem SPX), ele é AUTORITATIVO. O
+  // override do operador (alloc_status) NÃO pode remascará-lo: era exatamente o bug —
+  // ao alocar/editar, um `alloc_status` era gravado com o SPX daquele instante ("AGUARDANDO
+  // CHEGAR NO CLIENTE") e depois "congelava", escondendo o avanço real do SPX (CARREGADO,
+  // DESCARGA…). Isso alinha o front à decisão que o backend JÁ toma (status = spxStatus).
+  // Exceção: um status terminal LOCAL do operador (cancelado/no-show/desistiu) é preservado
+  // — decisão explícita que o SPX não reflete. Sem `spxStatus` (não-SPX, sem motorista, ou
+  // sidecar fora do ar) → o override alloc_status volta a valer (comportamento antigo).
+  const allocStatus = (alloc.alloc_status || "").trim();
+  const isLocalTerminal = /cancel|desist|no[\s-]*show/i.test(allocStatus);
+  const status = row.spxStatus && !isLocalTerminal ? row.spxStatus : (alloc.alloc_status || row.status);
   return {
     ...row,
     motoristas,
