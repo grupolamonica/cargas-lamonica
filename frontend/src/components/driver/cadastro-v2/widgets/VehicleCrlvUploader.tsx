@@ -583,10 +583,10 @@ export function VehicleCrlvUploader({
   return (
     <div className="space-y-4">
       <OcrUploadTile
-        accept="image/*,application/pdf"
+        requirePdf
         maxSizeMb={8}
         label={tileLabel}
-        helper="Documento de licenciamento — frente ou frente+verso"
+        helper="Envie o PDF original do CRLV (não aceitamos foto/print)."
         state={tileState}
         previewName={previewName}
         // 19/05 — dados do CRLV nao sao exibidos pro motorista. O OCR popula
