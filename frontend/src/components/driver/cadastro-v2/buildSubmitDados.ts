@@ -108,6 +108,29 @@ function buildMotorista(data: ConfirmationWizardData) {
     ...(a1.rg ? { rg: a1.rg } : {}),
     ...(a1.rg_orgao ? { rg_orgao: a1.rg_orgao } : {}),
     ...(a1.rg_uf ? { rg_uf: a1.rg_uf } : {}),
+    // FASE 3 (Rodopar) — dados complementares do motorista coletados no card A4.
+    // Só emite quando preenchido (todos opcionais no backend). O mapeamento p/
+    // os códigos do Rodopar (ESTCIV/CORPEL) acontece no disparo (Fase 4).
+    ...(a.a4?.sexo ? { sexo: a.a4.sexo } : {}),
+    ...(a.a4?.estado_civil ? { estado_civil: a.a4.estado_civil } : {}),
+    ...(a.a4?.cor_raca ? { cor_raca: a.a4.cor_raca } : {}),
+    ...(a.a4?.pis ? { pis: a.a4.pis } : {}),
+    ...(a.a4?.rg_data ? { rg_data: a.a4.rg_data } : {}),
+    ...(() => {
+      const b = a.a4?.banco;
+      if (b?.bank && b.agencia && b.conta && b.tipo) {
+        return {
+          dados_bancarios: {
+            banco_compe: b.bank.compe ?? b.bank.ispb ?? "",
+            banco_nome: b.bank.nome ?? "",
+            agencia: b.agencia,
+            conta: b.conta,
+            tipo: b.tipo,
+          },
+        };
+      }
+      return {};
+    })(),
   };
 }
 
