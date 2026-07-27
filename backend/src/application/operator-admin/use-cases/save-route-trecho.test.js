@@ -8,7 +8,7 @@ import {
   seedUser,
   withPgTransaction,
 } from "../test-harness.js";
-import { normalizeClientName } from "./_shared.js";
+import { buildRouteCatalogKeys } from "../../../domain/operator-admin/route-utils.js";
 
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({ withPgTransaction }));
 
@@ -16,8 +16,9 @@ const { saveRouteTrecho } = await import("./save-route-trecho.js");
 
 const ORIGEM = "Campo Grande / MS";
 const DESTINO = "Simoes Filho / BA";
-const okey = normalizeClientName(ORIGEM).replace(/\s+/g, " ");
-const dkey = normalizeClientName(DESTINO).replace(/\s+/g, " ");
+// Chaves canônicas (mesma normalização que a gravação usa) — o trecho vira
+// "campo grande"/"simoes filho", sem o sufixo de UF.
+const { originKey: okey, destinationKey: dkey } = buildRouteCatalogKeys(ORIGEM, DESTINO);
 
 const trecho = (tarifas, over = {}) => ({
   origem: ORIGEM,
@@ -49,6 +50,35 @@ describe("saveRouteTrecho", () => {
   });
   afterAll(async () => {
     await closeTestDatabase();
+  });
+
+  it("mesmo trecho em grafias diferentes (/UF vs caixa) NÃO duplica — chave canônica", async () => {
+    const op = await seedUser({ email: "op-trecho-canon@teste.local" });
+    // 1ª gravação: grafia com /UF + espaços em torno da barra.
+    await saveRouteTrecho({
+      operatorId: op.id,
+      payload: trecho([{ perfil: "CARRETA", eixos: 0, valor: 5000, bonus: 0, bonus_exigencias: null }]),
+      correlationId: "c1",
+    });
+    // 2ª gravação do MESMO trecho em grafia diferente (caixa, sem espaços).
+    await saveRouteTrecho({
+      operatorId: op.id,
+      payload: trecho(
+        [{ perfil: "CARRETA", eixos: 0, valor: 5500, bonus: 0, bonus_exigencias: null }],
+        { origem: "CAMPO GRANDE/MS", destino: "SIMOES FILHO/BA" },
+      ),
+      correlationId: "c2",
+    });
+
+    // Upsert canônico: 1 só linha, atualizada pela 2ª gravação.
+    const rows = await tarifasFor();
+    expect(rows).toHaveLength(1);
+    expect(Number(rows[0].valor_padrao)).toBe(5500);
+    // Chave ARMAZENADA é canônica (sem sufixo de UF) — impede a linha "estreita" paralela.
+    const { rows: keyRows } = await query(
+      `SELECT DISTINCT origin_key, destination_key FROM public.route_metrics_cache`,
+    );
+    expect(keyRows).toEqual([{ origin_key: "campo grande", destination_key: "simoes filho" }]);
   });
 
   it("cria N tarifas por veículo para um trecho novo", async () => {

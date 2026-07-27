@@ -3,11 +3,10 @@ import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit
 import { buildAuditChanges } from "../../../domain/operator-admin/audit-diff.js";
 import { ConflictError, NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
 import {
-  normalizeClientName,
   isMissingRouteCatalogColumnsError,
   resolveRouteMetricsIfNeeded,
 } from "./_shared.js";
-import { createRouteLookupKeys } from "../../../domain/operator-admin/route-utils.js";
+import { createRouteLookupKeys, buildRouteCatalogKeys } from "../../../domain/operator-admin/route-utils.js";
 import { normalizeVehicleProfile } from "../../../domain/vehicle-profiles.js";
 
 // Editar a rota para um trecho (origem→destino) + perfil + nº de eixos que já
@@ -37,8 +36,9 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
       throw new ValidationError("Nao foi possivel salvar a rota sem distancia e duracao.");
     }
 
-    const originKey = normalizeClientName(payload.origem).replace(/\s+/g, " ");
-    const destinationKey = normalizeClientName(payload.destino).replace(/\s+/g, " ");
+    // Chave canônica (mesma do matching carga→rota) — evita rota duplicada por
+    // grafia (/UF, caixa, espaços). Ver route-utils.buildRouteCatalogKeys.
+    const { originKey, destinationKey } = buildRouteCatalogKeys(payload.origem, payload.destino);
     // perfil nunca nulo (compõe a chave única); eixos 0 = genérico.
     const perfilPadrao = payload.perfil_padrao || "CARRETA";
     const eixos = payload.eixos ?? 0;
