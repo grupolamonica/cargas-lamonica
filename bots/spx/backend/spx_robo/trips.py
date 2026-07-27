@@ -113,9 +113,13 @@ def _norm_trip(t: dict) -> dict:
         "origem": origem.get("station_name"),
         "destino": destino.get("station_name"),
         "std": origem.get("std") or origem.get("sta"),
-        # Datas p/ a tela Programação (epoch seg): carregamento = STD da origem;
-        # descarga = STA (chegada programada) da última estação. 0 → None.
-        "carregamento_ts": (origem.get("std") or origem.get("sta")) or None,
+        # Datas p/ a tela Programação (epoch seg). Ambas usam a CHEGADA programada
+        # (STA) da estação, que é o instante operacional de cada ponta:
+        #   carregamento = STA da ORIGEM  (chegada p/ carregar; a partida/STD é ~2h
+        #                  depois — o que a operação chama de "CPT", NÃO o carregamento);
+        #   descarga     = STA do DESTINO (chegada p/ descarregar).
+        # Fallback p/ STD só quando a STA estiver ausente (0). 0 → None.
+        "carregamento_ts": (origem.get("sta") or origem.get("std")) or None,
         "descarga_ts": (destino.get("sta") or destino.get("std")) or None,
         "driver_name": t.get("driver_name") or "",
         "vehicle_type": t.get("vehicle_type_name") or "",
