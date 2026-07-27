@@ -128,6 +128,18 @@ export function deriveSpxOutcome(job: ExternalRegistrationJob | null | undefined
   return "PENDENTE";
 }
 
+// Espelha o backend (isStatusTextConforme): só "Conforme" é aprovável; "Não
+// Conforme"/homologadora/vazio ⇒ ainda em homologação.
+function isPortalConforme(statusText: string | null | undefined): boolean {
+  const n = String(statusText ?? "")
+    .normalize("NFKD")
+    .replace(/[^a-zA-Z]/g, "")
+    .toUpperCase();
+  if (!n) return false;
+  if (n.includes("NAOCONFORME")) return false;
+  return n.includes("CONFORME");
+}
+
 /**
  * Painel de cadastro externo (Angellira + SPX/Shopee).
  * Mostra status por etapa, botões contextuais e mensagens amigáveis para o operador.
@@ -218,13 +230,27 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
   const precheckMutation = useMutation({
     mutationFn: () => precheckAngellira(cadastroId),
     onSuccess: (result) => {
-      const motorista = result.motorista as { status?: string; valid_until?: string } | undefined;
+      // Mostra o RÓTULO REAL do portal (statusText = status.description). Só
+      // "Conforme" é aprovável; qualquer outro (homologadora/em análise) é
+      // "em homologação" — o cadastro segue em pendentes até virar Conforme.
+      const motorista = result.motorista as
+        | { status?: string; validUntil?: string; valid_until?: string; statusText?: string }
+        | undefined;
+      const statusText = motorista?.statusText ?? null;
+      const validUntil = motorista?.validUntil ?? motorista?.valid_until ?? null;
+      const portalTxt = statusText ? ` — status no portal: “${statusText}”` : "";
       if (!motorista || motorista.status === "NOT_FOUND") {
         setVerifyResult({ text: "Motorista não encontrado no Angellira — ainda não cadastrado.", type: "warn" });
-      } else if (motorista.valid_until) {
-        setVerifyResult({ text: `✓ Motorista encontrado — vigência até ${motorista.valid_until}`, type: "ok" });
+      } else if (isPortalConforme(statusText)) {
+        setVerifyResult({
+          text: `✓ Motorista Conforme no Angellira${validUntil ? ` — vigência até ${validUntil}` : ""}`,
+          type: "ok",
+        });
       } else {
-        setVerifyResult({ text: "✓ Motorista encontrado no Angellira (vigência não informada)", type: "ok" });
+        setVerifyResult({
+          text: `Motorista em homologação no Angellira${portalTxt}. Segue em pendentes até o portal voltar “Conforme”.`,
+          type: "warn",
+        });
       }
     },
     onError: (err: Error) => toast.error(err.message || "Falha na verificação."),
