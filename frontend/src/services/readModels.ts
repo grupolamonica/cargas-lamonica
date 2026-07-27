@@ -1911,6 +1911,7 @@ export async function launchCargoFromTrip(input: {
   horarioDescarga?: string;
   nome?: string;
   perfil?: string;
+  accepted?: boolean;
 }): Promise<LaunchCargoResult> {
   const accessToken = await getOperatorAccessToken();
   return requestJson<LaunchCargoResult>("/api/operator/programacao/launch", {
@@ -2419,13 +2420,28 @@ export async function aprovarCadastro(
   }
   return response.json() as Promise<{
     ok: boolean;
-    // false quando o cadastro externo (Angellira/SPX) solicitado falhou: o
-    // cadastro NÃO foi aprovado e segue na fila para retentar.
+    // false quando o cadastro externo (Angellira/SPX) solicitado falhou OU o
+    // conjunto do Angellira ainda não voltou "Conforme" (em homologação): o
+    // cadastro NÃO foi aprovado e segue na fila.
     approved: boolean;
     driverId: string;
     jobs?: string[];
     angellira?: { ok: boolean; results: AngelliraStepResult[]; error?: { code?: string; message?: string } } | null;
     spx?: { ok: boolean; results?: AngelliraStepResult[]; error?: { code?: string; message?: string } } | null;
+    // Conformidade do Angellira (fluxo "disparar → pendentes até Conforme").
+    angelliraConforme?: boolean | null;
+    // true = disparou OK mas o conjunto ainda está em homologação (não é falha).
+    emHomologacao?: boolean;
+    angelliraStatus?: {
+      conforme: boolean;
+      indisponivel: boolean;
+      motivo: string | null;
+      status: {
+        motorista: string | null;
+        cavalo: string | null;
+        carretas: { placa: string; statusText: string | null }[];
+      } | null;
+    } | null;
   }>;
 }
 

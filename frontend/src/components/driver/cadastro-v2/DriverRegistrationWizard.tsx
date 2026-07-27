@@ -485,7 +485,10 @@ export function DriverRegistrationWizard({
       | undefined;
     const migratedFromA: Partial<StepBData> = {};
     if (legacyA && typeof legacyA === "object") {
-      if ("a4" in legacyA && legacyA.a4 !== undefined) {
+      // `a4` mudou de significado: ERA o tag-pedágio (string) que migrou p/ o
+      // StepB; AGORA é o card A4Complementares (objeto A4Data) que FICA no StepA.
+      // Só migra p/ o StepB quando for o formato ANTIGO (string), nunca o objeto.
+      if ("a4" in legacyA && legacyA.a4 !== undefined && typeof legacyA.a4 !== "object") {
         migratedFromA.a4 = legacyA.a4 as StepBData["a4"];
       }
       if ("a5" in legacyA && legacyA.a5 !== undefined) {
@@ -496,15 +499,20 @@ export function DriverRegistrationWizard({
       }
     }
     if (persistedA) {
-      // Strip a4/a5/a6 do persistedA antes de hidratar — StepAData novo não
-      // tem mais esses campos. Compatível com TS strict (tipos atuais).
-      const { a4: _a4, a5: _a5, a6: _a6, ...cleanA } = legacyA as Record<
-        string,
-        unknown
-      >;
-      void _a4;
+      // Strip a5/a6 (pancary/rastreador legados → StepB). `a4` é ambíguo: o
+      // formato NOVO (A4Data, objeto do card A4Complementares) FICA no StepA; o
+      // formato ANTIGO (tag-pedágio, string) sai (já migrado p/ o StepB acima).
+      // Sem isso, o A4 do motorista era descartado no restore do draft (perda de
+      // dado no fluxo público). Compatível com TS strict.
+      const { a5: _a5, a6: _a6, ...restA } = legacyA as Record<string, unknown>;
       void _a5;
       void _a6;
+      let cleanA: Record<string, unknown> = restA;
+      if ("a4" in cleanA && typeof cleanA.a4 !== "object") {
+        const { a4: _a4, ...withoutOldA4 } = cleanA;
+        void _a4;
+        cleanA = withoutOldA4;
+      }
       // Só hidrata se o draft tem a estrutura mínima (a1 presente) —
       // drafts de versões antigas podem ter shape diferente.
       if (cleanA.a1 && typeof cleanA.a1 === "object") {
@@ -1440,6 +1448,10 @@ export function DriverRegistrationWizard({
         const inPendencias = response.pendencias.find(
           (p) => p.plate?.toUpperCase().replace(/[^A-Z0-9]/g, "") === targetPlate,
         );
+        // SÓ EXPIRING/EXPIRED contam como "já registrado" (encontrada, mas
+        // renovando). NÃO inclua LOCAL_REGISTRATION_REQUIRED aqui: essa pendência
+        // (RF001) significa justamente que precisamos do CRLV — tratá-la como
+        // "registrada" pularia o upload e reabriria o furo do PRD.
         if (inPendencias && (inPendencias.reason === "EXPIRING" || inPendencias.reason === "EXPIRED")) {
           return { alreadyRegistered: true, daysUntilExpiry: inPendencias.daysUntilExpiry };
         }

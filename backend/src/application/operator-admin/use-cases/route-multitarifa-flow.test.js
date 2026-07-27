@@ -8,7 +8,7 @@ import {
   seedUser,
   withPgTransaction,
 } from "../test-harness.js";
-import { normalizeClientName } from "./_shared.js";
+import { buildRouteCatalogKeys } from "../../../domain/operator-admin/route-utils.js";
 
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({ withPgTransaction }));
 
@@ -19,8 +19,7 @@ const { saveRouteTrecho } = await import("./save-route-trecho.js");
 // remoção de uma tarifa. Espelha o que o operador faz na tela de Rotas.
 const ORIGEM = "Campo Grande / MS";
 const DESTINO = "Simoes Filho / BA";
-const okey = normalizeClientName(ORIGEM).replace(/\s+/g, " ");
-const dkey = normalizeClientName(DESTINO).replace(/\s+/g, " ");
+const { originKey: okey, destinationKey: dkey } = buildRouteCatalogKeys(ORIGEM, DESTINO);
 
 const trecho = (tarifas) => ({
   origem: ORIGEM,

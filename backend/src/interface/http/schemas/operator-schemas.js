@@ -205,6 +205,9 @@ export const programacaoLaunchBodySchema = z.object({
   horarioDescarga: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
   nome: z.string().trim().max(180).optional(),
   perfil: z.string().trim().max(60).optional(),
+  // Aceita (acceptance_status=1 no SPX / Nestlé aba Aceito): só aceita vira linha-casca
+  // na planilha no lançamento. Ausente = false (não escreve na planilha).
+  accepted: z.boolean().optional(),
 }).strict();
 
 /** Query params for PII redaction POST */

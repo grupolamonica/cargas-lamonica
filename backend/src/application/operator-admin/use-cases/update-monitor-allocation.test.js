@@ -327,12 +327,14 @@ describe("updateMonitorAllocation", () => {
     expect(rows[0].alloc_vinculo).toBe("AGREGADO DEDICADO");
   });
 
-  it("resolve carga do SISTEMA (lançada na Programação, lh_manual) por LH e grava alloc_*", async () => {
+  it("carga do SISTEMA (lh_manual): grava alloc_* e ESPELHA na planilha em UPDATE-ONLY (sem criar linha)", async () => {
     // Viagem lançada na Programação: id ALEATÓRIO, sheet_lh nulo, lh_manual = LH.
-    // NÃO existe carga com id = createSheetLoadId(lh) — antes do fix isso dava
-    // "Carga da planilha não encontrada" e o operador não conseguia editar a placa.
+    // A alocação PREENCHE a linha do LH na planilha SE ela existir (linha-casca criada
+    // no lançamento da carga aceita) — mas NÃO cria linha (sem createIfMissing/createOnly):
+    // carga não-aceita não tem casca → o write-back vira no-op na planilha e ela nunca
+    // aparece por aqui. A criação da linha é responsabilidade do lançamento/aceite.
     const SYS_LH = "LT-SYS-LAUNCHED-1";
-    const { id } = await seedCargo({ status: "OPEN" }); // sheet_lh nulo por padrão
+    const { id } = await seedCargo({ status: "OPEN", origem: "SJ Rio Preto / SP", destino: "Simoes Filho / BA" });
     await query(`UPDATE public.cargas SET lh_manual = $2 WHERE id = $1`, [id, SYS_LH]);
     const operator = await seedUser({ email: "op-sys-launched@teste.local" });
     writeSpy.mockClear();
@@ -349,12 +351,17 @@ describe("updateMonitorAllocation", () => {
     expect(row.alloc_motorista).toBe("ABELARDO");
     expect(row.alloc_carreta).toBe("FDZ0B46");
     expect(row.alloc_source).toBe("operator");
-    // Carga do sistema NÃO tem linha própria na planilha → NÃO faz write-back
-    // (senão apagaria/duplicaria a linha da planilha homônima).
-    expect(writeSpy).not.toHaveBeenCalled();
+    // Espelha PREENCHENDO a linha existente (update-only) — NUNCA cria.
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const arg = writeSpy.mock.calls[0][0][0];
+    expect(arg.lh).toBe(SYS_LH);
+    expect(arg.motorista).toBe("ABELARDO");
+    expect(arg.carreta).toBe("FDZ0B46");
+    expect("createIfMissing" in arg).toBe(false);
+    expect("createOnly" in arg).toBe(false);
   });
 
-  it("carga do SISTEMA: editar só o status NÃO faz write-back (não apaga motorista da planilha homônima)", async () => {
+  it("carga do SISTEMA: editar só o status espelha na planilha (update-only, sem createIfMissing/createOnly)", async () => {
     const SYS_LH = "LT-SYS-LAUNCHED-2";
     const { id } = await seedCargo({ status: "OPEN" });
     await query(`UPDATE public.cargas SET lh_manual = $2 WHERE id = $1`, [id, SYS_LH]);
@@ -370,7 +377,11 @@ describe("updateMonitorAllocation", () => {
 
     const row = await getAlloc(id);
     expect(row.alloc_status).toBe("AGUARDANDO DESCARGA");
-    expect(writeSpy).not.toHaveBeenCalled();
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const arg = writeSpy.mock.calls[0][0][0];
+    expect(arg.status).toBe("AGUARDANDO DESCARGA");
+    expect("createIfMissing" in arg).toBe(false);
+    expect("createOnly" in arg).toBe(false);
   });
 
   it("prefere a carga da PLANILHA quando o LH existe como planilha E como sistema (lh_manual)", async () => {

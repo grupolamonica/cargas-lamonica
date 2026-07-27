@@ -371,6 +371,9 @@ export default function Programacao() {
         dataDescarga: row.dataDescarga ?? undefined,
         horarioDescarga: row.horarioDescarga ?? undefined,
         nome: row.nome || undefined,
+        // Só ACEITA (SPX acceptance_status=1 ou Nestlé na aba Aceito) é "puxada" pra
+        // planilha no lançamento. Não-aceita é lançada só no portal.
+        accepted: row.acceptanceStatus === 1 || row.tab === "aceito",
       }),
     onSuccess: (res) => {
       toast.success(

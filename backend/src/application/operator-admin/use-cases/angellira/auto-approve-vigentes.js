@@ -148,9 +148,24 @@ async function checkCadastroConjunto(dados, { today, lookupCpf, lookupPlate }) {
     carretas: carretaPlacas.map((placa, i) => ({ placa, rec: recByKind[`carreta${i}`] })),
   };
   const recs = [components.motorista, components.cavalo?.rec, ...components.carretas.map((c) => c.rec)];
-  if (recs.some((r) => r && r.status === "UNAVAILABLE")) return { indisponivel: true };
+  if (recs.some((r) => r && r.status === "UNAVAILABLE")) return { indisponivel: true, components };
 
-  return { verdict: evaluateConjuntoConforme(components, today) };
+  return { verdict: evaluateConjuntoConforme(components, today), components };
+}
+
+/**
+ * Consulta AGORA o Angellira do conjunto (motorista + cavalo + carretas) de um
+ * cadastro e devolve o veredito de conformidade — mesma régua canônica do
+ * auto-approve (FOUND + rótulo "Conforme" + validade). Usada pela APROVAÇÃO
+ * MANUAL para NÃO aprovar enquanto o conjunto estiver em homologação (rótulo do
+ * portal ainda != "Conforme"). Session-independent, não grava nada.
+ *
+ * @returns {Promise<{circuitOpen?:true}|{indisponivel?:true, components?:object}|{verdict:{conforme:boolean,motivo:string|null}, components:object}>}
+ */
+export async function checkConjuntoConformeNow(dados, { correlationId = null } = {}) {
+  const today = todaySaoPaulo();
+  const { lookupCpf, lookupPlate } = makeAngelliraLookups(correlationId || "aprovar-manual-conforme");
+  return checkCadastroConjunto(dados || {}, { today, lookupCpf, lookupPlate });
 }
 
 /** Cria a tabela de settings se não existir (idempotente; espelha analytics_events no bootstrap). */

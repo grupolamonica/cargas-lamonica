@@ -15,16 +15,20 @@
 //  2. Casa por LH == cargas.sheet_lh (só cargas Shopee têm sheet_lh).
 //  3. STATUS: aplica shouldUpdateAspxStatus (regras DC-316) sobre o status ATUAL da
 //     planilha (cargas.sheet_status).
-//  4. DADOS: aplica os gates do DC-316 (shouldUpdateAspxData sobre o status atual):
-//     motorista/cavalo/carreta só em AGUARDANDO CARREGAMENTO/CARREGADO; datas também
-//     em AGUARDANDO CHEGAR NO CLIENTE.
-//  5. Grava os espelhos no sistema (cargas.sheet_*) e escreve de volta na planilha
-//     (write-back). NÃO toca alloc_* — override manual do operador é preservado e
-//     continua vencendo na exibição do Monitor.
+//  4. DADOS: aplica o gate do DC-316 (shouldUpdateAspxData) sobre o status atual —
+//     motorista/cavalo/carreta só em AGUARDANDO CARREGAMENTO/CARREGADO.
+//  5. Grava os espelhos no sistema (cargas.sheet_status/sheet_motorista/sheet_cavalo/
+//     sheet_carreta) e escreve de volta na planilha (write-back). NÃO toca alloc_* —
+//     override manual do operador é preservado e continua vencendo na exibição.
 //
-// FORA de escopo (consciente): origem/destino — sobrescrevê-los arriscaria o
-// casamento de rota do catálogo; ficam como estão. E não empurra status ao portal
-// Shopee (ShopeeOpsLib é da planilha).
+// FORA de escopo (consciente):
+//  - datas: `cargas.sheet_data_*` é rótulo denormalizado ISO ('YYYY-MM-DDTHH:MM') e o
+//    ASPX devolve outro formato — sincronizá-lo quebraria a convenção; o Monitor já
+//    mostra as datas do ASPX ao vivo (applySpxSchedule). Tratar à parte se necessário.
+//  - origem/destino: sobrescrever arriscaria o casamento de rota (route_metrics_cache).
+//  - push ao portal Shopee (ShopeeOpsLib é capacidade da planilha).
+// O status + motorista/cavalo/carreta já casam com o Apps Script publicado (PR #322),
+// que grava STATUS (col L) + E/F/G no update — sem reimplante.
 
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import {
@@ -89,7 +93,6 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
       const { rows } = await client.query(
         `SELECT id, sheet_lh, sheet_source, sheet_status,
                 sheet_motorista, sheet_cavalo, sheet_carreta,
-                sheet_data_carregamento, sheet_data_descarga,
                 alloc_motorista, alloc_cavalo, alloc_carreta
            FROM public.cargas
           WHERE sheet_lh = ANY($1::text[])`,
@@ -129,15 +132,6 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
           if (asp.cavalo && asp.cavalo !== trim(row.sheet_cavalo)) setCol("sheet_cavalo", asp.cavalo);
           if (asp.carreta && asp.carreta !== trim(row.sheet_carreta)) setCol("sheet_carreta", asp.carreta);
         }
-        // DATAS: sob o gate `datas` (inclui AGUARDANDO CHEGAR NO CLIENTE).
-        if (gate.datas) {
-          if (asp.dataCarregamento && asp.dataCarregamento !== trim(row.sheet_data_carregamento)) {
-            setCol("sheet_data_carregamento", asp.dataCarregamento);
-          }
-          if (asp.dataDescarga && asp.dataDescarga !== trim(row.sheet_data_descarga)) {
-            setCol("sheet_data_descarga", asp.dataDescarga);
-          }
-        }
 
         if (sets.length === 0) continue; // nada mudou nesta carga
 
@@ -157,10 +151,8 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
           cavalo: (gate.dados && asp.cavalo ? asp.cavalo : (row.alloc_cavalo || row.sheet_cavalo || "")).toString(),
           carreta: (gate.dados && asp.carreta ? asp.carreta : (row.alloc_carreta || row.sheet_carreta || "")).toString(),
         };
-        // status/datas são condicionais: o doPost só grava a coluna quando a chave vem.
+        // status é condicional: o Apps Script (PR #322) só grava col L quando a chave vem.
         if (statusChanged) item.status = asp.status;
-        if (gate.datas && asp.dataCarregamento) item.dataCarregamento = asp.dataCarregamento;
-        if (gate.datas && asp.dataDescarga) item.dataDescarga = asp.dataDescarga;
         sheetUpdates.push(item);
       }
 

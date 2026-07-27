@@ -2,10 +2,10 @@ import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { ValidationError } from "../../../domain/load-claims/errors.js";
 import {
-  normalizeClientName,
   isMissingRouteCatalogColumnsError,
   resolveRouteMetricsIfNeeded,
 } from "./_shared.js";
+import { buildRouteCatalogKeys } from "../../../domain/operator-admin/route-utils.js";
 
 export async function createOperatorRoute({ operatorId, payload, requestIp, correlationId }) {
   return withPgTransaction(async (client) => {
@@ -15,8 +15,9 @@ export async function createOperatorRoute({ operatorId, payload, requestIp, corr
       throw new ValidationError("Nao foi possivel salvar a rota sem distancia e duracao.");
     }
 
-    const originKey = normalizeClientName(payload.origem).replace(/\s+/g, " ");
-    const destinationKey = normalizeClientName(payload.destino).replace(/\s+/g, " ");
+    // Chave canônica (mesma do matching carga→rota) — evita rota duplicada por
+    // grafia (/UF, caixa, espaços). Ver route-utils.buildRouteCatalogKeys.
+    const { originKey, destinationKey } = buildRouteCatalogKeys(payload.origem, payload.destino);
     // perfil + eixos compõem a identidade da rota (uma rota por veículo).
     // perfil nunca nulo (compõe a chave única); eixos 0 = genérico.
     const perfilPadrao = payload.perfil_padrao || "CARRETA";

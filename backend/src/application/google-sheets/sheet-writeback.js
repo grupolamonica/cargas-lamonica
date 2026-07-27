@@ -55,8 +55,40 @@ export function isSheetWritebackEnabled(source) {
   return Boolean(configForSource(source).url);
 }
 
+/** Rótulo de agenda denormalizado ('YYYY-MM-DDTHH:MM') → formato da planilha
+ *  ('DD/MM/YYYY HH:MM'). Valores não-ISO (ex.: "A confirmar") passam direto; vazio → "". */
+export function formatSheetDateLabel(label) {
+  const s = String(label ?? "").trim();
+  if (!s) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(s);
+  return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}` : s;
+}
+
 /**
- * @param {Array<{lh:string, source?:string, motorista?:string, cavalo?:string, carreta?:string, status?:string, vinculo?:string, dataCarregamento?:string, dataDescarga?:string}>} updates
+ * Payload de "linha-casca" de uma carga do SISTEMA (lançada/aceita) p/ a planilha:
+ * cria a linha SOMENTE se o LH ainda não existe (createOnly) — sem motorista, que é
+ * preenchido depois pela alocação do Monitor. Se a linha já existe, o Apps Script NÃO
+ * a toca (não apaga um motorista já gravado). Usado no lançamento e no aceite.
+ */
+export function buildSystemCargoShellRow({ lh, source = null, origem, destino, carregamentoLabel, descargaLabel, tipo = "" }) {
+  return {
+    lh: String(lh ?? "").trim(),
+    source,
+    createOnly: true,
+    motorista: "",
+    cavalo: "",
+    carreta: "",
+    status: "",
+    tipo: tipo ?? "",
+    dataCarregamento: formatSheetDateLabel(carregamentoLabel),
+    dataDescarga: formatSheetDateLabel(descargaLabel),
+    origem: origem ?? "",
+    destino: destino ?? "",
+  };
+}
+
+/**
+ * @param {Array<{lh:string, source?:string, motorista?:string, cavalo?:string, carreta?:string, status?:string, vinculo?:string}>} updates
  * @param {{ fetchImpl?: typeof fetch, log?: (level:string,event:string,data:object)=>void }} [opts]
  */
 export async function writeAllocationsToSheet(updates, { fetchImpl = globalThis.fetch, log } = {}) {
@@ -77,13 +109,22 @@ export async function writeAllocationsToSheet(updates, { fetchImpl = globalThis.
       carreta: (u.carreta ?? "").toString(),
     };
     if (!item.lh) continue;
-    // status/vinculo/datas são opcionais: só vão quando o caller manda a chave —
-    // assim uma edição sem esses campos não sobrescreve a coluna. As datas
-    // (carregamento/descarga) são usadas pelo sync de status ASPX (DC-316).
+    // status (col de status) e vinculo são opcionais: só vão quando o caller manda
+    // a chave — assim uma edição sem esses campos não sobrescreve a coluna.
     if ("status" in u) item.status = (u.status ?? "").toString();
     if ("vinculo" in u) item.vinculo = (u.vinculo ?? "").toString();
-    if ("dataCarregamento" in u) item.dataCarregamento = (u.dataCarregamento ?? "").toString();
-    if ("dataDescarga" in u) item.dataDescarga = (u.dataDescarga ?? "").toString();
+    // Carga do SISTEMA (lh_manual): campos de linha completa p/ o Apps Script CRIAR a
+    // linha. Dois modos: `createIfMissing` cria-ou-preenche; `createOnly` cria só se o
+    // LH não existir e NÃO toca a linha existente (não apaga motorista já preenchido) —
+    // é o usado no LANÇAMENTO (a alocação vem depois pelo Monitor). Só encaminhados
+    // quando o caller os manda; uma edição normal (LH da planilha) não os carrega.
+    if (u.createIfMissing || u.createOnly) {
+      if (u.createIfMissing) item.createIfMissing = true;
+      if (u.createOnly) item.createOnly = true;
+      for (const k of ["tipo", "dataCarregamento", "dataDescarga", "origem", "destino"]) {
+        if (k in u) item[k] = (u[k] ?? "").toString();
+      }
+    }
     const source = normSource(u.source);
     if (!groups.has(source)) groups.set(source, []);
     groups.get(source).push(item);

@@ -270,6 +270,21 @@ function buildMotoristaFields(stepA: StepAData | null): OcrResultField[] {
   if (stepA.a3?.cidade && stepA.a3.uf) {
     f.push({ label: "Cidade / UF", value: `${stepA.a3.cidade} / ${stepA.a3.uf}` });
   }
+  // FASE 3 (Rodopar) — dados complementares (card A4). Mostrados na revisão
+  // porque são obrigatórios e incluem dados sensíveis (PIS/banco) que o
+  // motorista deve conferir antes do envio.
+  const a4 = stepA.a4;
+  if (a4?.sexo) f.push({ label: "Sexo", value: a4.sexo === "feminino" ? "Feminino" : "Masculino" });
+  if (a4?.estado_civil) f.push({ label: "Estado civil", value: a4.estado_civil });
+  if (a4?.cor_raca) f.push({ label: "Cor / raça", value: a4.cor_raca });
+  if (a4?.pis) f.push({ label: "PIS", value: a4.pis });
+  if (a4?.rg_data) f.push({ label: "Data do RG", value: a4.rg_data });
+  if (a4?.banco?.bank) {
+    f.push({
+      label: "Banco",
+      value: `${a4.banco.bank.nome} · ag. ${a4.banco.agencia} · c. ${a4.banco.conta}`,
+    });
+  }
   // Tag/Pancary/Rastreador foram movidos para a seção do cavalo em 2026-05-16
   // (atributos do veículo, não do motorista).
   return f;

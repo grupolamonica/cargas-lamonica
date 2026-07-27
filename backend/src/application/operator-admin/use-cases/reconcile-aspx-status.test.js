@@ -33,8 +33,7 @@ const baseDeps = (rows, extra = {}) => ({
 
 const rowOf = async (id) =>
   (await query(
-    `SELECT sheet_status, sheet_motorista, sheet_cavalo, sheet_carreta,
-            sheet_data_carregamento, sheet_data_descarga FROM public.cargas WHERE id = $1`,
+    `SELECT sheet_status, sheet_motorista, sheet_cavalo, sheet_carreta FROM public.cargas WHERE id = $1`,
     [id],
   )).rows[0];
 
@@ -68,7 +67,7 @@ describe("reconcileAspxStatus (DC-316 completo)", () => {
     expect((await rowOf(carga.id)).sheet_status).toBe("AGUARDANDO CARREGAMENTO");
   });
 
-  it("sob o gate (AGUARDANDO CARREGAMENTO): sincroniza status + motorista/placas + datas", async () => {
+  it("sob o gate (AGUARDANDO CARREGAMENTO): sincroniza status + motorista/placas (datas fora de escopo)", async () => {
     const carga = await seedCargo({ cliente_id: clienteId, sheet_lh: "LT-100" });
     await setSheetFields(carga.id, {
       sheet_status: "AGUARDANDO CARREGAMENTO",
@@ -94,13 +93,13 @@ describe("reconcileAspxStatus (DC-316 completo)", () => {
     expect(row.sheet_motorista).toBe("JOAO DA SILVA");
     expect(row.sheet_cavalo).toBe("ABC1D23");
     expect(row.sheet_carreta).toBe("XYZ9Z88");
-    expect(row.sheet_data_carregamento).toBe("2026-07-27 08:00");
-    expect(row.sheet_data_descarga).toBe("2026-07-28 10:00");
     expect(writes[0]).toMatchObject({
       lh: "LT-100", source: "shopee", status: "CARREGADO",
       motorista: "JOAO DA SILVA", cavalo: "ABC1D23", carreta: "XYZ9Z88",
-      dataCarregamento: "2026-07-27 08:00", dataDescarga: "2026-07-28 10:00",
     });
+    // datas NÃO sincronizam (fora de escopo — convenção ISO em sheet_data_*)
+    expect(writes[0].dataCarregamento).toBeUndefined();
+    expect(writes[0].dataDescarga).toBeUndefined();
   });
 
   it("gate FECHADO (AGUARDANDO DESCARGA): só o status muda; motorista/datas NÃO; write-back não apaga motorista", async () => {

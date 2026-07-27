@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { isSheetWritebackEnabled, writeAllocationsToSheet } from "./sheet-writeback.js";
+import {
+  isSheetWritebackEnabled,
+  writeAllocationsToSheet,
+  formatSheetDateLabel,
+  buildSystemCargoShellRow,
+} from "./sheet-writeback.js";
 
 const URL_KEY = "GOOGLE_SHEET_WRITEBACK_URL";
 const SECRET_KEY = "GOOGLE_SHEET_WRITEBACK_SECRET";
@@ -79,6 +84,75 @@ describe("sheet-writeback", () => {
     expect(body.updates[1]).toEqual({ lh: "L2", motorista: "B", cavalo: "", carreta: "" });
     expect("status" in body.updates[1]).toBe(false);
     expect("vinculo" in body.updates[1]).toBe(false);
+  });
+
+  it("createIfMissing encaminha os campos de linha completa (carga do sistema); ausente → nem createIfMissing nem campos", async () => {
+    process.env[URL_KEY] = TEST_URL;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true, updated: 1, created: 1 }));
+    await writeAllocationsToSheet(
+      [
+        {
+          lh: "LT-SYS-1", motorista: "ABELARDO", cavalo: "CUA1123", carreta: "FDZ0B46", status: "",
+          createIfMissing: true, tipo: "Spot", dataCarregamento: "01/08/2026 14:00",
+          dataDescarga: "03/08/2026 09:00", origem: "SJ Rio Preto / SP", destino: "Simoes Filho / BA",
+        },
+        // Edição normal (LH da planilha): sem createIfMissing → não encaminha nada disso.
+        { lh: "LT-SHEET-1", motorista: "B", tipo: "ForeCast", origem: "IGNORAR" },
+      ],
+      { fetchImpl },
+    );
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.updates[0]).toEqual({
+      lh: "LT-SYS-1", motorista: "ABELARDO", cavalo: "CUA1123", carreta: "FDZ0B46", status: "",
+      createIfMissing: true, tipo: "Spot", dataCarregamento: "01/08/2026 14:00",
+      dataDescarga: "03/08/2026 09:00", origem: "SJ Rio Preto / SP", destino: "Simoes Filho / BA",
+    });
+    // Sem createIfMissing → tipo/origem NÃO são encaminhados (não criam/tocam a linha).
+    expect(body.updates[1]).toEqual({ lh: "LT-SHEET-1", motorista: "B", cavalo: "", carreta: "" });
+    expect("createIfMissing" in body.updates[1]).toBe(false);
+    expect("tipo" in body.updates[1]).toBe(false);
+  });
+
+  it("createOnly encaminha os campos de linha (linha-casca do lançamento/aceite)", async () => {
+    process.env[URL_KEY] = TEST_URL;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true, updated: 0, created: 1 }));
+    await writeAllocationsToSheet(
+      [
+        {
+          lh: "LT-SHELL-1", motorista: "", cavalo: "", carreta: "", status: "",
+          createOnly: true, tipo: "", dataCarregamento: "05/08/2026 14:00",
+          dataDescarga: "", origem: "SJ Rio Preto / SP", destino: "Simoes Filho / BA",
+        },
+      ],
+      { fetchImpl },
+    );
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.updates[0]).toEqual({
+      lh: "LT-SHELL-1", motorista: "", cavalo: "", carreta: "", status: "",
+      createOnly: true, tipo: "", dataCarregamento: "05/08/2026 14:00",
+      dataDescarga: "", origem: "SJ Rio Preto / SP", destino: "Simoes Filho / BA",
+    });
+    expect("createIfMissing" in body.updates[0]).toBe(false);
+  });
+
+  it("formatSheetDateLabel: ISO → DD/MM/YYYY HH:MM; não-ISO passa direto; vazio → ''", () => {
+    expect(formatSheetDateLabel("2026-08-05T14:00")).toBe("05/08/2026 14:00");
+    expect(formatSheetDateLabel("A confirmar")).toBe("A confirmar");
+    expect(formatSheetDateLabel(null)).toBe("");
+    expect(formatSheetDateLabel("")).toBe("");
+  });
+
+  it("buildSystemCargoShellRow: monta a linha-casca (createOnly, sem motorista, datas formatadas)", () => {
+    const shell = buildSystemCargoShellRow({
+      lh: " LT-X1 ", source: "shopee", origem: "A / SP", destino: "B / BA",
+      carregamentoLabel: "2026-08-05T14:00", descargaLabel: null,
+    });
+    expect(shell).toEqual({
+      lh: "LT-X1", source: "shopee", createOnly: true,
+      motorista: "", cavalo: "", carreta: "", status: "", tipo: "",
+      dataCarregamento: "05/08/2026 14:00", dataDescarga: "",
+      origem: "A / SP", destino: "B / BA",
+    });
   });
 
   it("resposta ok:false (ex.: forbidden) → ok:false, não lança", async () => {
