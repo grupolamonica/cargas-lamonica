@@ -21,6 +21,13 @@ export interface OcrUploadTileProps {
   /** MIME types aceitos. Padrão: image/* + application/pdf. */
   accept?: string;
   /**
+   * Regra Rodopar/PRD: documentos oficiais (CNH, CRLV, cartão CNPJ) DEVEM ser
+   * PDF. Quando true, o tile só aceita PDF (`accept` vira application/pdf) e
+   * REJEITA foto/print/imagem na seleção (valida o magic number %PDF, à prova
+   * de drag-drop). Comprovante de residência NÃO usa isto (só "prefira PDF").
+   */
+  requirePdf?: boolean;
+  /**
    * Captura preferida da câmera nativa (mobile). Quando definida, o botão
    * "Tirar foto" usa `capture` para abrir a câmera direto; o botão "Enviar
    * arquivo" ignora o capture e abre o picker nativo (galeria/arquivos/PDF).
@@ -196,6 +203,7 @@ function humanizeOcrError(message?: string): string {
  */
 export function OcrUploadTile({
   accept = DEFAULT_ACCEPT,
+  requirePdf = false,
   capture,
   maxSizeMb = DEFAULT_MAX_SIZE_MB,
   onFile,
@@ -229,6 +237,19 @@ export function OcrUploadTile({
       // Reset value para permitir reescolher o mesmo arquivo após correção
       event.target.value = "";
       return;
+    }
+    // Regra PDF (Rodopar/PRD) — documento oficial precisa ser PDF. Valida o
+    // magic number %PDF (à prova de drag-drop / accept driblado), não só o MIME.
+    if (requirePdf) {
+      const head = await readFirstBytes(file, 5);
+      const isPdf = magicNumberMatches(head, [0x25, 0x50, 0x44, 0x46, 0x2d]); // "%PDF-"
+      if (!isPdf) {
+        setSizeError(
+          "Este documento precisa ser enviado em PDF (não aceitamos foto ou print). Envie o arquivo PDF original.",
+        );
+        event.target.value = "";
+        return;
+      }
     }
     // Bug-2: valida conteudo real (magic number + tamanho minimo) antes de
     // chamar o pai. Evita que arquivo de 12 bytes ("PNG fake") suba pro OCR
@@ -312,7 +333,7 @@ export function OcrUploadTile({
           ref={cameraInputRef}
           id={`${inputId}-camera`}
           type="file"
-          accept={accept}
+          accept={requirePdf ? "application/pdf" : accept}
           capture={capture}
           className="sr-only"
           onChange={handleFileChange}
@@ -324,7 +345,7 @@ export function OcrUploadTile({
         ref={fileInputRef}
         id={inputId}
         type="file"
-        accept={accept}
+        accept={requirePdf ? "application/pdf" : accept}
         className="sr-only"
         onChange={handleFileChange}
         aria-label={`${label} (enviar arquivo)`}

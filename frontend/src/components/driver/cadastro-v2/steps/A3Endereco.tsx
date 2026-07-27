@@ -308,7 +308,7 @@ export function A3Endereco({
         accept="image/*,application/pdf"
         maxSizeMb={8}
         label="Comprovante de residência"
-        helper="Conta de luz, água, internet ou similar — últimos 3 meses"
+        helper="Conta de luz, água, internet ou similar — últimos 3 meses. De preferência em PDF."
         state={tileState}
         previewName={previewName}
         extractedData={tileState === "success" ? extractedFields : undefined}

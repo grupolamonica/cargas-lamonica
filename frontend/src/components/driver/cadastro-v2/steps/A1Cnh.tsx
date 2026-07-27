@@ -346,10 +346,10 @@ export function A1Cnh({
       </header>
 
       <OcrUploadTile
-        accept="image/*,application/pdf"
+        requirePdf
         maxSizeMb={8}
         label="CNH do motorista"
-        helper="Frente, com todos os dados visíveis"
+        helper="Envie o PDF original da CNH (não aceitamos foto/print)."
         state={tileState}
         previewName={previewName}
         extractedData={tileState === "success" && !manualMode ? extractedFields : undefined}

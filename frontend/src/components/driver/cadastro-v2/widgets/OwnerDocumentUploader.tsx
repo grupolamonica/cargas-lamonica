@@ -376,13 +376,13 @@ export function OwnerDocumentUploader({
     ownerDocType === "cpf" ? "CNH do proprietário" : "Cartão CNPJ";
   const ocrHelper =
     ownerDocType === "cpf"
-      ? "Frente, com todos os dados visíveis (foto ou PDF)"
-      : "Frente, com razão social e CNPJ visíveis (foto ou PDF)";
+      ? "Envie o PDF original da CNH (não aceitamos foto/print)."
+      : "Envie o PDF original do cartão CNPJ (não aceitamos foto/print).";
 
   return (
     <div className="space-y-4">
       <OcrUploadTile
-        accept="image/*,application/pdf"
+        requirePdf
         maxSizeMb={8}
         label={ocrLabel}
         helper={ocrHelper}

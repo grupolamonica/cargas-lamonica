@@ -299,7 +299,7 @@ export function OwnerEnderecoComprovante({
             ? "Comprovante de residência"
             : "Comprovante de endereço (opcional)"
         }
-        helper="Conta de luz, água, internet ou similar — últimos 3 meses"
+        helper="Conta de luz, água, internet ou similar — últimos 3 meses. De preferência em PDF."
         state={tileState}
         previewName={previewName}
         extractedData={tileState === "success" ? extractedFields : undefined}
