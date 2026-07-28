@@ -113,20 +113,38 @@ export default function NotificationsBell() {
   // DC-279 — dispara o alerta completo (som de alarme + notificação do SO + card na
   // tela). Compartilhado pela detecção real e pelo botão de teste (dev). O card fica
   // na tela até o operador dispensar/aceitar (notificação visual persistente).
+  // Alvo do alarme sonoro em curso: ids das notificações que dispararam o loop de voz
+  // + id do toast/card. Servem para "Dispensar para todos" — quando essas notificações
+  // viram `seen` (por qualquer operador), o loop para em TODAS as telas (efeito abaixo).
+  const alarmingIdsRef = useRef<Set<string> | null>(null);
+  const alarmToastIdRef = useRef<string | number | null>(null);
+
   const fireSpotAlert = useCallback(
-    (opts: { count: number; rota: string; body?: string | null; tag: string; onOpen: () => void }) => {
-      const { count, rota, body, tag, onOpen } = opts;
+    (opts: {
+      count: number;
+      rota: string;
+      body?: string | null;
+      tag: string;
+      ids: string[];
+      audio: boolean;
+      onOpen: () => void;
+    }) => {
+      const { count, rota, body, tag, ids, audio, onOpen } = opts;
       const many = count > 1;
-      // Bip curto de atenção + voz em LOOP (repete até Dispensar ou aceitar no sistema).
-      playSpotBeep();
-      startSpeakingLoop(many ? "Programação disponível" : "Spot disponível");
+      // Som (bip + voz em LOOP) SÓ quando a carga é forecast (audio=true). Os demais
+      // tipos (Adhoc/FM Hub/Nestlé) ainda aparecem no sino + card, mas sem alarme sonoro.
+      if (audio) {
+        playSpotBeep();
+        startSpeakingLoop(many ? "Programação disponível" : "Spot disponível");
+        alarmingIdsRef.current = new Set(ids);
+      }
       showDesktopNotification({
         title: many ? `🚚 Programação disponível — ${count} cargas` : "🚚 Spot disponível",
         body: many ? "Clique para ver e aceitar na Programação" : `${rota}${body ? ` · ${body}` : ""}`,
         tag,
         onClick: onOpen,
       });
-      toast.custom(
+      const toastId = toast.custom(
         (id) => (
           <div className="flex w-[380px] max-w-[92vw] items-start gap-3 rounded-2xl border border-blue-200 bg-white p-4 shadow-xl dark:border-blue-500/40 dark:bg-slate-900">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm">
@@ -156,7 +174,17 @@ export default function NotificationsBell() {
                   type="button"
                   onClick={() => {
                     toast.dismiss(id);
-                    stopSpeakingLoop(); // dispensar para a voz
+                    stopSpeakingLoop(); // silencia a voz nesta tela na hora
+                    // DISPENSAR PARA TODOS: marca as notificações do alarme como vistas
+                    // (linhas globais em operator_notifications) → os outros operadores
+                    // param o alarme no próximo poll (efeito "parar loop quando visto").
+                    if (ids.length) {
+                      void markOperatorNotificationsSeen({ ids })
+                        .then(() => queryClient.invalidateQueries({ queryKey: NOTIFICATIONS_KEY }))
+                        .catch(() => {});
+                    }
+                    alarmingIdsRef.current = null;
+                    alarmToastIdRef.current = null;
                   }}
                   className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-100 dark:hover:bg-slate-800"
                 >
@@ -168,8 +196,9 @@ export default function NotificationsBell() {
         ),
         { duration: Infinity }, // fica na tela até dispensar/aceitar (visual persistente)
       );
+      if (audio) alarmToastIdRef.current = toastId;
     },
-    [],
+    [queryClient],
   );
 
   // DC-299 — alerta LEVE de novo motorista na fila: bip + 1 aviso de voz (SEM loop — o
@@ -249,6 +278,8 @@ export default function NotificationsBell() {
         rota: "Simões Filho/BA → Jaboatão dos Guararapes/PE",
         body: "TESTE · aceite na Programação",
         tag: `teste-${count}`,
+        ids: [], // teste local: sem ids reais p/ "dispensar para todos"
+        audio: true, // o botão de teste serve justamente p/ testar o som
         onOpen: () => {
           setOpen(false);
           navigate("/programacao");
@@ -304,14 +335,44 @@ export default function NotificationsBell() {
     // "Ver a carga" leva TODAS as LHs da leva (não só a primeira) → mostra todas as
     // cargas do alerta na Programação. Uma leva (freshNew > 1) usa o link multi-LH.
     const lhs = freshNew.map(lhOf).filter(Boolean);
+    // Som SÓ quando há carga forecast na leva (metadata.is_forecast do scanner). Os
+    // demais tipos (Adhoc/FM Hub/Nestlé) alertam só visualmente (sino + card), sem voz.
+    const isForecast = (n: OperatorNotification) => {
+      const m = (n.metadata ?? {}) as Record<string, unknown>;
+      return m.is_forecast === true || m.tipo === "forecast";
+    };
+    const audio = freshNew.some(isForecast);
     fireSpotAlert({
       count: freshNew.length,
       rota,
       body: first.body,
       tag: first.id,
+      ids: freshNew.map((n) => n.id),
+      audio,
       onOpen: () => navigate(lhs.length > 1 ? spotHrefMany(lhs) : spotHref(first.metadata)),
     });
   }, [data, items, navigate, fireSpotAlert]);
+
+  // DISPENSAR PARA TODOS (DC-279 iter): o alarme sonoro roda em LOOP até ser dispensado.
+  // Quando as notificações que dispararam o alarme viram `seen` (por QUALQUER operador que
+  // clicou em Dispensar, ou abriu o sino), este efeito — que roda a cada poll (30s) em todas
+  // as telas — para o loop e fecha o card. Assim "Dispensar" vale para todos os operadores.
+  useEffect(() => {
+    if (!data) return;
+    const alarming = alarmingIdsRef.current;
+    if (!alarming || alarming.size === 0) return;
+    const byId = new Map(items.map((n) => [n.id, n]));
+    const allDismissed = [...alarming].every((id) => {
+      const n = byId.get(id);
+      return !n || n.seen; // sumiu da lista OU já foi vista → dispensada
+    });
+    if (allDismissed) {
+      stopSpeakingLoop();
+      if (alarmToastIdRef.current != null) toast.dismiss(alarmToastIdRef.current);
+      alarmingIdsRef.current = null;
+      alarmToastIdRef.current = null;
+    }
+  }, [data, items]);
 
   // DC-299 — novo motorista na fila. Mesmo padrão do spot (1ª leva com dados só registra
   // ids, sem alertar histórico; depois alerta 1x por lead novo). Alarme SÓ p/ reais
