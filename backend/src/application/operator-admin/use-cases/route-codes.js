@@ -1,9 +1,15 @@
 import { selectAllParallel } from "../../../infrastructure/supabase/paginate.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
+import { normalizeRouteCodeLocation } from "../../../domain/operator-admin/route-utils.js";
 
-// Chave estável da rota: origem→destino normalizados (trim + minúsculo + espaço
-// único). Mesma rota com casing/espaço diferente → mesma chave → mesmo código.
-const norm = (s) => (s ?? "").toString().trim().toLowerCase().replace(/\s+/g, " ");
+// Chave estável da rota p/ o CÓDIGO exibido: origem→destino canonicalizados por
+// GRAFIA (normalizeRouteCodeLocation) — dobra acento/caixa/espaço, sufixo de UF
+// ("/BA" vs " / BA") e sufixo operacional ("-03"). Antes usava só
+// trim+minúsculo+colapsa-espaço, então a MESMA rota gravada em formatos
+// diferentes (planilha "Simoes Filho / BA" vs sistema "Simoes Filho/BA") gerava
+// CÓDIGOS diferentes (rota 1 vs 188) — a origem das rotas "duplicadas". Sub-locais
+// distintos (Salvador Pirajá vs Retiro) permanecem separados (não usa apelidos).
+const norm = (s) => normalizeRouteCodeLocation(s);
 const keyOf = (origem, destino) => `${norm(origem)}|${norm(destino)}`;
 
 /**
