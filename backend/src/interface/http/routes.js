@@ -169,6 +169,7 @@ import {
 import { resolveOperatorCadastrosComErroResponse } from "./operator-admin/cadastros-com-erro.handlers.js";
 import { resolveOperatorCadastroBotsHealthResponse } from "./operator-admin/cadastro-bots-health.handlers.js";
 import { resolveOperatorCadastrosIncompletosResponse } from "./operator-admin/cadastros-incompletos.handlers.js";
+import { resolveOperatorAnexarSelfieResponse } from "./operator-admin/anexar-selfie.handlers.js";
 
 import {
   resolveDriverLoadFacetsResponse,
@@ -477,6 +478,26 @@ export function registerRoutes(app) {
   );
   // Resgate de rascunho: operador completa e submete em nome do motorista
   router.post("/api/operator/cadastros/:id/submeter", wrap(resolveOperatorSubmitDraftResponse));
+  // Anexar selfie (segurando a CNH) a um cadastro concluído sem ela (aba "Dados
+  // incompletos"). Multipart 1-file — mesmo multer/bucket do upload do wizard.
+  router.post(
+    "/api/operator/cadastros/:id/anexar-selfie",
+    (req, res, next) => {
+      draftFileUpload.single("file")(req, res, (err) => {
+        if (!err) return next();
+        const correlationId = req.correlationId || null;
+        if (err?.code === "LIMIT_FILE_SIZE") {
+          return res.status(413).json({ error: "FILE_TOO_LARGE", message: "Arquivo excede o limite de 8 MB.", meta: { correlationId } });
+        }
+        if (err?.code === "UNSUPPORTED_TYPE") {
+          return res.status(415).json({ error: "UNSUPPORTED_TYPE", message: "Tipo de arquivo nao suportado. Use JPEG, PNG, HEIC, HEIF ou PDF.", meta: { correlationId } });
+        }
+        console.warn("[operator.anexar-selfie.multer]", { correlationId, code: err?.code, message: err?.message });
+        return res.status(400).json({ error: "BadRequest", message: "Falha no upload do arquivo.", meta: { correlationId } });
+      });
+    },
+    wrap(resolveOperatorAnexarSelfieResponse),
+  );
 
   // Angellira automation (DC-111 / Sprint 1)
   router.post("/api/operator/cadastros/:id/angellira/precheck", wrap(resolveOperatorAngelliraPrecheckResponse));
