@@ -13,6 +13,7 @@
 
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { createRouteLookupKeys } from "../../../domain/operator-admin/route-utils.js";
+import { classifySpxTripType, isForecastTripName } from "../../../domain/operator-admin/spx-trip-type.js";
 import { getProgramacao } from "./get-programacao.js";
 import { getSpotAlertRouteKeys } from "./programacao-settings.js";
 
@@ -107,6 +108,10 @@ export async function notifyNewSpots({ correlationId, deps = {} } = {}) {
       const origem = r.origemCidadeUf || r.origem;
       const destino = r.destinoCidadeUf || r.destino;
       const quando = [r.data, r.horario].filter(Boolean).join(" ");
+      // Tipo da viagem (embutido no LH Trip Name): só "forecast" dispara o alarme
+      // SONORO no cliente (o sino/visual continua valendo p/ todos os tipos).
+      const tipo = classifySpxTripType(r.nome);
+      const isForecast = isForecastTripName(r.nome);
       await client.query(
         `INSERT INTO public.operator_notifications (kind, title, body, metadata)
          VALUES ('new_spot', $1, $2, $3::jsonb)`,
@@ -121,6 +126,9 @@ export async function notifyNewSpots({ correlationId, deps = {} } = {}) {
             horario: r.horario ?? null,
             route_key: routeKey,
             source: r.source ?? "spx",
+            // Tipo da viagem + flag de forecast (gate do alarme sonoro no cliente).
+            tipo,
+            is_forecast: isForecast,
             correlation_id: correlationId || null,
           }),
         ],
