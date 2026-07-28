@@ -355,12 +355,21 @@ export function VehicleCrlvUploader({
   // R-01 P0: só reseta quando a placa muda DE VERDADE (normalize). Se o parent
   // re-renderizar mandando "ABC1234 " vs "ABC1234", whitespace/case não devem
   // descartar OCR/snapshot já feitos.
+  //
+  // fix placa-divergente: comparamos o prop `plate` contra o VALOR ANTERIOR do
+  // prop (prevPlateRef), não contra o `state.placa`. Antes, ao hidratar um draft
+  // cuja placa ESCOLHIDA do documento (Y) diverge do horsePlate digitado (X), o
+  // state semeado (placa=Y) divergia do prop (X) e o efeito APAGAVA todo o OCR
+  // hidratado no mount (o motorista via o CRLV "sumir"). Agora o reset só ocorre
+  // quando o prop `plate` de fato muda (ex.: iterar carretas no Step D).
+  const prevPlateRef = useRef(plate);
   useEffect(() => {
     const normalizePlate = (s: string) =>
       (s ?? "").trim().toUpperCase().replace(/-/g, "").replace(/\s/g, "");
-    if (normalizePlate(plate) === normalizePlate(state.placa)) {
+    if (normalizePlate(plate) === normalizePlate(prevPlateRef.current)) {
       return;
     }
+    prevPlateRef.current = plate;
     setState(buildEmpty(plate));
     setTileState("empty");
     setPreviewName(undefined);
