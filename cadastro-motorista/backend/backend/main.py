@@ -12,6 +12,7 @@ from pydantic import BaseModel, field_validator
 import asyncio
 
 import anexo_storage
+import cnh_recorte
 import gpt4o_vision
 import infosimples
 import ocr_router
@@ -493,6 +494,11 @@ async def ocr_cnh(req: OCRRequest):
             )
             if novo_id:
                 envelope["id_cadastro_pasta"] = novo_id
+
+        # Garante frente E verso no envelope (OBRIGATORIO p/ SPX): se a Infosimples
+        # nao recortou (e-CNH PDF digital, ou fallback Vision), gera nos mesmos a
+        # partir do arquivo enviado. Assim o frontend sobe frente+verso pro Supabase.
+        await asyncio.to_thread(cnh_recorte.garantir_recortes_no_envelope, envelope, req.imagem)
 
         return envelope
     except Exception as e:
