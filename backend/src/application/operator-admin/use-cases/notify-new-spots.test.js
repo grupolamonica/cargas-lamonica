@@ -17,6 +17,7 @@ function makeRow(over) {
     horario: "08:00",
     tab: "planejado",
     isLinehaul: true,
+    acceptanceStatus: 0, // ainda não aceita (spot disponível p/ aceitar)
     podeLancar: true,
     jaLancada: false,
     expirada: false,
@@ -63,6 +64,7 @@ describe("notifyNewSpots (DC-279)", () => {
       makeRow({ lh: "LT-C", expirada: true }), // expirada → ignora
       makeRow({ lh: "LT-D", data: null }), // sem data ("a confirmar") → ignora
       makeRow({ lh: "LT-E", tab: "planejado", isLinehaul: false }), // não line-haul → ignora
+      makeRow({ lh: "LT-F", acceptanceStatus: 1 }), // JÁ ACEITA no SPX → não é spot disponível, não toca
     ];
     const { deps, inserts } = makeDeps({ rows, alertKeys: SELECTED_KEYS });
     const res = await notifyNewSpots({ deps });
@@ -72,6 +74,18 @@ describe("notifyNewSpots (DC-279)", () => {
     expect(inserts[0].metadata.lh).toBe("LT-A");
     expect(inserts[0].title).toContain("São Paulo/SP");
     expect(inserts[0].metadata.route_key).toBeTruthy();
+  });
+
+  it("NÃO toca em viagem planejado JÁ ACEITA no SPX (acceptance_status=1) — bug 'já aceitas ainda tocam'", async () => {
+    const rows = [
+      makeRow({ lh: "LT-ACC", acceptanceStatus: 1, motorista: "FULANO" }), // já aceita (muitas c/ motorista) → não toca
+      makeRow({ lh: "LT-OK", acceptanceStatus: 0 }), // ainda por aceitar → toca
+    ];
+    const { deps, inserts } = makeDeps({ rows, alertKeys: SELECTED_KEYS });
+    const res = await notifyNewSpots({ deps });
+    expect(res.notified).toBe(1);
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].metadata.lh).toBe("LT-OK");
   });
 
   it("notifica spot JÁ LANÇADO (auto-launch publica no portal mas não aceita no SPX) — #3", () => {
