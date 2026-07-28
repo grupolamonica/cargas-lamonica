@@ -1,4 +1,5 @@
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { buildHomonymIndex, stripDriverCpfSuffix, type HomonymIndex } from "@/lib/driverHomonyms";
 import {
   AlertTriangle,
   ArrowDown,
@@ -729,6 +730,29 @@ function VehicleChecklistIcons({ cavalo, carreta, cavaloChecklist, carretaCheckl
 // linha referencia via `list=`. Datalist = combobox nativo: autocomplete dos
 // cadastrados + texto livre, sem problemas de posicionamento dentro da tabela
 // com scroll (que um Popover teria).
+// DC-310 — índice de homônimos (nome → CPFs distintos) exposto p/ toda a árvore do
+// Monitor via contexto, evitando prop-drilling até AllocCell/RowDetailModal.
+const HomonymContext = createContext<HomonymIndex | null>(null);
+function useHomonymIndex(): HomonymIndex | null {
+  return useContext(HomonymContext);
+}
+
+// Selo "homônimo" ao lado do nome — sinaliza que há outro motorista com o MESMO nome
+// (não dá p/ saber qual só pelo nome gravado; o operador confere o CPF). Nada renderiza
+// quando o nome não é homônimo.
+function HomonymBadge({ name }: { name: string | null | undefined }) {
+  const homonym = useHomonymIndex();
+  if (!name || !homonym?.isHomonym(name)) return null;
+  return (
+    <span
+      title="Homônimo — há outro motorista com este mesmo nome. Confira o CPF antes de alocar."
+      className="ml-1 inline-flex shrink-0 items-center rounded bg-amber-100 px-1 text-[0.55rem] font-bold uppercase leading-tight text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
+    >
+      homônimo
+    </span>
+  );
+}
+
 const DRIVER_DATALIST_ID = "monitor-driver-options";
 const CAVALO_DATALIST_ID = "monitor-cavalo-options";
 const CARRETA_DATALIST_ID = "monitor-carreta-options";
@@ -1388,9 +1412,12 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
     onError: (e) => toast.error(e instanceof Error ? e.message : "Não foi possível salvar a carga."),
   });
 
+  // DC-310 — limpa o sufixo `(***NNN)` do dropdown de homônimos antes de comparar/gravar.
+  const motoristaClean = stripDriverCpfSuffix(form.motorista);
+
   // Trocou motorista/veículo? (comparado ao que veio na linha) → exige o motivo.
   const mvChanged =
-    form.motorista.trim() !== (row?.motoristas ?? "").trim() ||
+    motoristaClean !== (row?.motoristas ?? "").trim() ||
     form.cavalo.trim() !== (row?.cavalo ?? "").trim() ||
     form.carreta.trim() !== (row?.carreta ?? "").trim();
 
@@ -1403,7 +1430,7 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
     }
     // "Disponível" reabre a carga pro painel — só faz sentido SEM motorista. Com
     // motorista, BLOQUEIA (o operador remove o motorista antes; nunca removemos sozinho).
-    if (/^dispon[ií]vel$/i.test(form.status.trim()) && form.motorista.trim()) {
+    if (/^dispon[ií]vel$/i.test(form.status.trim()) && motoristaClean) {
       toast.error("Esta carga tem motorista. Remova o motorista antes de deixá-la Disponível.");
       return;
     }
@@ -1423,7 +1450,7 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
       data,
       horario,
       descarga: form.descarga, // datetime-local ou '' (limpa)
-      motorista: form.motorista.trim(),
+      motorista: motoristaClean,
       cavalo: form.cavalo.trim(),
       carreta: form.carreta.trim(),
       vinculo: form.vinculo.trim(),
@@ -1512,7 +1539,7 @@ function NewCargoModal({ open, onClose, statusOptions }: { open: boolean; onClos
           lh: form.lh.trim(),
           status: form.status.trim(),
           tipo: form.tipo.trim(),
-          motorista: form.motorista.trim(),
+          motorista: stripDriverCpfSuffix(form.motorista),
           cavalo: form.cavalo.trim(),
           carreta: form.carreta.trim(),
         });
@@ -1616,7 +1643,10 @@ function AllocCell({ row, enriched, aspxAssigned, cavaloChecklist, carretaCheckl
         )}
         <div className="min-w-0 flex-1">
           {row.motoristas ? (
-            <span className="truncate text-xs font-medium text-foreground">{row.motoristas}</span>
+            <span className="inline-flex max-w-full items-center">
+              <span className="truncate text-xs font-medium text-foreground">{row.motoristas}</span>
+              <HomonymBadge name={row.motoristas} />
+            </span>
           ) : (
             <span className="text-xs text-muted-foreground/50">—</span>
           )}
@@ -1659,7 +1689,10 @@ function AllocCell({ row, enriched, aspxAssigned, cavaloChecklist, carretaCheckl
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             {row.motoristas ? (
-              <span className="w-[46%] shrink-0 truncate text-xs font-medium text-foreground" title={row.motoristas}>{row.motoristas}</span>
+              <>
+                <span className="w-[46%] shrink-0 truncate text-xs font-medium text-foreground" title={row.motoristas}>{row.motoristas}</span>
+                <HomonymBadge name={row.motoristas} />
+              </>
             ) : (
               <span className="w-[46%] shrink-0 truncate text-xs text-muted-foreground/50">Sem motorista</span>
             )}
@@ -2896,10 +2929,14 @@ function RowDetailModal({
   const pinned = Boolean(alloc?.alloc_pinned ?? row.pinned);
   const allocEditable = editable && !pinned;
 
+  // DC-310 — o dropdown de homônimos oferece `Nome (***NNN)`; o sufixo é só visual,
+  // então limpamos antes de comparar/gravar (o nome persistido continua sem sufixo).
+  const allocMotoristaEff = stripDriverCpfSuffix(allocForm.motorista);
+
   // Trocou o motorista/veículo em relação ao EFETIVO (override ?? planilha)?
   // (mudança só de status/tipo não pede motivo — e não regrava motorista/veículo.)
   const mvChanged =
-    allocForm.motorista !== effectiveAllocField(alloc?.alloc_motorista, row.motoristas) ||
+    allocMotoristaEff !== effectiveAllocField(alloc?.alloc_motorista, row.motoristas) ||
     allocForm.cavalo !== effectiveAllocField(alloc?.alloc_cavalo, row.cavalo) ||
     allocForm.carreta !== effectiveAllocField(alloc?.alloc_carreta, row.carreta);
 
@@ -2907,7 +2944,7 @@ function RowDetailModal({
     // Motorista EFETIVO (override do operador OU planilha) — usado no guard abaixo.
     // Considera o motorista da planilha também: não dá pra deixar "Disponível" uma
     // carga que a planilha ainda escala (o portal a ofereceria = duplo-booking).
-    const savedMotorista = effectiveAllocField(allocEditable ? allocForm.motorista : alloc?.alloc_motorista, row.motoristas).trim();
+    const savedMotorista = effectiveAllocField(allocEditable ? allocMotoristaEff : alloc?.alloc_motorista, row.motoristas).trim();
     // "Disponível" reabre a carga pro painel — e só faz sentido SEM motorista. Com
     // motorista, BLOQUEIA: o operador precisa remover o motorista primeiro (regra do
     // usuário: nunca remover o motorista automaticamente, apenas impedir "Disponível").
@@ -2945,7 +2982,7 @@ function RowDetailModal({
       // valor pré-preenchido (efetivo = planilha), o que "congelava" o motorista da
       // planilha como override e voltaria a escondê-lo se a Shopee re-escalasse.
       ...(allocEditable && mvChanged
-        ? { motorista: allocForm.motorista, cavalo: allocForm.cavalo, carreta: allocForm.carreta }
+        ? { motorista: allocMotoristaEff, cavalo: allocForm.cavalo, carreta: allocForm.carreta }
         : {}),
       // Motivo da troca — só quando o motorista/veículo mudou (o modal exige).
       ...(descricao ? { descricao } : {}),
@@ -3282,7 +3319,7 @@ function RowDetailModal({
                 <p className="text-xs text-muted-foreground/50">Sem motorista nesta viagem.</p>
               ) : (
                 <div className="space-y-1">
-                  <ModalRow label="Nome (planilha)" value={<span className="font-semibold">{row.motoristas}</span>} />
+                  <ModalRow label="Nome (planilha)" value={<span className="inline-flex items-center font-semibold">{row.motoristas}<HomonymBadge name={row.motoristas} /></span>} />
                   {enriched ? (
                     <>
                       {enriched.aspx_display_name && (
@@ -3514,7 +3551,7 @@ function ReservaPanelModal({ open, carga, reservas, onPull, onClose }: {
   });
 
   const submitAdd = () => {
-    const motorista = addForm.motorista.trim();
+    const motorista = stripDriverCpfSuffix(addForm.motorista);
     if (!motorista || !origem || !destino) return;
     createMut.mutate({ motorista, cavalo: addForm.cavalo.trim() || undefined, carreta: addForm.carreta.trim() || undefined, origem, destino });
   };
@@ -3524,7 +3561,7 @@ function ReservaPanelModal({ open, carga, reservas, onPull, onClose }: {
   };
   const submitEdit = () => {
     if (!editId) return;
-    updateMut.mutate({ reservaId: editId, motorista: editForm.motorista.trim(), cavalo: editForm.cavalo.trim(), carreta: editForm.carreta.trim() });
+    updateMut.mutate({ reservaId: editId, motorista: stripDriverCpfSuffix(editForm.motorista), cavalo: editForm.cavalo.trim(), carreta: editForm.carreta.trim() });
   };
   const addFromHistory = (h: RouteDriverHistoryEntry) => {
     if (!origem || !destino) return;
@@ -3939,18 +3976,31 @@ export default function SheetMonitor() {
     retry: 1,
   });
 
+  // DC-310 — índice de homônimos a partir dos motoristas cadastrados (nome→CPFs distintos).
+  const homonymIndex = useMemo(
+    () =>
+      buildHomonymIndex(
+        (suggestionsData?.drivers ?? []).map((d) => ({ displayName: d.displayName, document: d.contact?.document })),
+      ),
+    [suggestionsData],
+  );
+
   // Opções = valores já presentes nas linhas (planilha/alocação) + cadastrados.
   const { driverOptions, cavaloOptions, carretaOptions } = useMemo(() => {
     const drivers = new Set<string>();
     const cavalos = new Set<string>();
     const carretas = new Set<string>();
+    // Cadastrados (têm CPF): homônimos entram com sufixo `Nome (***NNN)` p/ o operador
+    // distinguir os dois no dropdown; não-homônimos entram com o nome cru (sem ruído).
+    for (const d of suggestionsData?.drivers ?? []) {
+      if (d.displayName) drivers.add(homonymIndex.labelFor(d.displayName, d.contact?.document));
+    }
     for (const r of items) {
-      if (r.motoristas) drivers.add(r.motoristas);
+      // Nomes já nas linhas: só os NÃO-homônimos (os homônimos já têm opções com sufixo
+      // vindas dos cadastrados — evita reintroduzir o nome ambíguo cru no dropdown).
+      if (r.motoristas && !homonymIndex.isHomonym(r.motoristas)) drivers.add(r.motoristas);
       if (r.cavalo) cavalos.add(r.cavalo);
       if (r.carreta) carretas.add(r.carreta);
-    }
-    for (const d of suggestionsData?.drivers ?? []) {
-      if (d.displayName) drivers.add(d.displayName);
     }
     for (const v of suggestionsData?.vehicles ?? []) {
       if (!v.plate) continue;
@@ -3959,7 +4009,7 @@ export default function SheetMonitor() {
     }
     const sort = (s: Set<string>) => Array.from(s).sort((a, b) => a.localeCompare(b, "pt-BR"));
     return { driverOptions: sort(drivers), cavaloOptions: sort(cavalos), carretaOptions: sort(carretas) };
-  }, [items, suggestionsData]);
+  }, [items, suggestionsData, homonymIndex]);
 
   // ── Edição inline da alocação ─────────────────────────────────────────────────
   const {
@@ -3984,7 +4034,9 @@ export default function SheetMonitor() {
   const handleStartEdit = useCallback((lh: string) => setEditingLh(lh), []);
   const handleCancelEdit = useCallback(() => setEditingLh(null), []);
   const handleSaveInline = useCallback(
-    (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string; tipo: string }) => {
+    (rawPayload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string; tipo: string }) => {
+      // DC-310 — limpa o sufixo `(***NNN)` do dropdown de homônimos antes de comparar/gravar.
+      const payload = { ...rawPayload, motorista: stripDriverCpfSuffix(rawPayload.motorista) };
       const target = itemsRef.current.find((r) => r.lh === payload.lh);
       const mvChanged =
         !target ||
@@ -4548,6 +4600,7 @@ export default function SheetMonitor() {
   }, []);
 
   return (
+    <HomonymContext.Provider value={homonymIndex}>
     <div>
       <DashboardHeader title="Monitor" subtitle="Visao completa dos dados do Google Sheets" />
 
@@ -4877,5 +4930,6 @@ export default function SheetMonitor() {
         onClose={() => setStandbyPickerLh(null)}
       />
     </div>
+    </HomonymContext.Provider>
   );
 }
