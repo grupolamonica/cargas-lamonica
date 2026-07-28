@@ -2453,12 +2453,23 @@ function SheetMonitorTable({
 
 // ─── Filtro por rota ────────────────────────────────────────────────────────────
 
-// Chave de rota = "ORIGEM → DESTINO" (usada no filtro de rota). Sem rota → "—".
+// Chave de rota = "ORIGEM → DESTINO" (texto cru). Usada no ARRASTO/FILA/standby e
+// como rótulo — alinhada ao backend (reassign/descend usam origem→destino cru).
 function routeKeyOf(row: SheetMonitorRowType) {
   const o = (row.origem || "").trim();
   const d = (row.destino || "").trim();
   if (!o && !d) return "—";
   return `${o || "—"} → ${d || "—"}`;
+}
+
+// Chave de rota p/ o FILTRO (dropdown "Rotas"): agrupa por CÓDIGO da rota, que é
+// CANÔNICO (uma rota = um código — PR #329). Assim a MESMA rota gravada em formatos
+// diferentes conforme a fonte (planilha "Cidade / BA", sistema "Cidade/BA", antigo
+// "SIMOES FILHO") vira UMA opção só, em vez de N opções "R1" idênticas. Sem código
+// (rota nova ainda sem code / reserva) → cai pro texto cru. NÃO usada no arrasto/fila
+// (esses seguem routeKeyOf cru p/ não divergir da validação de rota do backend).
+function routeFilterKeyOf(row: SheetMonitorRowType) {
+  return row.routeCodigo != null ? `R${row.routeCodigo}` : routeKeyOf(row);
 }
 
 // ── Ordem da fila do Monitor (compartilhada entre a exibição e a cascata) ───────
@@ -4094,20 +4105,29 @@ export default function SheetMonitor() {
     const desFrom = descargaFromFilter ? new Date(descargaFromFilter).getTime() : null;
     const desTo = descargaToFilter ? new Date(descargaToFilter).getTime() : null;
     const inDate = (row: SheetMonitorRowType) => rowMatchesDateRanges(row, { carFrom, carTo, desFrom, desTo });
-    const byKey = new Map<string, number | null>();
+    // Agrupa por CÓDIGO canônico (routeFilterKeyOf) → UMA opção por rota, mesmo que
+    // as cargas gravem origem/destino em formatos diferentes. Guarda um rótulo
+    // representativo (texto cru) p/ exibir — prefere grafia MISTA ("Simoes Filho / BA")
+    // ao ALL-CAPS ("SIMOES FILHO"), que é mais legível.
+    const byKey = new Map<string, { codigo: number | null; label: string }>();
     items.forEach((item) => {
       if (!inDate(item)) return;
-      const k = routeKeyOf(item);
-      if (!byKey.has(k)) byKey.set(k, item.routeCodigo ?? null);
+      const k = routeFilterKeyOf(item);
+      const label = routeKeyOf(item);
+      const prev = byKey.get(k);
+      if (!prev) byKey.set(k, { codigo: item.routeCodigo ?? null, label });
+      else if (prev.label === prev.label.toUpperCase() && label !== label.toUpperCase()) {
+        byKey.set(k, { codigo: prev.codigo, label });
+      }
     });
     // Ordena por CÓDIGO da rota (operator-only); rotas sem código ainda por nome.
     return Array.from(byKey.entries())
-      .map(([key, codigo]) => ({ key, codigo }))
+      .map(([key, v]) => ({ key, codigo: v.codigo, label: v.label }))
       .sort((a, b) => {
         if (a.codigo != null && b.codigo != null) return a.codigo - b.codigo;
         if (a.codigo != null) return -1;
         if (b.codigo != null) return 1;
-        return a.key.localeCompare(b.key, "pt-BR");
+        return a.label.localeCompare(b.label, "pt-BR");
       });
   }, [items, dateFromFilter, dateToFilter, descargaFromFilter, descargaToFilter]);
 
@@ -4126,7 +4146,7 @@ export default function SheetMonitor() {
   const vinculoSelectOptions = useMemo<MultiOption[]>(() => vinculoOptions.map((v) => ({ value: v, label: v })), [vinculoOptions]);
   const clienteSelectOptions = useMemo<MultiOption[]>(() => clienteOptions.map((c) => ({ value: c, label: c })), [clienteOptions]);
   const routeSelectOptions = useMemo<MultiOption[]>(
-    () => routeOptions.map((r) => ({ value: r.key, label: r.codigo != null ? `R${r.codigo} — ${r.key}` : r.key })),
+    () => routeOptions.map((r) => ({ value: r.key, label: r.codigo != null ? `R${r.codigo} — ${r.label}` : r.label })),
     [routeOptions],
   );
 
@@ -4159,7 +4179,7 @@ export default function SheetMonitor() {
       result = result.filter((r) => r.cliente != null && clienteFilter.includes(r.cliente));
 
     if (routeFilter.length > 0)
-      result = result.filter((r) => routeFilter.includes(routeKeyOf(r)));
+      result = result.filter((r) => routeFilter.includes(routeFilterKeyOf(r)));
 
     // Atribuição — OR entre os selecionados (com motorista / sem motorista / disponíveis).
     if (assignmentFilter.length > 0)
