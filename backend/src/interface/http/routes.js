@@ -27,6 +27,7 @@ import {
   resolveMessageTemplatesListResponse,
   resolveMessageTemplateUpdateResponse,
   resolveOperatorNotificationsClearResponse,
+  resolveOperatorNotificationsTestSpotResponse,
   resolveOperatorNotificationsListResponse,
   resolveOperatorNotificationsSeenResponse,
   resolveOutreachOptoutAddResponse,
@@ -419,6 +420,7 @@ export function registerRoutes(app) {
   router.get("/api/operator/notifications", wrap(resolveOperatorNotificationsListResponse));
   router.post("/api/operator/notifications/seen", wrap(resolveOperatorNotificationsSeenResponse));
   router.post("/api/operator/notifications/clear", wrap(resolveOperatorNotificationsClearResponse));
+  router.post("/api/operator/notifications/test-spot", wrap(resolveOperatorNotificationsTestSpotResponse));
 
   // Driver outreach — chat com motoristas (WhatsApp)
   router.get("/api/operator/chat/conversations", wrap(resolveChatConversationsResponse));

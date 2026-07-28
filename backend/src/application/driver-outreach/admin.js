@@ -788,6 +788,34 @@ export async function listOperatorNotifications({ limit = 40 } = {}) {
   });
 }
 
+// DC-279 (dev/teste) — cria notificação(ões) de spot REAIS para testar o fluxo
+// completo (sino persistente + som + card) sem depender do feed SPX ao vivo. O
+// gate fica no handler HTTP (ENABLE_TEST_NOTIFICATIONS), então não roda em prod.
+export async function createTestSpotNotifications({ count = 1 } = {}) {
+  const total = Math.max(1, Math.min(10, Number(count) || 1));
+  return withPgClient(async (client) => {
+    for (let i = 0; i < total; i += 1) {
+      const lh = `LT-TESTE-${Date.now()}-${i}`;
+      await client.query(
+        `INSERT INTO public.operator_notifications (kind, title, body, metadata)
+         VALUES ('new_spot', $1, $2, $3::jsonb)`,
+        [
+          "[TESTE] Nova carga spot: Simões Filho/BA → Jaboatão dos Guararapes/PE",
+          "TESTE · aceite na Programação",
+          JSON.stringify({
+            lh,
+            origem: "Simões Filho/BA",
+            destino: "Jaboatão dos Guararapes/PE",
+            source: "teste",
+            test: true,
+          }),
+        ],
+      );
+    }
+    return { ok: true, created: total };
+  });
+}
+
 export async function markNotificationsSeen(ids) {
   const list = (Array.isArray(ids) ? ids : []).filter(Boolean);
   if (!list.length) return { updated: 0 };

@@ -889,6 +889,16 @@ export async function clearOperatorNotifications(input: { ids?: string[]; all?: 
   });
 }
 
+/** DC-279 (dev/teste) — cria notificação(ões) de spot REAIS (grava no banco → sino). */
+export async function createTestSpotNotification(count = 1) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; created: number }>("/api/operator/notifications/test-spot", {
+    method: "POST",
+    body: { count },
+    accessToken,
+  });
+}
+
 // ─── Chat WhatsApp ───────────────────────────────────────────────────────────
 
 export interface ChatConversation {
@@ -1855,6 +1865,8 @@ export async function runAutoLaunchSpots(): Promise<AutoLaunchResult> {
 
 export interface ProgramacaoSettings {
   spotAutolaunchEnabled: boolean;
+  /** DC-279: rotas (origin_key|destination_key) que disparam alerta de spot. */
+  alertRouteKeys: string[];
   updatedAt: string | null;
 }
 
@@ -1914,6 +1926,16 @@ export async function deleteProgramacaoRouteColor(id: string): Promise<{ deleted
     accessToken,
     method: "DELETE",
     body: { id },
+  });
+}
+
+/** DC-279 — define quais rotas cadastradas disparam alerta de spot (compartilhado). */
+export async function setSpotAlertRouteKeys(alertRouteKeys: string[]): Promise<ProgramacaoSettings> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<ProgramacaoSettings>("/api/operator/programacao/settings", {
+    accessToken,
+    method: "PATCH",
+    body: { alertRouteKeys },
   });
 }
 
