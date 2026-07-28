@@ -19,15 +19,20 @@ import { getSpotAlertRouteKeys } from "./programacao-settings.js";
 const DEDUP_WINDOW_HOURS = 24;
 const MAX_PER_RUN = 20;
 
-// Recorte de "spot disponível": planejado line-haul ofertável, ou Nestlé aceita
-// sem caminhão; nunca atrasado/sem data. NÃO filtra por `jaLancada`: o
+// Recorte de "spot disponível": planejado line-haul AINDA NÃO ACEITA, ou Nestlé
+// aceita sem caminhão; nunca atrasado/sem data. NÃO filtra por `jaLancada`: o
 // auto-lançamento (DC-201) publica o spot no portal mas NÃO aceita no SPX — o
 // operador ainda precisa aceitar, então o alerta continua valendo. O dedup por LH
 // (24h) evita renotificar. Sem isto, o auto-launch (5min) marcava jaLancada antes
 // do notifier (3min) e ~40% dos alertas nunca disparavam (review DC-279 #3).
+//
+// A aba "planejado" do SPX contém viagens JÁ ACEITAS (acceptance_status=1), muitas já
+// COM motorista — não são spot disponível e não devem tocar. Alerta só as que ainda
+// precisam de aceite (acceptance_status === 0). Sem esse gate, todas as viagens aceitas
+// da aba disparavam alarme ("cargas já aceitas ainda tocam").
 function isAvailableSpot(r) {
   if (!r.data || r.expirada) return false;
-  if (r.tab === "planejado" && r.isLinehaul) return true;
+  if (r.tab === "planejado" && r.isLinehaul && r.acceptanceStatus === 0) return true;
   if (r.tab === "aceito" && r.source === "nestle-galileu" && r.podeLancar) return true;
   return false;
 }
