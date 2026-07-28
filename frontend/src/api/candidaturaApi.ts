@@ -53,9 +53,26 @@ export interface PreCheckResponseMeta {
   correlationId: string;
 }
 
+/**
+ * Snapshot do motorista do cadastro aprovado/concluido — devolvido pelo
+ * pre-check SOMENTE quando ha pendencia de selfie (reason=SELFIE_REQUIRED),
+ * para o wizard exibir a identidade conhecida no passo "so a selfie". E o
+ * objeto `dados.motorista` persistido (shape do submit); todos os campos sao
+ * opcionais aqui porque vem de JSON arbitrario. NAO usado para montar o
+ * payload — o submit envia so a selfie e o backend faz o merge do resto.
+ */
+export interface PersistedMotorista {
+  nome?: string;
+  cpf?: string;
+  cnh?: { categoria?: string; validade?: string; [k: string]: unknown };
+  [k: string]: unknown;
+}
+
 export interface PreCheckResponse {
   pendencias: CandidaturaPendency[];
   completos: CandidaturaCompleto[];
+  /** Presente apenas no caso SELFIE_REQUIRED (ver PersistedMotorista). */
+  persistedMotorista?: PersistedMotorista;
   meta: PreCheckResponseMeta;
 }
 
@@ -242,6 +259,36 @@ export async function requestCandidaturaPreCheck(
       horsePlate: payload.horsePlate,
       trailerPlates: payload.trailerPlates,
     },
+  });
+}
+
+export interface AttachSelfiePayload {
+  /** CPF do motorista (dígitos; o backend normaliza). */
+  cpf: string;
+  /** storage_path da selfie (slot motorista_selfie_cnh) devolvido por uploadDraftFile. */
+  selfieStoragePath: string;
+}
+
+export interface AttachSelfieResponse {
+  ok: boolean;
+  selfie_cnh_url: string;
+  meta: PreCheckResponseMeta;
+}
+
+/**
+ * Hook TanStack para POST /api/candidatura/attach-selfie.
+ *
+ * Anexa a selfie-com-CNH ao cadastro JÁ aprovado do motorista (caso
+ * SELFIE_REQUIRED), sem passar pelo submit da candidatura — o backend grava
+ * `selfie_cnh_url` na própria linha aprovada. Endpoint público (CPF-based).
+ */
+export function useAttachSelfie() {
+  return useMutation<AttachSelfieResponse, CandidaturaApiError, AttachSelfiePayload>({
+    mutationFn: ({ cpf, selfieStoragePath }) =>
+      requestJson<AttachSelfieResponse>("/api/candidatura/attach-selfie", {
+        method: "POST",
+        body: { cpf, selfieStoragePath },
+      }),
   });
 }
 
