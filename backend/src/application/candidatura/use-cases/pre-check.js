@@ -36,7 +36,7 @@ function resolveVehicleTypeFromTrailerCount(trailerCount) {
  * na etapa correta. CPF nao encontrado nas bases ASPX/Angellira (sync parou
  * ou motorista realmente novo) e cadastrado via etapa "Dados do motorista".
  */
-function buildDriverPendency(driverSummary, { hasLocalCadastro } = {}) {
+function buildDriverPendency(driverSummary, { hasLocalCadastro, hasLocalSelfie = true } = {}) {
   const angellira = driverSummary?.angelira || {};
   const aspx = driverSummary?.aspx || {};
 
@@ -64,6 +64,23 @@ function buildDriverPendency(driverSummary, { hasLocalCadastro } = {}) {
         "Encontramos seu cadastro em nossa base. Para concluir seu cadastro no Portal e " +
         "atender aos requisitos operacionais, e necessario complementar algumas informacoes " +
         "e enviar os documentos obrigatorios.",
+    };
+  }
+
+  // Ja tem cadastro completo no nosso portal, MAS sem a selfie segurando a CNH
+  // (o Step A foi pulado em cadastros anteriores a selfie virar obrigatoria).
+  // Forca a etapa do motorista SO para coletar a selfie — o frontend
+  // pre-preenche o resto a partir do cadastro aprovado (persistedMotorista), de
+  // modo que o motorista so precisa anexar a selfie. NAO forca os veiculos
+  // (classifyPlate segue usando hasLocalCadastro, que continua true aqui).
+  if (!hasLocalSelfie) {
+    return {
+      step: "A",
+      reason: "SELFIE_REQUIRED",
+      label: "Falta a selfie segurando a CNH",
+      description:
+        "Seu cadastro esta quase completo — so falta a selfie segurando a CNH. " +
+        "Os demais dados ja vem preenchidos; e so conferir, anexar a selfie e enviar.",
     };
   }
 
@@ -311,9 +328,13 @@ export async function candidaturaPreCheck({
   // nunca completou o cadastro no NOSSO portal (nao temos os documentos). Esse
   // sinal decide se as etapas (motorista + veiculos) sao forcadas mesmo quando
   // o dado externo esta "em dia".
-  const hasLocalCadastro = await hasCompleteLocalCadastro({ cpf: driverCpf, correlationId });
+  const localCadastro = await getLocalCadastroStatus({ cpf: driverCpf, correlationId });
+  const hasLocalCadastro = localCadastro.hasCadastro;
 
-  const driverPendency = buildDriverPendency(summary.driver, { hasLocalCadastro });
+  const driverPendency = buildDriverPendency(summary.driver, {
+    hasLocalCadastro,
+    hasLocalSelfie: localCadastro.hasSelfie,
+  });
   if (driverPendency) {
     pendencias.push(driverPendency);
   }
@@ -384,50 +405,73 @@ export async function candidaturaPreCheck({
     }
   }
 
-  return { pendencias, completos };
+  // Snapshot do motorista aprovado p/ o frontend PRE-PREENCHER o Step A quando a
+  // pendencia e a selfie (SELFIE_REQUIRED) — o motorista so confere e anexa a
+  // selfie. So enviado nesse caso (evita vazar dados do motorista sem necessidade).
+  const needsSelfiePrefill = pendencias.some((p) => p.reason === "SELFIE_REQUIRED");
+  return {
+    pendencias,
+    completos,
+    ...(needsSelfiePrefill && localCadastro.motorista
+      ? { persistedMotorista: localCadastro.motorista }
+      : {}),
+  };
 }
 
 /**
- * RF001 — O motorista JA tem um cadastro COMPLETO no nosso portal?
+ * RF001 + selfie — estado do cadastro COMPLETO do motorista no nosso portal.
  *
  * "Completo" = existe um `pending_driver_registrations` desse CPF com status
  * `aprovado` ou `concluido` — ou seja, ja passou pelo wizard e enviou os
  * documentos (a aprovacao exige os anexos). Um cadastro apenas `pendente`/
- * `rejeitado`/`draft` NAO conta (ainda nao esta completo/documentado), e a
- * existencia no Angellira/ASPX tambem NAO conta (e base externa, sem nossos
- * documentos). Usado para decidir se as etapas do wizard sao forcadas.
+ * `rejeitado`/`draft` NAO conta, e a existencia no Angellira/ASPX tambem NAO
+ * conta (base externa, sem nossos documentos).
  *
- * Fail-open: se o DB falhar, retorna `true` (degrada para o comportamento
- * atual — nao forca o fluxo por erro transitorio; e durante uma queda de DB o
- * resto do fluxo/submit tambem estaria degradado). Emite evento estruturado
- * `...local-cadastro-check.db_error` para observabilidade (detectar fail-open
- * sustentado — janela em que o gate RF001 fica bypassado).
+ * Retorna 3 sinais numa unica consulta:
+ *  - `hasCadastro`: tem ao menos 1 cadastro aprovado/concluido (gate RF001 + veiculos).
+ *  - `hasSelfie`:  ALGUM desses cadastros ja tem a selfie (motorista.selfie_cnh_url).
+ *                  Se nenhum tem, o wizard forca a etapa do motorista so p/ a selfie.
+ *  - `motorista`:  snapshot do motorista do cadastro mais recente (o frontend
+ *                  usa p/ PRE-PREENCHER o Step A no caso SELFIE_REQUIRED).
  *
- * @returns {Promise<boolean>}
+ * Fail-open: se o DB falhar, retorna hasCadastro/hasSelfie = true (degrada p/ o
+ * comportamento atual — NAO forca o fluxo por erro transitorio) e emite evento
+ * estruturado `...local-cadastro-check.db_error` p/ observabilidade.
+ *
+ * @returns {Promise<{ hasCadastro: boolean, hasSelfie: boolean, motorista: object|null }>}
  */
-async function hasCompleteLocalCadastro({ cpf, correlationId } = {}) {
+async function getLocalCadastroStatus({ cpf, correlationId } = {}) {
   const digits = String(cpf || "").replace(/\D/g, "");
-  if (digits.length !== 11) return false; // sem CPF valido → trata como novo (forca fluxo)
+  // sem CPF valido → trata como novo (forca fluxo); nao ha snapshot p/ pre-preencher.
+  if (digits.length !== 11) return { hasCadastro: false, hasSelfie: false, motorista: null };
   try {
     return await withPgClient(async (client) => {
       const { rows } = await client.query(
         `
-          SELECT 1
+          SELECT dados->'motorista' AS motorista,
+                 (COALESCE(dados->'motorista'->>'selfie_cnh_url', '') <> '') AS has_selfie
           FROM public.pending_driver_registrations
           WHERE regexp_replace(COALESCE(dados->'motorista'->>'cpf', ''), '\\D', '', 'g') = $1
             AND status IN ('aprovado', 'concluido')
-          LIMIT 1
+          ORDER BY created_at DESC
+          LIMIT 20
         `,
         [digits],
       );
-      return rows.length > 0;
+      if (rows.length === 0) return { hasCadastro: false, hasSelfie: false, motorista: null };
+      return {
+        hasCadastro: true,
+        hasSelfie: rows.some((r) => r.has_selfie === true),
+        motorista: rows[0].motorista ?? null, // mais recente (ORDER BY created_at DESC)
+      };
     });
   } catch (err) {
     logStructuredEvent("warn", "candidatura.pre-check.local-cadastro-check.db_error", {
       correlationId: correlationId || null,
       message: err instanceof Error ? err.message : String(err),
     });
-    return true; // fail-open: degrada p/ comportamento atual (nao forca por erro de DB)
+    // fail-open: NAO forca nada por erro de DB (nem RF001 nem selfie).
+    return { hasCadastro: true, hasSelfie: true, motorista: null };
   }
 }
 
