@@ -325,7 +325,27 @@ function StepBCavaloImpl({
   });
 
   const revertHorsePlateToInitial = () => {
-    setData((current) => ({ ...current, placa: horsePlate ?? "" }));
+    // "Usar a original": o motorista havia anexado um CRLV de placa DIVERGENTE
+    // (Y) e escolhido usá-la; ao voltar pra placa digitada (X) NÃO basta trocar
+    // a placa — renavam/chassi/marca/owner/CRLV continuavam sendo do veículo Y,
+    // gerando um cadastro "Frankenstein" (placa X colada no documento de Y).
+    // Limpamos TODOS os campos derivados do CRLV divergente; com ownerDoc/placa
+    // zerados o gate (crlvCompleted) trava e o motorista reenvia o CRLV de X.
+    setData((current) => ({
+      ...current,
+      placa: horsePlate ?? "",
+      renavam: "",
+      chassi: "",
+      marca: "",
+      ano: "",
+      cor: "",
+      ownerDoc: "",
+      ownerDocType: "",
+      ownerNome: "",
+      crlvStoragePath: undefined,
+      ocr_fallback_manual: false,
+    }));
+    setBcData(undefined);
   };
 
   const placaValid = data.placa.trim().length >= 7;
