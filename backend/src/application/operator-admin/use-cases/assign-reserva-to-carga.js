@@ -3,6 +3,7 @@ import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit
 import { NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 import { ensureMonitorSheetCargo } from "./_shared.js";
+import { normalizeRouteCodeLocation } from "../../../domain/operator-admin/route-utils.js";
 
 /**
  * Puxa um motorista em STANDBY (monitor_reservas) para uma carga da planilha
@@ -54,9 +55,12 @@ export async function assignReservaToCarga({ reservaId, targetLh, operatorId, re
 
     // Invariante: standby só entra em carga da MESMA rota (origem→destino). Defesa
     // no servidor — o front bloqueia, mas não pode ser a única linha de defesa.
+    // Compara CANONICALIZADO (dobra grafia: acento/caixa/espaço/UF/"-03") = mesma
+    // canonicalização do front (routeCanonKey) e do reassign/descend. Cru recusava
+    // puxar reserva quando reserva e carga gravavam o trecho em formatos diferentes.
     const sameRoute =
-      (reserva.origem ?? "").trim() === (carga.origem ?? "").trim() &&
-      (reserva.destino ?? "").trim() === (carga.destino ?? "").trim();
+      normalizeRouteCodeLocation(reserva.origem) === normalizeRouteCodeLocation(carga.origem) &&
+      normalizeRouteCodeLocation(reserva.destino) === normalizeRouteCodeLocation(carga.destino);
     if (!sameRoute) {
       throw new ValidationError("O standby é de outra rota. Só pode ser puxado para uma carga da mesma rota (origem → destino).");
     }
