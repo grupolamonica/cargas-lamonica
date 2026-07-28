@@ -33,6 +33,7 @@ import { performSpxPrecheck } from "./precheck.js";
 import { checkCnhCategoryGate } from "./cnh-category-gate.js";
 import { checkCrlvGate } from "./crlv-gate.js";
 import { mapSpxMotoristaPayload } from "./payload-mapper.js";
+import { buildImportedDriverInfo } from "./import-driver-info.js";
 import { generateDossie } from "../unificada/generate-dossie.js";
 import { stageSpxAnexos } from "./spx-anexos-stager.js";
 import { consultRiskExpiry, defaultExpiryIso } from "./risk-expiry.js";
@@ -186,9 +187,15 @@ export async function runSpxPipeline({
       // o bot NÃO toca campos locked).
       const { anexosMap, radExpireDate } = await prepareSpxDocs({ client, cadastro, operatorId, correlationId });
       const payload = mapSpxMotoristaPayload(cadastro.dados, { ...overrides, ...anexosMap, rad_expire_date: radExpireDate });
+      // O SPX NÃO devolve o perfil do motorista de outra agência num match cross-agency
+      // (driver_info vem vazio) — por isso importar_matched barrava com "nome e CNH
+      // vazio". Montamos o driver_info a partir do NOSSO cadastro (nome/CNH/endereço já
+      // estão no nosso banco) com o que o SPX devolver prevalecendo por cima. Ver
+      // buildImportedDriverInfo.
+      const driverInfo = buildImportedDriverInfo(payload, precheck);
       const r = await botImportarMatched({
         cpf: payload.cpf,
-        driverInfo: precheck.driverInfo || { driver_id: precheck.existingDriverId },
+        driverInfo,
         contractType: payload.contract_type,
         functionTypeList: payload.function_type_list,
         linehaulStationName: payload.linehaul_station_name,
