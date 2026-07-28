@@ -409,9 +409,15 @@ export function buildSubmitDados(data: ConfirmationWizardData): Record<string, u
   // o owner ja esta em `cavalo_owner` — nao duplicar em `carreta_owners`. O
   // backend (carreta.owner_doc) ja aponta pro mesmo doc; carreta_owners[] e
   // somente para docs distintos do cavalo_owner.
+  // fix dedup: quando ownerIsDriver=true o Step C é pulado (stepC null), então o
+  // fallback antigo (data.stepC?.owner.documento) virava "" e a carreta do
+  // PRÓPRIO motorista não era deduplicada — duplicava o CPF do cavalo.owner_doc
+  // em carreta_owners. Nesse caso o dono do cavalo é o motorista (data.stepB.ownerDoc).
   const cavaloOwnerDoc = cavalo_owner?.doc
     ? digitsOnly(cavalo_owner.doc)
-    : digitsOnly(data.stepC?.owner.documento || "");
+    : digitsOnly(
+        (ownerIsDriver ? data.stepB?.ownerDoc : data.stepC?.owner.documento) || "",
+      );
   const carreta_owners: ReturnType<typeof buildOwnerFromCollected>[] = [];
   data.collectedCarretaOwners.forEach((owner, idx) => {
     const ownerDoc = digitsOnly(owner.doc);
