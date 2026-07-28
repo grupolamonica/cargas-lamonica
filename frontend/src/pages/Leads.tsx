@@ -1,5 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { AlertTriangle, Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Download, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User, UserPlus } from "lucide-react";
 import { differenceInDays, format } from "date-fns";
 import { toast } from "sonner";
@@ -220,6 +221,15 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   const autoRevalidateFiredRef = useRef<number>(0);
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
 
+  // DC-299 — deep-link do alerta de novo motorista na fila: /leads?carga=A,B,C realça e
+  // expande as cargas com motorista novo (e limpa filtros que poderiam escondê-las).
+  const [searchParams] = useSearchParams();
+  const highlightCargaSet = useMemo(
+    () => new Set((searchParams.get("carga") || "").split(",").map((s) => s.trim()).filter(Boolean)),
+    [searchParams],
+  );
+  const cargaDeepLinkHandledRef = useRef<string | null>(null);
+
   // `fila` (default) puxa só cargas vivas; `historico` só as terminais. O
   // servidor agora particiona por status (antes vinha tudo e o front descartava),
   // então a query key inclui o escopo p/ Fila e Histórico não colidirem no cache.
@@ -335,6 +345,10 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     });
   }, [routeOptions]);
   const filteredGroups = useMemo(() => {
+    // Busca casa QUALQUER token separado por vírgula — usado pelo deep-link do alerta da
+    // fila (setSearch com N carga_ids) p/ mostrar TODAS as cargas do alerta. Digitação
+    // normal (sem vírgula) = 1 token = comportamento anterior.
+    const searchTokens = deferredSearch ? deferredSearch.split(",").map((t) => t.trim()).filter(Boolean) : [];
     return groups
       .map((group) => {
         const isTerminal = TERMINAL_LOAD_STATUSES.includes(group.load.status);
@@ -382,7 +396,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
           .join(" ")
           .toLowerCase();
 
-        const loadMatchesSearch = !deferredSearch || loadText.includes(deferredSearch);
+        const loadMatchesSearch = !searchTokens.length || searchTokens.some((t) => loadText.includes(t));
 
         const leads = group.leads.filter((lead) => {
           const matchesLeadStatus = leadStatusFilter === "todos" || lead.status === leadStatusFilter;
@@ -391,7 +405,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
             return false;
           }
 
-          if (!deferredSearch || loadMatchesSearch) {
+          if (!searchTokens.length || loadMatchesSearch) {
             return true;
           }
 
@@ -411,7 +425,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
             .join(" ")
             .toLowerCase();
 
-          return leadText.includes(deferredSearch);
+          return searchTokens.some((t) => leadText.includes(t));
         });
 
         // Cargas SEM candidatura: por padrão escondidas. Exceção DC-257 — carga
@@ -614,8 +628,33 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     }
 
     knownLoadIdsRef.current = [...knownLoadIdsRef.current, ...unseenLoadIds];
-    setCollapsedLoadIds((current) => Array.from(new Set([...current, ...unseenLoadIds])));
-  }, [groups]);
+    // Não colapsa a carga destacada por deep-link (?carga=) — ela precisa aparecer aberta.
+    setCollapsedLoadIds((current) =>
+      Array.from(new Set([...current, ...unseenLoadIds.filter((id) => !highlightCargaSet.has(id))])),
+    );
+  }, [groups, highlightCargaSet]);
+
+  // DC-299 — chegou pelo alerta de novo motorista na fila (/leads?carga=A,B,C): limpa os
+  // filtros que poderiam esconder a carga e garante que os grupos destacados fiquem
+  // EXPANDIDOS. Uma vez por valor de ?carga (o operador filtra à vontade depois).
+  useEffect(() => {
+    const key = searchParams.get("carga") || "";
+    if (!key || highlightCargaSet.size === 0) return;
+    if (cargaDeepLinkHandledRef.current === key) return;
+    cargaDeepLinkHandledRef.current = key;
+    // Filtra a fila PARA as cargas do alerta via a BUSCA (visível + limpável pelo operador):
+    // garante que apareçam na 1ª página — a fila é paginada (10/pág) e a carga com motorista
+    // novo ordena por último, caindo fora da página. Também limpa os demais filtros que
+    // poderiam escondê-las e expande os grupos destacados. Uma vez por valor de ?carga.
+    setSearch([...highlightCargaSet].join(","));
+    setLoadStatusFilter("todos");
+    setLeadStatusFilter("todos");
+    setCandidaturaFilter("todas");
+    setClienteFilter("");
+    setRouteFilter([]);
+    setDateFilter(EMPTY_CARGO_DATE_FILTER);
+    setCollapsedLoadIds((prev) => prev.filter((id) => !highlightCargaSet.has(id)));
+  }, [searchParams, highlightCargaSet]);
 
   // Fire-and-forget validation runs inside the submission request and can timeout/trip the
   // circuit breaker. Auto-retry after 15s so the operator doesn't have to click manually.
@@ -1239,6 +1278,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
               return (
                 <article
                   key={group.load.id}
+                  data-load={group.load.id}
                   className={cn(
                     // iter #9 — overflow-visible: deixa badge top-right respirar sem
                     // ser cortado quando o card encolhe.
@@ -1246,6 +1286,9 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                     isNearDeadline
                       ? "outline outline-[3px] -outline-offset-1 outline-amber-500 shadow-[0_0_0_6px_rgba(245,158,11,0.22)] dark:outline-amber-400"
                       : `outline outline-[3px] -outline-offset-1 ${statusStyle.ring} ${statusStyle.shadow}`,
+                    // DC-299 — realce da carga com motorista novo (deep-link do alerta da fila).
+                    highlightCargaSet.has(group.load.id) &&
+                      "ring-4 ring-emerald-400 ring-offset-2 dark:ring-offset-slate-900",
                   )}
                 >
                   <span

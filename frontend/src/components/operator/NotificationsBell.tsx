@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { Bell, CheckCheck, Trash2, Truck } from "lucide-react";
+import { Bell, CheckCheck, Trash2, Truck, UserPlus } from "lucide-react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import {
   ensureNotificationPermission,
   playSpotBeep,
   showDesktopNotification,
+  speakSpot,
   startSpeakingLoop,
   stopSpeakingLoop,
   unlockSpotAudio,
@@ -40,6 +41,7 @@ const KIND_LABEL: Record<string, string> = {
   route_need_accept: "Motorista topou chamado de carga",
   route_need_converted: "Candidatura via chamado de carga",
   new_spot: "Nova carga spot disponível",
+  new_queue_driver: "Novo motorista na fila",
 };
 
 const KIND_TINT: Record<string, string> = {
@@ -57,6 +59,7 @@ const KIND_TINT: Record<string, string> = {
   route_need_accept: "bg-teal-500",
   route_need_converted: "bg-emerald-500",
   new_spot: "bg-blue-600",
+  new_queue_driver: "bg-emerald-600",
 };
 
 function fmtRelative(iso: string) {
@@ -79,6 +82,13 @@ function spotHref(metadata: Record<string, unknown> | undefined): string {
 function spotHrefMany(lhs: string[]): string {
   const uniq = [...new Set(lhs.map((s) => String(s).trim()).filter(Boolean))];
   return uniq.length ? `/programacao?lh=${uniq.map(encodeURIComponent).join(",")}` : "/programacao";
+}
+
+// DC-299 — alerta de novo motorista na fila leva à Fila (/leads) destacando a(s) carga(s)
+// do(s) motorista(s). ?carga=A,B,C → a Fila realça/expande esses grupos.
+function queueHrefMany(cargaIds: string[]): string {
+  const uniq = [...new Set(cargaIds.map((s) => String(s).trim()).filter(Boolean))];
+  return uniq.length ? `/leads?carga=${uniq.map(encodeURIComponent).join(",")}` : "/leads";
 }
 
 export default function NotificationsBell() {
@@ -157,6 +167,65 @@ export default function NotificationsBell() {
           </div>
         ),
         { duration: Infinity }, // fica na tela até dispensar/aceitar (visual persistente)
+      );
+    },
+    [],
+  );
+
+  // DC-299 — alerta LEVE de novo motorista na fila: bip + 1 aviso de voz (SEM loop — o
+  // operador não precisa "aceitar" na hora, e motorista entra na fila com frequência) +
+  // notificação do navegador + toast que some sozinho (o sino guarda o histórico).
+  const fireQueueAlert = useCallback(
+    (opts: { count: number; nome: string; body?: string | null; tag: string; onOpen: () => void }) => {
+      const { count, nome, body, tag, onOpen } = opts;
+      const many = count > 1;
+      playSpotBeep();
+      speakSpot(many ? "Novos motoristas na fila" : "Novo motorista na fila"); // 1x, sem loop
+      showDesktopNotification({
+        title: many ? `👤 ${count} novos motoristas na fila` : "👤 Novo motorista na fila",
+        body: many ? "Clique para ver na Fila" : `${nome || "Motorista"}${body ? ` · ${body}` : ""}`,
+        tag,
+        onClick: onOpen,
+      });
+      toast.custom(
+        (id) => (
+          <div className="flex w-[380px] max-w-[92vw] items-start gap-3 rounded-2xl border border-emerald-200 bg-white p-4 shadow-xl dark:border-emerald-500/40 dark:bg-slate-900">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-sm">
+              <UserPlus className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-emerald-600 dark:text-emerald-400">
+                {many ? `${count} novos motoristas na fila` : "Novo motorista na fila"}
+              </p>
+              <p className="mt-0.5 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
+                {many ? "Veja na Fila" : nome || "Motorista"}
+              </p>
+              {!many && body ? (
+                <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">{body}</p>
+              ) : null}
+              <div className="mt-2.5 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    toast.dismiss(id);
+                    onOpen();
+                  }}
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
+                >
+                  Ver na fila
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toast.dismiss(id)}
+                  className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Dispensar
+                </button>
+              </div>
+            </div>
+          </div>
+        ),
+        { duration: 20_000 },
       );
     },
     [],
@@ -243,6 +312,49 @@ export default function NotificationsBell() {
       onOpen: () => navigate(lhs.length > 1 ? spotHrefMany(lhs) : spotHref(first.metadata)),
     });
   }, [data, items, navigate, fireSpotAlert]);
+
+  // DC-299 — novo motorista na fila. Mesmo padrão do spot (1ª leva com dados só registra
+  // ids, sem alertar histórico; depois alerta 1x por lead novo). Alarme SÓ p/ reais
+  // (ignora metadata.test). Dedup de alarme por lead_id em memória.
+  const alertedQueueIdsRef = useRef<Set<string> | null>(null);
+  const alertedLeadsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!data) return;
+    const drivers = items.filter(
+      (n) => n.kind === "new_queue_driver" && !(n.metadata as Record<string, unknown> | undefined)?.test,
+    );
+    if (alertedQueueIdsRef.current === null) {
+      alertedQueueIdsRef.current = new Set(drivers.map((n) => n.id));
+      return;
+    }
+    const already = alertedQueueIdsRef.current;
+    const leadOf = (n: OperatorNotification) => String((n.metadata as Record<string, unknown> | undefined)?.lead_id ?? "");
+    const cargaOf = (n: OperatorNotification) => String((n.metadata as Record<string, unknown> | undefined)?.carga_id ?? "");
+    const fresh = drivers.filter((n) => !already.has(n.id) && !n.seen);
+    fresh.forEach((n) => already.add(n.id));
+    const alertedLeads = alertedLeadsRef.current;
+    const freshNew = fresh.filter((n) => {
+      const l = leadOf(n);
+      return !l || !alertedLeads.has(l);
+    });
+    if (freshNew.length === 0) return;
+    freshNew.forEach((n) => {
+      const l = leadOf(n);
+      if (l) alertedLeads.add(l);
+    });
+
+    const first = freshNew[0];
+    const meta = (first.metadata ?? {}) as Record<string, unknown>;
+    const nome = String(meta.driver ?? "").trim();
+    const cargaIds = freshNew.map(cargaOf).filter(Boolean);
+    fireQueueAlert({
+      count: freshNew.length,
+      nome,
+      body: first.body,
+      tag: first.id,
+      onOpen: () => navigate(queueHrefMany(cargaIds)),
+    });
+  }, [data, items, navigate, fireQueueAlert]);
 
   const markAllMut = useMutation({
     mutationFn: () => markOperatorNotificationsSeen({ all: true }),
@@ -348,10 +460,19 @@ export default function NotificationsBell() {
           ) : (
             <ul className="divide-y divide-border/60">
               {items.map((n) => {
-                // DC-279: a notificação de spot é clicável e leva o operador à
-                // Programação (no spot, via ?lh=) para aceitar pelo fluxo normal.
-                const clickable = n.kind === "new_spot";
-                const openRow = () => goToSpot(n.metadata);
+                // DC-279/DC-299: notificações clicáveis levam o operador ao contexto —
+                // spot → Programação (?lh=); novo motorista → Fila (?carga=).
+                const isQueue = n.kind === "new_queue_driver";
+                const clickable = n.kind === "new_spot" || isQueue;
+                const openRow = () => {
+                  if (isQueue) {
+                    setOpen(false);
+                    const cid = (n.metadata as Record<string, unknown> | undefined)?.carga_id;
+                    navigate(typeof cid === "string" && cid ? `/leads?carga=${encodeURIComponent(cid)}` : "/leads");
+                    return;
+                  }
+                  goToSpot(n.metadata);
+                };
                 return (
                   <li
                     key={n.id}
@@ -385,7 +506,9 @@ export default function NotificationsBell() {
                         {KIND_LABEL[n.kind] ?? n.kind}
                       </p>
                       {clickable ? (
-                        <p className="mt-1 text-[11px] font-semibold text-primary">Abrir na Programação &rarr;</p>
+                        <p className="mt-1 text-[11px] font-semibold text-primary">
+                          {isQueue ? "Abrir na Fila" : "Abrir na Programação"} &rarr;
+                        </p>
                       ) : null}
                     </div>
                   </li>
