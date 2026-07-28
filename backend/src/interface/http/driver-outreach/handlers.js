@@ -12,6 +12,7 @@ import {
   getOutreachOverview,
   getOutreachQueueItem,
   getWhatsappStatus,
+  createTestSpotNotifications,
   deleteOperatorNotifications,
   listOperatorNotifications,
   listWhatsappConversations,
@@ -1265,6 +1266,30 @@ export async function resolveOperatorNotificationsSeenResponse(request) {
     const body = (await parseJsonBody(request)) || {};
     const payload = body.all ? await markAllNotificationsSeen() : await markNotificationsSeen(body.ids);
     return { statusCode: 200, payload: { ok: true, ...payload, meta: { correlationId } } };
+  } catch (error) {
+    return toErrorResponse(error, correlationId);
+  }
+}
+
+/**
+ * POST /api/operator/notifications/test-spot  { count?: number }  (DEV/TESTE)
+ * Cria notificação(ões) de spot REAIS para testar o fluxo completo (sino + som +
+ * card). Gate por env ENABLE_TEST_NOTIFICATIONS=true — 403 em produção.
+ */
+export async function resolveOperatorNotificationsTestSpotResponse(request) {
+  const correlationId = getCorrelationId(request);
+  try {
+    const { user } = await requireOperatorSession(getAuthorizationHeader(request));
+    assertOperatorPermission(user, "operator:read", "Somente operadores podem testar notificações.");
+    if (process.env.ENABLE_TEST_NOTIFICATIONS !== "true") {
+      return {
+        statusCode: 403,
+        payload: { error: "DISABLED", message: "Teste de notificação desabilitado neste ambiente.", meta: { correlationId } },
+      };
+    }
+    const body = (await parseJsonBody(request)) || {};
+    const payload = await createTestSpotNotifications({ count: body.count });
+    return { statusCode: 200, payload: { ...payload, meta: { correlationId } } };
   } catch (error) {
     return toErrorResponse(error, correlationId);
   }
