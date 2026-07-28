@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import Leads from "@/pages/Leads";
@@ -249,7 +250,7 @@ describe("Leads", () => {
       isFetching: false,
     });
 
-    render(<Leads />);
+    render(<MemoryRouter><Leads /></MemoryRouter>);
 
     // Antes eram escondidas (guard leads.length===0). Agora as duas cargas OPEN
     // avulsas sem candidatura aparecem na Fila.
@@ -295,7 +296,7 @@ describe("Leads", () => {
       isFetching: false,
     });
 
-    render(<Leads />);
+    render(<MemoryRouter><Leads /></MemoryRouter>);
 
     // Padrão "Com e sem candidatura": as duas cargas aparecem.
     expect(screen.getByText("Curitiba / PR -> Joinville / SC")).toBeInTheDocument();
@@ -357,7 +358,7 @@ describe("Leads", () => {
       };
     });
 
-    render(<Leads />);
+    render(<MemoryRouter><Leads /></MemoryRouter>);
 
     const cargasCardValue = () =>
       within(screen.getByText("Cargas").closest("div") as HTMLElement).getByText(/^\d+$/).textContent;
@@ -371,7 +372,7 @@ describe("Leads", () => {
   });
 
   it("renderiza a fila real e aprova a reserva do motorista selecionado", async () => {
-    render(<Leads />);
+    render(<MemoryRouter><Leads /></MemoryRouter>);
 
     expect(screen.getByText("Fila")).toBeInTheDocument();
     expect(screen.getByText("Salvador / BA -> Campinas / SP")).toBeInTheDocument();
@@ -391,7 +392,7 @@ describe("Leads", () => {
       invalidateQueries,
     });
 
-    render(<Leads />);
+    render(<MemoryRouter><Leads /></MemoryRouter>);
 
     expect(mockUseQuery).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -431,7 +432,7 @@ describe("Leads", () => {
   });
 
   it("historico usa escopo proprio na query key e nao faz auto-poll (corta egress)", () => {
-    render(<Leads historicoMode />);
+    render(<MemoryRouter><Leads historicoMode /></MemoryRouter>);
 
     const leadsCall = mockUseQuery.mock.calls.find(
       (c) => (c[0] as { queryKey?: unknown[] })?.queryKey?.[1] === "public-load-leads",
@@ -493,7 +494,7 @@ describe("Leads", () => {
       isFetching: true,
     });
 
-    render(<Leads />);
+    render(<MemoryRouter><Leads /></MemoryRouter>);
 
     expect(screen.getByText("Sincronizacao temporariamente indisponivel")).toBeInTheDocument();
     // Dados antigos (rota) seguem visiveis — banner NAO bloqueia a UI.
@@ -510,7 +511,7 @@ describe("Leads", () => {
       isFetching: false,
     });
 
-    render(<Leads />);
+    render(<MemoryRouter><Leads /></MemoryRouter>);
 
     expect(screen.getByText("Não foi possível carregar a fila")).toBeInTheDocument();
     expect(screen.getByText("Only authenticated operators can perform this operation.")).toBeInTheDocument();
@@ -518,7 +519,7 @@ describe("Leads", () => {
   });
 
   it("filtra leads por busca, status da carga e status do lead", () => {
-    render(<Leads />);
+    render(<MemoryRouter><Leads /></MemoryRouter>);
 
     fireEvent.change(screen.getByPlaceholderText(/Pesquisar por/i), {
       target: { value: "Recife" },
@@ -641,7 +642,7 @@ describe("Leads", () => {
       isFetching: false,
     });
 
-    render(<Leads />);
+    render(<MemoryRouter><Leads /></MemoryRouter>);
 
     // Card pacote unico (1 viagem casada, 2 paradas).
     expect(screen.getByText("Viagem casada")).toBeInTheDocument();
@@ -723,7 +724,7 @@ describe("Leads", () => {
       isFetching: false,
     });
 
-    render(<Leads />);
+    render(<MemoryRouter><Leads /></MemoryRouter>);
     fireEvent.click(screen.getAllByRole("button", { name: /Expandir disputa/i })[0]);
 
     // Cabecalho da coluna mudou de "Telefone" para "Motorista".
@@ -781,7 +782,7 @@ describe("Leads", () => {
       isFetching: false,
     });
 
-    render(<Leads />);
+    render(<MemoryRouter><Leads /></MemoryRouter>);
     fireEvent.click(screen.getAllByRole("button", { name: /Expandir disputa/i })[0]);
 
     // Phone formatado eh exibido como label principal (fallback do driverName null).
@@ -793,7 +794,7 @@ describe("Leads", () => {
   });
 
   it("abre as disputas minimizadas por padrao e permite expandir depois", () => {
-    render(<Leads />);
+    render(<MemoryRouter><Leads /></MemoryRouter>);
 
     expect(screen.queryByRole("button", { name: "Reservar para este motorista" })).not.toBeInTheDocument();
     expect(screen.getAllByText("Candidatos nesta carga").length).toBeGreaterThan(0);
@@ -870,7 +871,7 @@ describe("Leads", () => {
       isFetching: false,
     });
 
-    render(<Leads historicoMode />);
+    render(<MemoryRouter><Leads historicoMode /></MemoryRouter>);
 
     const recente = screen.getByText("Recente / RR -> Nova / NN");
     const antiga = screen.getByText("Antiga / AA -> Velha / VV");
