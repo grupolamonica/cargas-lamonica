@@ -1098,6 +1098,12 @@ def importar_motorista_matched(
     # perfil importado da outra agencia nao traz cnh_remarks. Sem isso o campo
     # obrigatorio do SPX fica vazio e o rascunho nao conclui (submit falha).
     cnh_remarks: list[str] | None = None,
+    # CNH frente/verso + selfie do NOSSO cadastro: usados SOMENTE quando o perfil
+    # importado NAO trouxe a imagem (caso outra agencia — driver_info sem fotos).
+    # Se o perfil ja tiver, NAO tocamos (preserva a regra de nao sobrescrever foto).
+    cnh_frente_path: str | None = None,
+    cnh_verso_path: str | None = None,
+    selfie_path: str | None = None,
 ) -> dict[str, Any]:
     """Cria uma driver_request NOSSA reusando um driver_profile existente na Shopee
     que foi detectado via `is_matched=True` no validate/basic.
@@ -1237,6 +1243,30 @@ def importar_motorista_matched(
     vehicle_manufacturing_year = vehicle_manufacturing_year or str(driver_info.get("vehicle_manufacturing_year") or "")
     vehicle_owner_name = vehicle_owner_name or str(driver_info.get("vehicle_owner_name") or "")
 
+    # ── 2b. CNH frente/verso + foto ─────────────────────────────────────
+    # Regra: prioriza a imagem do PERFIL importado (locked); mas quando o perfil
+    # NAO trouxe (caso outra agencia — driver_info vem sem fotos), sobe a NOSSA
+    # (a que o nosso cadastro ja gerou). Nunca sobrescreve uma imagem existente.
+    # Sem isso o rascunho fica SEM a CNH e a Shopee nao aprova.
+    license_img_front_url = str(driver_info.get("license_img_front") or "")
+    license_img_back_url = str(driver_info.get("license_img_back") or "")
+    driver_photo_url = str(driver_info.get("driver_photo") or "")
+    try:
+        if not license_img_front_url and cnh_frente_path:
+            r = uploads.upload_license_image(client, cnh_frente_path)
+            license_img_front_url = (r or {}).get("url") or ""
+            avisos.append("CNH frente: usando a do nosso cadastro (perfil importado veio sem)")
+        if not license_img_back_url and cnh_verso_path:
+            r = uploads.upload_license_image(client, cnh_verso_path)
+            license_img_back_url = (r or {}).get("url") or ""
+            avisos.append("CNH verso: usando a do nosso cadastro (perfil importado veio sem)")
+        if not driver_photo_url and selfie_path:
+            r = uploads.upload_driver_photo(client, selfie_path)
+            driver_photo_url = (r or {}).get("url") or ""
+            avisos.append("Foto/selfie: usando a do nosso cadastro (perfil importado veio sem)")
+    except APIErro as exc:
+        return {"ok": False, "etapa": "upload_cnh_img", "erro": str(exc), "retcode": exc.retcode, "avisos": avisos}
+
     # ── 3. Monta payload usando driver_info como base (locked) ─────────
     # Dados LOCKED do perfil — JAMAIS sobrescritos.
     payload = drivers.build_payload_normal_driver(
@@ -1277,9 +1307,9 @@ def importar_motorista_matched(
         vehicle_owner_name=vehicle_owner_name,
         renavam=renavam,
         # Fotos/docs do perfil — NUNCA sobrescritos
-        driver_photo=str(driver_info.get("driver_photo") or ""),
-        license_img_front=str(driver_info.get("license_img_front") or ""),
-        license_img_back=str(driver_info.get("license_img_back") or ""),
+        driver_photo=driver_photo_url,
+        license_img_front=license_img_front_url,
+        license_img_back=license_img_back_url,
         vehicle_document=vehicle_document_url,
         # Risk Doc — nosso (gerado pela unificada)
         risk_assessment_document=risk_doc_url,
@@ -1291,9 +1321,9 @@ def importar_motorista_matched(
         "driver_name": "perfil_spx (locked)",
         "contact_number": "perfil_spx (locked)",
         "license_number": "perfil_spx (locked)",
-        "license_img_front": "perfil_spx (locked) — nao tocamos",
-        "license_img_back": "perfil_spx (locked) — nao tocamos",
-        "driver_photo": "perfil_spx (locked) — nao tocamos",
+        "license_img_front": "perfil_spx (locked) OU nosso cadastro se o perfil veio sem",
+        "license_img_back": "perfil_spx (locked) OU nosso cadastro se o perfil veio sem",
+        "driver_photo": "perfil_spx (locked) OU nosso cadastro se o perfil veio sem",
         "city_id": f"perfil_spx ({city_name_di})",
         "neighbourhood_name": "perfil_spx (locked)",
         "street_name": "perfil_spx (locked)",

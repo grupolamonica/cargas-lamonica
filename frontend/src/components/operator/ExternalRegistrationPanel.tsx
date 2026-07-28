@@ -9,6 +9,7 @@ import {
   Info,
   KeyRound,
   Loader2,
+  Pencil,
   PlayCircle,
   RefreshCw,
   RotateCcw,
@@ -34,6 +35,10 @@ import { refreshAspxSession } from "@/services/aspxAdmin";
 
 type Props = {
   cadastroId: string;
+  /** Abre o editor de campos do cadastro ("corrigir o que veio errado" antes de
+   * re-cadastrar). Opcional — sem ele o botão não aparece. O modal em si é do pai
+   * (reusa o CadastroCamposEditorModal já montado com o `dados` do cadastro). */
+  onEditarDados?: () => void;
 };
 
 type AngelliraStepInfo = {
@@ -144,7 +149,7 @@ function isPortalConforme(statusText: string | null | undefined): boolean {
  * Painel de cadastro externo (Angellira + SPX/Shopee).
  * Mostra status por etapa, botões contextuais e mensagens amigáveis para o operador.
  */
-export default function ExternalRegistrationPanel({ cadastroId }: Props) {
+export default function ExternalRegistrationPanel({ cadastroId, onEditarDados }: Props) {
   const queryClient = useQueryClient();
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
   const [verifyResult, setVerifyResult] = useState<{ text: string; type: "ok" | "warn" | "info" } | null>(null);
@@ -333,6 +338,20 @@ export default function ExternalRegistrationPanel({ cadastroId }: Props) {
           <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
         </button>
       </div>
+
+      {/* Editar dados do cadastro — corrigir o que veio errado (ex.: telefone que
+          diferia da outra agência, campos do OCR) e ANEXAR docs faltantes ANTES de
+          re-cadastrar/importar. Depois de salvar, use "Re-cadastrar" pra re-disparar. */}
+      {onEditarDados ? (
+        <button
+          type="button"
+          onClick={onEditarDados}
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+        >
+          <Pencil className="h-4 w-4 text-primary" />
+          Editar dados (corrigir o que veio errado)
+        </button>
+      ) : null}
 
       {/* ── Angellira ────────────────────────────────────────────────────── */}
       <div className="mt-3 rounded-xl border border-border bg-background p-3">
