@@ -74,6 +74,7 @@ export function playSpotBeep() {
  * "Spot disponível" (1 carga) ou "Programação disponível" (leva). Best-effort.
  */
 export function speakSpot(text: string): void {
+  if (typeof window === "undefined") return;
   try {
     const synth = window.speechSynthesis;
     if (!synth) return;
@@ -101,10 +102,13 @@ const SPEECH_MAX_REPEATS = 60; // teto de segurança (~3 min)
 
 /** Começa a repetir a frase (fala já e depois a cada ~5s) até stopSpeakingLoop(). */
 export function startSpeakingLoop(text: string): void {
+  if (typeof window === "undefined") return;
   stopSpeakingLoop();
   speechRepeats = 0;
   const tick = () => {
-    if (speechRepeats >= SPEECH_MAX_REPEATS) {
+    // Se a janela sumiu (ex.: teardown de teste jsdom) ou bateu o teto, para o loop —
+    // um tick órfão nunca deve tocar `window` fora de guarda (evita flaky "window is not defined").
+    if (typeof window === "undefined" || speechRepeats >= SPEECH_MAX_REPEATS) {
       stopSpeakingLoop();
       return;
     }
@@ -118,11 +122,11 @@ export function startSpeakingLoop(text: string): void {
 /** Para o loop de fala (dispensar/aceitar). */
 export function stopSpeakingLoop(): void {
   if (speechTimer !== null) {
-    window.clearInterval(speechTimer);
+    if (typeof window !== "undefined") window.clearInterval(speechTimer);
     speechTimer = null;
   }
   try {
-    window.speechSynthesis?.cancel();
+    if (typeof window !== "undefined") window.speechSynthesis?.cancel();
   } catch {
     /* ignore */
   }
