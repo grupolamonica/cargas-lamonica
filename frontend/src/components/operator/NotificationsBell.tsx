@@ -74,6 +74,13 @@ function spotHref(metadata: Record<string, unknown> | undefined): string {
   return lh ? `/programacao?lh=${encodeURIComponent(lh)}` : "/programacao";
 }
 
+// Leva de spots (alerta "Programação disponível"): manda TODAS as LHs (?lh=A,B,C) p/ a
+// Programação filtrar/destacar todas — não só a primeira.
+function spotHrefMany(lhs: string[]): string {
+  const uniq = [...new Set(lhs.map((s) => String(s).trim()).filter(Boolean))];
+  return uniq.length ? `/programacao?lh=${uniq.map(encodeURIComponent).join(",")}` : "/programacao";
+}
+
 export default function NotificationsBell() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -225,12 +232,15 @@ export default function NotificationsBell() {
     const rota =
       [meta.origem, meta.destino].filter(Boolean).join(" → ") ||
       first.title.replace(/^Nova carga spot:\s*/i, "");
+    // "Ver a carga" leva TODAS as LHs da leva (não só a primeira) → mostra todas as
+    // cargas do alerta na Programação. Uma leva (freshNew > 1) usa o link multi-LH.
+    const lhs = freshNew.map(lhOf).filter(Boolean);
     fireSpotAlert({
       count: freshNew.length,
       rota,
       body: first.body,
       tag: first.id,
-      onOpen: () => navigate(spotHref(first.metadata)),
+      onOpen: () => navigate(lhs.length > 1 ? spotHrefMany(lhs) : spotHref(first.metadata)),
     });
   }, [data, items, navigate, fireSpotAlert]);
 
