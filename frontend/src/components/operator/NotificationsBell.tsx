@@ -155,43 +155,78 @@ export default function NotificationsBell() {
     [],
   );
 
-  // Botões de teste (gate backend ENABLE_TEST_NOTIFICATIONS): CRIAM notificação(ões) de spot REAIS no banco →
-  // caem no sino (persistem, dismissáveis, revisáveis depois) e disparam o alerta
-  // completo pelo fluxo normal de detecção. Um gesto do usuário destrava áudio/voz.
-  const fireTestNotifications = (count: number) => {
-    unlockSpotAudio();
-    void ensureNotificationPermission();
-    createTestSpotNotification(count)
-      .then(() => queryClient.invalidateQueries({ queryKey: NOTIFICATIONS_KEY }))
-      .catch((e: Error) => toast.error(e.message || "Falha ao criar notificação de teste."));
-  };
-  const testSpotAlert = () => fireTestNotifications(1);
-  const testProgramacaoAlert = () => fireTestNotifications(4);
+  // Botões de teste (gate backend ENABLE_TEST_NOTIFICATIONS): CRIAM notificação(ões) de
+  // spot REAIS no banco (metadata.test=true) → caem no sino de TODOS (persistem,
+  // dismissáveis). Mas o ALARME (voz em loop + card) dispara SÓ na tela de quem clicou —
+  // localmente aqui —, porque a detecção (abaixo) ignora metadata.test. Assim o operador
+  // testa o alerta completo sem estourar o alarme na tela dos outros operadores.
+  const testMut = useMutation({
+    mutationFn: (count: number) => {
+      unlockSpotAudio();
+      void ensureNotificationPermission();
+      return createTestSpotNotification(count);
+    },
+    onSuccess: (_res, count) => {
+      queryClient.invalidateQueries({ queryKey: NOTIFICATIONS_KEY });
+      fireSpotAlert({
+        count,
+        rota: "Simões Filho/BA → Jaboatão dos Guararapes/PE",
+        body: "TESTE · aceite na Programação",
+        tag: `teste-${count}`,
+        onOpen: () => {
+          setOpen(false);
+          navigate("/programacao");
+        },
+      });
+    },
+    onError: (e: Error) => toast.error(e.message || "Falha ao criar notificação de teste."),
+  });
+  const testSpotAlert = () => testMut.mutate(1);
+  const testProgramacaoAlert = () => testMut.mutate(4);
 
   // DC-279: som + notificação do navegador quando chega uma nova carga spot. Só
   // roda depois que a query trouxe dados (senão a 1ª leva real seria tratada como
   // "nova" e tocaria o histórico inteiro — review #11). A 1ª leva COM dados só
   // registra os IDs (sem alertar); levas seguintes (polling 30s) alertam 1x cada.
   const alertedSpotIdsRef = useRef<Set<string> | null>(null);
+  // Dedup de ALARME por LH (em memória): evita re-tocar o alarme do MESMO spot se a
+  // notificação for recriada — ex.: após "Limpar todas" o scanner reinsere o LH ainda
+  // aberto. O card reaparece no sino normalmente; isto só corta o nag sonoro repetido.
+  const alertedLhsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!data) return;
-    const spots = items.filter((n) => n.kind === "new_spot");
+    // Alarme SÓ p/ spots reais: metadata.test é IGNORADO aqui — o botão de teste dispara
+    // o alarme localmente só na tela de quem clicou (não estoura na dos outros operadores).
+    const spots = items.filter(
+      (n) => n.kind === "new_spot" && !(n.metadata as Record<string, unknown> | undefined)?.test,
+    );
     if (alertedSpotIdsRef.current === null) {
       alertedSpotIdsRef.current = new Set(spots.map((n) => n.id));
       return;
     }
     const already = alertedSpotIdsRef.current;
+    const lhOf = (n: OperatorNotification) => String((n.metadata as Record<string, unknown> | undefined)?.lh ?? "");
     const fresh = spots.filter((n) => !already.has(n.id) && !n.seen);
-    if (fresh.length === 0) return;
     fresh.forEach((n) => already.add(n.id));
+    // Não re-alarma LHs já alertados nesta sessão (linha recriada após limpar/expirar).
+    const alertedLhs = alertedLhsRef.current;
+    const freshNew = fresh.filter((n) => {
+      const lh = lhOf(n);
+      return !lh || !alertedLhs.has(lh);
+    });
+    if (freshNew.length === 0) return;
+    freshNew.forEach((n) => {
+      const lh = lhOf(n);
+      if (lh) alertedLhs.add(lh);
+    });
 
-    const first = fresh[0];
+    const first = freshNew[0];
     const meta = (first.metadata ?? {}) as Record<string, unknown>;
     const rota =
       [meta.origem, meta.destino].filter(Boolean).join(" → ") ||
       first.title.replace(/^Nova carga spot:\s*/i, "");
     fireSpotAlert({
-      count: fresh.length,
+      count: freshNew.length,
       rota,
       body: first.body,
       tag: first.id,
@@ -222,16 +257,18 @@ export default function NotificationsBell() {
           <button
             type="button"
             onClick={testSpotAlert}
+            disabled={testMut.isPending}
             title="Testar: 1 spot → fala 'Spot disponível'"
-            className="flex items-center gap-1 rounded-xl px-2 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 dark:text-amber-200 dark:hover:bg-amber-500/20"
+            className="flex items-center gap-1 rounded-xl px-2 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-50 dark:text-amber-200 dark:hover:bg-amber-500/20"
           >
             <Truck className="h-3.5 w-3.5" /> Spot
           </button>
           <button
             type="button"
             onClick={testProgramacaoAlert}
+            disabled={testMut.isPending}
             title="Testar: leva de cargas → fala 'Programação disponível'"
-            className="rounded-xl px-2 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 dark:text-amber-200 dark:hover:bg-amber-500/20"
+            className="rounded-xl px-2 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-50 dark:text-amber-200 dark:hover:bg-amber-500/20"
           >
             Leva
           </button>

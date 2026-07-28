@@ -454,6 +454,10 @@ export default function Programacao() {
         accepted: row.acceptanceStatus === 1 || row.tab === "aceito",
       }),
     onSuccess: (res) => {
+      // DC-279: lançar a carga também silencia o alerta de voz — spots só-lançáveis
+      // (Nestlé aceito, ou SPX que o operador prefere lançar) não têm botão "Aceitar",
+      // então "Lançar" precisa parar o loop (senão a voz seguia até o teto de ~3min).
+      stopSpeakingLoop();
       toast.success(
         res.alreadyExists
           ? "Essa viagem já estava lançada como carga."
