@@ -1275,9 +1275,17 @@ export function DriverRegistrationWizard({
         let nextStepD: StepDData | null = null;
         setStepDData((currentDData) => {
           const carretas = currentDData ? [...currentDData.carretas] : [];
-          const idx = carretas.findIndex((existing) => existing.plate === entry.plate);
-          if (idx >= 0) carretas[idx] = entry;
-          else carretas.push(entry);
+          // fix carreta-duplicada: indexar pela POSIÇÃO do trailer (pending.idx),
+          // não pela placa. Quando a placa do CRLV (Y) diverge da candidatura (X)
+          // e o motorista escolhe a do documento, o placeholder empurrado antes do
+          // Step E (com a placa ORIGINAL X) não batia no findIndex por placa e a
+          // carreta era EMPILHADA (duplicada). Espelha a correção já aplicada em
+          // handleStepDTrailerAutoResolved (path auto-resolvido).
+          if (pending.idx >= 0 && pending.idx <= carretas.length) {
+            carretas[pending.idx] = entry;
+          } else {
+            carretas.push(entry);
+          }
           nextStepD = { carretas };
           return nextStepD;
         });
