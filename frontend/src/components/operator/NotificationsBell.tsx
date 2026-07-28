@@ -426,11 +426,10 @@ export default function NotificationsBell() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: NOTIFICATIONS_KEY }),
   });
 
-  // DC-279 (temporário, a pedido do operador): o chip de teste fica visível em PROD p/ o
-  // operador testar o alerta. A guarda REAL é o backend (ENABLE_TEST_NOTIFICATIONS): sem a
-  // env ligada o endpoint responde 403. Para tirar depois: SHOW_TEST_CHIP=false (ou desligar
-  // a env no backend, que já esconde a função — o botão passa a 403).
-  const SHOW_TEST_CHIP = true;
+  // DC-279 — o chip de teste era TEMPORÁRIO (a pedido do operador, p/ validar o alerta em
+  // prod). Removido a pedido do operador. Mantido como flag desligado p/ reativar fácil se
+  // preciso; a guarda REAL segue no backend (ENABLE_TEST_NOTIFICATIONS → 403 sem a env).
+  const SHOW_TEST_CHIP = false;
 
   return (
     <div className="flex items-center gap-2">
