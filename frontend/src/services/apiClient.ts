@@ -147,3 +147,40 @@ export async function requestJson<T>(url: string, options: ApiRequestOptions = {
   return payload as T;
 }
 
+/**
+ * Envia um multipart/form-data (upload de arquivo) com a MESMA autenticação e
+ * tratamento de erro do requestJson. NÃO seta Content-Type — o browser define o
+ * boundary do multipart automaticamente a partir do FormData.
+ */
+export async function requestMultipart<T>(
+  url: string,
+  formData: FormData,
+  options: { method?: string; accessToken?: string } = {},
+): Promise<T> {
+  const headers = new Headers({ "X-Correlation-Id": createCorrelationId() });
+  if (options.accessToken) {
+    headers.set("Authorization", `Bearer ${options.accessToken}`);
+  }
+
+  const resolvedUrl = API_BASE ? `${API_BASE.replace(/\/$/, "")}${url.startsWith("/") ? url : `/${url}`}` : url;
+  const requestUrl = resolveCanonicalApiRequestUrl(resolvedUrl);
+
+  const response = await fetch(requestUrl, {
+    method: options.method || "POST",
+    headers,
+    body: formData,
+  });
+
+  const { payload, fallbackMessage } = await parseApiPayload(response, url);
+
+  if (!response.ok) {
+    const message =
+      payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string"
+        ? payload.message
+        : fallbackMessage;
+    throw new ApiError(message || "Erro ao enviar o arquivo.", { status: response.status });
+  }
+
+  return payload as T;
+}
+
