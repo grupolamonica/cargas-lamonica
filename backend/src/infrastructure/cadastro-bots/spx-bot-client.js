@@ -431,6 +431,7 @@ export async function importarMatched({
   vehicleTypeName, licensePlate, renavam, vehicleManufacturer, vehicleManufacturingYear,
   vehicleOwnerName,
   crlvPath, riskDocPath, radExpireDate,
+  cnhFrentePath, cnhVersoPath, selfiePath,
   cityNameFallback,
   cnhRemarks,
   dryRun = false, doDraftSave = false,
@@ -457,6 +458,11 @@ export async function importarMatched({
       crlv_path: crlvPath,
       risk_doc_path: riskDocPath,
       rad_expire_date: radExpireDate,
+      // CNH frente/verso + selfie do nosso cadastro — o bot só usa quando o perfil
+      // importado (outra agência) veio SEM a imagem; senão preserva a do perfil.
+      cnh_frente_path: cnhFrentePath || null,
+      cnh_verso_path: cnhVersoPath || null,
+      selfie_path: selfiePath || null,
       dry_run: dryRun,
       do_draft_save: doDraftSave,
       city_name_fallback: cityNameFallback || null,

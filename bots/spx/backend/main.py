@@ -925,6 +925,11 @@ class ImportarMatchedPayload(BaseModel):
     # Fallback de CNH Remarks (EAR etc.) do nosso cadastro — só é usado quando o
     # perfil importado não traz cnh_remarks (campo obrigatório do SPX).
     cnh_remarks: list[str] | None = None
+    # CNH frente/verso + selfie do nosso cadastro — usados só quando o perfil
+    # importado (outra agência) veio SEM a imagem (senão preserva a do perfil).
+    cnh_frente_path: str | None = None
+    cnh_verso_path: str | None = None
+    selfie_path: str | None = None
 
 
 @app.post("/spx/motorista/importar_matched")
@@ -956,6 +961,9 @@ def importar_matched_endpoint(p: ImportarMatchedPayload):
             do_draft_save=p.do_draft_save,
             city_name_fallback=p.city_name_fallback,
             cnh_remarks=p.cnh_remarks,
+            cnh_frente_path=p.cnh_frente_path,
+            cnh_verso_path=p.cnh_verso_path,
+            selfie_path=p.selfie_path,
         )
     except (APIErro, SessaoExpirada) as exc:
         raise HTTPException(status_code=502, detail=str(exc))

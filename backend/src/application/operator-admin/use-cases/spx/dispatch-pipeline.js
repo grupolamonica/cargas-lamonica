@@ -212,6 +212,11 @@ export async function runSpxPipeline({
         // Risk Doc + CRLV + vigência (preenche campos vazios da request importada).
         crlvPath: anexosMap.crlv_path || null,
         riskDocPath: anexosMap.risk_doc_path || null,
+        // CNH frente/verso + selfie do NOSSO cadastro — o bot só usa quando o
+        // perfil importado (outra agência) veio SEM a imagem (rascunho ficava sem CNH).
+        cnhFrentePath: anexosMap.cnh_frente_path || null,
+        cnhVersoPath: anexosMap.cnh_verso_path || null,
+        selfiePath: anexosMap.selfie_path || null,
         radExpireDate,
         // CNH Remarks (EAR etc.) do nosso cadastro — usado só como fallback
         // quando o perfil importado não traz (senão o SPX prende em rascunho).
