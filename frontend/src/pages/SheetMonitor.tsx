@@ -2113,6 +2113,7 @@ function SheetMonitorTable({
   resolveChecklistLevel,
   allocByLh,
   selectedLh,
+  selectedRowKey,
   editingLh,
   savingLh,
   pinningLh,
@@ -2141,6 +2142,7 @@ function SheetMonitorTable({
   resolveChecklistLevel: (plate: string | null | undefined) => VehicleChecklistLevelEntry | undefined;
   allocByLh: Record<string, SheetMonitorAllocation>;
   selectedLh: string | null;
+  selectedRowKey: string | null;
   editingLh: string | null;
   savingLh: string | null;
   pinningLh: string | null;
@@ -2420,7 +2422,7 @@ function SheetMonitorTable({
                 aspxAssigned={resolveAssigned(row)}
                 cavaloChecklist={resolveChecklistLevel(row.cavalo)}
                 carretaChecklist={resolveChecklistLevel(row.carreta)}
-                selected={row.lh === selectedLh}
+                selected={row.rowKey ? row.rowKey === selectedRowKey : row.lh === selectedLh}
                 editing={row.lh === editingLh}
                 saving={row.lh === savingLh}
                 pinning={row.lh === pinningLh}
@@ -2701,6 +2703,10 @@ function RowDetailModal({
 }) {
   const queryClient = useQueryClient();
   const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "", tipo: "", vinculo: "" });
+  // Carga do SISTEMA (source='sistema'): no modal unificado ela é editada AQUI como
+  // uma planilha — LH/rota/agenda inclusive (é a fonte da verdade). Form canônico
+  // completo, salvo via updateMonitorCargo (por cargoId). Cargas da planilha ignoram.
+  const [cargoForm, setCargoForm] = useState<CargoForm>(EMPTY_CARGO_FORM);
   const [confirmChange, setConfirmChange] = useState(false);
 
   // Pré-preenche com a alocação EFETIVA: override do operador (alloc_*) ?? planilha.
@@ -2720,6 +2726,27 @@ function RowDetailModal({
     });
   }, [row, alloc, open]);
 
+  // Carga do SISTEMA: pré-preenche o form canônico completo (mesmos campos e origem
+  // que o antigo editor de carga do sistema). Fonte da verdade = a própria carga
+  // (sem sheet_* por baixo), então LH/origem/destino/carregamento/descarga vêm das
+  // colunas canônicas expostas na linha (row.cargaAt/descargaAt/origem/destino).
+  useEffect(() => {
+    if (!open || !row || row.source !== "sistema") return;
+    setCargoForm({
+      lh: row.lh ?? "",
+      status: row.status ?? "",
+      tipo: row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "",
+      origem: row.origem ?? "",
+      destino: row.destino ?? "",
+      carregamento: row.cargaAt ?? (row.data ? `${row.data}T${(row.horario ?? "00:00").slice(0, 5)}` : ""),
+      descarga: row.descargaAt ?? "",
+      motorista: row.motoristas ?? "",
+      cavalo: row.cavalo ?? "",
+      carreta: row.carreta ?? "",
+      vinculo: row.vinculo ?? "",
+    });
+  }, [open, row]);
+
   const saveAllocation = useMutation({
     mutationFn: updateMonitorAllocation,
     onSuccess: () => {
@@ -2733,6 +2760,21 @@ function RowDetailModal({
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "Não foi possível salvar a alocação.");
     },
+  });
+
+  // Carga do SISTEMA: salva os campos CANÔNICOS (LH/rota/agenda + motorista/veículo/
+  // status) via updateMonitorCargo (por cargoId). updateMonitorAllocation (alloc_*,
+  // por lh) NÃO escreve rota/agenda/LH e barra carga sem LH — por isso a carga do
+  // sistema usa este caminho, não o saveAllocation.
+  const saveSystemCargo = useMutation({
+    mutationFn: updateMonitorCargo,
+    onSuccess: () => {
+      toast.success("Carga atualizada.");
+      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
+      onClose();
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Não foi possível salvar a carga."),
   });
 
   const pinMutation = useMutation({
@@ -2897,8 +2939,56 @@ function RowDetailModal({
       ...(descricao ? { descricao } : {}),
     });
   };
+  // ── Carga do SISTEMA: troca de m/v + build (espelha o antigo editor de carga do
+  // sistema; grava por cargoId via updateMonitorCargo). Só usado quando source='sistema'.
+  const mvChangedSystem =
+    cargoForm.motorista.trim() !== (row.motoristas ?? "").trim() ||
+    cargoForm.cavalo.trim() !== (row.cavalo ?? "").trim() ||
+    cargoForm.carreta.trim() !== (row.carreta ?? "").trim();
+  const buildAndMutateSystem = (descricao = "") => {
+    if (!row.cargoId) return;
+    const { data, horario } = splitCarregamento(cargoForm.carregamento);
+    if (cargoForm.origem.trim().length < 2 || cargoForm.destino.trim().length < 2 || !data || !horario) {
+      toast.error("Rota e carregamento (origem, destino, data + hora) são obrigatórios.");
+      return;
+    }
+    if (/^dispon[ií]vel$/i.test(cargoForm.status.trim()) && cargoForm.motorista.trim()) {
+      toast.error("Esta carga tem motorista. Remova o motorista antes de deixá-la Disponível.");
+      return;
+    }
+    // Mesmo gate do #186: só manda status se o operador mudou (senão congela o eco do SPX).
+    const statusChanged = cargoForm.status.trim() !== (row.status ?? "").trim();
+    saveSystemCargo.mutate({
+      cargoId: row.cargoId,
+      lh: cargoForm.lh.trim(),
+      ...(statusChanged ? { status: cargoForm.status.trim() } : {}),
+      tipo: cargoForm.tipo.trim(),
+      origem: cargoForm.origem.trim(),
+      destino: cargoForm.destino.trim(),
+      data,
+      horario,
+      descarga: cargoForm.descarga, // datetime-local ou '' (limpa)
+      motorista: cargoForm.motorista.trim(),
+      cavalo: cargoForm.cavalo.trim(),
+      carreta: cargoForm.carreta.trim(),
+      vinculo: cargoForm.vinculo.trim(),
+      ...(descricao ? { descricao } : {}),
+    });
+  };
+
   const requestSave = () => {
     // Trocou m/v → exige o modal "Confirmar troca" com a descrição (motivo).
+    if (row.source === "sistema") {
+      // Valida rota/agenda antes de abrir o modal de motivo (espelha o save do sistema).
+      const { data, horario } = splitCarregamento(cargoForm.carregamento);
+      if (cargoForm.origem.trim().length < 2 || cargoForm.destino.trim().length < 2 || !data || !horario) {
+        toast.error("Rota e carregamento (origem, destino, data + hora) são obrigatórios.");
+        return;
+      }
+      if (mvChangedSystem) setConfirmChange(true);
+      else buildAndMutateSystem();
+      return;
+    }
     if (allocEditable && mvChanged) setConfirmChange(true);
     else doSave();
   };
@@ -2918,8 +3008,10 @@ function RowDetailModal({
                   {row.tipo}
                 </span>
               )}
-              {/* Check Rodopar (DC-260) — alterna não lançado / lançado / lançado incorreto. */}
-              {!row.reserva && (
+              {/* Check Rodopar (DC-260) — alterna não lançado / lançado / lançado incorreto.
+                  Só p/ carga da planilha: o estado é chaveado por LH (monitor_rodopar_status),
+                  e a carga do sistema pode ter lh_manual vazio/duplicado → colisão/400. */}
+              {!row.reserva && row.source !== "sistema" && (
                 <RodoparBadge status={rodoparStatus} busy={rodoparMutation.isPending} onCycle={cycleRodopar} withLabel />
               )}
               {/* DC-230: consultar Angellira/ASPX só desta carga (sem varrer a planilha). */}
@@ -2935,7 +3027,7 @@ function RowDetailModal({
               </button>
             </div>
             {/* DC-260: quem alterou o Check Rodopar por último (e quando). */}
-            {!row.reserva && rodoparBy && (
+            {!row.reserva && row.source !== "sistema" && rodoparBy && (
               <p className="text-[0.65rem] text-muted-foreground">
                 Rodopar alterado por{" "}
                 <span className="font-semibold text-foreground">{rodoparBy}</span>
@@ -2948,15 +3040,21 @@ function RowDetailModal({
           {/* Scrollable body */}
           <div className="min-h-0 flex-1 overflow-y-auto">
 
-            {/* Motivo da última troca de motorista/veículo (descrição do operador). */}
-            {alloc?.alloc_descricao && (
-              <div className="mx-4 mt-3 rounded-lg border border-amber-300/70 bg-amber-50 px-3 py-2 dark:border-amber-500/30 dark:bg-amber-500/10">
-                <p className="text-[0.6rem] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-                  Motivo da última troca de motorista/veículo
-                </p>
-                <p className="mt-0.5 whitespace-pre-wrap text-sm leading-snug text-foreground">{alloc.alloc_descricao}</p>
-              </div>
-            )}
+            {/* Motivo da última troca de motorista/veículo (descrição do operador).
+                Planilha: vem do override alloc_descricao (allocByLh por sheet_lh).
+                Sistema: o alloc não é carregado por lh (allocByLh é da planilha), então
+                o motivo vem denormalizado na própria linha (row.descricao). */}
+            {(() => {
+              const motivo = row.source === "sistema" ? row.descricao : alloc?.alloc_descricao;
+              return motivo ? (
+                <div className="mx-4 mt-3 rounded-lg border border-amber-300/70 bg-amber-50 px-3 py-2 dark:border-amber-500/30 dark:bg-amber-500/10">
+                  <p className="text-[0.6rem] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                    Motivo da última troca de motorista/veículo
+                  </p>
+                  <p className="mt-0.5 whitespace-pre-wrap text-sm leading-snug text-foreground">{motivo}</p>
+                </div>
+              ) : null;
+            })()}
 
             {/* ── Histórico (reserva, aprovação, write-back na planilha) ── */}
             {/* DC-237: minimizável (a timeline fica longa e empurra as seções de
@@ -2992,9 +3090,29 @@ function RowDetailModal({
               )}
             </ModalSection>
 
-            {/* ── Alocação (editável no sistema) ── */}
-            <ModalSection title="Alocação · editar no sistema">
+            {/* ── Edição: carga do sistema = form canônico completo; planilha = alocação (alloc_*) ── */}
+            <ModalSection title={row.source === "sistema" ? "Editar carga · sistema" : "Alocação · editar no sistema"}>
               <div className="space-y-2">
+                {row.source === "sistema" ? (
+                  /* Carga do SISTEMA: tudo é editável (LH/rota/agenda + motorista/veículo/status),
+                     salvo por cargoId via updateMonitorCargo. Não há camada de planilha (sem Fixar/
+                     lock de ASPX aqui — a carga é a fonte da verdade). */
+                  <>
+                    <MonitorCargoFields form={cargoForm} setForm={setCargoForm} statusOptions={OPERATIONAL_STATUS_OPTIONS} />
+                    <div className="flex items-center justify-end gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={requestSave}
+                        disabled={saveSystemCargo.isPending}
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {saveSystemCargo.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                        Salvar
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                <>
                 {/* Fixar/desafixar — trava o motorista/veículo nesta carga. */}
                 <div className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/30 px-2 py-1.5">
                   <span className="text-[0.62rem] font-medium leading-tight text-muted-foreground">
@@ -3120,10 +3238,14 @@ function RowDetailModal({
                     Salvar
                   </button>
                 </div>
+                </>
+                )}
               </div>
             </ModalSection>
 
-            {/* ── Viagem ── */}
+            {/* ── Viagem (só-leitura) — só para carga da PLANILHA. Na carga do sistema a
+                   rota/carregamento/descarga já são editáveis no bloco acima. ── */}
+            {row.source !== "sistema" && (
             <ModalSection title="Viagem">
               <div className="space-y-1">
                 <div className="flex items-start gap-2 mb-3">
@@ -3140,6 +3262,7 @@ function RowDetailModal({
                 {row.checklistCarreta && <ModalRow label="Checklist carreta" value={row.checklistCarreta} />}
               </div>
             </ModalSection>
+            )}
 
             {/* ── Motorista ── */}
             <ModalSection title="Motorista">
@@ -3283,7 +3406,7 @@ function RowDetailModal({
     <ChangeReasonDialog
       open={confirmChange}
       aspxWarning={allocEditable && aspxWarning}
-      onConfirm={(reason) => { setConfirmChange(false); doSave(reason); }}
+      onConfirm={(reason) => { setConfirmChange(false); if (row.source === "sistema") buildAndMutateSystem(reason); else doSave(reason); }}
       onCancel={() => setConfirmChange(false)}
     />
     </>
@@ -4404,12 +4527,12 @@ export default function SheetMonitor() {
   // Re-consulta manual sob demanda fica no botão "Atualizar consultas".
 
   const handleSelectRow = useCallback((row: SheetMonitorRowType) => {
-    // Carga do sistema → modal de edição (planilha-like); planilha → detalhe.
-    if (row.source === "sistema") {
-      setEditingSystemRow(row);
-      return;
-    }
-    setSelectedRow((prev) => (prev?.lh === row.lh ? null : row));
+    // Modal ÚNICO (source-aware): planilha E sistema abrem o RowDetailModal. Ele
+    // adapta o corpo pela fonte — carga do sistema edita os campos canônicos
+    // (LH/rota/agenda) e salva por cargoId; planilha edita alloc_* por lh.
+    // Toggle por rowKey (identidade estável: 'cargo:<id>'/'sheet:<lh>') — lh_manual
+    // pode ser vazio/duplicado, então alternar por lh fecharia/realçaria a linha errada.
+    setSelectedRow((prev) => (prev?.rowKey && prev.rowKey === row.rowKey ? null : row));
   }, []);
 
   return (
@@ -4600,6 +4723,7 @@ export default function SheetMonitor() {
                 resolveChecklistLevel={resolveChecklistLevel}
                 allocByLh={allocByLh}
                 selectedLh={selectedRow?.lh ?? null}
+                selectedRowKey={selectedRow?.rowKey ?? null}
                 editingLh={editingLh}
                 savingLh={savingLh}
                 pinningLh={pinningLh}
