@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, Loader2, PackagePlus, RefreshCw, Search, Upload, X, Zap } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, Loader2, PackagePlus, Palette, RefreshCw, Search, Upload, X, Zap } from "lucide-react";
 
 import DashboardHeader from "@/components/DashboardHeader";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ import {
   acceptSpxTrips,
   fetchOperatorClientes,
   fetchProgramacao,
+  fetchProgramacaoRouteColors,
   getProgramacaoSettings,
   launchCargoFromTrip,
   runAutoLaunchSpots,
@@ -30,6 +31,8 @@ import {
   type ProgramacaoRow,
   type ProgramacaoTab,
 } from "@/services/readModels";
+import RouteColorsDialog, { PROGRAMACAO_ROUTE_COLORS_KEY } from "@/components/operator/RouteColorsDialog";
+import { buildRouteColorMap, colorForRow, contrastText } from "@/lib/programacaoColors";
 import { fetchAssignableRoutes, findAssignableRouteByLocations } from "@/lib/assignableRoutes";
 import { attachClienteRota, createOperatorRoute, type ImportCargasResponse } from "@/services/operatorAdmin";
 import { parseMoneyInput, parseOptionalNumber, trimTextOrNull } from "@/lib/routeCatalog";
@@ -307,6 +310,18 @@ export default function Programacao() {
   });
   const autolaunchOn = autolaunchQuery.data?.spotAutolaunchEnabled ?? true;
   const [autolaunchModalOpen, setAutolaunchModalOpen] = useState(false);
+
+  // Cores da linha por rota (código de partida+chegada+veículo). Compartilhadas e
+  // editáveis pelo painel "Cores da rota". Mesma queryKey do painel → editar recolore
+  // a lista na hora. Best-effort: sem regras/erro → tabela sem cor (comportamento atual).
+  const [routeColorsOpen, setRouteColorsOpen] = useState(false);
+  const routeColorsQuery = useQuery({
+    queryKey: PROGRAMACAO_ROUTE_COLORS_KEY,
+    queryFn: fetchProgramacaoRouteColors,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const routeColorMap = useMemo(() => buildRouteColorMap(routeColorsQuery.data), [routeColorsQuery.data]);
   const autolaunchMut = useMutation({
     mutationFn: (enabled: boolean) => setSpotAutolaunchEnabled(enabled),
     onSuccess: (res) => {
@@ -681,6 +696,14 @@ export default function Programacao() {
               <Zap className={cn("h-4 w-4", autolaunchOn && "fill-current")} />
               Lançamento automático: {autolaunchOn ? "Ligado" : "Desligado"}
             </Button>
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => setRouteColorsOpen(true)}
+              title="Definir a cor da linha de cada rota (por código de partida/chegada e veículo)"
+            >
+              <Palette className="h-4 w-4" /> Cores da rota
+            </Button>
             <Button variant="outline" className="gap-2" onClick={() => setImportOpen(true)}>
               <Upload className="h-4 w-4" /> Importar programação
             </Button>
@@ -806,34 +829,50 @@ export default function Programacao() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/50">
-                {pagedRows.map((r, i) => (
-                  <tr key={`${r.tab}:${r.lh}`} className={cn("align-top transition hover:bg-primary/[0.03]", i % 2 === 1 && "bg-muted/20")}>
+                {pagedRows.map((r, i) => {
+                  // Cor da linha por rota (código de partida+chegada+veículo). Quando há
+                  // cor, a linha inteira é pintada e o texto usa a cor contrastante — as
+                  // classes text-foreground/text-muted-foreground saem p/ herdar a cor.
+                  const rowColor = colorForRow(routeColorMap, r);
+                  const rowText = rowColor ? contrastText(rowColor) : undefined;
+                  return (
+                  <tr
+                    key={`${r.tab}:${r.lh}`}
+                    className={cn("align-top transition", !rowColor && "hover:bg-primary/[0.03]", !rowColor && i % 2 === 1 && "bg-muted/20")}
+                    style={rowColor ? { backgroundColor: rowColor, color: rowText } : undefined}
+                  >
                     <td className="px-3 py-2.5">
-                      <div className="font-medium text-foreground">{r.cliente || "—"}</div>
-                      <div className="font-mono text-[11px] text-muted-foreground">{r.lh || "—"}</div>
+                      <div className={cn("font-medium", !rowColor && "text-foreground")}>{r.cliente || "—"}</div>
+                      <div className={cn("font-mono text-[11px]", !rowColor && "text-muted-foreground")}>{r.lh || "—"}</div>
                     </td>
                     <td className="px-3 py-2.5">
-                      <span className="font-medium text-foreground">{r.origem || "—"}</span>
-                      <span className="text-muted-foreground"> → {r.destino || "—"}</span>
+                      <span className={cn("font-medium", !rowColor && "text-foreground")}>{r.origem || "—"}</span>
+                      <span className={cn(!rowColor && "text-muted-foreground")}> → {r.destino || "—"}</span>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2.5 text-muted-foreground">
-                      <div>{r.data ? `${fmtDate(r.data)}${r.horario ? ` ${r.horario}` : ""}` : <span className="text-amber-600 dark:text-amber-400">A confirmar</span>}</div>
-                      <div className="text-[11px]">↓ {r.dataDescarga ? `${fmtDate(r.dataDescarga)}${r.horarioDescarga ? ` ${r.horarioDescarga}` : ""}` : <span className="text-amber-600 dark:text-amber-400">A confirmar</span>}</div>
+                    <td className={cn("whitespace-nowrap px-3 py-2.5", !rowColor && "text-muted-foreground")}>
+                      <div>{r.data ? `${fmtDate(r.data)}${r.horario ? ` ${r.horario}` : ""}` : <span className={cn(!rowColor && "text-amber-600 dark:text-amber-400")}>A confirmar</span>}</div>
+                      <div className="text-[11px]">↓ {r.dataDescarga ? `${fmtDate(r.dataDescarga)}${r.horarioDescarga ? ` ${r.horarioDescarga}` : ""}` : <span className={cn(!rowColor && "text-amber-600 dark:text-amber-400")}>A confirmar</span>}</div>
                     </td>
                     <td className="px-3 py-2.5">
-                      <span className={cn("inline-flex whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold", TAB_TINT[r.tab])}>
+                      {/* Em linha colorida, o selo de status vira um chip branco com texto
+                          escuro (legível em qualquer cor e em ambos os temas); sem cor,
+                          mantém o tint por status (TAB_TINT). */}
+                      <span
+                        className={cn("inline-flex whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold", !rowColor && TAB_TINT[r.tab])}
+                        style={rowColor ? { backgroundColor: "rgba(255,255,255,0.9)", color: "#0f172a", borderColor: "rgba(15,23,42,0.15)" } : undefined}
+                      >
                         {rowStatus(r) || "—"}
                       </span>
                     </td>
                     {tab !== "planejado" && (
-                      <td className="px-3 py-2.5 text-muted-foreground">
+                      <td className={cn("px-3 py-2.5", !rowColor && "text-muted-foreground")}>
                         {[r.motorista, r.placa].filter(Boolean).join(" · ") || "—"}
                       </td>
                     )}
                     <td className="px-3 py-2.5">
                       <div className="flex items-center justify-end gap-2">
                         {r.jaLancada ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
+                          <span className={cn("inline-flex items-center gap-1 text-[11px] font-semibold", !rowColor && "text-emerald-600")}>
                             <CheckCircle2 className="h-3.5 w-3.5" /> Lançada
                           </span>
                         ) : (
@@ -867,7 +906,8 @@ export default function Programacao() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
             {totalPages > 1 && (
@@ -916,6 +956,9 @@ export default function Programacao() {
         clientes={clienteOptions}
         existingRoutes={routesQuery.data ?? []}
       />
+
+      {/* Cores da linha por rota (partida+chegada+veículo), compartilhadas e editáveis */}
+      <RouteColorsDialog open={routeColorsOpen} onOpenChange={setRouteColorsOpen} />
 
       {/* Importar programação (CSV) — movido da tela de Cargas */}
       <ImportProgramacaoModal

@@ -1754,6 +1754,9 @@ export interface ProgramacaoRow {
   destinoRaw: string;
   origemCidadeUf: string;
   destinoCidadeUf: string;
+  /** Código da estação SPX (ex.: "8808"); "" quando ausente (Nestlé/importada). */
+  origemCodigo?: string;
+  destinoCodigo?: string;
   data: string | null;
   horario: string | null;
   /** Epoch (segundos, UTC) do carregamento — instante absoluto p/ decidir atraso sem fuso. */
@@ -1859,6 +1862,49 @@ export async function setSpotAutolaunchEnabled(enabled: boolean): Promise<Progra
     accessToken,
     method: "PATCH",
     body: { spotAutolaunchEnabled: enabled },
+  });
+}
+
+/** Regra de cor da LINHA da Programação por rota (código de partida+chegada+veículo). */
+export interface RouteColorRule {
+  id: string;
+  partida: string;
+  chegada: string;
+  veiculo: string;
+  cor: string; // hex #rrggbb
+  updatedAt: string | null;
+}
+
+/** Lista as regras de cor por rota (compartilhadas entre operadores). */
+export async function fetchProgramacaoRouteColors(): Promise<RouteColorRule[]> {
+  const accessToken = await getOperatorAccessToken();
+  const res = await requestJson<{ rules: RouteColorRule[] }>("/api/operator/programacao/route-colors", { accessToken });
+  return res.rules ?? [];
+}
+
+/** Cria/atualiza a cor de uma rota (upsert por partida+chegada+veículo). */
+export async function upsertProgramacaoRouteColor(input: {
+  partida: string;
+  chegada: string;
+  veiculo: string;
+  cor: string;
+}): Promise<RouteColorRule> {
+  const accessToken = await getOperatorAccessToken();
+  const res = await requestJson<{ rule: RouteColorRule }>("/api/operator/programacao/route-colors", {
+    accessToken,
+    method: "POST",
+    body: input,
+  });
+  return res.rule;
+}
+
+/** Remove uma regra de cor por id. */
+export async function deleteProgramacaoRouteColor(id: string): Promise<{ deleted: boolean }> {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ deleted: boolean }>("/api/operator/programacao/route-colors", {
+    accessToken,
+    method: "DELETE",
+    body: { id },
   });
 }
 
