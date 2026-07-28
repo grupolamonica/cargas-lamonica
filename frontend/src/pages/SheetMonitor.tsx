@@ -51,6 +51,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { allocEditPolicy, isSpxTrip } from "@/lib/monitorEditPolicy";
+import { routeCanonKey } from "@/lib/routeCanonical";
 import { computeSwapMoves } from "@/lib/monitorReorder";
 import { mergeAllocIntoRow, effectiveAllocField } from "@/lib/monitorAllocOverlay";
 import {
@@ -2455,21 +2456,32 @@ function SheetMonitorTable({
 
 // ─── Filtro por rota ────────────────────────────────────────────────────────────
 
-// Chave de rota = "ORIGEM → DESTINO" (texto cru). Usada no ARRASTO/FILA/standby e
-// como rótulo — alinhada ao backend (reassign/descend usam origem→destino cru).
+// Chave de rota CANÔNICA (origem→destino dobrando grafia: acento/caixa/espaço/UF/
+// sufixo "-03"). Usada no ARRASTO/FILA/standby p/ decidir "mesma rota". CANÔNICA (não
+// texto cru) porque a MESMA rota é gravada em formatos diferentes conforme a fonte
+// (planilha "Cidade / BA" vs sistema/lançada "Cidade/BA") — com texto cru, reordenar/
+// trocar entre esses formatos era barrado ("Só é possível reordenar dentro da mesma
+// rota…"). ESPELHA o backend (reassign/descend/assign-reserva agora canonicalizam com
+// normalizeRouteCodeLocation) — os dois lados PRECISAM concordar senão o front solta e
+// o back recusa. Sub-locais distintos (Pirajá ≠ Retiro) seguem separados (conservador).
 function routeKeyOf(row: SheetMonitorRowType) {
+  const o = (row.origem || "").trim();
+  const d = (row.destino || "").trim();
+  if (!o && !d) return "—";
+  return routeCanonKey(o, d);
+}
+
+// Rótulo de rota p/ EXIBIÇÃO (texto cru, legível) — título de modal e label do filtro.
+// NÃO usar em comparação de rota (use routeKeyOf, que é canônico).
+function routeDisplayOf(row: SheetMonitorRowType) {
   const o = (row.origem || "").trim();
   const d = (row.destino || "").trim();
   if (!o && !d) return "—";
   return `${o || "—"} → ${d || "—"}`;
 }
 
-// Chave de rota p/ o FILTRO (dropdown "Rotas"): agrupa por CÓDIGO da rota, que é
-// CANÔNICO (uma rota = um código — PR #329). Assim a MESMA rota gravada em formatos
-// diferentes conforme a fonte (planilha "Cidade / BA", sistema "Cidade/BA", antigo
-// "SIMOES FILHO") vira UMA opção só, em vez de N opções "R1" idênticas. Sem código
-// (rota nova ainda sem code / reserva) → cai pro texto cru. NÃO usada no arrasto/fila
-// (esses seguem routeKeyOf cru p/ não divergir da validação de rota do backend).
+// Chave de rota p/ o FILTRO (dropdown "Rotas"): agrupa por CÓDIGO da rota (canônico,
+// PR #329); sem código (rota nova / reserva) cai pra chave canônica de routeKeyOf.
 function routeFilterKeyOf(row: SheetMonitorRowType) {
   return row.routeCodigo != null ? `R${row.routeCodigo}` : routeKeyOf(row);
 }
@@ -3539,7 +3551,7 @@ function ReservaPanelModal({ open, carga, reservas, onPull, onClose }: {
           </DialogTitle>
           <DialogDescription className="pt-1 text-sm text-muted-foreground">
             {viewCarga ? (
-              <>Carga <span className="font-mono font-semibold text-foreground">{viewCarga.lh}</span> — {routeKeyOf(viewCarga)}</>
+              <>Carga <span className="font-mono font-semibold text-foreground">{viewCarga.lh}</span> — {routeDisplayOf(viewCarga)}</>
             ) : "—"}
           </DialogDescription>
         </DialogHeader>
@@ -4236,7 +4248,7 @@ export default function SheetMonitor() {
     items.forEach((item) => {
       if (!inDate(item)) return;
       const k = routeFilterKeyOf(item);
-      const label = routeKeyOf(item);
+      const label = routeDisplayOf(item);
       const prev = byKey.get(k);
       if (!prev) byKey.set(k, { codigo: item.routeCodigo ?? null, label });
       else if (prev.label === prev.label.toUpperCase() && label !== label.toUpperCase()) {

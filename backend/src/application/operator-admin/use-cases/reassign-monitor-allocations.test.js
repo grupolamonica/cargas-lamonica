@@ -73,6 +73,42 @@ describe("reassignMonitorAllocations", () => {
     expect(b.sheet_motorista).toBe("MOTORISTA B");
   });
 
+  it("NÃO barra reordenar entre cargas do MESMO trecho gravado em formatos diferentes (fix)", async () => {
+    // Mesma rota canônica, grafias diferentes por fonte: planilha "X / BA" vs sistema "X/BA".
+    // Antes: ValidationError "Só é possível reordenar dentro da mesma rota…" (routeKeys crus).
+    await seedCargo({ id: createSheetLoadId("LH-FMT-A"), sheet_lh: "LH-FMT-A", status: "OPEN", origem: "Simoes Filho / BA", destino: "Jaboatão dos Guararapes / PE" });
+    await seedCargo({ id: createSheetLoadId("LH-FMT-B"), sheet_lh: "LH-FMT-B", status: "OPEN", origem: "Simoes Filho/BA", destino: "Jaboatão dos Guararapes/PE" });
+    const operator = await seedUser({ email: "op-reassign-fmt@teste.local" });
+
+    const res = await reassignMonitorAllocations({
+      moves: [
+        { lh: "LH-FMT-A", motorista: "M B", cavalo: "", carreta: "" },
+        { lh: "LH-FMT-B", motorista: "M A", cavalo: "", carreta: "" },
+      ],
+      operatorId: operator.id,
+      correlationId: "corr-reassign-fmt",
+    });
+    expect(res.statusCode).toBe(200);
+    expect((await getAlloc(createSheetLoadId("LH-FMT-A"))).alloc_motorista).toBe("M B");
+  });
+
+  it("ainda barra reordenar entre rotas REALMENTE diferentes", async () => {
+    await seedCargo({ id: createSheetLoadId("LH-DIF-A"), sheet_lh: "LH-DIF-A", status: "OPEN", origem: "Simoes Filho/BA", destino: "Jaboatao/PE" });
+    await seedCargo({ id: createSheetLoadId("LH-DIF-B"), sheet_lh: "LH-DIF-B", status: "OPEN", origem: "Feira de Santana/BA", destino: "Recife/PE" });
+    const operator = await seedUser({ email: "op-reassign-dif@teste.local" });
+
+    await expect(
+      reassignMonitorAllocations({
+        moves: [
+          { lh: "LH-DIF-A", motorista: "X", cavalo: "", carreta: "" },
+          { lh: "LH-DIF-B", motorista: "Y", cavalo: "", carreta: "" },
+        ],
+        operatorId: operator.id,
+        correlationId: "corr-reassign-dif",
+      }),
+    ).rejects.toThrow(/mesma rota/i);
+  });
+
   it('grava "" como vazio EXPLÍCITO (não null) — linha esvaziada na reordenação', async () => {
     const id = await seedSheetCargo("LH-EMPTY", { motorista: "MOTORISTA PLANILHA" });
     const operator = await seedUser({ email: "op-reassign-empty@teste.local" });

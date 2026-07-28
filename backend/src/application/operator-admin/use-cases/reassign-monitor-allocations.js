@@ -3,6 +3,7 @@ import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit
 import { NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 import { ensureMonitorSheetCargo } from "./_shared.js";
+import { normalizeRouteCodeLocation } from "../../../domain/operator-admin/route-utils.js";
 
 /**
  * Reatribui (move) a alocação motorista+cavalo+carreta entre cargas do Monitor,
@@ -52,8 +53,14 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
     };
   });
 
-  // Chave de rota = origem→destino normalizado (mesma ideia do routeKeyOf do front).
-  const routeKeyFromRow = (r) => `${(r.origem ?? "").trim()}→${(r.destino ?? "").trim()}`;
+  // Chave de rota CANÔNICA (origem→destino dobrando grafia: acento/caixa/espaço/UF/
+  // sufixo "-03") — MESMA canonicalização do front (routeCanonKey) e do código de rota
+  // (PR #329). Cru NÃO servia: a mesma rota gravada em formatos diferentes por fonte
+  // (planilha "Cidade / BA" vs sistema "Cidade/BA") virava 2 chaves → reordenar/trocar
+  // entre elas era barrado indevidamente. Sub-locais distintos (Pirajá ≠ Retiro) seguem
+  // separados (normalizeRouteCodeLocation não usa apelidos de cidade).
+  const routeKeyFromRow = (r) =>
+    `${normalizeRouteCodeLocation(r.origem)}→${normalizeRouteCodeLocation(r.destino)}`;
 
   const result = await withPgTransaction(async (client) => {
     // 1) Trava e valida TODAS as cargas afetadas ANTES de escrever (sem escrita

@@ -4,6 +4,7 @@ import { NotFoundError, ValidationError } from "../../../domain/load-claims/erro
 import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 import { computeDescendFromDrop } from "../monitor-cascade.js";
+import { normalizeRouteCodeLocation } from "../../../domain/operator-admin/route-utils.js";
 
 // Regra de editabilidade (espelha o allocEditPolicy do front): Disponível/Reservado
 // (sem status) e o pré-carregamento ("aguardando chegar/carregamento") podem ceder/
@@ -101,7 +102,11 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
 
     // Monta a fila na ORDEM EXIBIDA (a que o front enviou), só com as cargas que
     // ainda existem. Valida rota única (origem→destino) — descer é dentro da rota.
-    const routeKeyOf = (r) => `${(r.origem ?? "").trim()}→${(r.destino ?? "").trim()}`;
+    // Chave CANÔNICA (dobra grafia: acento/caixa/espaço/UF/"-03") = mesma do front
+    // (routeCanonKey) e do reassign; cru barrava reordenar entre cargas do mesmo
+    // trecho gravado em formatos diferentes (planilha "Cidade / BA" vs "Cidade/BA").
+    const routeKeyOf = (r) =>
+      `${normalizeRouteCodeLocation(r.origem)}→${normalizeRouteCodeLocation(r.destino)}`;
     const sourceRouteKey = routeKeyOf(sourceRow);
     const loads = [];
     for (const lh of order) {
