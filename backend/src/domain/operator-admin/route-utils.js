@@ -51,6 +51,21 @@ export function stripOperationalLocationSuffix(value) {
     .trim();
 }
 
+/**
+ * Chave de LOCAL para o CÓDIGO de rota do Monitor (monitor_route_codes).
+ * Dobra APENAS variações de GRAFIA do MESMO local — acento, caixa, espaços,
+ * sufixo de UF ("/BA", " - PE") e sufixo operacional ("-03", números soltos) —
+ * SEM os apelidos de cidade de canonicalizeRouteLookupLocation. Assim
+ * "Simões Filho/BA", "Simoes Filho / BA" e "Simões Filho" viram a MESMA chave
+ * (um código só), mas sub-locais distintos (Salvador Pirajá vs Retiro vs
+ * Salvador) permanecem SEPARADOS — decisão do operador (unificar só variações
+ * de formato, não fundir sub-locais). Mais conservador que buildRouteCatalogKeys
+ * (preço), que aplica apelidos e fundiria os sub-locais.
+ */
+export function normalizeRouteCodeLocation(value) {
+  return stripOperationalLocationSuffix(stripRouteStateSuffix(normalizeRouteLocation(value)));
+}
+
 export function canonicalizeRouteLookupLocation(value) {
   const normalizedValue = stripOperationalLocationSuffix(stripRouteStateSuffix(normalizeRouteLocation(value)));
 
