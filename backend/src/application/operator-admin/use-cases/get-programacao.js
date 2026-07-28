@@ -60,17 +60,21 @@ function epochToBRT(ts) {
 // Estação SPX: "LM Hub_CE_Juazeiro do Norte" (ou "[10768]LM Hub_CE_..." pela Torre) →
 //   label:  "Cidade/UF · TIPO"     (exibição, mantém o tipo LM Hub/SoC/...)
 //   cityUf: "Cidade/UF"            (casar com catálogo de rotas / prefill do modal)
+//   codigo: "10768"                (código da estação, quando vem entre colchetes pela
+//                                   Torre — usado p/ pintar a linha por rota; "" se ausente)
 function parseStation(raw) {
   const s = String(raw || "").trim();
-  if (!s) return { label: "", cityUf: "" };
+  if (!s) return { label: "", cityUf: "", codigo: "" };
+  const cod = s.match(/^\[(\d+)\]/);
+  const codigo = cod ? cod[1] : "";
   const body = s.replace(/^\[\d+\]\s*/, "");
   const m = body.match(/^(.*?)_([A-Z]{2})_(.+)$/);
-  if (!m) return { label: body, cityUf: body };
+  if (!m) return { label: body, cityUf: body, codigo };
   const tipo = m[1].trim();
   const uf = m[2];
   const cidade = m[3].replace(/_/g, " ").trim();
   const cityUf = `${cidade}/${uf}`;
-  return { label: `${cityUf}${tipo ? ` · ${tipo}` : ""}`, cityUf };
+  return { label: `${cityUf}${tipo ? ` · ${tipo}` : ""}`, cityUf, codigo };
 }
 
 function normalizeRow(t, tab) {
@@ -89,6 +93,9 @@ function normalizeRow(t, tab) {
   const motorista = String(t.driver_name ?? "").trim();
   const placa = [t.cavalo, t.carreta].map((v) => String(v ?? "").trim()).filter(Boolean).join(" / ");
   const acceptanceStatus = typeof t.acceptance_status === "number" ? t.acceptance_status : null;
+  // Código (whs_id) da estação p/ pintar a linha por rota+veículo.
+  const origemCodigo = Number(t.origem_station_id) > 0 ? String(t.origem_station_id) : origemStation.codigo;
+  const destinoCodigo = Number(t.destino_station_id) > 0 ? String(t.destino_station_id) : destinoStation.codigo;
   return {
     lh,
     nome: t.trip_name || "",
@@ -103,6 +110,11 @@ function normalizeRow(t, tab) {
     destinoRaw: t.destino || "",
     origemCidadeUf: origemStation.cityUf,
     destinoCidadeUf: destinoStation.cityUf,
+    // Código (whs_id) da estação de origem/destino (ex.: "8808" → "10963") p/ pintar a
+    // linha por rota+veículo. Fonte: station_id do payload SPX direto (origem_station_id,
+    // exposto pelo sidecar); fallback "[código]" no nome (legado Torre).
+    origemCodigo,
+    destinoCodigo,
     data,
     horario,
     carregamentoTs,
@@ -206,6 +218,9 @@ function normalizeNestleRow(o) {
     destinoRaw: o.empdest_nomeciduf || destinoCidadeUf,
     origemCidadeUf,
     destinoCidadeUf,
+    // Nestlé não usa os códigos de estação SPX → sem cor por rota (fica sem match).
+    origemCodigo: "",
+    destinoCodigo: "",
     data: carreg.data,
     horario: carreg.horario,
     carregamentoTs: carreg.ts,

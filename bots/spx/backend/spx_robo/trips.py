@@ -112,6 +112,10 @@ def _norm_trip(t: dict) -> dict:
         "trip_name": t.get("trip_name"),
         "origem": origem.get("station_name"),
         "destino": destino.get("station_name"),
+        # station_id numérico (whs_id) da origem/destino — ex.: 8808 = Simoes Filho.
+        # A tela Programação usa p/ pintar a linha por rota (código de partida+chegada).
+        "origem_station_id": origem.get("station"),
+        "destino_station_id": destino.get("station"),
         "std": origem.get("std") or origem.get("sta"),
         # Datas p/ a tela Programação (epoch seg). Ambas usam a CHEGADA programada
         # (STA) da estação, que é o instante operacional de cada ponta:
