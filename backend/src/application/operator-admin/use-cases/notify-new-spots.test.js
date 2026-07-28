@@ -76,6 +76,23 @@ describe("notifyNewSpots (DC-279)", () => {
     expect(inserts[0].metadata.route_key).toBeTruthy();
   });
 
+  it("grava tipo/is_forecast no metadata a partir do nome da viagem (gate do som)", async () => {
+    const rows = [
+      makeRow({ lh: "LT-FC", nome: "20260802F0_125_4199_21:00_22:00_HUB_AM01" }), // forecast
+      makeRow({ lh: "LT-AD", nome: "20260728Adhoc-S0217519HAM0501" }), // adhoc (spot)
+      makeRow({ lh: "LT-FM", nome: "20260731FM Hub_3PL_SP_Pedreira_01-2601" }), // fm-hub
+    ];
+    const { deps, inserts } = makeDeps({ rows, alertKeys: SELECTED_KEYS });
+    await notifyNewSpots({ deps });
+    const byLh = Object.fromEntries(inserts.map((i) => [i.metadata.lh, i.metadata]));
+    expect(byLh["LT-FC"].tipo).toBe("forecast");
+    expect(byLh["LT-FC"].is_forecast).toBe(true);
+    expect(byLh["LT-AD"].tipo).toBe("adhoc");
+    expect(byLh["LT-AD"].is_forecast).toBe(false);
+    expect(byLh["LT-FM"].tipo).toBe("fm-hub");
+    expect(byLh["LT-FM"].is_forecast).toBe(false);
+  });
+
   it("NÃO toca em viagem planejado JÁ ACEITA no SPX (acceptance_status=1) — bug 'já aceitas ainda tocam'", async () => {
     const rows = [
       makeRow({ lh: "LT-ACC", acceptanceStatus: 1, motorista: "FULANO" }), // já aceita (muitas c/ motorista) → não toca
