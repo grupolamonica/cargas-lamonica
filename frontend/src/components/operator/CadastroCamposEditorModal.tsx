@@ -584,6 +584,9 @@ export function CadastroCamposEditorModal({
               {mfield("Nome do pai", "nome_pai")}
               {mfield("Nome da mãe", "nome_mae")}
             </div>
+            {/* Selfie segurando a CNH — anexo do motorista que faltou (Step A pulado).
+                Sem OCR (é só foto): grava motorista.selfie_cnh_url; o "Salvar" persiste. */}
+            {attachControl("motorista", [{ docKind: "selfie-cnh", label: "Selfie com CNH" }])}
           </section>
 
           <section className="space-y-2">

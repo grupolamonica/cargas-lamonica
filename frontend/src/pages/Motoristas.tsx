@@ -48,6 +48,7 @@ import DriverDetailModal, { type DriverDetailModalData } from "@/components/Driv
 import ApproveCadastroModal, { type ApproveJob } from "@/components/operator/ApproveCadastroModal";
 import { AutoApproveAngelliraCard } from "@/components/operator/AutoApproveAngelliraCard";
 import { CadastroCamposEditorModal } from "@/components/operator/CadastroCamposEditorModal";
+import { AnexarSelfieButton, isSelfieMissing } from "@/components/operator/AnexarSelfieButton";
 import { CadastroBotsHealthBanner } from "@/components/operator/CadastroBotsHealthBanner";
 import DispatchProgressModal from "@/components/operator/DispatchProgressModal";
 import ExternalRegistrationPanel from "@/components/operator/ExternalRegistrationPanel";
@@ -1557,6 +1558,37 @@ const Motoristas = () => {
                         </div>
                       );
                     })()}
+
+                    {/* Selfie faltante — anexo direto de 1 clique aqui na ficha
+                        (o cadastro sai de "Dados incompletos"). Para revisar mais
+                        campos + anexar, use também "Editar dados". */}
+                    {isSelfieMissing(selectedPendente.dados) ? (
+                      <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50/60 p-3 dark:border-amber-500/30 dark:bg-amber-900/10">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                          Selfie com a CNH não anexada
+                        </p>
+                        <AnexarSelfieButton
+                          cadastroId={selectedPendente.id}
+                          onDone={(url) => {
+                            queryClient.invalidateQueries({ queryKey: PENDENTES_QUERY_KEY });
+                            setSelectedPendente((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    dados: {
+                                      ...(prev.dados as Record<string, unknown>),
+                                      motorista: {
+                                        ...(((prev.dados as Record<string, unknown>)?.motorista as Record<string, unknown>) ?? {}),
+                                        selfie_cnh_url: url,
+                                      },
+                                    },
+                                  }
+                                : prev,
+                            );
+                          }}
+                        />
+                      </div>
+                    ) : null}
 
                     {/* Documentos de cadastro MIGRADO (lidos do share da produção e
                         servidos como base64 — não passam pelo Supabase). */}
