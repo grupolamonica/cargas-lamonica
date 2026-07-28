@@ -49,6 +49,9 @@ type RowInfo = {
   daysToExpire?: number | null;
   statusText?: string | null;
   errorMessage?: string | null;
+  /** SPX: motorista existe em OUTRA agência → o "cadastrar" na verdade IMPORTA
+   * pra nossa agência (relabela o checkbox pra deixar isso claro). */
+  matchedOutra?: boolean;
 };
 
 const ALERTA_THRESHOLD_DAYS = 30;
@@ -343,14 +346,20 @@ export default function ApproveCadastroModal({
                 <div className="flex-1 text-sm">
                   <p className="flex items-center gap-2 font-semibold text-foreground">
                     <Truck className="h-4 w-4 text-orange-600" />
-                    {spxVigenteOuJaNossa ? "Re-cadastrar no SPX/Shopee" : "Cadastrar no SPX/Shopee"}
+                    {rows.spx.matchedOutra
+                      ? "Importar para nossa agência (SPX)"
+                      : spxVigenteOuJaNossa
+                        ? "Re-cadastrar no SPX/Shopee"
+                        : "Cadastrar no SPX/Shopee"}
                   </p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    {spxVigenteOuJaNossa
-                      ? "Motorista já cadastrado. Re-cadastrar criaria nova request."
-                      : rows.spx.status === "INDISPONIVEL"
-                        ? "SPX indisponível — cookies podem precisar de renovação."
-                        : "Cria driver_request na agência LAMONICA (~30-60s)."}
+                    {rows.spx.matchedOutra
+                      ? "Motorista existe em outra agência SPX — traz o cadastro pra LAMONICA usando os dados que já temos no nosso sistema."
+                      : spxVigenteOuJaNossa
+                        ? "Motorista já cadastrado. Re-cadastrar criaria nova request."
+                        : rows.spx.status === "INDISPONIVEL"
+                          ? "SPX indisponível — cookies podem precisar de renovação."
+                          : "Cria driver_request na agência LAMONICA (~30-60s)."}
                   </p>
                 </div>
               </label>
@@ -628,6 +637,7 @@ function rowFromSpxPrecheck(precheck: SpxPrecheckResult, label: string, icon: Re
       statusText: "⚠ CADASTRADO EM OUTRA AGÊNCIA — importar pra LAMONICA",
       errorMessage: precheck.message,
       validUntil: null,
+      matchedOutra: true,
     };
   }
   if (precheck.status === "BLOQUEADO") {
