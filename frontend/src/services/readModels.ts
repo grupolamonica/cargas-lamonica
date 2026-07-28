@@ -1,4 +1,4 @@
-import { getOperatorAccessToken, requestJson } from "@/services/apiClient";
+import { getOperatorAccessToken, requestJson, requestMultipart } from "@/services/apiClient";
 import type { PublicLeadValidationSummary, PublicLeadValidationOverallStatus } from "@/services/loadClaims";
 
 /**
@@ -2357,6 +2357,25 @@ export async function fetchCadastrosIncompletos(params: {
   return requestJson<CadastrosIncompletosResponse>(
     `/api/operator/cadastros-incompletos${query ? `?${query}` : ""}`,
     { accessToken },
+  );
+}
+
+/**
+ * Anexa a selfie (segurando a CNH) a um cadastro que concluiu sem ela. Envia o
+ * arquivo (multipart) para o operador; o backend escopa a pasta pelo CPF/carga
+ * do próprio cadastro. Ao concluir, o cadastro sai da aba "Dados incompletos".
+ */
+export async function anexarSelfieCadastro(
+  id: string,
+  file: File,
+): Promise<{ ok: boolean; selfie_cnh_url: string }> {
+  const accessToken = await getOperatorAccessToken();
+  const formData = new FormData();
+  formData.append("file", file);
+  return requestMultipart<{ ok: boolean; selfie_cnh_url: string }>(
+    `/api/operator/cadastros/${id}/anexar-selfie`,
+    formData,
+    { accessToken, method: "POST" },
   );
 }
 
