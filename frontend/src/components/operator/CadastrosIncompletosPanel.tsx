@@ -1,74 +1,12 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Camera, ClipboardList, FileWarning, Loader2, ShieldX } from "lucide-react";
-import { useRef, useState } from "react";
-import { toast } from "sonner";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ClipboardList, FileWarning, Loader2, ShieldX } from "lucide-react";
+import { useState } from "react";
 
 import AdminPagination from "@/components/AdminPagination";
-import { Button } from "@/components/ui/button";
+import { AnexarSelfieButton, hasSelfieProblema } from "@/components/operator/AnexarSelfieButton";
 import { repomBadge, type RepomBadgeTone } from "@/lib/repomProgress";
 import { cn } from "@/lib/utils";
-import {
-  anexarSelfieCadastro,
-  fetchCadastrosIncompletos,
-  type CadastroProblema,
-} from "@/services/readModels";
-
-/** Detecta a pendência "Selfie com a CNH não anexada" no motorista. */
-function hasSelfieProblema(problemas: CadastroProblema[]): boolean {
-  return problemas.some((p) => p.area === "motorista" && /selfie/i.test(p.motivo));
-}
-
-/**
- * Botão "Anexar selfie" — só aparece em cadastros cujo problema é a selfie
- * faltante. Sobe o arquivo (multipart) via endpoint do operador; ao concluir,
- * invalida a lista (o cadastro sai de "Dados incompletos").
- */
-function AnexarSelfieButton({ id }: { id: string }) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: (file: File) => anexarSelfieCadastro(id, file),
-    onSuccess: () => {
-      toast.success("Selfie anexada. O cadastro saiu de “Dados incompletos”.");
-      queryClient.invalidateQueries({ queryKey: ["operator", "cadastros-incompletos"] });
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Não foi possível anexar a selfie.");
-    },
-  });
-
-  return (
-    <>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*,application/pdf"
-        className="sr-only"
-        aria-label="Anexar selfie com a CNH"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          event.target.value = ""; // permite reescolher o mesmo arquivo
-          if (file) mutation.mutate(file);
-        }}
-      />
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={mutation.isPending}
-        onClick={() => inputRef.current?.click()}
-        className="gap-1.5"
-      >
-        {mutation.isPending ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : (
-          <Camera className="h-3.5 w-3.5" />
-        )}
-        Anexar selfie
-      </Button>
-    </>
-  );
-}
+import { fetchCadastrosIncompletos, type CadastroProblema } from "@/services/readModels";
 
 const AREA_LABEL: Record<string, string> = {
   motorista: "Motorista",
@@ -97,6 +35,7 @@ function tipoClasses(tipo: CadastroProblema["tipo"]) {
  */
 export function CadastrosIncompletosPanel() {
   const [page, setPage] = useState(1);
+  const queryClient = useQueryClient();
 
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ["operator", "cadastros-incompletos", page],
@@ -166,7 +105,14 @@ export function CadastrosIncompletosPanel() {
                   <FileWarning className="h-3.5 w-3.5" /> {item.n_problemas}{" "}
                   {item.n_problemas === 1 ? "pendência" : "pendências"}
                 </span>
-                {hasSelfieProblema(item.problemas) ? <AnexarSelfieButton id={item.id} /> : null}
+                {hasSelfieProblema(item.problemas) ? (
+                  <AnexarSelfieButton
+                    cadastroId={item.id}
+                    onDone={() =>
+                      queryClient.invalidateQueries({ queryKey: ["operator", "cadastros-incompletos"] })
+                    }
+                  />
+                ) : null}
               </div>
             </div>
             <ul className="mt-3 space-y-1.5">
