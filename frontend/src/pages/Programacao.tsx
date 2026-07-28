@@ -391,8 +391,14 @@ export default function Programacao() {
     });
 
   // DC-279 — a notificação de spot navega p/ /programacao?lh=<lh>; destacamos a linha.
+  // Uma LEVA (alerta "Programação disponível") manda TODAS as LHs separadas por vírgula
+  // (?lh=A,B,C) → destacamos/filtramos todas, não só a primeira.
   const [searchParams] = useSearchParams();
   const highlightLh = searchParams.get("lh");
+  const highlightLhSet = useMemo(
+    () => new Set((highlightLh || "").split(",").map((s) => s.trim()).filter(Boolean)),
+    [highlightLh],
+  );
   const spotTabHandledRef = useRef<string | null>(null);
   const spotSearchHandledRef = useRef<string | null>(null);
 
@@ -621,6 +627,9 @@ export default function Programacao() {
 
   const filteredAll = useMemo(() => {
     const q = search.trim().toUpperCase();
+    // Busca casa QUALQUER token separado por vírgula — usado pelo deep-link da leva de
+    // spots (?lh=A,B,C) p/ mostrar TODAS as cargas do alerta. Digitação normal = 1 token.
+    const qTokens = q ? q.split(",").map((t) => t.trim()).filter(Boolean) : [];
     const cliSet = new Set(fCliente);
     const rotaSet = new Set(fRota);
     const stSet = new Set(fStatus);
@@ -631,7 +640,10 @@ export default function Programacao() {
       // no passado vs o relógio corrente). Compara epoch absoluto → sem ambiguidade de
       // fuso. Reavaliado a cada tick (nowMs). Aceito/Concluído são naturalmente passados.
       if (r.tab === "planejado" && r.carregamentoTs && r.carregamentoTs * 1000 < nowMs) return false;
-      if (q && !`${r.lh} ${r.nome}`.toUpperCase().includes(q)) return false;
+      if (qTokens.length) {
+        const hay = `${r.lh} ${r.nome}`.toUpperCase();
+        if (!qTokens.some((t) => hay.includes(t))) return false;
+      }
       if (cliSet.size && !cliSet.has(r.cliente)) return false;
       if (rotaSet.size && !rotaSet.has(routeLabel(r))) return false;
       if (stSet.size && !stSet.has(rowStatus(r))) return false;
@@ -711,21 +723,22 @@ export default function Programacao() {
       setSearch(highlightLh); // a busca casa por LH
     }
     if (spotTabHandledRef.current !== highlightLh) {
-      const target = rows.find((r) => r.lh === highlightLh);
+      const target = rows.find((r) => highlightLhSet.has(r.lh));
       if (target) {
         // Sem isso, um spot Nestlé ACEITO não apareceria (aba default = 'planejado').
         spotTabHandledRef.current = highlightLh;
         if (target.tab !== tab) setTab(target.tab);
       }
     }
-  }, [highlightLh, rows, tab]);
+  }, [highlightLh, highlightLhSet, rows, tab]);
 
-  // DC-279 — ao chegar pela notificação (?lh=), rola até a linha destacada (se visível).
+  // DC-279 — ao chegar pela notificação (?lh=), rola até a 1ª linha destacada (se visível).
   useEffect(() => {
-    if (!highlightLh) return;
-    const el = document.querySelector(`tr[data-lh="${CSS.escape(highlightLh)}"]`);
+    if (highlightLhSet.size === 0) return;
+    const firstLh = [...highlightLhSet][0];
+    const el = document.querySelector(`tr[data-lh="${CSS.escape(firstLh)}"]`);
     if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [highlightLh, pagedRows]);
+  }, [highlightLhSet, pagedRows]);
 
   const hasActiveFilters =
     search.trim().length > 0 ||
@@ -965,7 +978,7 @@ export default function Programacao() {
                       "align-top transition",
                       !rowColor && "hover:bg-primary/[0.03]",
                       !rowColor && i % 2 === 1 && "bg-muted/20",
-                      highlightLh && r.lh === highlightLh && "bg-blue-50 ring-2 ring-inset ring-blue-400 dark:bg-blue-500/10",
+                      highlightLhSet.has(r.lh) && "bg-blue-50 ring-2 ring-inset ring-blue-400 dark:bg-blue-500/10",
                     )}
                     style={rowColor ? { backgroundColor: rowColor, color: rowText } : undefined}
                   >
