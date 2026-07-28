@@ -1244,7 +1244,9 @@ def importar_motorista_matched(
         driver_name=str(driver_info.get("driver_name") or ""),
         contact_number=str(driver_info.get("contact_number") or ""),
         gender=int(driver_info.get("gender") or 1),
-        birth_day=int(driver_info.get("birth_day") or 0),
+        # birth_day pode vir como unix int (perfil do SPX) OU ISO 'YYYY-MM-DD'
+        # (quando o driver_info e montado a partir do NOSSO cadastro) — normaliza.
+        birth_day=_to_unix_seconds(driver_info.get("birth_day")),
         city_id=int(city_id),
         # Endereco do perfil (locked, usa do SPX)
         neighbourhood_name=str(driver_info.get("neighbourhood_name") or ""),
@@ -1261,7 +1263,8 @@ def importar_motorista_matched(
         # CNH locked do perfil
         license_number=str(driver_info.get("license_number") or ""),
         license_type=int(driver_info.get("license_type") or 0),
-        license_expire_date=int(driver_info.get("license_expire_date") or 0),
+        # ISO (nosso cadastro) OU unix int (perfil do SPX) — _to_unix_seconds cobre os dois.
+        license_expire_date=_to_unix_seconds(driver_info.get("license_expire_date")),
         # Perfil (locked) tem prioridade; nosso cnh_remarks preenche so quando o
         # perfil importado veio sem — evita rascunho preso por campo obrigatorio.
         cnh_remarks=(driver_info.get("cnh_remarks") or cnh_remarks or []),
