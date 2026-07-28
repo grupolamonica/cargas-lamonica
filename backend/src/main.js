@@ -595,6 +595,37 @@ async function bootstrap() {
     console.info("[spot-alert] desabilitado via kill-switch (SPOT_ALERT_ENABLED=false)");
   }
 
+  // 4d-ter. DC-299 — Alerta de novo motorista na FILA. Varre a fila do operador e insere
+  //     uma notificação `new_queue_driver` quando um motorista ENTRA na fila (lead QUEUED
+  //     recém-criado). O sino (polling 30s, toda tela) dispara bip + 1 aviso de voz +
+  //     notificação do navegador + toast, e leva à Fila. Kill-switch: QUEUE_ALERT_ENABLED=false.
+  //     Intervalo: QUEUE_ALERT_INTERVAL_MIN (default 3min — o read model da fila é pesado
+  //     (6 JOINs, cache de só 3s); 3min mantém a carga comparável ao próprio polling da tela).
+  if (process.env.QUEUE_ALERT_ENABLED !== "false") {
+    const intervalMin = Math.max(1, Number(process.env.QUEUE_ALERT_INTERVAL_MIN || 3));
+    let notifyingQueue = false;
+    setInterval(async () => {
+      if (notifyingQueue) return;
+      notifyingQueue = true;
+      try {
+        const { notifyNewQueueDrivers } = await import(
+          "./application/operator-admin/use-cases/notify-new-queue-drivers.js"
+        );
+        const r = await notifyNewQueueDrivers({ correlationId: "queue-alert" });
+        if (r.notified) {
+          console.info(`[queue-alert] ${r.notified} novo(s) motorista(s) na fila notificado(s) (candidatos=${r.candidates}, repetidos=${r.skipped})`);
+        }
+      } catch (err) {
+        console.error("[queue-alert] erro:", err?.message);
+      } finally {
+        notifyingQueue = false;
+      }
+    }, intervalMin * 60 * 1000);
+    console.info(`[queue-alert] timer ativo (intervalo ${intervalMin}min)`);
+  } else {
+    console.info("[queue-alert] desabilitado via kill-switch (QUEUE_ALERT_ENABLED=false)");
+  }
+
   // 4e. Expiração de cargas passadas (OPEN → EXPIRED). Sem isso, cargas cujo
   //     carregamento já venceu ficam OPEN no painel do operador (poluindo "ativas"
   //     e criando a impressão de "cargas que não aparecem para o motorista"), embora
