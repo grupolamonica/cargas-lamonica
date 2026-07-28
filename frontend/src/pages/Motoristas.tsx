@@ -1714,7 +1714,10 @@ const Motoristas = () => {
                         Aparece quando cadastro já foi aprovado (driver_profile criado). */}
                     {selectedPendente.status === "aprovado" ? (
                       <>
-                        <ExternalRegistrationPanel cadastroId={selectedPendente.id} />
+                        <ExternalRegistrationPanel
+                          cadastroId={selectedPendente.id}
+                          onEditarDados={() => setShowCamposEditor(true)}
+                        />
                         {/* Ações de gerenciamento para cadastros aprovados */}
                         {permissions.canApproveMotoristas ? (
                           <div className="mt-4 flex gap-2 border-t border-border pt-4">
