@@ -1742,11 +1742,23 @@ export async function syncGoogleSheetLoads({
   // a linha da planilha (com o motorista real) e o dedup esconde a lançada. Editar
   // o horário atinge só a lançada (→ /motorista), nunca o Monitor/planilha.
   //
-  // A planilha é a fonte de verdade de alocação: quando a viagem aparece TOMADA
-  // (motorista preenchido), aposentamos a gêmea lançada — expira a carga (some do
-  // portal, para de aceitar candidatura) e cancela as candidaturas ativas (limpa a
-  // fila fantasma). Idempotente/self-healing: os já-terminais são filtrados, então
-  // syncs seguintes viram no-op. Best-effort: nunca derruba o sync.
+  // A planilha é a fonte de verdade de alocação. Dois casos aposentam a gêmea lançada:
+  //
+  //  (1) Viagem TOMADA na planilha (motorista preenchido): a lançada virou fantasma —
+  //      expira a carga (some do portal, para de aceitar candidatura) e cancela as
+  //      candidaturas ativas (limpa a fila fantasma).
+  //
+  //  (2) Viagem DISPONÍVEL na planilha (sem motorista) mas já lançada antes: a linha da
+  //      planilha (sheet_lh, id determinístico) e a lançada (lh_manual) são a MESMA
+  //      viagem OPEN → o motorista via a carga DUPLICADA no /motorista (mesma rota/
+  //      data/horário, dois cards). A planilha é canônica (recebe lifecycle do sync,
+  //      Monitor, writeback), então aposentamos a lançada — MAS só quando ela não tem
+  //      reserva/candidatura ativa (senão destruiríamos ação real do motorista; esses
+  //      poucos casos ficam p/ o operador) e só quando a gêmea da planilha existe OPEN
+  //      e pronta (com valor), garantindo que não removemos o único spot visível.
+  //
+  // Idempotente/self-healing: os já-terminais são filtrados, então syncs seguintes
+  // viram no-op. Best-effort: nunca derruba o sync.
   const takenSheetLhs = Array.from(
     new Set(
       allSheetRows
@@ -1754,27 +1766,57 @@ export async function syncGoogleSheetLoads({
         .map((row) => row.lh.trim()),
     ),
   );
-  if (takenSheetLhs.length > 0) {
+  // LHs DISPONÍVEIS (OPEN) na planilha nesta rodada — as linhas que acabaram de ser
+  // upsertadas como cargas OPEN. Gêmeas lançadas destes LHs são o caso (2) acima.
+  const openSheetLhs = Array.from(currentSheetKeys);
+  if (takenSheetLhs.length > 0 || openSheetLhs.length > 0) {
     try {
       const reconcileResult = await withPgClient((pgClient) =>
         pgClient.query(
           `
             WITH twins AS (
-              SELECT c.id
+              SELECT c.id,
+                     (c.lh_manual = ANY($1::text[])) AS is_taken
                 FROM public.cargas c
-               WHERE c.lh_manual = ANY($1::text[])
-                 AND c.sheet_lh IS NULL
+               WHERE c.sheet_lh IS NULL
                  AND COALESCE(c.is_template, false) = false
                  AND c.status NOT IN ('EXPIRED', 'CANCELLED', 'COMPLETED', 'FAILED')
                  -- Só gêmeas de hoje/futuro: as passadas já não aparecem ao
                  -- motorista (regra data >= hoje) e reescrever candidaturas
                  -- históricas mudaria relatórios sem necessidade.
                  AND c.data >= (now() AT TIME ZONE 'America/Sao_Paulo')::date
+                 AND (
+                   -- (1) viagem TOMADA na planilha → aposenta a gêmea (fantasma).
+                   c.lh_manual = ANY($1::text[])
+                   -- (2) viagem DISPONÍVEL na planilha e já lançada → gêmea OPEN
+                   -- duplicada no portal. Só aposenta quando a lançada NÃO tem
+                   -- reserva/candidatura ativa e quando a linha da planilha existe
+                   -- OPEN e pronta (com valor) — nunca remove o único spot visível.
+                   OR (
+                     c.lh_manual = ANY($3::text[])
+                     AND c.status = 'OPEN'
+                     AND c.reserved_public_lead_id IS NULL
+                     AND NOT EXISTS (
+                       SELECT 1 FROM public.load_public_leads l
+                        WHERE l.load_id = c.id
+                          AND l.status IN ('PRE_REGISTERED', 'QUEUED', 'APPROVED')
+                     )
+                     AND EXISTS (
+                       SELECT 1 FROM public.cargas s
+                        WHERE s.sheet_lh = c.lh_manual
+                          AND s.sheet_source IS NOT NULL
+                          AND s.status = 'OPEN'
+                          AND s.valor IS NOT NULL
+                     )
+                   )
+                 )
             ),
             cancelled_leads AS (
+              -- Só gêmeas TOMADAS têm candidatura fantasma a cancelar; as gêmeas OPEN
+              -- entram no CTE twins apenas quando NAO tem candidatura ativa (guarda acima).
               UPDATE public.load_public_leads l
                  SET status = 'CANCELLED', updated_at = now()
-               WHERE l.load_id IN (SELECT id FROM twins)
+               WHERE l.load_id IN (SELECT id FROM twins WHERE is_taken)
                  AND l.status IN ('PRE_REGISTERED', 'QUEUED', 'APPROVED')
               RETURNING l.id, l.load_id
             ),
@@ -1799,19 +1841,23 @@ export async function syncGoogleSheetLoads({
             )
             SELECT
               (SELECT count(*) FROM expired_twins)::int  AS twins_expired,
+              (SELECT count(*) FROM twins WHERE is_taken)::int AS twins_taken,
+              (SELECT count(*) FROM twins WHERE NOT is_taken)::int AS twins_open,
               (SELECT count(*) FROM cancelled_leads)::int AS leads_cancelled
           `,
-          [takenSheetLhs, source],
+          [takenSheetLhs, source, openSheetLhs],
         ),
       );
 
       const stats = reconcileResult?.rows?.[0] ?? {};
       const twinsExpired = Number(stats.twins_expired ?? 0);
+      const twinsTaken = Number(stats.twins_taken ?? 0);
+      const twinsOpen = Number(stats.twins_open ?? 0);
       const leadsCancelled = Number(stats.leads_cancelled ?? 0);
       if (twinsExpired > 0 || leadsCancelled > 0) {
         console.info(
-          `[google-sheet-loads] ${twinsExpired} carga(s) lançada(s) aposentada(s) por já estarem tomadas na planilha (gêmea) — ${leadsCancelled} candidatura(s) fantasma cancelada(s)`,
-          { twinsExpired, leadsCancelled, source },
+          `[google-sheet-loads] ${twinsExpired} carga(s) lançada(s) aposentada(s) como gêmea da planilha (${twinsTaken} tomada(s), ${twinsOpen} disponível(is) duplicada(s)) — ${leadsCancelled} candidatura(s) fantasma cancelada(s)`,
+          { twinsExpired, twinsTaken, twinsOpen, leadsCancelled, source },
         );
       }
     } catch (reconcileError) {

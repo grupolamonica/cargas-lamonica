@@ -1044,13 +1044,21 @@ describe("google sheet loads sync", () => {
     // Só age sobre a carga do SISTEMA (sheet_lh NULL) ainda viva (não-terminal).
     expect(reconcileCall.sql).toContain("c.sheet_lh IS NULL");
     expect(reconcileCall.sql).toContain("c.status NOT IN ('EXPIRED', 'CANCELLED', 'COMPLETED', 'FAILED')");
-    // Alvo = LHs tomadas na planilha (motorista preenchido).
+    // Alvo TOMADO ($1) = LHs tomadas na planilha (motorista preenchido).
     expect(reconcileCall.params[0]).toContain("LT0Q4402267J1");
     expect(reconcileCall.params[0]).not.toContain("LT0Q4302267L1");
     expect(reconcileCall.params[1]).toBe("shopee");
+    // SQL agora distingue a gêmea tomada (is_taken) e trata a gêmea OPEN duplicada
+    // via um segundo alvo ($3 = LHs disponíveis).
+    expect(reconcileCall.sql).toContain("AS is_taken");
+    expect(reconcileCall.sql).toContain("c.lh_manual = ANY($3::text[])");
+    expect(Array.isArray(reconcileCall.params[2])).toBe(true);
   });
 
-  it("não roda a reconciliação de gêmeas quando nenhuma linha da planilha tem motorista", async () => {
+  it("reconcilia gêmea OPEN duplicada (mesma viagem lançada + planilha) mesmo sem linha tomada", async () => {
+    // Sem motorista em nenhuma linha: não há gêmea TOMADA, mas as viagens
+    // disponíveis podem já ter sido lançadas (lh_manual) → gêmea OPEN duplicada
+    // no /motorista. A reconciliação agora roda para aposentar essas gêmeas.
     const csvNoTaken = SAMPLE_CSV.replace(",Antonio,", ",,");
     const supabaseClient = createSupabaseMock();
     const fetchImpl = vi.fn().mockResolvedValue({
@@ -1068,8 +1076,21 @@ describe("google sheet loads sync", () => {
       sheetClientId: SHEET_CLIENT_ID,
     });
 
-    const reconcileCall = pgQueryCalls.find((c) => c.sql.includes("c.lh_manual = ANY($1::text[])"));
-    expect(reconcileCall).toBeUndefined();
+    const reconcileCall = pgQueryCalls.find(
+      (c) => c.sql.includes("c.lh_manual = ANY($1::text[])") && c.sql.includes("public.load_public_leads"),
+    );
+    expect(reconcileCall).toBeTruthy();
+    // Sem linha tomada: alvo TOMADO ($1) vazio, alvo DISPONÍVEL ($3) preenchido.
+    expect(reconcileCall.params[0]).toEqual([]);
+    expect(reconcileCall.params[2].length).toBeGreaterThan(0);
+    // Guarda da gêmea OPEN: só aposenta sem reserva/candidatura ativa e quando a
+    // gêmea da planilha existe OPEN e pronta (com valor).
+    expect(reconcileCall.sql).toContain("c.reserved_public_lead_id IS NULL");
+    expect(reconcileCall.sql).toContain("s.sheet_lh = c.lh_manual");
+    expect(reconcileCall.sql).toContain("s.valor IS NOT NULL");
+    // As candidaturas só são canceladas para as gêmeas TOMADAS (as OPEN entram
+    // sem candidatura ativa, pela guarda).
+    expect(reconcileCall.sql).toContain("SELECT id FROM twins WHERE is_taken");
   });
 
   it("excludes RESERVED from the truly-gone batch but still expires OPEN when the row is removed", async () => {
