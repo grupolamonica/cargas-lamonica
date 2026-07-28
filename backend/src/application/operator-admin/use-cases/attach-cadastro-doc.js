@@ -128,6 +128,16 @@ export function resolveWriteTarget(docKind, target) {
     return null;
   }
 
+  // Selfie do MOTORISTA segurando a CNH. Fecha o caso do cadastro que concluiu
+  // sem a selfie (Step A pulado) — o operador anexa pelo editor. Não há OCR (uma
+  // selfie não tem campos a extrair): só grava o *_url em motorista.selfie_cnh_url.
+  if (docKind === "selfie-cnh") {
+    if (target === "motorista") {
+      return { slot: "motorista_selfie_cnh", urlPath: ["motorista", "selfie_cnh_url"], mergeTarget: "motorista" };
+    }
+    return null;
+  }
+
   return null;
 }
 
@@ -324,13 +334,17 @@ export async function attachCadastroDocument({
   // 4) Grava o *_url na cópia — SEMPRE (anexar o doc é a ação primária; o OCR é bônus).
   setDeep(dados, write.urlPath, storagePath);
 
-  // 5) OCR (best-effort — nunca lança; falha vira relatório).
+  // 5) OCR (best-effort — nunca lança; falha vira relatório). Alguns docKinds
+  // (ex.: selfie-cnh) NÃO têm extrator — a selfie é só um anexo, sem campos a
+  // ler: pulamos o OCR e o *_url já gravado no passo 4 é o resultado.
   const extractor = OCR_BY_KIND[docKind];
   let ocr = { ok: false };
-  try {
-    ocr = await extractor({ imagemBase64: file.toString("base64"), idCadastro, correlationId });
-  } catch (err) {
-    ocr = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  if (extractor) {
+    try {
+      ocr = await extractor({ imagemBase64: file.toString("base64"), idCadastro, correlationId });
+    } catch (err) {
+      ocr = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   // 5b) Cartão-CNPJ: o Vision serve SÓ pra ler o número do CNPJ; os dados (razão
@@ -412,7 +426,8 @@ export async function attachCadastroDocument({
   const report = {
     label: `${target}.${docKind}`,
     kind: docKind,
-    ok: !!ocr.ok,
+    // docKinds sem OCR (ex.: selfie-cnh): o próprio anexo é o sucesso.
+    ok: !!ocr.ok || !extractor,
     provider: ocr.provider ?? null,
     code: ocr.code ?? null,
     message: rfFailMsg ?? ocr.codeMessage ?? ocr.error ?? null,

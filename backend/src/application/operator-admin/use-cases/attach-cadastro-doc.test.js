@@ -73,11 +73,32 @@ describe("attachCadastroDocument (integração pg-mem)", () => {
     expect(r).toEqual({ notFound: true });
   });
 
-  it("combinação inválida (motorista fora do escopo v1) → { invalid: BAD_TARGET }", async () => {
+  it("combinação inválida (cnh do motorista fora do escopo) → { invalid: BAD_TARGET }", async () => {
     const { id } = await seedPendingRegistration({ dados: { motorista: { cpf: "11111111111", cnh_url: "o/c/motorista_cnh_1.jpg" } } });
     const r = await attachCadastroDocument({ id, docKind: "cnh", target: "motorista", ...baseArgs });
     expect(r).toEqual({ invalid: "BAD_TARGET" });
     expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it("Selfie do motorista (selfie-cnh): grava motorista.selfie_cnh_url, SEM OCR, report ok; NÃO persiste", async () => {
+    const { id } = await seedPendingRegistration({
+      dados: { motorista: { cpf: "11111111111", nome: "JOSE", cnh_url: "o/c/motorista_cnh_1.jpg" }, cavalo: { placa: "ABC1D23" } },
+    });
+    const r = await attachCadastroDocument({ id, docKind: "selfie-cnh", target: "motorista", ...baseArgs });
+
+    // slot canônico do wizard; pasta derivada de CPF + carga (id).
+    expect(uploadMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerKey: "11111111111", cargaId: id, slot: "motorista_selfie_cnh" }),
+    );
+    expect(r.dados.motorista.selfie_cnh_url).toBe(`11111111111/${id}/motorista_selfie_cnh_999.jpg`);
+    expect(r.dados.motorista.nome).toBe("JOSE"); // identidade preservada
+    // Selfie não tem OCR: nenhum extractor chamado; report.ok=true (o anexo é o sucesso).
+    expect(cnhMock).not.toHaveBeenCalled();
+    expect(r.report.ok).toBe(true);
+    expect(r.report.filled).toEqual([]);
+    // NÃO persiste: o "Salvar" (PATCH /dados) é quem grava.
+    const persisted = await getDados(id);
+    expect(persisted.motorista.selfie_cnh_url).toBeUndefined();
   });
 
   it("CRLV do cavalo: grava crlv_url (slot cavalo_crlv) + mescla campos; placa preservada; NÃO persiste", async () => {
