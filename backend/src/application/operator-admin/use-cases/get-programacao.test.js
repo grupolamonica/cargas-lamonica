@@ -251,3 +251,43 @@ describe("getProgramacao (consulta direta ao SPX via sidecar)", () => {
     expect(unk.podeLancar).toBe(false);
   });
 });
+
+describe("getProgramacao — códigos de estação (cor da linha por rota)", () => {
+  it("usa o station_id do payload SPX direto (fonte primária) como origemCodigo/destinoCodigo", async () => {
+    const t1 = {
+      ...trip("LT-COD-1", { origem: "SoC_BA_Simoes Filho", destino: "SoC_PE_Jaboatão dos Guararapes" }),
+      origem_station_id: 8808,
+      destino_station_id: 10963,
+    };
+    const fetchTripsByTab = makeTripsFn({ 1: [t1] });
+    const res = await getProgramacao({ deps: { ...baseDeps, fetchTripsByTab } });
+    const row = res.payload.rows.find((r) => r.lh === "LT-COD-1");
+    expect(row.origemCodigo).toBe("8808");
+    expect(row.destinoCodigo).toBe("10963");
+  });
+
+  it("fallback: sem station_id, extrai do '[código]' no nome (legado Torre)", async () => {
+    const fetchTripsByTab = makeTripsFn({
+      1: [
+        trip("LT-COD-1B", {
+          origem: "[8808]LM Hub_BA_Simoes Filho",
+          destino: "[10963]SoC_PE_Jaboatao dos Guararapes",
+        }),
+      ],
+    });
+    const res = await getProgramacao({ deps: { ...baseDeps, fetchTripsByTab } });
+    const row = res.payload.rows.find((r) => r.lh === "LT-COD-1B");
+    expect(row.origemCodigo).toBe("8808");
+    expect(row.destinoCodigo).toBe("10963");
+  });
+
+  it("sem station_id nem colchete → origemCodigo/destinoCodigo vazios (sem cor)", async () => {
+    const fetchTripsByTab = makeTripsFn({
+      1: [trip("LT-COD-2", { origem: "LM Hub_CE_Juazeiro do Norte", destino: "SoC_CE_Itaitinga" })],
+    });
+    const res = await getProgramacao({ deps: { ...baseDeps, fetchTripsByTab } });
+    const row = res.payload.rows.find((r) => r.lh === "LT-COD-2");
+    expect(row.origemCodigo).toBe("");
+    expect(row.destinoCodigo).toBe("");
+  });
+});

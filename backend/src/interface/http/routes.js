@@ -118,6 +118,9 @@ import {
   resolveAutoLaunchSpotsResponse,
   resolveGetProgramacaoSettingsResponse,
   resolveUpdateProgramacaoSettingsResponse,
+  resolveListRouteColorsResponse,
+  resolveUpsertRouteColorResponse,
+  resolveDeleteRouteColorResponse,
   resolveToggleOperatorCargoStatusResponse,
   resolveUpdateOperatorCargoResponse,
   resolveUpdateOperatorClienteResponse,
@@ -534,6 +537,9 @@ export function registerRoutes(app) {
   router.post("/api/operator/programacao/auto-launch", wrap(resolveAutoLaunchSpotsResponse));
   router.get("/api/operator/programacao/settings", wrap(resolveGetProgramacaoSettingsResponse));
   router.patch("/api/operator/programacao/settings", wrap(resolveUpdateProgramacaoSettingsResponse));
+  router.get("/api/operator/programacao/route-colors", wrap(resolveListRouteColorsResponse));
+  router.post("/api/operator/programacao/route-colors", wrap(resolveUpsertRouteColorResponse));
+  router.delete("/api/operator/programacao/route-colors", wrap(resolveDeleteRouteColorResponse));
 
   // PII Redaction
   router.post("/api/operator/pii-redaction", wrap(resolveRedactPublicLeadPiiResponse));

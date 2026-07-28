@@ -115,6 +115,11 @@ import {
   getProgramacaoSettings,
   updateProgramacaoSettings,
 } from "../../../application/operator-admin/use-cases/programacao-settings.js";
+import {
+  listRouteColors,
+  upsertRouteColor,
+  deleteRouteColor,
+} from "../../../application/operator-admin/use-cases/programacao-route-colors.js";
 import { DOC_TIPOS, listAvailableMigratedDocs, readLocalProdDocAsDataUri } from "../../../application/operator-admin/use-cases/migrated-docs/prod-docs-share.js";
 import {
   buildMissingFieldsMessage,
@@ -1724,6 +1729,74 @@ export async function resolveUpdateProgramacaoSettingsResponse(request) {
         operatorId: operatorId ?? null,
       });
       return { statusCode: 200, payload: { ...settings, meta: { correlationId } } };
+    },
+  );
+}
+
+// Cores da LINHA da Programação por rota (partida+chegada+veículo). GET = qualquer
+// operador logado; escrita (POST/DELETE) exige cargos:write (mesma permissão das
+// demais mutações da Programação). Erros de validação vêm como Error.statusCode=400.
+export async function resolveListRouteColorsResponse(request) {
+  return withOperatorSession(request, "programacao-route-colors-list", async ({ correlationId }) => {
+    const rules = await listRouteColors();
+    return { statusCode: 200, payload: { rules, meta: { correlationId } } };
+  });
+}
+
+export async function resolveUpsertRouteColorResponse(request) {
+  return withOperatorSession(
+    request,
+    "programacao-route-colors-upsert",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar as cores da Programação.",
+    },
+    async ({ correlationId, operatorId }) => {
+      const body = (await parseJsonBody(request)) || {};
+      try {
+        const rule = await upsertRouteColor({
+          partida: body.partida,
+          chegada: body.chegada,
+          veiculo: body.veiculo,
+          cor: body.cor,
+          operatorId: operatorId ?? null,
+        });
+        return { statusCode: 200, payload: { rule, meta: { correlationId } } };
+      } catch (err) {
+        if (err?.statusCode) {
+          return {
+            statusCode: err.statusCode,
+            payload: { error: err.statusCode === 400 ? "INVALID_BODY" : "UNAVAILABLE", message: err.message, meta: { correlationId } },
+          };
+        }
+        throw err;
+      }
+    },
+  );
+}
+
+export async function resolveDeleteRouteColorResponse(request) {
+  return withOperatorSession(
+    request,
+    "programacao-route-colors-delete",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar as cores da Programação.",
+    },
+    async ({ correlationId }) => {
+      const body = (await parseJsonBody(request)) || {};
+      try {
+        const result = await deleteRouteColor({ id: body.id });
+        return { statusCode: 200, payload: { ...result, meta: { correlationId } } };
+      } catch (err) {
+        if (err?.statusCode) {
+          return {
+            statusCode: err.statusCode,
+            payload: { error: err.statusCode === 400 ? "INVALID_BODY" : "UNAVAILABLE", message: err.message, meta: { correlationId } },
+          };
+        }
+        throw err;
+      }
     },
   );
 }
