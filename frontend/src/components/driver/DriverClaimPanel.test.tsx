@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,6 +13,7 @@ const {
   mockCreatePublicLoadLeadPreRegistration,
   mockFetchDriverLoadAlternatives,
   mockFetchLoadClaimStatus,
+  mockRequestCandidaturaPreCheck,
   mockToastError,
   mockToastSuccess,
   mockToastInfo,
@@ -20,6 +21,7 @@ const {
   mockCreatePublicLoadLeadPreRegistration: vi.fn(),
   mockFetchDriverLoadAlternatives: vi.fn(),
   mockFetchLoadClaimStatus: vi.fn(),
+  mockRequestCandidaturaPreCheck: vi.fn(),
   mockToastError: vi.fn(),
   mockToastSuccess: vi.fn(),
   mockToastInfo: vi.fn(),
@@ -53,6 +55,14 @@ vi.mock("@/services/loadClaims", () => ({
 vi.mock("@/lib/driverLoadAlternatives", () => ({
   fetchDriverLoadAlternatives: mockFetchDriverLoadAlternatives,
 }));
+
+// O pre-check de cadastro roda em background na view "queued". Mockar evita um
+// fetch real que resolve depois do teardown do teste (fonte do flake
+// "window is not defined"); preserva os demais exports do módulo.
+vi.mock("@/api/candidaturaApi", async () => {
+  const actual = await vi.importActual<typeof import("@/api/candidaturaApi")>("@/api/candidaturaApi");
+  return { ...actual, requestCandidaturaPreCheck: mockRequestCandidaturaPreCheck };
+});
 
 vi.mock("sonner", () => ({
   toast: {
@@ -136,8 +146,15 @@ describe("DriverClaimPanel", () => {
     mockCreatePublicLoadLeadPreRegistration.mockReset();
     mockFetchDriverLoadAlternatives.mockReset();
     mockFetchLoadClaimStatus.mockReset();
+    mockRequestCandidaturaPreCheck.mockReset();
     mockToastError.mockReset();
     mockToastSuccess.mockReset();
+
+    mockRequestCandidaturaPreCheck.mockResolvedValue({
+      pendencias: [],
+      completos: [],
+      meta: { correlationId: "test-correlation" },
+    });
 
     mockUseQueryClient.mockReturnValue({
       invalidateQueries: vi.fn(),
@@ -349,7 +366,7 @@ describe("DriverClaimPanel", () => {
     expect(screen.getByText(/Esta carga já seguiu com outro motorista/i)).toBeInTheDocument();
   });
 
-  it("mostra confirmacao persistente quando a carga foi reservada para o proprio motorista da fila publica", () => {
+  it("mostra confirmacao persistente quando a carga foi reservada para o proprio motorista da fila publica", async () => {
     window.localStorage.setItem(
       "lamonica-public-load-lead:load-1",
       JSON.stringify({
@@ -394,6 +411,11 @@ describe("DriverClaimPanel", () => {
       "/motorista/cargas/load-1",
     );
     expect(screen.queryByText(/foi direcionada para outro motorista/i)).not.toBeInTheDocument();
+
+    // Libera o microtask do pre-check de background (view "queued") DENTRO de act —
+    // evita setState fora de act e o vazamento pós-teardown (flake histórico).
+    expect(mockRequestCandidaturaPreCheck).toHaveBeenCalled();
+    await act(async () => { await Promise.resolve(); });
   });
 
   it("continua permitindo candidatura mesmo quando a meta antiga de WhatsApp vem desabilitada", async () => {
@@ -530,7 +552,7 @@ describe("DriverClaimPanel", () => {
     });
   });
 
-  it("avisa quando a carga vai para outro motorista e destaca alternativas da mesma origem", () => {
+  it("avisa quando a carga vai para outro motorista e destaca alternativas da mesma origem", async () => {
     window.localStorage.setItem(
       "lamonica-public-load-lead:load-1",
       JSON.stringify({
@@ -590,5 +612,10 @@ describe("DriverClaimPanel", () => {
     expect(screen.getAllByText(/Salvador \/ BA/i).length).toBeGreaterThan(0);
     expect(screen.getByText("R$ 1.400,00")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Abrir carga/i })).toHaveAttribute("href", "/cargas/load-2");
+
+    // Libera o microtask do pre-check de background (view "queued") DENTRO de act —
+    // evita setState fora de act e o vazamento pós-teardown (flake histórico).
+    expect(mockRequestCandidaturaPreCheck).toHaveBeenCalled();
+    await act(async () => { await Promise.resolve(); });
   });
 });
