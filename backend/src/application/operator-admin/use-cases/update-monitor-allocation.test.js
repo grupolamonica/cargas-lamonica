@@ -14,9 +14,13 @@ import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({ withPgTransaction }));
 
-// Write-back pra planilha (espelho) — mockado p/ capturar o valor EFETIVO espelhado.
+// Write-back pra planilha (espelho) — só writeAllocationsToSheet é mockado (captura
+// o valor EFETIVO espelhado); formatSheetDateLabel (puro) fica o real via importOriginal.
 const { writeSpy } = vi.hoisted(() => ({ writeSpy: vi.fn(async () => {}) }));
-vi.mock("../../google-sheets/sheet-writeback.js", () => ({ writeAllocationsToSheet: writeSpy }));
+vi.mock("../../google-sheets/sheet-writeback.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  writeAllocationsToSheet: writeSpy,
+}));
 
 const { updateMonitorAllocation } = await import("./update-monitor-allocation.js");
 
@@ -327,15 +331,18 @@ describe("updateMonitorAllocation", () => {
     expect(rows[0].alloc_vinculo).toBe("AGREGADO DEDICADO");
   });
 
-  it("carga do SISTEMA (lh_manual): grava alloc_* e ESPELHA na planilha em UPDATE-ONLY (sem criar linha)", async () => {
+  it("carga do SISTEMA (lh_manual) com motorista: CRIA-ou-preenche a linha na planilha (createIfMissing + rota/agenda)", async () => {
     // Viagem lançada na Programação: id ALEATÓRIO, sheet_lh nulo, lh_manual = LH.
-    // A alocação PREENCHE a linha do LH na planilha SE ela existir (linha-casca criada
-    // no lançamento da carga aceita) — mas NÃO cria linha (sem createIfMissing/createOnly):
-    // carga não-aceita não tem casca → o write-back vira no-op na planilha e ela nunca
-    // aparece por aqui. A criação da linha é responsabilidade do lançamento/aceite.
+    // A "linha-casca" só é criada no lançamento quando a viagem está ACEITA, então um
+    // spot lançado-não-aceito (auto-lançamento DC-201) e depois alocado aqui NÃO tinha
+    // linha na planilha e sumia. Agora, com um motorista efetivo, a alocação CRIA-ou-
+    // preenche a linha (createIfMissing) com rota + agenda + motorista/veículo.
     const SYS_LH = "LT-SYS-LAUNCHED-1";
     const { id } = await seedCargo({ status: "OPEN", origem: "SJ Rio Preto / SP", destino: "Simoes Filho / BA" });
-    await query(`UPDATE public.cargas SET lh_manual = $2 WHERE id = $1`, [id, SYS_LH]);
+    await query(
+      `UPDATE public.cargas SET lh_manual = $2, sheet_data_carregamento = $3, sheet_data_descarga = $4 WHERE id = $1`,
+      [id, SYS_LH, "2026-08-01T14:00", "2026-08-03T09:00"],
+    );
     const operator = await seedUser({ email: "op-sys-launched@teste.local" });
     writeSpy.mockClear();
 
@@ -351,17 +358,23 @@ describe("updateMonitorAllocation", () => {
     expect(row.alloc_motorista).toBe("ABELARDO");
     expect(row.alloc_carreta).toBe("FDZ0B46");
     expect(row.alloc_source).toBe("operator");
-    // Espelha PREENCHENDO a linha existente (update-only) — NUNCA cria.
+    // Espelha CRIANDO-ou-preenchendo a linha (createIfMissing) com rota + agenda.
     expect(writeSpy).toHaveBeenCalledTimes(1);
     const arg = writeSpy.mock.calls[0][0][0];
     expect(arg.lh).toBe(SYS_LH);
     expect(arg.motorista).toBe("ABELARDO");
     expect(arg.carreta).toBe("FDZ0B46");
-    expect("createIfMissing" in arg).toBe(false);
-    expect("createOnly" in arg).toBe(false);
+    expect(arg.createIfMissing).toBe(true);
+    expect(arg.origem).toBe("SJ Rio Preto / SP");
+    expect(arg.destino).toBe("Simoes Filho / BA");
+    // Datas denormalizadas ISO → formato da planilha (DD/MM/YYYY HH:MM).
+    expect(arg.dataCarregamento).toBe("01/08/2026 14:00");
+    expect(arg.dataDescarga).toBe("03/08/2026 09:00");
   });
 
-  it("carga do SISTEMA: editar só o status espelha na planilha (update-only, sem createIfMissing/createOnly)", async () => {
+  it("carga do SISTEMA SEM motorista: editar só o status é UPDATE-ONLY (não cria linha vazia)", async () => {
+    // Sem motorista efetivo, a alocação NÃO cria linha na planilha (não polui com
+    // spot vazio) — só o motorista alocado dispara o create-or-fill.
     const SYS_LH = "LT-SYS-LAUNCHED-2";
     const { id } = await seedCargo({ status: "OPEN" });
     await query(`UPDATE public.cargas SET lh_manual = $2 WHERE id = $1`, [id, SYS_LH]);
@@ -381,6 +394,29 @@ describe("updateMonitorAllocation", () => {
     const arg = writeSpy.mock.calls[0][0][0];
     expect(arg.status).toBe("AGUARDANDO DESCARGA");
     expect("createIfMissing" in arg).toBe(false);
+    expect("createOnly" in arg).toBe(false);
+  });
+
+  it("carga do SISTEMA com LH NÃO-SPX (não LT…) + motorista: NÃO cria linha (gate LT evita planilha errada)", async () => {
+    // Carga lançada não persiste sheet_source (NULL → roteia p/ shopee). Um LH de
+    // outra fonte (não SPX) não deve ser criado na planilha Shopee → gate LT….
+    const SYS_LH = "NESTLE-9910";
+    const { id } = await seedCargo({ status: "OPEN", origem: "A / SP", destino: "B / BA" });
+    await query(`UPDATE public.cargas SET lh_manual = $2 WHERE id = $1`, [id, SYS_LH]);
+    const operator = await seedUser({ email: "op-sys-nonlt@teste.local" });
+    writeSpy.mockClear();
+
+    await updateMonitorAllocation({
+      lh: SYS_LH,
+      operatorId: operator.id,
+      payload: { motorista: "JOANA", cavalo: "AAA1B22", carreta: "CCC3D44" },
+      correlationId: "corr-sys-nonlt",
+    });
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const arg = writeSpy.mock.calls[0][0][0];
+    expect(arg.motorista).toBe("JOANA");
+    expect("createIfMissing" in arg).toBe(false); // update-only: não cria
     expect("createOnly" in arg).toBe(false);
   });
 
