@@ -2083,5 +2083,19 @@ export async function syncAllSheetSources({
     });
   }
 
+  // Auto-cura de preço/métricas defasados: cargas cujo destino mudou depois de
+  // criadas ficaram com valor/distância de OUTRA rota (o sync/lançamento preserva
+  // valor não-nulo). Re-deriva do catálogo quando a distância gravada destoa da
+  // rota atual. Isolado — nunca derruba o resultado do sync.
+  try {
+    const { reconcileStaleRouteMetrics } = await import("./reconcile-stale-route-metrics.js");
+    const reconcile = await reconcileStaleRouteMetrics();
+    results.push({ source: "__reconcile_route_metrics__", ok: true, result: reconcile });
+  } catch (error) {
+    console.error("[google-sheet-loads] reconcile route-metrics falhou (isolado)", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   return { sources: results };
 }
