@@ -268,6 +268,70 @@ export function mergePreservingGood(next, prev) {
 }
 
 /**
+ * Monta as linhas de upsert p/ motoristas_historico a partir dos motoristas que
+ * foram consultados AO VIVO agora (fallback ASPX) e voltaram FOUND. Persistir
+ * transforma a consulta volátil num registro durável: na próxima passada o
+ * motorista é resolvido pela TABELA (data fresca), SEM re-consultar a API — o que
+ * elimina a oscilação FOUND↔UNAVAILABLE quando a API do Angellira falha
+ * intermitentemente (timeout/circuit breaker). Puro/testável: recebe o estado já
+ * resolvido e devolve as linhas (dedup por CPF; só FOUND com availability OK).
+ */
+export function buildDriverHistoricoUpsertRows(driverByName, cpfsToFetch, angelliraDrivers) {
+  const fetched = new Set((cpfsToFetch || []).map((c) => String(c || "").replace(/\D/g, "")).filter(Boolean));
+  const byCpf = new Map();
+  for (const name of Object.keys(driverByName || {})) {
+    const d = driverByName[name];
+    const norm = String(d?.cpf || "").replace(/\D/g, "");
+    if (!norm || !fetched.has(norm) || byCpf.has(norm)) continue;
+    const a = angelliraDrivers?.[norm];
+    if (!a || a.availability !== "OK" || a.found !== true) continue;
+    byCpf.set(norm, {
+      cpf: norm,
+      nome: (a.driverDetails?.name || d.aspxDisplayName || name || "").trim(),
+      angelliraQueryId: a.queryId ?? null,
+      angelliraSentDate: a.lastSeenAt ?? null,
+      angelliraLimitDate: a.validUntil ?? null,
+      aspxFound: d.aspxFound === true,
+      aspxDisplayName: d.aspxDisplayName ?? null,
+    });
+  }
+  return [...byCpf.values()];
+}
+
+// Grava (best-effort) as linhas do builder acima. Só toca colunas Angellira/ASPX
+// (COALESCE preserva o resto da ficha). NÃO lança — persistir é um bônus.
+async function persistFetchedDriversToHistorico(driverByName, cpfsToFetch, angelliraDrivers, correlationId) {
+  try {
+    const rows = buildDriverHistoricoUpsertRows(driverByName, cpfsToFetch, angelliraDrivers);
+    if (rows.length === 0) return;
+    const pool = getPostgresPool();
+    for (const r of rows) {
+      await pool.query(
+        `INSERT INTO public.motoristas_historico
+           (cpf, nome, angellira_query_id, angellira_sent_date, angellira_limit_date,
+            aspx_found, aspx_display_name, aspx_matched_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $6 THEN now() ELSE NULL END, now())
+         ON CONFLICT (cpf) DO UPDATE SET
+           nome                 = COALESCE(NULLIF(EXCLUDED.nome, ''), motoristas_historico.nome),
+           angellira_query_id   = EXCLUDED.angellira_query_id,
+           angellira_sent_date  = EXCLUDED.angellira_sent_date,
+           angellira_limit_date = EXCLUDED.angellira_limit_date,
+           aspx_found           = motoristas_historico.aspx_found OR EXCLUDED.aspx_found,
+           aspx_display_name    = COALESCE(EXCLUDED.aspx_display_name, motoristas_historico.aspx_display_name),
+           updated_at           = now()`,
+        [r.cpf, r.nome, r.angelliraQueryId, r.angelliraSentDate, r.angelliraLimitDate, r.aspxFound, r.aspxDisplayName],
+      );
+    }
+    logStructuredEvent("info", "sheet-monitor-enrich.persist-drivers", { correlationId, count: rows.length });
+  } catch (err) {
+    logStructuredEvent("warn", "sheet-monitor-enrich.persist-failed", {
+      correlationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
  * Núcleo: resolve ASPX/Angellira (com cache) p/ um conjunto de linhas e faz
  * upsert em sheet_monitor_enriched (onConflict lh). Linhas da planilha e do
  * sistema usam o mesmo pipeline.
@@ -428,6 +492,12 @@ async function enrichRows(supabaseClient, batch, correlationId) {
         : null;
     }
   }
+
+  // Persiste no motoristas_historico quem foi consultado AO VIVO agora e voltou
+  // FOUND: vira registro durável → a próxima passada resolve pela tabela (data
+  // fresca) sem re-consultar a API. Mata a oscilação FOUND↔UNAVAILABLE do motorista
+  // que só existe no ASPX. Best-effort (não bloqueia o selo).
+  await persistFetchedDriversToHistorico(driverByName, cpfsToFetch, angelliraDrivers, correlationId);
 
   const ctx = { driverByName, vehiclesByPlate, angelliraVehicles };
   const upsertRows = batch.map((row) => buildEnrichedUpsertRow(row, ctx));

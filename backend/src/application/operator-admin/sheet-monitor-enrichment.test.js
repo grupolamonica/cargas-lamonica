@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildEnrichedUpsertRow,
+  buildDriverHistoricoUpsertRows,
   mergePreservingGood,
   matchAspxDriver,
   driverNamesMatch,
@@ -8,6 +9,45 @@ import {
   fetchEnrichedLhSet,
   filterRowsToProcess,
 } from "./sheet-monitor-enrichment.js";
+
+describe("buildDriverHistoricoUpsertRows — persiste consulta ao vivo p/ virar registro durável", () => {
+  const angelliraDrivers = {
+    "11111111111": { availability: "OK", found: true, queryId: "q1", validUntil: "2026-10-14", lastSeenAt: "2026-07-01T00:00:00Z", driverDetails: { name: "CARLEANDRO WAGNER" } },
+    "22222222222": { availability: "OK", found: false, queryId: null, validUntil: null }, // NOT_FOUND
+    "33333333333": { availability: "UNAVAILABLE", found: false }, // falha transitória
+  };
+
+  it("só persiste FOUND com availability OK que foi buscado agora (cpfsToFetch)", () => {
+    const driverByName = {
+      "CARLEANDRO WAGNER": { cpf: "11111111111", aspxFound: true, aspxDisplayName: "CARLEANDRO W" },
+      "FULANO NOT FOUND": { cpf: "22222222222", aspxFound: true, aspxDisplayName: "FULANO" },
+      "BELTRANO INDISPONIVEL": { cpf: "33333333333", aspxFound: true, aspxDisplayName: "BELTRANO" },
+    };
+    const rows = buildDriverHistoricoUpsertRows(driverByName, ["11111111111", "22222222222", "33333333333"], angelliraDrivers);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      cpf: "11111111111",
+      nome: "CARLEANDRO WAGNER",
+      angelliraQueryId: "q1",
+      angelliraLimitDate: "2026-10-14",
+      aspxFound: true,
+    });
+  });
+
+  it("ignora motorista NÃO buscado agora (veio do cache/motoristas_historico)", () => {
+    const driverByName = { "CARLEANDRO WAGNER": { cpf: "11111111111", aspxFound: true } };
+    // cpfsToFetch vazio → nada foi consultado ao vivo → nada a persistir
+    expect(buildDriverHistoricoUpsertRows(driverByName, [], angelliraDrivers)).toHaveLength(0);
+  });
+
+  it("dedup por CPF quando dois nomes resolvem o mesmo motorista", () => {
+    const driverByName = {
+      "CARLEANDRO WAGNER": { cpf: "11111111111", aspxFound: true },
+      "CARLEANDRO W N RIBEIRO": { cpf: "11111111111", aspxFound: true },
+    };
+    expect(buildDriverHistoricoUpsertRows(driverByName, ["11111111111"], angelliraDrivers)).toHaveLength(1);
+  });
+});
 
 describe("driverNamesMatch — mesma pessoa entre planilha e ASPX", () => {
   it("acento/caixa/espaço não separam a pessoa", () => {

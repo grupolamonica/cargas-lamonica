@@ -476,6 +476,7 @@ function mapAngelliraRecord(queryFor, queryValue, payload) {
       availability: "OK",
       status: "NOT_FOUND",
       found: false,
+      queryId: null,
       displayName: null,
       validUntil: null,
       lastSeenAt: null,
@@ -574,6 +575,9 @@ function mapAngelliraRecord(queryFor, queryValue, payload) {
     availability: "OK",
     status: "FOUND",
     found: true,
+    // Id do registro Angellira. Serve de sinal de "encontrado" ao persistir em
+    // motoristas_historico (a leitura do enrichment usa angellira_query_id != null).
+    queryId: firstMatch.id ?? null,
     displayName,
     validUntil: parseDateOnly(firstMatch.limitDate),
     lastSeenAt: parseIsoDateTime(firstMatch.sentDate),
