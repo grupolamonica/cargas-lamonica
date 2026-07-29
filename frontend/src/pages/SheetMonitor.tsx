@@ -3512,10 +3512,13 @@ function ReservaPanelModal({ open, carga, reservas, onPull, onClose }: {
   const [editId, setEditId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ motorista: "", cavalo: "", carreta: "" });
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // DC-322: busca dentro do modal — filtra as duas seções (reservas + histórico)
+  // por motorista/placa. Insensível a acento e a separador de placa.
+  const [search, setSearch] = useState("");
 
   // Reset dos formulários ao (re)abrir o modal.
   useEffect(() => {
-    if (open) { setAddOpen(false); setAddForm({ motorista: "", cavalo: "", carreta: "" }); setEditId(null); setConfirmDeleteId(null); }
+    if (open) { setAddOpen(false); setAddForm({ motorista: "", cavalo: "", carreta: "" }); setEditId(null); setConfirmDeleteId(null); setSearch(""); }
   }, [open]);
 
   const invalidate = useCallback(() => {
@@ -3577,6 +3580,27 @@ function ReservaPanelModal({ open, carga, reservas, onPull, onClose }: {
     (h) => !reservaNames.has((h.motorista ?? "").trim().toLowerCase()),
   );
 
+  // DC-322: casa por nome (sem acento) OU por placa/telefone (só alfanumérico —
+  // ignora " ", "-", ".", "()"), sobre motorista + cavalo + carreta + telefone.
+  // Query vazia = mostra tudo.
+  const matchesSearch = (motorista?: string | null, cavalo?: string | null, carreta?: string | null, telefone?: string | null) => {
+    const q = search.trim();
+    if (!q) return true;
+    const hay = [motorista, cavalo, carreta, telefone].filter(Boolean).join(" ");
+    const alnum = (s: string) => normNameKey(s).replace(/[^a-z0-9]/g, "");
+    const qAlnum = alnum(q);
+    return normNameKey(hay).includes(normNameKey(q)) || (qAlnum.length > 0 && alnum(hay).includes(qAlnum));
+  };
+  const filteredReservas = viewReservas.filter((r) => {
+    // Nunca esconda uma reserva em edição / confirmação de exclusão — senão a
+    // busca fecharia o formulário aberto (editId/confirmDeleteId continuam setados).
+    const rid = r.reservaId ?? null;
+    if (rid && (rid === editId || rid === confirmDeleteId)) return true;
+    return matchesSearch(r.motoristas, r.cavalo, r.carreta, r.telefone);
+  });
+  const filteredHistory = historyEntries.filter((h) => matchesSearch(h.motorista, h.cavalo, h.carreta, h.telefone));
+  const hasSearch = search.trim().length > 0;
+
   const inputClass = "w-full rounded-lg border border-border/70 bg-white/92 px-2.5 py-1.5 text-xs outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10 dark:bg-muted/40";
 
   return (
@@ -3592,6 +3616,29 @@ function ReservaPanelModal({ open, carga, reservas, onPull, onClose }: {
             ) : "—"}
           </DialogDescription>
         </DialogHeader>
+
+        {/* DC-322: busca dentro do modal (motorista / placa) — fixa acima da lista rolável */}
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar por motorista ou placa…"
+            aria-label="Buscar por motorista ou placa"
+            className="w-full rounded-lg border border-border/70 bg-white/92 py-2 pl-9 pr-9 text-sm outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10 dark:bg-muted/40"
+          />
+          {hasSearch && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              aria-label="Limpar busca"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
 
         <div className="max-h-[60vh] space-y-5 overflow-y-auto pr-1">
           {/* ── Seção 1 — Em reserva nesta rota ── */}
@@ -3628,11 +3675,13 @@ function ReservaPanelModal({ open, carga, reservas, onPull, onClose }: {
               </div>
             )}
 
-            {viewReservas.length === 0 ? (
-              <p className="py-4 text-center text-sm text-muted-foreground">Nenhum motorista em reserva nesta rota.</p>
+            {filteredReservas.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                {viewReservas.length === 0 ? "Nenhum motorista em reserva nesta rota." : "Nenhuma reserva corresponde à busca."}
+              </p>
             ) : (
               <div className="space-y-1.5">
-                {viewReservas.map((s) => {
+                {filteredReservas.map((s) => {
                   const rid = s.reservaId ?? null;
                   const isEditing = editId != null && editId === rid;
                   const isConfirming = confirmDeleteId != null && confirmDeleteId === rid;
@@ -3712,11 +3761,13 @@ function ReservaPanelModal({ open, carga, reservas, onPull, onClose }: {
               <p className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" /> Carregando histórico…
               </p>
-            ) : historyEntries.length === 0 ? (
-              <p className="py-4 text-center text-sm text-muted-foreground">Nenhum motorista no histórico desta rota.</p>
+            ) : filteredHistory.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                {historyEntries.length === 0 ? "Nenhum motorista no histórico desta rota." : "Nenhum motorista do histórico corresponde à busca."}
+              </p>
             ) : (
               <div className="space-y-1.5">
-                {historyEntries.map((h, i) => (
+                {filteredHistory.map((h, i) => (
                   <div key={`${h.motorista}-${i}`} className="flex items-start justify-between gap-3 rounded-lg border border-border/60 px-3 py-2">
                     <div className="min-w-0 space-y-0.5">
                       <p className="truncate text-sm font-medium text-foreground">{h.motorista || "—"}</p>
