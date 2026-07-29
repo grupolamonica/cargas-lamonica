@@ -71,6 +71,45 @@ describe("reconcileTakenCargosToSheet", () => {
     expect("status" in byLh["LT-RESERVA"]).toBe(false);
   });
 
+  it("carga do SISTEMA (create_row): CRIA-ou-preenche a linha (createIfMissing + rota/agenda)", async () => {
+    cannedRows.current = [
+      {
+        lh: "LT-SISTEMA",
+        create_row: true,
+        sheet_source: null,
+        alloc_motorista: "Carlos Pereira",
+        alloc_cavalo: "AAA1B22",
+        alloc_carreta: "CCC3D44",
+        origem: "Jaboatao dos Guararapes/PE",
+        destino: "Simoes Filho/BA",
+        carreg: "2026-07-29T10:30",
+        descarga: "2026-07-30T04:30",
+        validation_summary_json: null,
+      },
+    ];
+
+    const res = await reconcileTakenCargosToSheet();
+    expect(res.ok).toBe(true);
+    expect(res.reconciled).toBe(1);
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const u = body.updates[0];
+    expect(u).toMatchObject({
+      lh: "LT-SISTEMA",
+      motorista: "Carlos Pereira",
+      cavalo: "AAA1B22",
+      carreta: "CCC3D44",
+      createIfMissing: true,
+      origem: "Jaboatao dos Guararapes/PE",
+      destino: "Simoes Filho/BA",
+    });
+    // Datas ISO denormalizadas → formato da planilha (DD/MM/YYYY HH:MM).
+    expect(u.dataCarregamento).toBe("29/07/2026 10:30");
+    expect(u.dataDescarga).toBe("30/07/2026 04:30");
+    // Reconciliador NÃO manda status (não re-rotula a coluna de status).
+    expect("status" in u).toBe(false);
+  });
+
   it("pula linha sem nada para gravar (sem motorista e sem placas)", async () => {
     cannedRows.current = [{ lh: "LT-VAZIO", alloc_motorista: null, validation_summary_json: null }];
     const res = await reconcileTakenCargosToSheet();
