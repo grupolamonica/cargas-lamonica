@@ -8,7 +8,7 @@ const { mockValidatePublicLeadPreRegistration, mockPgClient, canned } = vi.hoist
     // Estado controlavel das 2 queries de pre-check.js:
     //  - hasLocalCadastro (RF001): motorista JA tem cadastro completo (aprovado/concluido)?
     //  - duplicate/duplicateError (iter #7): duplicate-check.
-    canned: { hasLocalCadastro: true, localCadastroError: false, duplicate: null, duplicateError: false },
+    canned: { hasLocalCadastro: true, hasLocalSelfie: true, localCadastroError: false, duplicate: null, duplicateError: false },
   };
 });
 
@@ -31,15 +31,22 @@ describe("candidaturaPreCheck", () => {
     // Default: motorista JA tem cadastro local (preserva os testes de vigencia),
     // sem duplicate.
     canned.hasLocalCadastro = true;
+    canned.hasLocalSelfie = true;
     canned.localCadastroError = false;
     canned.duplicate = null;
     canned.duplicateError = false;
     mockPgClient.query.mockImplementation(async (sql) => {
       const s = String(sql);
-      // RF001 — hasCompleteLocalCadastro (status IN ('aprovado','concluido')).
+      // RF001 + selfie — getLocalCadastroStatus (status IN ('aprovado','concluido')).
+      // Retorna motorista (snapshot) + has_selfie, como a query real.
       if (s.includes("'aprovado'") && s.includes("'concluido'")) {
         if (canned.localCadastroError) throw new Error("pg down (local-cadastro)");
-        return canned.hasLocalCadastro ? { rows: [{ one: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
+        return canned.hasLocalCadastro
+          ? {
+              rows: [{ motorista: { cpf: "12345678901", nome: "MOTORISTA TESTE" }, has_selfie: canned.hasLocalSelfie }],
+              rowCount: 1,
+            }
+          : { rows: [], rowCount: 0 };
       }
       // duplicate-check.
       if (canned.duplicateError) throw new Error("pg down");
@@ -573,6 +580,56 @@ describe("candidaturaPreCheck", () => {
 
       expect(result.pendencias.find((x) => x.reason === "LOCAL_REGISTRATION_REQUIRED")).toBeUndefined();
       expect(result.completos).toEqual(expect.arrayContaining([expect.objectContaining({ plate: "ABC1D23" })]));
+    });
+  });
+
+  // ── Selfie obrigatoria — cadastro local SEM selfie forca SO a etapa do motorista ──
+  describe("selfie obrigatoria (cadastro local sem selfie)", () => {
+    it("tem cadastro local mas SEM selfie → pendencia step A SELFIE_REQUIRED + persistedMotorista, sem forcar veiculos", async () => {
+      canned.hasLocalCadastro = true;
+      canned.hasLocalSelfie = false;
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: {
+          driver: { angelira: { found: true }, aspx: { found: false } },
+          plates: [{ field: "horsePlate", status: "FOUND", found: true, validUntil: "2030-01-01" }],
+        },
+      });
+
+      const result = await candidaturaPreCheck({
+        driverCpf: "12345678901",
+        horsePlate: "ABC1D23",
+        trailerPlates: [],
+        correlationId: "selfie-A",
+      });
+
+      const p = result.pendencias.find((x) => x.reason === "SELFIE_REQUIRED" && x.step === "A");
+      expect(p).toBeDefined();
+      // NAO forca veiculos: hasLocalCadastro=true → cavalo vigente vai p/ completos.
+      expect(result.pendencias.find((x) => x.step === "B")).toBeUndefined();
+      expect(result.completos).toEqual(expect.arrayContaining([expect.objectContaining({ plate: "ABC1D23" })]));
+      // Snapshot do motorista aprovado p/ o frontend pre-preencher o Step A.
+      expect(result.persistedMotorista).toMatchObject({ cpf: "12345678901", nome: "MOTORISTA TESTE" });
+    });
+
+    it("tem cadastro local COM selfie → sem pendencia de selfie e sem persistedMotorista", async () => {
+      canned.hasLocalCadastro = true;
+      canned.hasLocalSelfie = true;
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: {
+          driver: { angelira: { found: true }, aspx: { found: false } },
+          plates: [{ field: "horsePlate", status: "FOUND", found: true, validUntil: "2030-01-01" }],
+        },
+      });
+
+      const result = await candidaturaPreCheck({
+        driverCpf: "12345678901",
+        horsePlate: "ABC1D23",
+        trailerPlates: [],
+        correlationId: "selfie-B",
+      });
+
+      expect(result.pendencias.find((x) => x.reason === "SELFIE_REQUIRED")).toBeUndefined();
+      expect(result.persistedMotorista).toBeUndefined();
     });
   });
 });

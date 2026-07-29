@@ -27,6 +27,7 @@ import {
 } from "./ConfirmationScreen";
 import { RegistrationWizardShell } from "./RegistrationWizardShell";
 import { StepAMotorista, type StepAData, type StepADriverProfile } from "./steps/StepAMotorista";
+import { StepASelfieOnly } from "./steps/StepASelfieOnly";
 import { StepBCavalo, type StepBData } from "./steps/StepBCavalo";
 import {
   StepCProprietarioCavalo,
@@ -1425,6 +1426,20 @@ export function DriverRegistrationWizard({
     setState({ kind: "idle" });
   }, [draft, onOpenChange]);
 
+  // SELFIE_REQUIRED — a selfie foi anexada direto no cadastro aprovado
+  // (StepASelfieOnly → POST /candidatura/attach-selfie), SEM submit. O claim da
+  // carga é independente e já existe, então aqui só limpamos e fechamos.
+  const handleSelfieAttached = useCallback(() => {
+    draft.clearAndReset();
+    onOpenChange(false);
+    setState({ kind: "idle" });
+    toast({
+      title: "Selfie enviada",
+      description: "Seu cadastro está completo.",
+      duration: 4000,
+    });
+  }, [draft, onOpenChange]);
+
   /**
    * Verifica se uma placa alternativa (escolhida via divergência de CRLV) já
    * tem cadastro vigente. Chama o pre-check substituindo a placa informada na
@@ -1549,6 +1564,7 @@ export function DriverRegistrationWizard({
         onDismissTela0: handleTela0Dismiss,
         driverProfile,
         onStepAComplete: handleStepAComplete,
+        onSelfieAttached: handleSelfieAttached,
         onStepABack: handleStepABack,
         onAdoptCnhData: handleAdoptCnhData,
         onStepAProgress: handleStepAProgress,
@@ -1616,6 +1632,7 @@ interface RenderStateArgs {
   onDismissTela0: () => void;
   driverProfile: StepADriverProfile;
   onStepAComplete: (data: StepAData) => void;
+  onSelfieAttached: () => void;
   onStepABack: () => void;
   onAdoptCnhData?: (data: { cpf: string; nome: string }) => Promise<void>;
   onStepAProgress: (data: Partial<StepAData>) => void;
@@ -1691,6 +1708,7 @@ function renderState({
   onDismissTela0,
   driverProfile,
   onStepAComplete,
+  onSelfieAttached,
   onStepABack,
   onAdoptCnhData,
   onStepAProgress,
@@ -1762,6 +1780,30 @@ function renderState({
       );
 
     case "step-a": {
+      // SELFIE_REQUIRED — motorista já cadastrado que só precisa anexar a selfie.
+      // Renderiza o passo enxuto (StepASelfieOnly) em vez do Step A completo. Só
+      // quando temos o snapshot do cadastro (persistedMotorista); sem ele, cai no
+      // fluxo normal (mais seguro que exibir um passo sem identidade).
+      const driverPendency = state.response.pendencias.find((p) => p.step === "A");
+      const persisted = state.response.persistedMotorista;
+      if (driverPendency?.reason === "SELFIE_REQUIRED" && persisted) {
+        return (
+          <StepASelfieOnly
+            knownDriver={{
+              nome: typeof persisted.nome === "string" ? persisted.nome : undefined,
+              cpf: typeof persisted.cpf === "string" ? persisted.cpf : draftCpf,
+            }}
+            cpf={draftCpf}
+            currentStep={1}
+            totalSteps={totalSteps}
+            initialSelfie={stepAValue?.a1b}
+            onDone={onSelfieAttached}
+            onBack={onStepABack}
+            cargaId={draftCargaId}
+            accessToken={draftAccessToken}
+          />
+        );
+      }
       return (
         <StepAMotorista
           driverProfile={driverProfile}

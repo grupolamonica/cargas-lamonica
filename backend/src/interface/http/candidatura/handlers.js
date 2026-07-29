@@ -17,6 +17,7 @@ import { listIncompleteCadastroDrafts } from "../../../application/candidatura/u
 import { submitCandidaturaFinal } from "../../../application/candidatura/use-cases/submit-final.js";
 import { resolveAnttCascade } from "../../../application/candidatura/use-cases/antt-cascade.js";
 import { verifyDocument } from "../../../application/candidatura/use-cases/verify-document.js";
+import { attachSelfieToCadastro } from "../../../application/candidatura/use-cases/attach-selfie.js";
 import { getExistingMotorista } from "../../../application/candidatura/use-cases/get-existing-motorista.js";
 import { getExistingCavalo } from "../../../application/candidatura/use-cases/get-existing-cavalo.js";
 import { collectMissingRequiredDocuments } from "../../../application/candidatura/use-cases/required-documents.js";
@@ -31,6 +32,7 @@ import {
 import {
   buildMissingFieldsMessage,
   candidaturaAnttPrecheckSchema,
+  candidaturaAttachSelfieSchema,
   candidaturaDraftSchema,
   candidaturaPreCheckSchema,
   candidaturaSubmitSchema,
@@ -77,6 +79,36 @@ function checkPreCheckRateLimit(ip) {
   }
   entry.count += 1;
   if (entry.count > PRE_CHECK_MAX) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+    return { limited: true, retryAfterSeconds };
+  }
+  return { limited: false, retryAfterSeconds: 0 };
+}
+
+// Rate-limit dedicado para /attach-selfie (5/min/IP). Endpoint publico de
+// ESCRITA (grava selfie_cnh_url no cadastro por CPF) — mesmo budget estrito do
+// pre-check para conter enumeracao/abuso. In-memory (nao cluster-safe) como os demais.
+const ATTACH_SELFIE_WINDOW_MS = 60_000;
+const ATTACH_SELFIE_MAX = 5;
+const attachSelfieRateMap = new Map();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of attachSelfieRateMap) {
+    if (value.resetAt <= now) attachSelfieRateMap.delete(key);
+  }
+}, 60_000).unref();
+
+function checkAttachSelfieRateLimit(ip) {
+  if (!ip) return { limited: false, retryAfterSeconds: 0 };
+  const now = Date.now();
+  const entry = attachSelfieRateMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    attachSelfieRateMap.set(ip, { count: 1, resetAt: now + ATTACH_SELFIE_WINDOW_MS });
+    return { limited: false, retryAfterSeconds: 0 };
+  }
+  entry.count += 1;
+  if (entry.count > ATTACH_SELFIE_MAX) {
     const retryAfterSeconds = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
     return { limited: true, retryAfterSeconds };
   }
@@ -289,7 +321,7 @@ export async function resolveCandidaturaPreCheckResponse(request) {
   const cpfMasked = maskCpf(parsedInput.cpf);
 
   try {
-    const { pendencias, completos } = await candidaturaPreCheck({
+    const { pendencias, completos, persistedMotorista } = await candidaturaPreCheck({
       driverCpf: parsedInput.cpf,
       horsePlate: parsedInput.horsePlate,
       trailerPlates: parsedInput.trailerPlates,
@@ -312,6 +344,10 @@ export async function resolveCandidaturaPreCheckResponse(request) {
       payload: {
         pendencias,
         completos,
+        // Snapshot do motorista do cadastro aprovado/concluido — enviado SO quando
+        // ha pendencia de selfie (SELFIE_REQUIRED), p/ o wizard exibir a identidade
+        // e submeter so a selfie (merge no backend preserva o resto). Ver pre-check.js.
+        ...(persistedMotorista ? { persistedMotorista } : {}),
         meta: { correlationId },
       },
     };
@@ -331,6 +367,110 @@ export async function resolveCandidaturaPreCheckResponse(request) {
       payload: {
         error: "InternalError",
         message: "Nao foi possivel realizar o pre-check agora. Tente novamente em alguns instantes.",
+        meta: { correlationId },
+      },
+    };
+  }
+}
+
+/**
+ * POST /api/candidatura/attach-selfie
+ * Endpoint PUBLICO (sem auth) — motorista JA cadastrado (aprovado/concluido)
+ * que so precisa anexar a selfie-com-CNH (pendencia SELFIE_REQUIRED do
+ * pre-check). Grava `dados.motorista.selfie_cnh_url` na PROPRIA linha aprovada,
+ * sem passar pelo submit da candidatura (ver attach-selfie.js para o porque).
+ * O claim da carga e independente (load_public_leads), entao nao e afetado.
+ */
+export async function resolveAttachSelfieResponse(request) {
+  const correlationId = getCorrelationId(request);
+  const requestIp = getRequestIp(request);
+
+  const { limited, retryAfterSeconds } = checkAttachSelfieRateLimit(requestIp);
+  if (limited) {
+    return {
+      statusCode: 429,
+      payload: {
+        error: "TooManyRequests",
+        message: "Muitas tentativas. Aguarde alguns instantes e tente novamente.",
+        retryAfterSeconds,
+        meta: { correlationId },
+      },
+    };
+  }
+
+  let body;
+  try {
+    body = await parseJsonBody(request);
+  } catch {
+    return {
+      statusCode: 400,
+      payload: {
+        error: "BadRequest",
+        message: "Corpo da requisicao invalido (esperado JSON).",
+        meta: { correlationId },
+      },
+    };
+  }
+
+  let parsedInput;
+  try {
+    parsedInput = candidaturaAttachSelfieSchema.parse(body);
+  } catch (err) {
+    if (err instanceof ZodError) {
+      return zodErrorToHttpResponse(err, correlationId);
+    }
+    throw err;
+  }
+
+  try {
+    const result = await attachSelfieToCadastro({
+      cpf: parsedInput.cpf,
+      selfieStoragePath: parsedInput.selfieStoragePath,
+      correlationId,
+    });
+
+    if (result.ok) {
+      return {
+        statusCode: 200,
+        payload: {
+          ok: true,
+          selfie_cnh_url: result.selfie_cnh_url,
+          meta: { correlationId },
+        },
+      };
+    }
+
+    if (result.code === "NOT_FOUND") {
+      return {
+        statusCode: 404,
+        payload: {
+          error: "NotFound",
+          message: "Nao encontramos um cadastro aprovado para anexar a selfie.",
+          meta: { correlationId },
+        },
+      };
+    }
+
+    // INVALID_CPF / INVALID_PATH — dados nao batem com o esperado.
+    return {
+      statusCode: 422,
+      payload: {
+        error: "ValidationError",
+        code: result.code || "INVALID_INPUT",
+        message: "Nao foi possivel anexar a selfie com os dados enviados.",
+        meta: { correlationId },
+      },
+    };
+  } catch (err) {
+    console.error("[candidatura.attach-selfie]", {
+      correlationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return {
+      statusCode: 500,
+      payload: {
+        error: "InternalError",
+        message: "Nao foi possivel anexar a selfie agora. Tente novamente em alguns instantes.",
         meta: { correlationId },
       },
     };

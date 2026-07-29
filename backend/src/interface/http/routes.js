@@ -197,6 +197,7 @@ import { resolveFinalizarCadastroResponse } from "./cadastro/handlers.js";
 import { resolveLookupPisResponse } from "./cadastro/lookup-pis.handler.js";
 
 import {
+  resolveAttachSelfieResponse,
   resolveCandidaturaAnttPrecheckResponse,
   resolveCandidaturaDraftGetResponse,
   resolveCandidaturaDraftSaveResponse,
@@ -281,6 +282,7 @@ export function registerRoutes(app) {
 
   // Cadastro v2 — driver-authenticated wizard endpoints
   router.post("/api/candidatura/pre-check", wrap(resolveCandidaturaPreCheckResponse));
+  router.post("/api/candidatura/attach-selfie", wrap(resolveAttachSelfieResponse));
   router.post("/api/candidatura/draft", wrap(resolveCandidaturaDraftSaveResponse));
   router.get("/api/candidatura/draft/me", wrap(resolveCandidaturaDraftGetResponse));
   router.post("/api/candidatura/antt-precheck", wrap(resolveCandidaturaAnttPrecheckResponse));

@@ -47,6 +47,21 @@ export const candidaturaPreCheckSchema = z.object({
 });
 
 /**
+ * Schema do POST /api/candidatura/attach-selfie — motorista já cadastrado que
+ * só precisa anexar a selfie-com-CNH (pendência SELFIE_REQUIRED do pre-check).
+ * `selfieStoragePath` é o storage_path devolvido por uploadDraftFile (slot
+ * motorista_selfie_cnh); o use-case valida que está sob a pasta do próprio CPF.
+ */
+export const candidaturaAttachSelfieSchema = z.object({
+  cpf: cpfSchema,
+  selfieStoragePath: z
+    .string()
+    .trim()
+    .min(1, "Caminho da selfie ausente.")
+    .max(512, "Caminho da selfie inválido."),
+});
+
+/**
  * Schema do POST /api/candidatura/draft (plan 03 + Bug-8 hardening).
  *
  * - cargaId obrigatorio (D-10 — wizard sempre tem contexto de carga).
