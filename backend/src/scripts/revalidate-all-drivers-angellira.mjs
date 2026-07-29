@@ -6,9 +6,12 @@
  * do snapshot antigo (import manual). O timer do main.js
  * (ANGELLIRA_DRIVER_REVALIDATE_ENABLED) mantém a base fresca depois disso.
  *
+ * Ritmo SUAVE por padrão (não pesa no servidor nem no Angellira): concorrência
+ * baixa + pausa entre chamadas. Ajuste com --concurrency e --delay-ms.
+ *
  * Uso:
  *   node backend/src/scripts/revalidate-all-drivers-angellira.mjs
- *   node backend/src/scripts/revalidate-all-drivers-angellira.mjs --concurrency=8
+ *   node backend/src/scripts/revalidate-all-drivers-angellira.mjs --concurrency=3 --delay-ms=250
  *   node backend/src/scripts/revalidate-all-drivers-angellira.mjs --limit=500   (teste)
  *
  * Só grava com availability OK (nunca rebaixa por falha). NOT_FOUND zera a vigência.
@@ -39,18 +42,22 @@ function formatDuration(ms) {
 
 async function main() {
   const startedAt = Date.now();
-  const concurrency = Math.max(1, Number(parseArg("concurrency", 8)));
+  const concurrency = Math.max(1, Number(parseArg("concurrency", 3)));
+  const delayMs = Math.max(0, Number(parseArg("delay-ms", 250)));
   const limitArg = parseArg("limit", null);
   const limit = limitArg ? Number.parseInt(limitArg, 10) : null;
   const correlationId = `angellira-drivers-backfill-${startedAt}`;
 
-  console.log(`[revalidate-drivers-angellira] iniciando (concorrencia=${concurrency}${limit ? `, limite=${limit}` : ", base inteira"})`);
+  console.log(
+    `[revalidate-drivers-angellira] iniciando (concorrencia=${concurrency}, delay=${delayMs}ms${limit ? `, limite=${limit}` : ", base inteira"})`,
+  );
 
   // staleHours=null → ignora frescor (revalida TODOS os selecionados).
   const summary = await revalidateDriversAngellira({
     limit,
     staleHours: null,
     concurrency,
+    delayMs,
     correlationId,
     onProgress: ({ processed, total, found, notFound, unavailable }) => {
       if (processed % 100 === 0 || processed === total) {

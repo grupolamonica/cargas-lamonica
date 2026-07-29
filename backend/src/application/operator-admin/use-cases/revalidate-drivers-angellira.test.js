@@ -35,7 +35,7 @@ describe("revalidateDriversAngellira", () => {
     const db = makeDb([{ cpf: "11111111111", nome: "A" }, { cpf: "22222222222", nome: "B" }, { cpf: "33333333333", nome: "C" }]);
     const syncDriver = vi.fn().mockResolvedValue({ updated: true });
 
-    const summary = await revalidateDriversAngellira({ db, lookup, syncDriver, limit: 10, staleHours: null, concurrency: 2 });
+    const summary = await revalidateDriversAngellira({ db, lookup, syncDriver, limit: 10, staleHours: null, concurrency: 2, delayMs: 0 });
 
     expect(summary).toEqual({ checked: 3, found: 1, notFound: 1, unavailable: 1 });
 
@@ -60,7 +60,7 @@ describe("revalidateDriversAngellira", () => {
 
   it("aplica filtro de frescor (staleHours) e teto (limit) no SELECT", async () => {
     const db = makeDb([]);
-    await revalidateDriversAngellira({ db, lookup, syncDriver: vi.fn(), limit: 50, staleHours: 20, concurrency: 1 });
+    await revalidateDriversAngellira({ db, lookup, syncDriver: vi.fn(), limit: 50, staleHours: 20, concurrency: 1, delayMs: 0 });
     const sel = db.selects[0];
     expect(sel.sql).toMatch(/updated_at\s*<\s*now\(\)\s*-/i);
     expect(sel.params).toContain(20);
@@ -69,7 +69,7 @@ describe("revalidateDriversAngellira", () => {
 
   it("staleHours=null e limit=null revalidam a base inteira (sem filtros)", async () => {
     const db = makeDb([]);
-    await revalidateDriversAngellira({ db, lookup, syncDriver: vi.fn(), limit: null, staleHours: null });
+    await revalidateDriversAngellira({ db, lookup, syncDriver: vi.fn(), limit: null, staleHours: null, delayMs: 0 });
     const sel = db.selects[0];
     expect(sel.sql).not.toMatch(/updated_at\s*<\s*now/i);
     expect(sel.sql).not.toMatch(/LIMIT\s+\$/i); // cláusula LIMIT $n (não a coluna angellira_limit_date)

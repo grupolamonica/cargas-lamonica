@@ -700,6 +700,8 @@ async function bootstrap() {
   if (process.env.ANGELLIRA_DRIVER_REVALIDATE_ENABLED === "true") {
     const intervalMin = Math.max(1, Number(process.env.ANGELLIRA_DRIVER_REVALIDATE_INTERVAL_MIN || 30));
     const batch = Math.max(1, Number(process.env.ANGELLIRA_DRIVER_REVALIDATE_BATCH || 100));
+    const concurrency = Math.max(1, Number(process.env.ANGELLIRA_DRIVER_REVALIDATE_CONCURRENCY || 3));
+    const delayMs = Math.max(0, Number(process.env.ANGELLIRA_DRIVER_REVALIDATE_DELAY_MS || 250));
     let revalidatingDrivers = false;
     setInterval(async () => {
       if (revalidatingDrivers) return;
@@ -708,7 +710,7 @@ async function bootstrap() {
         const { revalidateDriversAngellira } = await import(
           "./application/operator-admin/use-cases/revalidate-drivers-angellira.js"
         );
-        const r = await revalidateDriversAngellira({ limit: batch });
+        const r = await revalidateDriversAngellira({ limit: batch, concurrency, delayMs });
         if (r.checked) {
           console.info(
             `[revalidate-drivers-angellira] ${r.checked} verificado(s): ${r.found} vigente(s), ${r.notFound} sem cadastro, ${r.unavailable} indisponível(is)`,
@@ -720,7 +722,9 @@ async function bootstrap() {
         revalidatingDrivers = false;
       }
     }, intervalMin * 60 * 1000);
-    console.info(`[revalidate-drivers-angellira] timer ativo (intervalo ${intervalMin}min, lote ${batch})`);
+    console.info(
+      `[revalidate-drivers-angellira] timer ativo (intervalo ${intervalMin}min, lote ${batch}, conc ${concurrency}, delay ${delayMs}ms)`,
+    );
   } else {
     console.info("[revalidate-drivers-angellira] desabilitado (defina ANGELLIRA_DRIVER_REVALIDATE_ENABLED=true para ligar)");
   }

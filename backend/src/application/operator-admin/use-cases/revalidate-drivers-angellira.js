@@ -16,10 +16,17 @@ import { syncDriverAngelliraValidation } from "./angellira-cache.js";
 //  - teto por rodada (`limit`) + `staleHours` (não re-consulta quem foi tocado há
 //    pouco) fazem um refresh ROTATIVO da base sem martelar a API / o circuit breaker.
 
+// Defaults deliberadamente SUAVES: a ideia é revalidar a base inteira sem pesar
+// no servidor nem no Angellira. Concorrência baixa + pausa entre chamadas seguram
+// o ritmo (rate); o cliente Angellira ainda tem cache de resultado (5min), cache de
+// token (20min) e circuit breaker por cima. Ritmo ≈ concurrency / (latência + delayMs).
 const DEFAULT_BATCH = 100;
 const DEFAULT_STALE_HOURS = 20;
-const DEFAULT_CONCURRENCY = 5;
+const DEFAULT_CONCURRENCY = 3;
+const DEFAULT_DELAY_MS = 250;
 const CALL_TIMEOUT_MS = 8_000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function normalizeCpf(value) {
   return String(value || "").replace(/\D/g, "");
@@ -139,6 +146,7 @@ export async function revalidateDriversAngellira({
   limit = DEFAULT_BATCH,
   staleHours = DEFAULT_STALE_HOURS,
   concurrency = DEFAULT_CONCURRENCY,
+  delayMs = DEFAULT_DELAY_MS,
   correlationId = null,
   onProgress = null,
 } = {}) {
@@ -156,6 +164,9 @@ export async function revalidateDriversAngellira({
     else if (r.status === "UNAVAILABLE") unavailable += 1;
     processed += 1;
     if (onProgress) onProgress({ processed, total: drivers.length, found, notFound, unavailable });
+    // Throttle: pausa entre chamadas p/ segurar o ritmo no Angellira (e no servidor).
+    // Ritmo ≈ concurrency / (latência + delayMs). Ex.: conc=3, delay=250ms ⇒ ~4-5 req/s.
+    if (delayMs > 0) await sleep(delayMs);
   });
 
   await runConcurrent(tasks, concurrency);
