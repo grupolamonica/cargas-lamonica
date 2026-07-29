@@ -268,11 +268,154 @@ export function mergePreservingGood(next, prev) {
 }
 
 /**
+ * Monta as linhas de upsert p/ motoristas_historico a partir dos motoristas que
+ * foram consultados AO VIVO agora (fallback ASPX) e voltaram FOUND. Persistir
+ * transforma a consulta volátil num registro durável: na próxima passada o
+ * motorista é resolvido pela TABELA (data fresca), SEM re-consultar a API — o que
+ * elimina a oscilação FOUND↔UNAVAILABLE quando a API do Angellira falha
+ * intermitentemente (timeout/circuit breaker). Puro/testável: recebe o estado já
+ * resolvido e devolve as linhas (dedup por CPF; só FOUND com availability OK).
+ */
+export function buildDriverHistoricoUpsertRows(driverByName, cpfsToFetch, angelliraDrivers) {
+  const fetched = new Set((cpfsToFetch || []).map((c) => String(c || "").replace(/\D/g, "")).filter(Boolean));
+  const byCpf = new Map();
+  for (const name of Object.keys(driverByName || {})) {
+    const d = driverByName[name];
+    const norm = String(d?.cpf || "").replace(/\D/g, "");
+    if (!norm || !fetched.has(norm) || byCpf.has(norm)) continue;
+    const a = angelliraDrivers?.[norm];
+    if (!a || a.availability !== "OK" || a.found !== true) continue;
+    byCpf.set(norm, {
+      cpf: norm,
+      nome: (a.driverDetails?.name || d.aspxDisplayName || name || "").trim(),
+      angelliraQueryId: a.queryId ?? null,
+      angelliraSentDate: a.lastSeenAt ?? null,
+      angelliraLimitDate: a.validUntil ?? null,
+      aspxFound: d.aspxFound === true,
+      aspxDisplayName: d.aspxDisplayName ?? null,
+    });
+  }
+  return [...byCpf.values()];
+}
+
+// Upsert (best-effort) das linhas do builder no motoristas_historico. Só toca
+// colunas Angellira/ASPX (COALESCE preserva o resto da ficha).
+async function upsertDriverHistoricoRows(pool, rows) {
+  for (const r of rows) {
+    await pool.query(
+      `INSERT INTO public.motoristas_historico
+         (cpf, nome, angellira_query_id, angellira_sent_date, angellira_limit_date,
+          aspx_found, aspx_display_name, aspx_matched_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $6 THEN now() ELSE NULL END, now())
+       ON CONFLICT (cpf) DO UPDATE SET
+         nome                 = COALESCE(NULLIF(EXCLUDED.nome, ''), motoristas_historico.nome),
+         angellira_query_id   = EXCLUDED.angellira_query_id,
+         angellira_sent_date  = EXCLUDED.angellira_sent_date,
+         angellira_limit_date = EXCLUDED.angellira_limit_date,
+         aspx_found           = motoristas_historico.aspx_found OR EXCLUDED.aspx_found,
+         aspx_display_name    = COALESCE(EXCLUDED.aspx_display_name, motoristas_historico.aspx_display_name),
+         updated_at           = now()`,
+      [r.cpf, r.nome, r.angelliraQueryId, r.angelliraSentDate, r.angelliraLimitDate, r.aspxFound, r.aspxDisplayName],
+    );
+  }
+}
+
+// Persiste (best-effort) os FOUND buscados agora. NÃO lança — persistir é um bônus.
+async function persistFetchedDriversToHistorico(driverByName, cpfsToFetch, angelliraDrivers, correlationId) {
+  try {
+    const rows = buildDriverHistoricoUpsertRows(driverByName, cpfsToFetch, angelliraDrivers);
+    if (rows.length === 0) return;
+    await upsertDriverHistoricoRows(getPostgresPool(), rows);
+    logStructuredEvent("info", "sheet-monitor-enrich.persist-drivers", { correlationId, count: rows.length });
+  } catch (err) {
+    logStructuredEvent("warn", "sheet-monitor-enrich.persist-failed", {
+      correlationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Plano de escrita do "Consultar item" (forceLive), a partir das consultas ao vivo:
+ *  - upserts: motoristas FOUND (data/id frescos) → mesmas linhas do builder normal;
+ *  - clears:  CPFs que voltaram NOT_FOUND (availability OK, found=false) → zera a
+ *             vigência (autoritativo, mesma convenção do cache de leads).
+ * UNAVAILABLE (API fora naquele instante) fica de fora dos dois — não rebaixa dado
+ * bom. Puro/testável (dedup por CPF; um CPF nunca aparece em upserts E clears).
+ */
+export function planForceLiveDriverWrites(driverByName, cpfsToFetch, angelliraDrivers) {
+  const upserts = buildDriverHistoricoUpsertRows(driverByName, cpfsToFetch, angelliraDrivers);
+  const upsertCpfs = new Set(upserts.map((u) => u.cpf));
+  const fetched = new Set((cpfsToFetch || []).map((c) => String(c || "").replace(/\D/g, "")).filter(Boolean));
+  const clears = new Set();
+  for (const name of Object.keys(driverByName || {})) {
+    const norm = String(driverByName[name]?.cpf || "").replace(/\D/g, "");
+    if (!norm || !fetched.has(norm) || upsertCpfs.has(norm)) continue;
+    const a = angelliraDrivers?.[norm];
+    if (a && a.availability === "OK" && a.found === false) clears.add(norm);
+  }
+  return { upserts, clears: [...clears] };
+}
+
+// "Consultar item": grava motorista (FOUND/NOT_FOUND) e VEÍCULOS ao vivo. Espelha em
+// driver_profiles (motorista REGISTRADO) e no cache `vehicles`. Best-effort — não lança.
+async function persistForceLiveResults(driverByName, cpfsToFetch, angelliraDrivers, angelliraVehicles, correlationId) {
+  try {
+    const { upserts, clears } = planForceLiveDriverWrites(driverByName, cpfsToFetch, angelliraDrivers);
+    const pool = getPostgresPool();
+    await upsertDriverHistoricoRows(pool, upserts);
+    for (const cpf of clears) {
+      await pool.query(
+        `UPDATE public.motoristas_historico
+            SET angellira_query_id = NULL, angellira_limit_date = NULL, updated_at = now()
+          WHERE cpf = $1`,
+        [cpf],
+      );
+    }
+
+    try {
+      const { syncDriverAngelliraValidation, syncVehicleAngelliraLookup } = await import("./use-cases/angellira-cache.js");
+      for (const r of upserts) {
+        const res = angelliraDrivers?.[r.cpf];
+        if (res && res.availability === "OK") {
+          await syncDriverAngelliraValidation({ documentNumber: r.cpf, angelliraResult: res, correlationId });
+        }
+      }
+      for (const plate of Object.keys(angelliraVehicles || {})) {
+        const res = angelliraVehicles[plate];
+        if (res && res.availability === "OK") {
+          await syncVehicleAngelliraLookup({ plate, vehicleType: res.vehicleDetails?.type ?? null, angelliraResult: res, correlationId });
+        }
+      }
+    } catch {
+      /* espelho em driver_profiles/vehicles é bônus — motoristas_historico já gravou */
+    }
+
+    logStructuredEvent("info", "sheet-monitor-enrich.force-live-persist", {
+      correlationId,
+      drivers: upserts.length,
+      cleared: clears.length,
+    });
+  } catch (err) {
+    logStructuredEvent("warn", "sheet-monitor-enrich.force-live-persist-failed", {
+      correlationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
  * Núcleo: resolve ASPX/Angellira (com cache) p/ um conjunto de linhas e faz
  * upsert em sheet_monitor_enriched (onConflict lh). Linhas da planilha e do
  * sistema usam o mesmo pipeline.
+ *
+ * forceLive=true ("Consultar item"): ignora TODO cache (motoristas_historico,
+ * driver_profiles, vehicles) e RECONSULTA o Angellira AO VIVO para o motorista e
+ * as placas da linha, persistindo o resultado (motoristas_historico/driver_profiles/
+ * vehicles). É o "atualizar agora" sob demanda do operador. Default false — o fluxo
+ * periódico e os hooks pós-alocação continuam usando cache (leves).
  */
-async function enrichRows(supabaseClient, batch, correlationId) {
+async function enrichRows(supabaseClient, batch, correlationId, { forceLive = false } = {}) {
   if (!Array.isArray(batch) || batch.length === 0) return 0;
 
   // BANCO DE MOTORISTA (motoristas_historico) — fonte PRIMÁRIA: tem CPF, ASPX já
@@ -312,7 +455,8 @@ async function enrichRows(supabaseClient, batch, correlationId) {
   const uniquePlates = [
     ...new Set(batch.flatMap((r) => [normalizePlate(r.cavalo), normalizePlate(r.carreta)]).filter(Boolean)),
   ];
-  const { data: dbVehicles } = uniquePlates.length > 0
+  // forceLive: ignora o cache de veículos → todas as placas vão p/ consulta ao vivo.
+  const { data: dbVehicles } = (!forceLive && uniquePlates.length > 0)
     ? await supabaseClient
         .from("vehicles")
         .select("plate, vehicle_type, plate_role, angellira_status, angellira_valid_until, angellira_status_text, angellira_display_name, angellira_details")
@@ -331,6 +475,18 @@ async function enrichRows(supabaseClient, batch, correlationId) {
     const mh = matchAspxDriver(name, mhIndex);
     if (mh) {
       const r = mhByCpf[mh.cpf];
+      if (forceLive && r?.cpf) {
+        // "Consultar item": ignora o valor salvo e RECONSULTA ao vivo. Resolve só
+        // CPF/ASPX pela tabela; a Angellira vem do fetch (e é persistida depois).
+        driverByName[name] = {
+          cpf: r.cpf,
+          aspxFound: r?.aspx_found === true,
+          aspxDisplayName: r?.aspx_display_name ?? null,
+          angellira: null,
+        };
+        aspxFallbackCpfs.push(r.cpf);
+        continue;
+      }
       driverByName[name] = {
         cpf: r?.cpf ?? null,
         aspxFound: r?.aspx_found === true,
@@ -360,9 +516,10 @@ async function enrichRows(supabaseClient, batch, correlationId) {
 
   const uniqueCpfs = [...new Set(aspxFallbackCpfs)];
 
-  // Driver cache (driver_profiles) — pula Angellira p/ CPF já validado
+  // Driver cache (driver_profiles) — pula Angellira p/ CPF já validado.
+  // forceLive: ignora o cache → todos os CPFs vão p/ consulta ao vivo.
   const driverCacheByNormalizedCpf = {};
-  if (uniqueCpfs.length > 0) {
+  if (uniqueCpfs.length > 0 && !forceLive) {
     try {
       const pool = getPostgresPool();
       const { rows: cachedDriverRows } = await pool.query(
@@ -427,6 +584,17 @@ async function enrichRows(supabaseClient, batch, correlationId) {
         ? { found: a.found, status: a.status, validUntil: a.validUntil, statusText: a.statusText, details: a.driverDetails ?? null }
         : null;
     }
+  }
+
+  // Persiste os resultados da consulta ao vivo (best-effort, não bloqueia o selo):
+  //  - normal: só motoristas FOUND buscados agora (fallback ASPX) → registro durável,
+  //    a próxima passada resolve pela tabela e não re-consulta (mata a oscilação).
+  //  - forceLive ("Consultar item"): grava motorista (FOUND=fresco, NOT_FOUND=zera) e
+  //    também persiste os VEÍCULOS no cache `vehicles`.
+  if (forceLive) {
+    await persistForceLiveResults(driverByName, cpfsToFetch, angelliraDrivers, angelliraVehicles, correlationId);
+  } else {
+    await persistFetchedDriversToHistorico(driverByName, cpfsToFetch, angelliraDrivers, correlationId);
   }
 
   const ctx = { driverByName, vehiclesByPlate, angelliraVehicles };
@@ -565,7 +733,7 @@ async function loadMonitorEnrichCandidates(supabaseClient, correlationId = null)
  * refletir o motorista/placa que o operador acabou de pôr, em vez de ficar "não
  * consultado" (que era o motorista antigo da planilha / linha vazia). Não lança.
  */
-export async function enrichSheetRowsByLh(supabaseClient, lhs, { correlationId = null } = {}) {
+export async function enrichSheetRowsByLh(supabaseClient, lhs, { correlationId = null, forceLive = false } = {}) {
   const wanted = [...new Set((lhs || []).map((s) => (s ?? "").toString().trim()).filter(Boolean))];
   if (wanted.length === 0) return;
   try {
@@ -606,7 +774,7 @@ export async function enrichSheetRowsByLh(supabaseClient, lhs, { correlationId =
         carreta: (a?.alloc_carreta ?? a?.sheet_carreta ?? base.carreta ?? "") || "",
       };
     });
-    await enrichRows(supabaseClient, rows, correlationId);
+    await enrichRows(supabaseClient, rows, correlationId, { forceLive });
   } catch (err) {
     logStructuredEvent("warn", "sheet-monitor-enrich.by-lh-failed", {
       correlationId,
@@ -624,7 +792,7 @@ export async function enrichSheetRowsByLh(supabaseClient, lhs, { correlationId =
 export async function enrichSheetRowByLhWithValues(
   supabaseClient,
   { lh, motorista = "", cavalo = "", carreta = "" },
-  { correlationId = null } = {},
+  { correlationId = null, forceLive = false } = {},
 ) {
   const l = (lh ?? "").toString().trim();
   if (!l) return;
@@ -639,6 +807,7 @@ export async function enrichSheetRowByLhWithValues(
         carreta: (carreta ?? "").toString().trim(),
       }],
       correlationId,
+      { forceLive },
     );
   } catch (err) {
     logStructuredEvent("warn", "sheet-monitor-enrich.by-lh-values-failed", {
@@ -732,7 +901,7 @@ export async function enrichAllPendingMonitorRows(
  * Sempre faz upsert — mesmo sem motorista/placa grava a linha esqueleto, p/ o
  * selo nunca ficar "não consultado". Best-effort: NÃO lança.
  */
-export async function enrichSystemCargoById(supabaseClient, cargoId, { correlationId = null } = {}) {
+export async function enrichSystemCargoById(supabaseClient, cargoId, { correlationId = null, forceLive = false } = {}) {
   if (!cargoId) return;
   try {
     const { data } = await supabaseClient
@@ -748,7 +917,7 @@ export async function enrichSystemCargoById(supabaseClient, cargoId, { correlati
       cavalo: data.alloc_cavalo || "",
       carreta: data.alloc_carreta || "",
     };
-    await enrichRows(supabaseClient, [row], correlationId);
+    await enrichRows(supabaseClient, [row], correlationId, { forceLive });
   } catch (err) {
     logStructuredEvent("warn", "sheet-monitor-enrich.system-cargo-failed", {
       correlationId,

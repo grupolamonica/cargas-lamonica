@@ -688,6 +688,47 @@ async function bootstrap() {
     console.info("[reconcile-aspx-status] desabilitado (defina ASPX_STATUS_RECONCILE_ENABLED=true para ligar)");
   }
 
+  // 4g. Revalida a vigência Angellira dos motoristas (motoristas_historico) AO VIVO,
+  //     em ROTAÇÃO: a cada tick pega os N mais defasados (nunca consultados / mais
+  //     vencidos / não tocados há > staleHours), reconsulta e grava limit_date
+  //     fresco. Conserta o snapshot congelado (a tabela era 1 import manual → ~55%
+  //     dos motoristas em prod ficaram "vencidos" mesmo renovados). Só grava com
+  //     availability OK (nunca rebaixa por falha); NOT_FOUND zera a vigência.
+  //     OPT-IN (default DESLIGADO): ANGELLIRA_DRIVER_REVALIDATE_ENABLED=true.
+  //     Intervalo: ANGELLIRA_DRIVER_REVALIDATE_INTERVAL_MIN (default 30min);
+  //     teto/rodada: ANGELLIRA_DRIVER_REVALIDATE_BATCH (default 100).
+  if (process.env.ANGELLIRA_DRIVER_REVALIDATE_ENABLED === "true") {
+    const intervalMin = Math.max(1, Number(process.env.ANGELLIRA_DRIVER_REVALIDATE_INTERVAL_MIN || 30));
+    const batch = Math.max(1, Number(process.env.ANGELLIRA_DRIVER_REVALIDATE_BATCH || 100));
+    const concurrency = Math.max(1, Number(process.env.ANGELLIRA_DRIVER_REVALIDATE_CONCURRENCY || 3));
+    const delayMs = Math.max(0, Number(process.env.ANGELLIRA_DRIVER_REVALIDATE_DELAY_MS || 250));
+    let revalidatingDrivers = false;
+    setInterval(async () => {
+      if (revalidatingDrivers) return;
+      revalidatingDrivers = true;
+      try {
+        const { revalidateDriversAngellira } = await import(
+          "./application/operator-admin/use-cases/revalidate-drivers-angellira.js"
+        );
+        const r = await revalidateDriversAngellira({ limit: batch, concurrency, delayMs });
+        if (r.checked) {
+          console.info(
+            `[revalidate-drivers-angellira] ${r.checked} verificado(s): ${r.found} vigente(s), ${r.notFound} sem cadastro, ${r.unavailable} indisponível(is)`,
+          );
+        }
+      } catch (err) {
+        console.error("[revalidate-drivers-angellira] erro:", err?.message);
+      } finally {
+        revalidatingDrivers = false;
+      }
+    }, intervalMin * 60 * 1000);
+    console.info(
+      `[revalidate-drivers-angellira] timer ativo (intervalo ${intervalMin}min, lote ${batch}, conc ${concurrency}, delay ${delayMs}ms)`,
+    );
+  } else {
+    console.info("[revalidate-drivers-angellira] desabilitado (defina ANGELLIRA_DRIVER_REVALIDATE_ENABLED=true para ligar)");
+  }
+
   // 5. Iniciar HTTP server
   const server = app.listen(PORT, () => {
     console.log(`[lamonica-backend] Servidor ouvindo em http://localhost:${PORT}`);
