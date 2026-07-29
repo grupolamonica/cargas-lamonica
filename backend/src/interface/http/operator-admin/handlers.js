@@ -1932,7 +1932,8 @@ export async function resolveSheetMonitorEnrichResponse(request) {
     const enrichment = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
     if (cargoId || lh) {
       if (cargoId) {
-        await enrichment.enrichSystemCargoById(supabaseClient, cargoId, { correlationId });
+        // "Consultar item" força consulta AO VIVO no Angellira e salva (forceLive).
+        await enrichment.enrichSystemCargoById(supabaseClient, cargoId, { correlationId, forceLive: true });
       } else {
         // Motorista/veículo EFETIVO enviados no corpo (o que o operador vê na
         // tela). O nome é PII → vai no corpo, nunca na URL. Com os valores,
@@ -1950,10 +1951,10 @@ export async function resolveSheetMonitorEnrichResponse(request) {
           await enrichment.enrichSheetRowByLhWithValues(
             supabaseClient,
             { lh, motorista: body.motorista, cavalo: body.cavalo, carreta: body.carreta },
-            { correlationId },
+            { correlationId, forceLive: true },
           );
         } else {
-          await enrichment.enrichSheetRowsByLh(supabaseClient, [lh], { correlationId });
+          await enrichment.enrichSheetRowsByLh(supabaseClient, [lh], { correlationId, forceLive: true });
         }
       }
       // DC-230: "Consultar item" também consulta o checklist do veículo (GRIFFI)

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildEnrichedUpsertRow,
   buildDriverHistoricoUpsertRows,
+  planForceLiveDriverWrites,
   mergePreservingGood,
   matchAspxDriver,
   driverNamesMatch,
@@ -9,6 +10,34 @@ import {
   fetchEnrichedLhSet,
   filterRowsToProcess,
 } from "./sheet-monitor-enrichment.js";
+
+describe("planForceLiveDriverWrites — Consultar item (força ao vivo)", () => {
+  const driverByName = {
+    "MOTORISTA FOUND": { cpf: "11111111111", aspxFound: true, aspxDisplayName: "M FOUND" },
+    "MOTORISTA NOT FOUND": { cpf: "22222222222", aspxFound: true, aspxDisplayName: "M NF" },
+    "MOTORISTA INDISP": { cpf: "33333333333", aspxFound: true, aspxDisplayName: "M IND" },
+  };
+  const angelliraDrivers = {
+    "11111111111": { availability: "OK", found: true, queryId: "q1", validUntil: "2026-10-14", lastSeenAt: "2026-07-01T00:00:00Z", driverDetails: { name: "M FOUND" } },
+    "22222222222": { availability: "OK", found: false }, // NOT_FOUND autoritativo
+    "33333333333": { availability: "UNAVAILABLE", found: false }, // API fora agora
+  };
+  const cpfs = ["11111111111", "22222222222", "33333333333"];
+
+  it("FOUND vira upsert; NOT_FOUND vira clear; UNAVAILABLE fica de fora", () => {
+    const { upserts, clears } = planForceLiveDriverWrites(driverByName, cpfs, angelliraDrivers);
+    expect(upserts).toHaveLength(1);
+    expect(upserts[0].cpf).toBe("11111111111");
+    expect(upserts[0].angelliraLimitDate).toBe("2026-10-14");
+    expect(clears).toEqual(["22222222222"]); // UNAVAILABLE (333) NÃO entra
+  });
+
+  it("um CPF nunca aparece em upserts E clears ao mesmo tempo", () => {
+    const { upserts, clears } = planForceLiveDriverWrites(driverByName, cpfs, angelliraDrivers);
+    const inBoth = upserts.map((u) => u.cpf).filter((c) => clears.includes(c));
+    expect(inBoth).toHaveLength(0);
+  });
+});
 
 describe("buildDriverHistoricoUpsertRows — persiste consulta ao vivo p/ virar registro durável", () => {
   const angelliraDrivers = {
