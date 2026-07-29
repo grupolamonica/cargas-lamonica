@@ -386,10 +386,16 @@ const DriverClaimPanel = ({
 
     const trailerPlates = [stored.form.trailerPlate, stored.form.trailerPlate2].filter(Boolean);
 
+    // Guarda de desmontagem: o pre-check é assíncrono e pode resolver depois do
+    // componente sair da árvore. Sem o guard, o setState pós-unmount dispara o
+    // scheduler do React (getCurrentEventPriority → window), o que quebra os
+    // testes quando o jsdom já foi desmontado ("window is not defined").
+    let active = true;
     setRegStatus({ loading: true, response: null, error: false });
     requestCandidaturaPreCheck({ cpf: cpfDigits, horsePlate: stored.form.horsePlate, trailerPlates })
-      .then((res) => setRegStatus({ loading: false, response: res, error: false }))
-      .catch(() => setRegStatus({ loading: false, response: null, error: true }));
+      .then((res) => { if (active) setRegStatus({ loading: false, response: res, error: false }); })
+      .catch(() => { if (active) setRegStatus({ loading: false, response: null, error: true }); });
+    return () => { active = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadId]);
 
