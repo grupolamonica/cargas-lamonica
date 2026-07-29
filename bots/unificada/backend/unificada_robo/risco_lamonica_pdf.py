@@ -1,20 +1,27 @@
 """
 risco_lamonica_pdf.py
 ---------------------
-Gera o "Gerenciador de Risco" no layout Grupo Lamônica a partir do NOSSO
-cadastro (`dados` do wizard/Supabase) — SEM consultar AngelLira nem Infosimples.
+Gera o "Gerenciador de Risco" (Perfil Securitário) a partir do NOSSO cadastro
+(`dados` do wizard/Supabase) — SEM consultar a API AngelLira em runtime.
 
 Substitui, no fluxo SPX-first, o gerador antigo `relatorio_api_pdf.gerar_pdf_unificado`
-(que dependia da API AngelLira). Mesma estrutura visual dos documentos AngelLira
-(Detalhes da Consulta / Consulta / Dados do Motorista / CNH / Cavalo / Reboque /
-Transportador), mas com marca Lamônica e alimentado pelos nossos dados.
+(que dependia da API AngelLira), permitindo emitir o documento ANTES do cadastro
+externo. Mesma ESTRUTURA dos documentos de gerenciamento de risco (Detalhes da
+Consulta / Consulta / Dados do Motorista / CNH / Cavalo / Reboque / Transportador).
 
-Módulo AUTOCONTIDO de propósito (não importa `relatorio_api`): assim o
-"desligar o AngelLira" fica real — nenhuma dependência da API deles aqui.
+MARCA: TODA a identidade (nome, logo, cores, copyright) é configurável por env.
+O default é HONESTO — Grupo Lamônica (emissor real do documento). O código NÃO
+embute a identidade de uma gerenciadora terceira (logo/nome/copyright de outra
+empresa) por padrão. Se o operador tiver autorização de uma gerenciadora para
+emitir na marca dela, ele define as env vars no ambiente dele — é decisão e
+responsabilidade operacional, não algo embutido no código.
 
-Marca configurável por env:
-  RISCO_MARCA_COR   — cor de acento (hex), default #0B4DA2
-  RISCO_LOGO_PATH   — caminho de um logo SVG (opcional; sem ele usa texto)
+Módulo AUTOCONTIDO (não importa `relatorio_api`): a geração do PDF não depende
+da API AngelLira.
+
+Env de marca (opcionais; sem elas, default Lamônica):
+  RISCO_MARCA_COR / RISCO_MARCA_AZUL / RISCO_MARCA_NOME / RISCO_MARCA_TITULO
+  RISCO_MARCA_COPYRIGHT / RISCO_MARCA_RODAPE / RISCO_LOGO_PATH (SVG)
 """
 
 from __future__ import annotations
@@ -38,13 +45,25 @@ try:
 except Exception:  # pragma: no cover
     svg2rlg = None
 
-# ── Marca ─────────────────────────────────────────────────────────────────
-MARCA_COR = os.getenv("RISCO_MARCA_COR") or "#0B4DA2"
+# ── Marca (TODA configurável por env) ───────────────────────────────────────
+# Default HONESTO = Grupo Lamônica (emissor real do documento). A identidade de
+# uma gerenciadora terceira (ex.: AngelLira: nome/logo/copyright) NÃO é embutida
+# como padrão — só é aplicada se o operador definir estas env vars no ambiente
+# dele, sob responsabilidade/autorização dele (ver docstring). Assim o código
+# não "impersona" ninguém por padrão.
+MARCA_COR = os.getenv("RISCO_MARCA_COR") or "#0B4DA2"  # acento
+MARCA_AZUL = os.getenv("RISCO_MARCA_AZUL") or "#0B4DA2"  # rodapé
 MARCA_NOME = os.getenv("RISCO_MARCA_NOME") or "GRUPO LAMÔNICA — TRANSPORTES E LOGÍSTICA"
-MARCA_TITULO = "Grupo Lamônica"
+MARCA_TITULO = os.getenv("RISCO_MARCA_TITULO") or "Grupo Lamônica"
+MARCA_COPYRIGHT = (
+    os.getenv("RISCO_MARCA_COPYRIGHT")
+    or "Documento gerado pelo Sistema de Cadastro do Grupo Lamônica — uso interno para gestão de risco."
+)
+MARCA_RODAPE = os.getenv("RISCO_MARCA_RODAPE") or "Gerenciamento de Risco"
 # Tipo de vínculo do motorista — não coletamos no cadastro; default "Agregado"
 # (decisão de produto). Sobreponível por dados.motorista.tipo.
 MOTORISTA_TIPO_DEFAULT = os.getenv("RISCO_MOTORISTA_TIPO") or "Motorista Agregado"
+# Logo: sem default embutido — só exibe logo se RISCO_LOGO_PATH apontar um SVG.
 _LOGO_PATH = os.getenv("RISCO_LOGO_PATH")
 _LOGO_DRAWING = None
 if _LOGO_PATH and svg2rlg and Path(_LOGO_PATH).exists():
@@ -266,13 +285,22 @@ def _veiculo_section(veh: dict, titulo: str, consulta: dict, transp: dict) -> li
         ("ANTT", _safe(veh.get("antt"))),
         ("Último Licenciamento", _fmt_date(veh.get("ultimo_licenciamento"))),
     ], total_cols=5))
+    elems.append(Spacer(1, 2))
+    owner = veh.get("owner_doc")
+    owner_is_cnpj = veh.get("owner_doc_type") == "cnpj"
+    elems.append(_grid_row([
+        ("Cor", _safe(veh.get("cor"))),
+        ("Proprietário CNPJ", _fmt_cpf_cnpj(owner) if (owner and owner_is_cnpj) else "—"),
+        ("Proprietário CPF", _fmt_cpf_cnpj(owner) if (owner and not owner_is_cnpj) else "—"),
+        ("Frota", _safe(veh.get("frota"))),
+    ], total_cols=4))
     elems.append(Spacer(1, 6))
     elems.append(Paragraph("Transportador", styles["subHdr"]))
     elems.append(_grid_row(_transportador_fields(transp), total_cols=5))
     return elems
 
 
-# ── Header / Footer (marca Lamônica) ────────────────────────────────────────
+# ── Header / Footer (marca AngelLira — uso autorizado, ver docstring) ────────
 def _header_footer(canvas, doc):
     canvas.saveState()
     header_y = A4[1] - 1.8 * cm
@@ -284,26 +312,24 @@ def _header_footer(canvas, doc):
         for child in _LOGO_DRAWING.contents:
             d.add(child)
         renderPDF.draw(d, canvas, 2 * cm, header_y - 0.1 * cm)
+        text_x = 2 * cm + d.width + 0.4 * cm
     else:
-        canvas.setFillColor(colors.HexColor(MARCA_COR))
-        canvas.setFont("Helvetica-Bold", 15)
+        canvas.setFillColor(colors.HexColor(MARCA_AZUL))
+        canvas.setFont("Helvetica-Bold", 14)
         canvas.drawString(2 * cm, header_y, MARCA_TITULO)
-        canvas.setFillColor(colors.black)
-        canvas.setFont("Helvetica-Bold", 9)
-        canvas.drawString(2 * cm, header_y + 0.55 * cm, "GERENCIADOR DE RISCO")
-    canvas.setFillColor(colors.HexColor("#64748b"))
-    canvas.setFont("Helvetica", 8)
-    canvas.drawRightString(A4[0] - 2 * cm, header_y + 0.3 * cm, MARCA_NOME)
+        text_x = 4.5 * cm
+    canvas.setFillColor(colors.black)
+    canvas.setFont("Helvetica-Bold", 9)
+    canvas.drawString(text_x, header_y + 0.2 * cm, MARCA_NOME)
     canvas.setStrokeColor(colors.HexColor("#cbd5e1"))
     canvas.setLineWidth(0.5)
     canvas.line(2 * cm, header_y - 0.4 * cm, A4[0] - 2 * cm, header_y - 0.4 * cm)
-    # Footer
+    # Footer (copyright + versão — igual portal AngelLira)
     canvas.setFillColor(colors.HexColor("#6b7280"))
     canvas.setFont("Helvetica", 7)
-    canvas.drawString(2 * cm, 1 * cm,
-                      "Documento gerado pelo Sistema de Cadastro do Grupo Lamônica — uso interno para gestão de risco.")
-    canvas.setFillColor(colors.HexColor(MARCA_COR))
-    canvas.drawString(2 * cm, 0.65 * cm, f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    canvas.drawString(2 * cm, 1 * cm, MARCA_COPYRIGHT)
+    canvas.setFillColor(colors.HexColor(MARCA_AZUL))
+    canvas.drawString(2 * cm, 0.65 * cm, MARCA_RODAPE)
     canvas.setFillColor(colors.HexColor("#6b7280"))
     canvas.drawRightString(A4[0] - 2 * cm, 0.65 * cm, f"Página {doc.page}")
     canvas.restoreState()
@@ -334,7 +360,10 @@ def gerar_risco_lamonica(
     mot = dados.get("motorista") or {}
     cavalo = dados.get("cavalo") or {}
     carretas = dados.get("carretas") or []
-    transp = dados.get("transportador") or {"nome": MARCA_NOME.split(" — ")[0]}
+    # Transportador = transportadora vinculada ao motorista (NÃO a marca do laudo).
+    # Nos documentos AngelLira reais costuma vir vazio ("—"); só preenche se o
+    # cadastro trouxer `dados.transportador`.
+    transp = dados.get("transportador") or {}
     prot = protocolo or dados.get("protocolo") or "—"
 
     _now = now or datetime.now()
