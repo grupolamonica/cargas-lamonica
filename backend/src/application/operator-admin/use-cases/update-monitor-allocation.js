@@ -2,7 +2,7 @@ import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { buildAuditChanges } from "../../../domain/operator-admin/audit-diff.js";
 import { NotFoundError } from "../../../domain/load-claims/errors.js";
-import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
+import { writeAllocationsToSheet, formatSheetDateLabel } from "../../google-sheets/sheet-writeback.js";
 import { cancelLoadCascade } from "./cancel-load-cascade.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
 import { ensureMonitorSheetCargo } from "./_shared.js";
@@ -49,7 +49,8 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     const sheetRow = await ensureMonitorSheetCargo(client, lh, {
       columns: `id, sheet_lh, sheet_source, sheet_motorista, sheet_cavalo, sheet_carreta, sheet_status,
                 alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
-                alloc_descricao, alloc_vinculo, status, reserved_public_lead_id`,
+                alloc_descricao, alloc_vinculo, status, reserved_public_lead_id,
+                origem, destino, sheet_data_carregamento, sheet_data_descarga`,
     });
 
     if (!sheetRow) {
@@ -230,6 +231,14 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       // fora da transação (write-back e reabertura de reserva).
       cargoId,
       isSystemCargo,
+      // Rota + agenda da carga — usados p/ CRIAR a linha da carga do sistema na
+      // planilha (createIfMissing) quando ela ainda não existe (ver write-back).
+      sheetRowExtras: {
+        origem: sheetRow.origem ?? "",
+        destino: sheetRow.destino ?? "",
+        carregamentoLabel: sheetRow.sheet_data_carregamento ?? "",
+        descargaLabel: sheetRow.sheet_data_descarga ?? "",
+      },
       // Valor EFETIVO espelhado na planilha (write-back). Motorista/veículo usam
       // `||`: um override VAZIO ("" ou null) cai pro valor da planilha em vez de
       // LIMPAR a célula — assim editar só o status de uma carga (override de
@@ -262,15 +271,28 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
   // Write-back best-effort pra planilha (espelho) — FORA da transação e SEM
   // await. Quando vai cascatear, o write-back fica por conta da cascata (que
   // sabe os valores relocados) — evita gravar o valor antigo e depois corrigir.
-  //
-  // UPDATE-ONLY (sem createIfMissing): preenche o motorista/veículo na linha do LH
-  // SE ela já existir na planilha. A "linha-casca" de uma carga do sistema é criada
-  // no LANÇAMENTO (só se a viagem estiver ACEITA — launch-cargo-from-trip/aceite);
-  // aqui a alocação só a preenche. Carga do sistema NÃO-aceita não tem linha → o
-  // write-back é no-op (não cria) — assim ela nunca aparece na planilha via Monitor.
-  // (Cancelamento continua indo pela cascata: willCascade.)
   if (!willCascade) {
-    void writeAllocationsToSheet([{ lh, ...result.effective }]).catch(() => {});
+    const update = { lh, ...result.effective };
+    // Carga da PLANILHA: update-only (a linha já veio da planilha). Carga do
+    // SISTEMA (lh_manual) com motorista efetivo: a "linha-casca" só é criada no
+    // lançamento quando a viagem está ACEITA, então spots lançados-não-aceitos
+    // (auto-lançamento DC-201) e depois alocados aqui nunca apareciam na planilha.
+    // createIfMissing cria-ou-preenche a linha com rota + agenda + o motorista/
+    // veículo alocados. Sem motorista efetivo NÃO cria (não polui a planilha com
+    // spot vazio) — cai no update-only, no-op quando a linha não existe.
+    // Gate LT…: só linehaul SPX (→ planilha Shopee). Carga lançada não persiste
+    // sheet_source (NULL → roteia p/ shopee); o gate evita criar um LH de outra
+    // fonte (ex.: Nestlé) na planilha errada. Rever ao ligar o write-back Nestlé.
+    const effMotorista = (result.effective.motorista ?? "").toString().trim();
+    const isSpxLinehaul = String(lh ?? "").trim().toUpperCase().startsWith("LT");
+    if (result.isSystemCargo && effMotorista && isSpxLinehaul) {
+      update.createIfMissing = true;
+      update.origem = result.sheetRowExtras.origem;
+      update.destino = result.sheetRowExtras.destino;
+      update.dataCarregamento = formatSheetDateLabel(result.sheetRowExtras.carregamentoLabel);
+      update.dataDescarga = formatSheetDateLabel(result.sheetRowExtras.descargaLabel);
+    }
+    void writeAllocationsToSheet([update]).catch(() => {});
   }
 
   let cascadeMovedLhs = [];
