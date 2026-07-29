@@ -32,6 +32,7 @@ from unificada_robo.relatorio_api import (
     query_profile_records,
 )
 from unificada_robo.relatorio_api_pdf import gerar_pdf_unificado
+from unificada_robo.risco_lamonica_pdf import gerar_risco_lamonica
 from unificada_robo.logger import log_erro, log_info
 
 app = FastAPI(title="Unificada Robo (API-only)", version="1.0.0")
@@ -135,6 +136,57 @@ def pdf_unificado(p: PdfUnificadoRequest):
         raise
     except Exception as exc:
         log_erro(f"[main] /relatorio/pdf_unificado falhou: {exc!r}")
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
+
+
+# ── Gera PDF do Gerenciador de Risco a partir do NOSSO cadastro (sem AngelLira) ──
+
+class PdfLamonicaRequest(BaseModel):
+    """Recebe o `dados` do cadastro (shape pending_driver_registrations.dados):
+    { motorista, cavalo, carretas[], transportador?, protocolo? }."""
+    dados: dict
+    protocolo: Optional[str] = None
+    usuario: Optional[str] = None
+    validade_dias: Optional[int] = None
+
+
+@app.post("/relatorio/pdf_lamonica")
+def pdf_lamonica(p: PdfLamonicaRequest):
+    """Gera o Gerenciador de Risco (layout Lamônica) a partir do cadastro, SEM
+    consultar o AngelLira. Retorna o arquivo binário — mesmo contrato do
+    /relatorio/pdf_unificado (FileResponse + X-Components/X-Warnings)."""
+    if not p.dados or not isinstance(p.dados, dict):
+        raise HTTPException(status_code=400, detail="Informe 'dados' do cadastro.")
+    tmp = Path(tempfile.gettempdir()) / f"risco_lamonica_{int(time.time())}.pdf"
+    try:
+        kwargs = {}
+        if p.protocolo:
+            kwargs["protocolo"] = p.protocolo
+        if p.usuario:
+            kwargs["usuario"] = p.usuario
+        if p.validade_dias:
+            kwargs["validade_dias"] = p.validade_dias
+        result = gerar_risco_lamonica(p.dados, tmp, **kwargs)
+        if not result.get("ok"):
+            raise HTTPException(status_code=502, detail={
+                "erro": "Falha ao gerar PDF",
+                "components": result.get("components"),
+                "warnings": result.get("warnings"),
+            })
+        log_info(f"[main] PDF Lamônica gerado em {tmp} (componentes={list(result.get('components') or {})})")
+        return FileResponse(
+            path=str(tmp),
+            media_type="application/pdf",
+            filename=tmp.name,
+            headers={
+                "X-Components": str(result.get("components") or {}),
+                "X-Warnings": str(result.get("warnings") or []),
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log_erro(f"[main] /relatorio/pdf_lamonica falhou: {exc!r}")
         raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
 
 

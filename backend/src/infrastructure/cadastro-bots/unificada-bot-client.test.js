@@ -4,6 +4,7 @@ import {
   UnificadaBotError,
   __resetCircuitForTests,
   consultarStatus,
+  gerarPdfLamonica,
   gerarPdfUnificado,
   health,
 } from "./unificada-bot-client.js";
@@ -98,5 +99,44 @@ describe("unificada-bot-client / gerarPdfUnificado", () => {
     await expect(
       gerarPdfUnificado({ cpf: "00000000000" }),
     ).rejects.toBeInstanceOf(UnificadaBotError);
+  });
+});
+
+describe("unificada-bot-client / gerarPdfLamonica", () => {
+  const DADOS = { motorista: { cpf: "53018634870", nome: "FULANO" }, cavalo: { placa: "ABC1D23" } };
+
+  it("retorna o PDF (Buffer) em caso de sucesso 200", async () => {
+    mockPdfOnce({ headers: { "X-Components": "{'motorista': True}", "X-Warnings": "[]" } });
+    const r = await gerarPdfLamonica({ dados: DADOS });
+    expect(r.ok).toBe(true);
+    expect(Buffer.isBuffer(r.pdf)).toBe(true);
+    expect(r.pdf.length).toBeGreaterThan(0);
+    expect(r.contentType).toMatch(/pdf/);
+    expect(r.components).toContain("motorista");
+  });
+
+  it("posta { dados } no endpoint /relatorio/pdf_lamonica", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(Buffer.from("%PDF-1.4 x"), { status: 200, headers: { "Content-Type": "application/pdf" } }),
+    );
+    await gerarPdfLamonica({ dados: DADOS, protocolo: "2026-00023" });
+    const [url, opts] = fetchSpy.mock.calls[0];
+    expect(String(url)).toContain("/relatorio/pdf_lamonica");
+    const sent = JSON.parse(opts.body);
+    expect(sent.dados).toEqual(DADOS);
+    expect(sent.protocolo).toBe("2026-00023");
+  });
+
+  it("rejeita SEM fazer fetch quando não há dados/motorista", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(gerarPdfLamonica({ dados: {} })).rejects.toMatchObject({
+      code: "UNIFICADA_BAD_REQUEST",
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("mapeia 502 (falha ao gerar) → UnificadaBotError", async () => {
+    mockJsonOnce(502, { detail: { erro: "Falha ao gerar PDF" } });
+    await expect(gerarPdfLamonica({ dados: DADOS })).rejects.toBeInstanceOf(UnificadaBotError);
   });
 });
