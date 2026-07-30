@@ -688,7 +688,7 @@
       "id": 23,
       "type": "stat",
       "title": "Supabase — conexões",
-      "description": "Ajustar nome da métrica após o 1º scrape do job supabase.",
+      "description": "Conexoes abertas no Postgres (max 90). Encostou no teto = site cai.",
       "gridPos": {
         "h": 6,
         "w": 4,
@@ -717,11 +717,11 @@
               },
               {
                 "color": "yellow",
-                "value": 40
+                "value": 70
               },
               {
                 "color": "red",
-                "value": 55
+                "value": 80
               }
             ]
           },
@@ -810,7 +810,7 @@
       "description": "Jobs Angellira/SPX/Unificada em ERROR nas últimas 24h.",
       "gridPos": {
         "h": 4,
-        "w": 6,
+        "w": 4,
         "x": 0,
         "y": 16
       },
@@ -911,7 +911,7 @@
       "title": "Funil de candidaturas — últimos 7 dias",
       "gridPos": {
         "h": 6,
-        "w": 16,
+        "w": 8,
         "x": 0,
         "y": 20
       },
@@ -958,7 +958,7 @@
       "gridPos": {
         "h": 4,
         "w": 3,
-        "x": 6,
+        "x": 4,
         "y": 16
       },
       "datasource": {
@@ -1009,7 +1009,7 @@
       "gridPos": {
         "h": 4,
         "w": 3,
-        "x": 9,
+        "x": 7,
         "y": 16
       },
       "datasource": {
@@ -1059,8 +1059,8 @@
       "description": "Banda de saida acumulada. Cota Pro: 250 GB/mes. Historico conta a partir de 30/07/2026 (inicio da coleta).",
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 12,
+        "w": 3,
+        "x": 16,
         "y": 16
       },
       "datasource": {
@@ -1118,8 +1118,8 @@
       "title": "Supabase — egress (taxa)",
       "gridPos": {
         "h": 4,
-        "w": 8,
-        "x": 16,
+        "w": 5,
+        "x": 19,
         "y": 16
       },
       "datasource": {
@@ -1152,6 +1152,151 @@
         },
         "tooltip": {
           "mode": "single"
+        }
+      }
+    },
+    {
+      "id": 40,
+      "type": "stat",
+      "title": "Acessos hoje",
+      "description": "Visitas ao portal do motorista (1 por IP a cada 30s).",
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 10,
+        "y": 16
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "lmc-postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE((SELECT visitas FROM kpi.portal_visitas_dia WHERE dia = (now() AT TIME ZONE 'America/Sao_Paulo')::date), 0) AS visitas;"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 41,
+      "type": "stat",
+      "title": "Motoristas únicos hoje",
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 13,
+        "y": 16
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "lmc-postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE((SELECT visitantes_unicos FROM kpi.portal_visitas_dia WHERE dia = (now() AT TIME ZONE 'America/Sao_Paulo')::date), 0) AS unicos;"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 42,
+      "type": "timeseries",
+      "title": "Acessos ao portal — 7 dias",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 20
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "lmc-postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT dia::timestamp AS time, visitas, visitantes_unicos AS unicos FROM kpi.portal_visitas_dia WHERE dia >= (now() AT TIME ZONE 'America/Sao_Paulo')::date - 6 ORDER BY dia;"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "showPoints": "always"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi"
         }
       }
     }
