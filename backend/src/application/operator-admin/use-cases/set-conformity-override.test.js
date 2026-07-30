@@ -79,4 +79,30 @@ describe("setConformityOverride", () => {
     ({ rows } = await query(`SELECT 1 FROM public.angellira_conformity_overrides`));
     expect(rows).toHaveLength(0);
   });
+
+  it("grava set_by_name e MASCARA o CPF no audit (LGPD — não persiste CPF cru no log)", async () => {
+    const op = await seedUser({ email: "op-conf-6@teste.local" });
+    await setConformityOverride({
+      subjectType: "DRIVER", subjectKey: "123.456.789-01", decision: "APPROVED",
+      observacao: "ok", operatorId: op.id, operatorName: "Fulano Operador",
+    });
+    const { rows: over } = await query(`SELECT set_by_name FROM public.angellira_conformity_overrides`);
+    expect(over[0].set_by_name).toBe("Fulano Operador");
+    const { rows: audit } = await query(
+      `SELECT resource_id, resource_type FROM public.security_audit_logs WHERE event_type = 'operator.monitor.conformity_override'`,
+    );
+    expect(audit[0].resource_type).toBe("driver");
+    expect(audit[0].resource_id).toBe("***901"); // CPF mascarado, não "12345678901"
+  });
+
+  it("veículo: placa NÃO é mascarada no audit (não é PII sensível)", async () => {
+    const op = await seedUser({ email: "op-conf-7@teste.local" });
+    await setConformityOverride({
+      subjectType: "VEHICLE", subjectKey: "abc-1d23", decision: "NOT_APPROVED", observacao: "pneu", operatorId: op.id,
+    });
+    const { rows: audit } = await query(
+      `SELECT resource_id FROM public.security_audit_logs WHERE event_type = 'operator.monitor.conformity_override'`,
+    );
+    expect(audit[0].resource_id).toBe("ABC1D23");
+  });
 });

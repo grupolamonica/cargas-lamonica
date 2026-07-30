@@ -1,4 +1,5 @@
 import { logStructuredEvent } from "../../infrastructure/security-log.js";
+import { selectAllPaginated } from "../../infrastructure/supabase/paginate.js";
 
 // Verdito manual de conformidade Angellira (Aprovado/Não aprovado) por ENTIDADE:
 // motorista pelo CPF (só dígitos) e veículo pela placa normalizada. O overlay é
@@ -32,18 +33,20 @@ export async function loadConformityOverrides(supabaseClient, correlationId) {
   const driver = new Map();
   const vehicle = new Map();
   try {
-    const { data, error } = await supabaseClient
-      .from("angellira_conformity_overrides")
-      .select("subject_type, subject_key, decision, observacao, set_by_name, set_at, updated_at");
-    if (error) {
-      logStructuredEvent("warn", "conformity-overrides.read-failed", {
-        correlationId,
-        code: error.code,
-        message: error.message,
-      });
-      return { driver, vehicle };
-    }
-    for (const r of data || []) {
+    // Pagina (.range) — o PostgREST capa em 1000 linhas server-side; embora a
+    // tabela cresça devagar (1 linha por CPF/placa), paginar evita o footgun de
+    // sumir selos além da linha 1000. partialOnError: tabela ausente/erro → best-
+    // effort (devolve o que leu; o Monitor segue com o selo derivado).
+    const data = await selectAllPaginated(
+      (from, to) =>
+        supabaseClient
+          .from("angellira_conformity_overrides")
+          .select("subject_type, subject_key, decision, observacao, set_by_name, set_at, updated_at")
+          .order("id", { ascending: true })
+          .range(from, to),
+      { label: "conformity_overrides", correlationId, partialOnError: true },
+    );
+    for (const r of data) {
       const key = normalizeSubjectKey(r.subject_type, r.subject_key);
       if (!key) continue;
       const verdict = {

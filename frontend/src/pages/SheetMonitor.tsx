@@ -558,7 +558,7 @@ const normNameKey = (s: string | null | undefined) =>
   (s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 const normPlateKey = (s: string | null | undefined) => (s ?? "").replace(/[\s\-.]/g, "").toUpperCase();
 
-type VehSelo = { plate: string; found: boolean | null; valid_until: string | null; status_text: string | null; display: string | null; type: string | null; source: string | null; details: unknown };
+type VehSelo = { plate: string; found: boolean | null; valid_until: string | null; status_text: string | null; display: string | null; type: string | null; source: string | null; details: unknown; manual: ConformityManualVerdict | null };
 type SeloMaps = { driverByName: Record<string, SheetMonitorEnrichedRow>; vehByPlate: Record<string, VehSelo> };
 
 function buildSeloMaps(
@@ -590,6 +590,7 @@ function buildSeloMaps(
           type: e[`${side}_type`] ?? null,
           source: e[`${side}_source`] ?? null,
           details: e[`${side}_details`] ?? null,
+          manual: e[`${side}_angellira_manual`] ?? null,
         };
       }
     }
@@ -616,6 +617,7 @@ function resolveRowSelo(row: SheetMonitorRowType, maps: SeloMaps): SheetMonitorE
     angellira_driver_valid_until: d?.angellira_driver_valid_until ?? null,
     angellira_driver_status_text: d?.angellira_driver_status_text ?? null,
     angellira_driver_details: d?.angellira_driver_details ?? null,
+    angellira_driver_manual: d?.angellira_driver_manual ?? null,
     cavalo_plate: cav?.plate ?? (row.cavalo ? normPlateKey(row.cavalo) : null),
     cavalo_source: cav?.source ?? null,
     cavalo_type: cav?.type ?? null,
@@ -624,6 +626,7 @@ function resolveRowSelo(row: SheetMonitorRowType, maps: SeloMaps): SheetMonitorE
     cavalo_angellira_status_text: cav?.status_text ?? null,
     cavalo_angellira_display: cav?.display ?? null,
     cavalo_details: cav?.details ?? null,
+    cavalo_angellira_manual: cav?.manual ?? null,
     carreta_plate: car?.plate ?? (row.carreta ? normPlateKey(row.carreta) : null),
     carreta_source: car?.source ?? null,
     carreta_type: car?.type ?? null,
@@ -632,6 +635,7 @@ function resolveRowSelo(row: SheetMonitorRowType, maps: SeloMaps): SheetMonitorE
     carreta_angellira_status_text: car?.status_text ?? null,
     carreta_angellira_display: car?.display ?? null,
     carreta_details: car?.details ?? null,
+    carreta_angellira_manual: car?.manual ?? null,
   } as SheetMonitorEnrichedRow;
 }
 
@@ -3296,7 +3300,7 @@ function RowDetailModal({
               if (row.cavalo) {
                 if (enriched?.cavalo_angellira_manual?.decision === "NOT_APPROVED") push(`Cavalo ${row.cavalo} — não aprovado (manual)`);
                 else if (enriched?.cavalo_angellira_found === false) push(`Cavalo ${row.cavalo} — não aprovado no Angellira`);
-                if (row.checklistCavalo === "Reprovado") push("Checklist do cavalo — reprovado");
+                if ((alloc?.alloc_checklist_cavalo ?? row.checklistCavalo) === "Reprovado") push("Checklist do cavalo — reprovado");
                 const lvl = griffiLevel(checklistCavalo);
                 if (lvl === "overdue") push("Checklist GRIFFI (cavalo) — vencido");
                 else if (lvl === "warning") push("Checklist GRIFFI (cavalo) — alerta", false);
@@ -3304,7 +3308,7 @@ function RowDetailModal({
               if (row.carreta) {
                 if (enriched?.carreta_angellira_manual?.decision === "NOT_APPROVED") push(`Carreta ${row.carreta} — não aprovado (manual)`);
                 else if (enriched?.carreta_angellira_found === false) push(`Carreta ${row.carreta} — não aprovado no Angellira`);
-                if (row.checklistCarreta === "Reprovado") push("Checklist da carreta — reprovado");
+                if ((alloc?.alloc_checklist_carreta ?? row.checklistCarreta) === "Reprovado") push("Checklist da carreta — reprovado");
                 const lvl = griffiLevel(checklistCarreta);
                 if (lvl === "overdue") push("Checklist GRIFFI (carreta) — vencido");
                 else if (lvl === "warning") push("Checklist GRIFFI (carreta) — alerta", false);

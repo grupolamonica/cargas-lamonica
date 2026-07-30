@@ -217,7 +217,6 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             status: row.alloc_status,
             tipo: row.alloc_tipo,
             vinculo: row.alloc_vinculo,
-            tratativas: row.alloc_tratativas,
             checklistCavalo: row.alloc_checklist_cavalo,
             checklistCarreta: row.alloc_checklist_carreta,
             origem: row.origem,
@@ -231,7 +230,6 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             status: allocStatus,
             tipo: allocTipo,
             vinculo: allocVinculo,
-            tratativas: allocTratativas,
             checklistCavalo: allocChecklistCavalo,
             checklistCarreta: allocChecklistCarreta,
             origem,
@@ -245,7 +243,9 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             { key: "status", label: "Status" },
             { key: "tipo", label: "Tipo" },
             { key: "vinculo", label: "Vínculo" },
-            { key: "tratativas", label: "Observação (checklist)" },
+            // `tratativas` (texto livre, pode ter PII) fica FORA do diff do audit —
+            // mesma política das placas e da observação de conformidade; valor só na
+            // coluna alloc_tratativas. Verdito do checklist (enum) pode ficar.
             { key: "checklistCavalo", label: "Checklist cavalo" },
             { key: "checklistCarreta", label: "Checklist carreta" },
             { key: "origem", label: "Origem" },

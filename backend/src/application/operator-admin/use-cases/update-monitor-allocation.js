@@ -173,20 +173,22 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
             status: sheetRow.alloc_status,
             tipo: sheetRow.alloc_tipo,
             vinculo: sheetRow.alloc_vinculo,
-            tratativas: sheetRow.alloc_tratativas,
             checklistCavalo: sheetRow.alloc_checklist_cavalo,
             checklistCarreta: sheetRow.alloc_checklist_carreta,
           },
           {
             motorista: finalMotorista, status: finalStatus, tipo: finalTipo, vinculo: finalVinculo,
-            tratativas: finalTratativas, checklistCavalo: finalChecklistCavalo, checklistCarreta: finalChecklistCarreta,
+            checklistCavalo: finalChecklistCavalo, checklistCarreta: finalChecklistCarreta,
           },
           [
             { key: "motorista", label: "Motorista" },
             { key: "status", label: "Status" },
             { key: "tipo", label: "Tipo" },
             { key: "vinculo", label: "Vínculo" },
-            { key: "tratativas", label: "Observação (checklist)" },
+            // `tratativas` (texto livre, pode ter PII) NÃO entra no diff do audit —
+            // mesma política das placas (linhas acima) e da observação de conformidade;
+            // o valor fica só na coluna alloc_tratativas. O verdito do checklist
+            // (Aprovado/Reprovado) é enum, não PII, então pode ficar.
             { key: "checklistCavalo", label: "Checklist cavalo" },
             { key: "checklistCarreta", label: "Checklist carreta" },
           ],

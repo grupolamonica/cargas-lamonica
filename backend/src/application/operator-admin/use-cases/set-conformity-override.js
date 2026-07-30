@@ -32,6 +32,12 @@ export async function setConformityOverride({
   if (!key) {
     throw new ValidationError("Identidade da entidade (CPF/placa) ausente ou inválida.");
   }
+  // Id do recurso p/ o audit log: mascara o CPF do motorista (LGPD — não persiste
+  // CPF cru no security_audit_logs / CSV do DC-186; convenção `***NNN` do DC-310).
+  // A placa do veículo não é PII sensível e vai crua. O CPF completo fica só na
+  // tabela angellira_conformity_overrides.subject_key.
+  const auditResourceId =
+    subjectType === "DRIVER" ? (key.length >= 3 ? `***${key.slice(-3)}` : "***") : key;
   const clearing = decision === null || decision === undefined;
   const obs = (observacao ?? "").toString().trim();
   // Enforcement autoritativo (além do zod): observação obrigatória ao aprovar/reprovar.
@@ -52,7 +58,7 @@ export async function setConformityOverride({
         actorUserId: operatorId,
         actorRole: "operator",
         resourceType: subjectType === "DRIVER" ? "driver" : "vehicle",
-        resourceId: key,
+        resourceId: auditResourceId,
         action: "update",
         outcome: "success",
         requestIp,
@@ -80,7 +86,7 @@ export async function setConformityOverride({
       actorUserId: operatorId,
       actorRole: "operator",
       resourceType: subjectType === "DRIVER" ? "driver" : "vehicle",
-      resourceId: key,
+      resourceId: auditResourceId,
       action: "update",
       outcome: "success",
       requestIp,

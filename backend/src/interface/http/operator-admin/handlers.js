@@ -1378,7 +1378,7 @@ export async function resolveSetConformityOverrideResponse(request) {
       requiredPermission: "cargos:write",
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar a conformidade.",
     },
-    async ({ correlationId, requestIp, operatorId }) => {
+    async ({ correlationId, requestIp, operatorId, user }) => {
       const body = sheetMonitorConformityOverrideBodySchema.parse(await parseJsonBody(request));
       const result = await setConformityOverride({
         subjectType: body.subjectType,
@@ -1386,6 +1386,7 @@ export async function resolveSetConformityOverrideResponse(request) {
         decision: body.decision,
         observacao: body.observacao,
         operatorId,
+        operatorName: user?.user_metadata?.full_name ?? user?.email ?? null,
         requestIp,
         correlationId,
       });
