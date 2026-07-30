@@ -2910,11 +2910,17 @@ function RowDetailModal({
   // ao TROCAR de linha — NUNCA num refetch em background (poll de 2min / invalidate
   // pós-save), senão apagaria o que o operador está digitando com o modal aberto.
   const rowIdentity = row ? (row.rowKey ?? row.lh ?? null) : null;
+  // Baseline "limpo" do form (o que está salvo/carregado). Atualizado no PREFILL
+  // (abrir/trocar linha) E após SALVAR com sucesso. isDirty compara o form com ele —
+  // assim, logo após salvar (form == baseline), a guarda NÃO pergunta, mesmo antes do
+  // refetch em background chegar (o bug: baseline vinha das props e ficava defasado).
+  const [allocBaseline, setAllocBaseline] = useState({ motorista: "", cavalo: "", carreta: "", status: "", tipo: "", vinculo: "", tratativas: "", checklistCavalo: "", checklistCarreta: "" });
+  const [cargoBaseline, setCargoBaseline] = useState<CargoForm>(EMPTY_CARGO_FORM);
 
   // Pré-preenche com a alocação EFETIVA: override do operador (alloc_*) ?? planilha.
   useEffect(() => {
     if (!row) return;
-    setAllocForm({
+    const allocBase = {
       // effectiveAllocField (`??`, fonte única com o overlay da linha): override "" =
       // vazio EXPLÍCITO (operador esvaziou num arrasto/troca) → fica VAZIO; null → cai
       // pra planilha. Com o antigo `||`, a carga esvaziada abria o modal mostrando o
@@ -2932,7 +2938,9 @@ function RowDetailModal({
       // (alloc_checklist_*) ?? valor da planilha (row.checklistCavalo/carreta, col N/O).
       checklistCavalo: alloc?.alloc_checklist_cavalo ?? row.checklistCavalo ?? "",
       checklistCarreta: alloc?.alloc_checklist_carreta ?? row.checklistCarreta ?? "",
-    });
+    };
+    setAllocForm(allocBase);
+    setAllocBaseline(allocBase);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- só ao abrir/trocar de linha (não em refetch → preserva edições não salvas)
   }, [rowIdentity, open]);
 
@@ -2942,7 +2950,7 @@ function RowDetailModal({
   // colunas canônicas expostas na linha (row.cargaAt/descargaAt/origem/destino).
   useEffect(() => {
     if (!open || !row || row.source !== "sistema") return;
-    setCargoForm({
+    const cargoBase = {
       lh: row.lh ?? "",
       status: row.status ?? "",
       tipo: row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "",
@@ -2958,7 +2966,9 @@ function RowDetailModal({
       // Carga do sistema: o verdito vem denormalizado na linha (row.checklistCavalo/carreta).
       checklistCavalo: row.checklistCavalo ?? "",
       checklistCarreta: row.checklistCarreta ?? "",
-    });
+    };
+    setCargoForm(cargoBase);
+    setCargoBaseline(cargoBase);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- idem: só ao abrir/trocar de linha
   }, [open, rowIdentity]);
 
@@ -3113,6 +3123,9 @@ function RowDetailModal({
     allocForm.carreta !== effectiveAllocField(alloc?.alloc_carreta, row.carreta);
 
   const doSave = (descricao = "") => {
+    // Snapshot do form no momento do save = novo baseline "limpo" (aplicado no
+    // onSuccess). Mantém o modal aberto SEM marcar como sujo logo após salvar.
+    const savedAllocSnapshot = { ...allocForm };
     // Motorista EFETIVO (override do operador OU planilha) — usado no guard abaixo.
     // Considera o motorista da planilha também: não dá pra deixar "Disponível" uma
     // carga que a planilha ainda escala (o portal a ofereceria = duplo-booking).
@@ -3169,7 +3182,7 @@ function RowDetailModal({
         : {}),
       // Motivo da troca — só quando o motorista/veículo mudou (o modal exige).
       ...(descricao ? { descricao } : {}),
-    });
+    }, { onSuccess: () => setAllocBaseline(savedAllocSnapshot) });
   };
   // ── Carga do SISTEMA: troca de m/v + build (espelha o antigo editor de carga do
   // sistema; grava por cargoId via updateMonitorCargo). Só usado quando source='sistema'.
@@ -3179,6 +3192,7 @@ function RowDetailModal({
     cargoForm.carreta.trim() !== (row.carreta ?? "").trim();
   const buildAndMutateSystem = (descricao = "") => {
     if (!row.cargoId) return;
+    const savedCargoSnapshot = { ...cargoForm };
     const { data, horario } = splitCarregamento(cargoForm.carregamento);
     if (cargoForm.origem.trim().length < 2 || cargoForm.destino.trim().length < 2 || !data || !horario) {
       toast.error("Rota e carregamento (origem, destino, data + hora) são obrigatórios.");
@@ -3212,32 +3226,15 @@ function RowDetailModal({
       ...(cargoForm.checklistCarreta.trim() !== (row.checklistCarreta ?? "").trim()
         ? { checklistCarreta: cargoForm.checklistCarreta.trim() } : {}),
       ...(descricao ? { descricao } : {}),
-    });
+    }, { onSuccess: () => setCargoBaseline(savedCargoSnapshot) });
   };
 
-  // Alterações não salvas (guarda ao fechar): compara o form com o baseline do prefill.
-  // (motorista já entra via mvChanged/mvChangedSystem, que consideram o sufixo de homônimo.)
-  const allocDirty =
-    mvChanged ||
-    allocForm.status !== (alloc?.alloc_status || row.status || "") ||
-    allocForm.tipo !== (alloc?.alloc_tipo ?? (row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "") ?? "") ||
-    allocForm.vinculo !== (alloc?.alloc_vinculo ?? row.vinculo ?? "") ||
-    allocForm.tratativas !== (alloc?.alloc_tratativas ?? row.tratativas ?? "") ||
-    allocForm.checklistCavalo !== (alloc?.alloc_checklist_cavalo ?? row.checklistCavalo ?? "") ||
-    allocForm.checklistCarreta !== (alloc?.alloc_checklist_carreta ?? row.checklistCarreta ?? "");
-  const cargoDirty =
-    mvChangedSystem ||
-    cargoForm.lh !== (row.lh ?? "") ||
-    cargoForm.status !== (row.status ?? "") ||
-    cargoForm.tipo !== (row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "") ||
-    cargoForm.origem !== (row.origem ?? "") ||
-    cargoForm.destino !== (row.destino ?? "") ||
-    cargoForm.carregamento !== (row.cargaAt ?? (row.data ? `${row.data}T${(row.horario ?? "00:00").slice(0, 5)}` : "")) ||
-    cargoForm.descarga !== (row.descargaAt ?? "") ||
-    cargoForm.vinculo !== (row.vinculo ?? "") ||
-    cargoForm.tratativas !== (row.tratativas ?? "") ||
-    cargoForm.checklistCavalo !== (row.checklistCavalo ?? "") ||
-    cargoForm.checklistCarreta !== (row.checklistCarreta ?? "");
+  // Alterações não salvas (guarda ao fechar): compara o form ATUAL com o BASELINE
+  // (estado atualizado no PREFILL e após SALVAR com sucesso). Comparação por valor
+  // (mesma ordem de chaves dos literais) — independe do refetch em background, então
+  // logo após salvar (form == baseline) a guarda NÃO pergunta.
+  const allocDirty = JSON.stringify(allocForm) !== JSON.stringify(allocBaseline);
+  const cargoDirty = JSON.stringify(cargoForm) !== JSON.stringify(cargoBaseline);
   const isDirty = row.source === "sistema" ? cargoDirty : allocDirty;
   // Tentativa de fechar (X / Esc / clique fora): com alterações não salvas, pergunta antes.
   const attemptClose = () => { if (isDirty) setConfirmClose(true); else onClose(); };
