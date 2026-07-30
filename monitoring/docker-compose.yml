@@ -1,0 +1,85 @@
+# monitoring/docker-compose.yml — Coletores de observabilidade no VPS
+#
+# Roda em /opt/apps/lamonica/monitoring (o repo já é sincronizado no VPS pelo
+# deploy). Subida manual (não faz parte do deploy do app):
+#   docker compose -f monitoring/docker-compose.yml up -d
+#
+# O Grafana NÃO roda aqui — fica no servidor da empresa e consome o Prometheus
+# da platform via https://prometheus.grupolamonica.com (ver README.md).
+#
+# node-exporter e cAdvisor ficam atrás do profile "host-metrics": só subir se
+# a stack platform ainda não tiver equivalentes (verificar antes):
+#   docker compose -f monitoring/docker-compose.yml --profile host-metrics up -d
+
+name: lmc-monitoring
+
+services:
+  # ── Blackbox exporter — probes HTTP (site externo + bots internos) ────────
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: blackbox-exporter
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/blackbox/blackbox.yml"
+    volumes:
+      - ./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    networks:
+      - platform_monitoring
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ── node-exporter — CPU/RAM/disco do host (profile host-metrics) ──────────
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: node-exporter
+    restart: unless-stopped
+    profiles: ["host-metrics"]
+    pid: host
+    command:
+      - "--path.rootfs=/host"
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - platform_monitoring
+    mem_limit: 64m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ── cAdvisor — CPU/RAM por container (profile host-metrics) ───────────────
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: cadvisor
+    restart: unless-stopped
+    profiles: ["host-metrics"]
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+    networks:
+      - platform_monitoring
+    mem_limit: 192m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+networks:
+  platform_monitoring:
+    external: true
+    name: platform_monitoring

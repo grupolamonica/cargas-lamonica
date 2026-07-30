@@ -1,0 +1,79 @@
+# scrape-jobs.example.yml — Jobs a adicionar em scrape_configs do
+# /opt/platform/prometheus.yml (VPS). NÃO é lido automaticamente: é um
+# snippet de referência. Placeholders entre <> são preenchidos NO VPS
+# (secrets nunca ficam neste repo).
+#
+# Após editar o prometheus.yml real, hot-reload sem restart:
+#   docker kill --signal=SIGHUP prometheus
+# Verificar: Prometheus UI -> Status -> Targets (todos UP).
+
+  # ── Traefik (tráfego HTTP: req/s, códigos, latência) ─────────────────────
+  - job_name: 'traefik'
+    static_configs:
+      - targets: ['traefik:8080']
+
+  # ── Backend Lamonica (pool pg, memória, uptime) ──────────────────────────
+  # O serviço backend já está na network platform_monitoring.
+  - job_name: 'lamonica-backend'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['backend:3001']
+
+  # ── Supabase (plano Pro: conexões, disco, CPU/RAM do projeto) ────────────
+  # <SUPABASE_PROJECT_REF>: ref do projeto (subdomínio do dashboard).
+  # <SUPABASE_SERVICE_ROLE_KEY>: já existe no .env de produção do VPS.
+  - job_name: 'supabase'
+    scheme: https
+    metrics_path: /customer/v1/privileged/metrics
+    scrape_interval: 60s
+    basic_auth:
+      username: service_role
+      password: <SUPABASE_SERVICE_ROLE_KEY>
+    static_configs:
+      - targets: ['<SUPABASE_PROJECT_REF>.supabase.co']
+
+  # ── Blackbox: site em produção visto de fora (via Traefik + TLS + pg) ────
+  - job_name: 'blackbox-site'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - 'https://cargas.grupolamonica.com/health?deep=1'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'blackbox-exporter:9115'
+
+  # ── Blackbox: bots internos (exigem os bots na network platform_monitoring,
+  #    incluído no docker-compose.yml do app) ────────────────────────────────
+  - job_name: 'blackbox-bots'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    scrape_interval: 60s
+    static_configs:
+      - targets:
+          - 'http://angelira-bot:8765/api/status'
+          - 'http://spx-bot:8766/spx/status'
+          - 'http://unificada-bot:8001/health'
+          - 'http://cadastro-ocr:8765/api/status'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'blackbox-exporter:9115'
+
+  # ── Host/containers (só se o profile host-metrics estiver ativo) ─────────
+  # - job_name: 'node-exporter'
+  #   static_configs:
+  #     - targets: ['node-exporter:9100']
+  # - job_name: 'cadvisor'
+  #   static_configs:
+  #     - targets: ['cadvisor:8080']
