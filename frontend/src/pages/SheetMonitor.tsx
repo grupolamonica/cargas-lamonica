@@ -74,6 +74,8 @@ import {
   setMonitorRodoparStatus,
   updateMonitorAllocation,
   updateMonitorCargo,
+  setConformityOverride,
+  type ConformityManualVerdict,
   updateReserva,
   type AspxAllocationItem,
   type AspxAllocationPreview,
@@ -556,7 +558,7 @@ const normNameKey = (s: string | null | undefined) =>
   (s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 const normPlateKey = (s: string | null | undefined) => (s ?? "").replace(/[\s\-.]/g, "").toUpperCase();
 
-type VehSelo = { plate: string; found: boolean | null; valid_until: string | null; status_text: string | null; display: string | null; type: string | null; source: string | null; details: unknown };
+type VehSelo = { plate: string; found: boolean | null; valid_until: string | null; status_text: string | null; display: string | null; type: string | null; source: string | null; details: unknown; manual: ConformityManualVerdict | null };
 type SeloMaps = { driverByName: Record<string, SheetMonitorEnrichedRow>; vehByPlate: Record<string, VehSelo> };
 
 function buildSeloMaps(
@@ -588,6 +590,7 @@ function buildSeloMaps(
           type: e[`${side}_type`] ?? null,
           source: e[`${side}_source`] ?? null,
           details: e[`${side}_details`] ?? null,
+          manual: e[`${side}_angellira_manual`] ?? null,
         };
       }
     }
@@ -614,6 +617,7 @@ function resolveRowSelo(row: SheetMonitorRowType, maps: SeloMaps): SheetMonitorE
     angellira_driver_valid_until: d?.angellira_driver_valid_until ?? null,
     angellira_driver_status_text: d?.angellira_driver_status_text ?? null,
     angellira_driver_details: d?.angellira_driver_details ?? null,
+    angellira_driver_manual: d?.angellira_driver_manual ?? null,
     cavalo_plate: cav?.plate ?? (row.cavalo ? normPlateKey(row.cavalo) : null),
     cavalo_source: cav?.source ?? null,
     cavalo_type: cav?.type ?? null,
@@ -622,6 +626,7 @@ function resolveRowSelo(row: SheetMonitorRowType, maps: SeloMaps): SheetMonitorE
     cavalo_angellira_status_text: cav?.status_text ?? null,
     cavalo_angellira_display: cav?.display ?? null,
     cavalo_details: cav?.details ?? null,
+    cavalo_angellira_manual: cav?.manual ?? null,
     carreta_plate: car?.plate ?? (row.carreta ? normPlateKey(row.carreta) : null),
     carreta_source: car?.source ?? null,
     carreta_type: car?.type ?? null,
@@ -630,6 +635,7 @@ function resolveRowSelo(row: SheetMonitorRowType, maps: SeloMaps): SheetMonitorE
     carreta_angellira_status_text: car?.status_text ?? null,
     carreta_angellira_display: car?.display ?? null,
     carreta_details: car?.details ?? null,
+    carreta_angellira_manual: car?.manual ?? null,
   } as SheetMonitorEnrichedRow;
 }
 
@@ -1294,7 +1300,7 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
 // Cargas do sistema (sheet_lh nulo) são editadas como uma planilha: Status, LH,
 // Rota, Agenda, Motorista/Placa — todos editáveis (a carga é a fonte da verdade).
 
-type CargoForm = { lh: string; status: string; tipo: string; origem: string; destino: string; carregamento: string; descarga: string; motorista: string; cavalo: string; carreta: string; vinculo: string };
+type CargoForm = { lh: string; status: string; tipo: string; origem: string; destino: string; carregamento: string; descarga: string; motorista: string; cavalo: string; carreta: string; vinculo: string; tratativas: string; checklistCavalo: string; checklistCarreta: string };
 
 function MonitorCargoFields({ form, setForm, statusOptions }: {
   form: CargoForm;
@@ -1348,7 +1354,15 @@ function MonitorCargoFields({ form, setForm, statusOptions }: {
   );
 }
 
-const EMPTY_CARGO_FORM: CargoForm = { lh: "", status: "", tipo: "", origem: "", destino: "", carregamento: "", descarga: "", motorista: "", cavalo: "", carreta: "", vinculo: "" };
+const EMPTY_CARGO_FORM: CargoForm = { lh: "", status: "", tipo: "", origem: "", destino: "", carregamento: "", descarga: "", motorista: "", cavalo: "", carreta: "", vinculo: "", tratativas: "", checklistCavalo: "", checklistCarreta: "" };
+
+// Verdito manual do checklist por veículo (gravado em alloc_checklist_* e espelhado
+// nas colunas CheckList Cavalo / CheckList Carreta1 da planilha). "" = sem verdito.
+const CHECKLIST_VERDICT_OPTIONS = [
+  { value: "", label: "— sem verdito —" },
+  { value: "Aprovado", label: "Aprovado" },
+  { value: "Reprovado", label: "Reprovado" },
+] as const;
 
 // datetime-local 'YYYY-MM-DDTHH:MM' → { data:'YYYY-MM-DD', horario:'HH:MM' }
 function splitCarregamento(dt: string): { data: string; horario: string } {
@@ -2643,6 +2657,140 @@ function AngelliraStatusBadge({ found, statusText }: { found: boolean | null | u
   );
 }
 
+/** Selo do verdito MANUAL de conformidade (aprovado/não aprovado), mostrado ao lado
+ *  do selo Angellira derivado. Só aparece quando há verdito manual. */
+function ManualVerdictBadge({ verdict }: { verdict: ConformityManualVerdict | null | undefined }) {
+  if (!verdict) return null;
+  const approved = verdict.decision === "APPROVED";
+  return (
+    <span
+      title={verdict.observacao || undefined}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[0.6rem] font-semibold",
+        approved
+          ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+          : "bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-300",
+      )}
+    >
+      {approved ? <BadgeCheck className="h-3 w-3" /> : <ShieldX className="h-3 w-3" />}
+      {approved ? "Aprovado (manual)" : "Não aprovado (manual)"}
+    </span>
+  );
+}
+
+/** Controle para o operador definir/limpar o verdito MANUAL de conformidade de uma
+ *  entidade (motorista=CPF, veículo=placa). Observação OBRIGATÓRIA ao aprovar/reprovar.
+ *  Sem CPF/placa resolvida, mostra aviso (não dá pra chavear o verdito). */
+function ConformityOverrideControl({
+  subjectType,
+  subjectKey,
+  verdict,
+  onSaved,
+}: {
+  subjectType: "DRIVER" | "VEHICLE";
+  subjectKey: string | null | undefined;
+  verdict: ConformityManualVerdict | null | undefined;
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [decision, setDecision] = useState<"APPROVED" | "NOT_APPROVED">(verdict?.decision ?? "APPROVED");
+  const [obs, setObs] = useState(verdict?.observacao ?? "");
+  useEffect(() => {
+    setDecision(verdict?.decision ?? "APPROVED");
+    setObs(verdict?.observacao ?? "");
+  }, [verdict, open]);
+
+  const mutation = useMutation({
+    mutationFn: setConformityOverride,
+    onSuccess: () => { toast.success("Conformidade atualizada."); setOpen(false); onSaved(); },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Não foi possível salvar a conformidade."),
+  });
+
+  const key = (subjectKey ?? "").toString().trim();
+  if (!key) {
+    return (
+      <p className="mt-1 flex items-start gap-1 text-[0.62rem] leading-tight text-muted-foreground/60">
+        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+        Consulte ao vivo (CPF/placa) para habilitar o verdito manual de conformidade.
+      </p>
+    );
+  }
+
+  if (!open) {
+    // O selo do verdito já aparece na linha "Angellira" acima — aqui só o gatilho.
+    return (
+      <div className="mt-1">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="text-[0.62rem] font-semibold text-primary underline-offset-2 hover:underline"
+        >
+          {verdict ? "Alterar conformidade manual" : "Definir conformidade manual"}
+        </button>
+      </div>
+    );
+  }
+
+  const canSave = obs.trim().length > 0 && !mutation.isPending;
+  return (
+    <div className="mt-1 space-y-1.5 rounded-md border border-border/60 bg-muted/30 p-2">
+      <div className="flex gap-1">
+        {(["APPROVED", "NOT_APPROVED"] as const).map((d) => (
+          <button
+            key={d}
+            type="button"
+            onClick={() => setDecision(d)}
+            className={cn(
+              "flex-1 rounded-md border px-2 py-1 text-[0.68rem] font-semibold transition-colors",
+              decision === d
+                ? d === "APPROVED"
+                  ? "border-emerald-400 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                  : "border-red-400 bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-300"
+                : "border-border/80 text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {d === "APPROVED" ? "Aprovado" : "Não aprovado"}
+          </button>
+        ))}
+      </div>
+      <textarea
+        value={obs}
+        onChange={(e) => setObs(e.target.value)}
+        placeholder="Observação (obrigatória) — motivo/tratativa da conformidade"
+        rows={2}
+        maxLength={1000}
+        className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+      />
+      <div className="flex items-center justify-between gap-2">
+        {verdict ? (
+          <button
+            type="button"
+            disabled={mutation.isPending}
+            onClick={() => mutation.mutate({ subjectType, subjectKey: key, decision: null })}
+            className="text-[0.62rem] font-semibold text-muted-foreground hover:text-red-500 disabled:opacity-60"
+          >
+            Limpar (voltar ao derivado)
+          </button>
+        ) : <span />}
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={() => setOpen(false)} className="text-[0.62rem] text-muted-foreground hover:text-foreground">
+            Cancelar
+          </button>
+          <button
+            type="button"
+            disabled={!canSave}
+            onClick={() => mutation.mutate({ subjectType, subjectKey: key, decision, observacao: obs.trim() })}
+            className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-[0.68rem] font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {mutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+            Salvar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SourceBadge({ source }: { source: string | null | undefined }) {
   if (!source) return null;
   const map: Record<string, string> = {
@@ -2747,17 +2895,32 @@ function RowDetailModal({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "", tipo: "", vinculo: "" });
+  const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "", tipo: "", vinculo: "", tratativas: "", checklistCavalo: "", checklistCarreta: "" });
   // Carga do SISTEMA (source='sistema'): no modal unificado ela é editada AQUI como
   // uma planilha — LH/rota/agenda inclusive (é a fonte da verdade). Form canônico
   // completo, salvo via updateMonitorCargo (por cargoId). Cargas da planilha ignoram.
   const [cargoForm, setCargoForm] = useState<CargoForm>(EMPTY_CARGO_FORM);
   const [confirmChange, setConfirmChange] = useState(false);
+  // Guarda de "alterações não salvas" ao tentar fechar o modal.
+  const [confirmClose, setConfirmClose] = useState(false);
+  // Fecha o modal DEPOIS de um save bem-sucedido — só quando o operador escolhe
+  // "Salvar e sair" na guarda. Save normal (botão Salvar) mantém o modal ABERTO.
+  const closeAfterSaveRef = useRef(false);
+  // Identidade estável da linha: o prefill re-preenche o form só ao ABRIR o modal ou
+  // ao TROCAR de linha — NUNCA num refetch em background (poll de 2min / invalidate
+  // pós-save), senão apagaria o que o operador está digitando com o modal aberto.
+  const rowIdentity = row ? (row.rowKey ?? row.lh ?? null) : null;
+  // Baseline "limpo" do form (o que está salvo/carregado). Atualizado no PREFILL
+  // (abrir/trocar linha) E após SALVAR com sucesso. isDirty compara o form com ele —
+  // assim, logo após salvar (form == baseline), a guarda NÃO pergunta, mesmo antes do
+  // refetch em background chegar (o bug: baseline vinha das props e ficava defasado).
+  const [allocBaseline, setAllocBaseline] = useState({ motorista: "", cavalo: "", carreta: "", status: "", tipo: "", vinculo: "", tratativas: "", checklistCavalo: "", checklistCarreta: "" });
+  const [cargoBaseline, setCargoBaseline] = useState<CargoForm>(EMPTY_CARGO_FORM);
 
   // Pré-preenche com a alocação EFETIVA: override do operador (alloc_*) ?? planilha.
   useEffect(() => {
     if (!row) return;
-    setAllocForm({
+    const allocBase = {
       // effectiveAllocField (`??`, fonte única com o overlay da linha): override "" =
       // vazio EXPLÍCITO (operador esvaziou num arrasto/troca) → fica VAZIO; null → cai
       // pra planilha. Com o antigo `||`, a carga esvaziada abria o modal mostrando o
@@ -2768,8 +2931,18 @@ function RowDetailModal({
       status: alloc?.alloc_status || row.status || "",
       tipo: alloc?.alloc_tipo ?? (row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "") ?? "",
       vinculo: alloc?.alloc_vinculo ?? row.vinculo ?? "",
-    });
-  }, [row, alloc, open]);
+      // Observação de checklist (tratativas): planilha vem via allocByLh (alloc_tratativas),
+      // sistema vem denormalizado na linha (row.tratativas).
+      tratativas: alloc?.alloc_tratativas ?? row.tratativas ?? "",
+      // Verdito do checklist por veículo (Aprovado/Reprovado): override do operador
+      // (alloc_checklist_*) ?? valor da planilha (row.checklistCavalo/carreta, col N/O).
+      checklistCavalo: alloc?.alloc_checklist_cavalo ?? row.checklistCavalo ?? "",
+      checklistCarreta: alloc?.alloc_checklist_carreta ?? row.checklistCarreta ?? "",
+    };
+    setAllocForm(allocBase);
+    setAllocBaseline(allocBase);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- só ao abrir/trocar de linha (não em refetch → preserva edições não salvas)
+  }, [rowIdentity, open]);
 
   // Carga do SISTEMA: pré-preenche o form canônico completo (mesmos campos e origem
   // que o antigo editor de carga do sistema). Fonte da verdade = a própria carga
@@ -2777,7 +2950,7 @@ function RowDetailModal({
   // colunas canônicas expostas na linha (row.cargaAt/descargaAt/origem/destino).
   useEffect(() => {
     if (!open || !row || row.source !== "sistema") return;
-    setCargoForm({
+    const cargoBase = {
       lh: row.lh ?? "",
       status: row.status ?? "",
       tipo: row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "",
@@ -2789,20 +2962,58 @@ function RowDetailModal({
       cavalo: row.cavalo ?? "",
       carreta: row.carreta ?? "",
       vinculo: row.vinculo ?? "",
-    });
-  }, [open, row]);
+      tratativas: row.tratativas ?? "",
+      // Carga do sistema: o verdito vem denormalizado na linha (row.checklistCavalo/carreta).
+      checklistCavalo: row.checklistCavalo ?? "",
+      checklistCarreta: row.checklistCarreta ?? "",
+    };
+    setCargoForm(cargoBase);
+    setCargoBaseline(cargoBase);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- idem: só ao abrir/trocar de linha
+  }, [open, rowIdentity]);
 
   const saveAllocation = useMutation({
     mutationFn: updateMonitorAllocation,
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       toast.success("Alocação salva no sistema.");
-      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
-      // O selo Angellira/ASPX é re-enriquecido no backend em background (motorista
-      // efetivo) — refetch atrasado p/ ele aparecer sem ficar "não consultado".
+      // OTIMISTA: reflete a alocação NA HORA no cache (allocByLh) — o grid/modal
+      // atualizam instantâneo, sem esperar o refetch pesado (~2s / ~13MB). Fonte:
+      // a RESPOSTA (motorista/cavalo/carreta/status autoritativos) + o payload
+      // (tipo/vínculo/tratativas/checklist). Um único refetch atrasado reconcilia os
+      // selos (Angellira/ASPX) e o que o patch não cobre — antes eram DOIS refetches.
+      const lh = data?.lh;
+      const a = data?.allocation;
+      if (lh && a) {
+        const v = variables ?? {};
+        queryClient.setQueryData<Awaited<ReturnType<typeof fetchSheetMonitor>>>([...SHEET_MONITOR_QUERY_KEY], (old) => {
+          if (!old?.allocByLh) return old;
+          const prev = old.allocByLh[lh];
+          const next: SheetMonitorAllocation = {
+            sheet_lh: lh,
+            alloc_motorista: a.motorista,
+            alloc_cavalo: a.cavalo,
+            alloc_carreta: a.carreta,
+            alloc_status: a.status,
+            alloc_tipo: "tipo" in v ? (v.tipo ?? null) : (prev?.alloc_tipo ?? null),
+            alloc_descricao: "descricao" in v ? (v.descricao ?? null) : (prev?.alloc_descricao ?? null),
+            alloc_vinculo: "vinculo" in v ? (v.vinculo ?? null) : (prev?.alloc_vinculo ?? null),
+            alloc_tratativas: "tratativas" in v ? (v.tratativas ?? null) : (prev?.alloc_tratativas ?? null),
+            alloc_checklist_cavalo: "checklistCavalo" in v ? (v.checklistCavalo ?? null) : (prev?.alloc_checklist_cavalo ?? null),
+            alloc_checklist_carreta: "checklistCarreta" in v ? (v.checklistCarreta ?? null) : (prev?.alloc_checklist_carreta ?? null),
+            alloc_pinned: prev?.alloc_pinned ?? false,
+            alloc_updated_at: new Date().toISOString(),
+          };
+          return { ...old, allocByLh: { ...old.allocByLh, [lh]: next } };
+        });
+      }
+      // Único refetch em background p/ reconciliar selos (Angellira/ASPX são
+      // eventualmente-consistentes; o enrich roda fire-and-forget no backend).
       setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
-      onClose();
+      // Mantém o modal ABERTO após salvar; só fecha quando o operador pediu "Salvar e sair".
+      if (closeAfterSaveRef.current) { closeAfterSaveRef.current = false; onClose(); }
     },
     onError: (err) => {
+      closeAfterSaveRef.current = false;
       toast.error(err instanceof Error ? err.message : "Não foi possível salvar a alocação.");
     },
   });
@@ -2813,13 +3024,39 @@ function RowDetailModal({
   // sistema usa este caminho, não o saveAllocation.
   const saveSystemCargo = useMutation({
     mutationFn: updateMonitorCargo,
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       toast.success("Carga atualizada.");
-      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      // OTIMISTA (carga do sistema): a linha do Monitor também mescla allocByLh pelo
+      // lh_manual, então atualizamos allocByLh[lh] na hora com a RESPOSTA + payload.
+      const c = data?.cargo;
+      const lh = c?.lh;
+      if (c && lh) {
+        const v = variables ?? {};
+        queryClient.setQueryData<Awaited<ReturnType<typeof fetchSheetMonitor>>>([...SHEET_MONITOR_QUERY_KEY], (old) => {
+          if (!old?.allocByLh) return old;
+          const prev = old.allocByLh[lh];
+          const next: SheetMonitorAllocation = {
+            sheet_lh: lh,
+            alloc_motorista: c.motorista ?? "",
+            alloc_cavalo: c.cavalo ?? "",
+            alloc_carreta: c.carreta ?? "",
+            alloc_status: c.status ?? "",
+            alloc_tipo: "tipo" in v ? (v.tipo ?? null) : (prev?.alloc_tipo ?? null),
+            alloc_descricao: "descricao" in v ? (v.descricao ?? null) : (prev?.alloc_descricao ?? null),
+            alloc_vinculo: "vinculo" in v ? (v.vinculo ?? null) : (prev?.alloc_vinculo ?? null),
+            alloc_tratativas: "tratativas" in v ? (v.tratativas ?? null) : (prev?.alloc_tratativas ?? null),
+            alloc_checklist_cavalo: "checklistCavalo" in v ? (v.checklistCavalo ?? null) : (prev?.alloc_checklist_cavalo ?? null),
+            alloc_checklist_carreta: "checklistCarreta" in v ? (v.checklistCarreta ?? null) : (prev?.alloc_checklist_carreta ?? null),
+            alloc_pinned: prev?.alloc_pinned ?? false,
+            alloc_updated_at: new Date().toISOString(),
+          };
+          return { ...old, allocByLh: { ...old.allocByLh, [lh]: next } };
+        });
+      }
       setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
-      onClose();
+      if (closeAfterSaveRef.current) { closeAfterSaveRef.current = false; onClose(); }
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Não foi possível salvar a carga."),
+    onError: (e) => { closeAfterSaveRef.current = false; toast.error(e instanceof Error ? e.message : "Não foi possível salvar a carga."); },
   });
 
   const pinMutation = useMutation({
@@ -2941,6 +3178,9 @@ function RowDetailModal({
     allocForm.carreta !== effectiveAllocField(alloc?.alloc_carreta, row.carreta);
 
   const doSave = (descricao = "") => {
+    // Snapshot do form no momento do save = novo baseline "limpo" (aplicado no
+    // onSuccess). Mantém o modal aberto SEM marcar como sujo logo após salvar.
+    const savedAllocSnapshot = { ...allocForm };
     // Motorista EFETIVO (override do operador OU planilha) — usado no guard abaixo.
     // Considera o motorista da planilha também: não dá pra deixar "Disponível" uma
     // carga que a planilha ainda escala (o portal a ofereceria = duplo-booking).
@@ -2976,6 +3216,17 @@ function RowDetailModal({
       // Vínculo (col H): sempre enviado (prefilled com o valor efetivo) — o
       // backend espelha na planilha; se não mudou, reescreve o mesmo valor.
       vinculo: allocForm.vinculo,
+      // Observação de checklist (tratativas): sempre enviada (prefilled com o
+      // valor efetivo). Editável mesmo com m/v travado (é uma nota, não alocação).
+      tratativas: allocForm.tratativas,
+      // Verdito do checklist por veículo (Aprovado/Reprovado): só vai quando o
+      // operador REALMENTE mudou. Como ele é espelhado em CheckList Cavalo/Carreta1
+      // (colunas do robô GRIFFI), reenviá-lo sem mudança poderia sobrescrever um
+      // valor mais novo do robô numa edição não relacionada (ex.: só status).
+      ...(allocForm.checklistCavalo !== (alloc?.alloc_checklist_cavalo ?? row.checklistCavalo ?? "")
+        ? { checklistCavalo: allocForm.checklistCavalo } : {}),
+      ...(allocForm.checklistCarreta !== (alloc?.alloc_checklist_carreta ?? row.checklistCarreta ?? "")
+        ? { checklistCarreta: allocForm.checklistCarreta } : {}),
       // Motorista/veículo SÓ vão no payload quando a linha é editável E o operador
       // REALMENTE trocou (mvChanged). Editar só o status NÃO reenvia o motorista →
       // o backend preserva o override atual (has()=false). Antes reenviávamos o
@@ -2986,7 +3237,7 @@ function RowDetailModal({
         : {}),
       // Motivo da troca — só quando o motorista/veículo mudou (o modal exige).
       ...(descricao ? { descricao } : {}),
-    });
+    }, { onSuccess: () => setAllocBaseline(savedAllocSnapshot) });
   };
   // ── Carga do SISTEMA: troca de m/v + build (espelha o antigo editor de carga do
   // sistema; grava por cargoId via updateMonitorCargo). Só usado quando source='sistema'.
@@ -2996,6 +3247,7 @@ function RowDetailModal({
     cargoForm.carreta.trim() !== (row.carreta ?? "").trim();
   const buildAndMutateSystem = (descricao = "") => {
     if (!row.cargoId) return;
+    const savedCargoSnapshot = { ...cargoForm };
     const { data, horario } = splitCarregamento(cargoForm.carregamento);
     if (cargoForm.origem.trim().length < 2 || cargoForm.destino.trim().length < 2 || !data || !horario) {
       toast.error("Rota e carregamento (origem, destino, data + hora) são obrigatórios.");
@@ -3021,11 +3273,30 @@ function RowDetailModal({
       cavalo: cargoForm.cavalo.trim(),
       carreta: cargoForm.carreta.trim(),
       vinculo: cargoForm.vinculo.trim(),
+      tratativas: cargoForm.tratativas.trim(),
+      // Verdito do checklist: só quando mudou (ver doSave — evita reescrever a célula
+      // do robô GRIFFI numa edição não relacionada).
+      ...(cargoForm.checklistCavalo.trim() !== (row.checklistCavalo ?? "").trim()
+        ? { checklistCavalo: cargoForm.checklistCavalo.trim() } : {}),
+      ...(cargoForm.checklistCarreta.trim() !== (row.checklistCarreta ?? "").trim()
+        ? { checklistCarreta: cargoForm.checklistCarreta.trim() } : {}),
       ...(descricao ? { descricao } : {}),
-    });
+    }, { onSuccess: () => setCargoBaseline(savedCargoSnapshot) });
   };
 
-  const requestSave = () => {
+  // Alterações não salvas (guarda ao fechar): compara o form ATUAL com o BASELINE
+  // (estado atualizado no PREFILL e após SALVAR com sucesso). Comparação por valor
+  // (mesma ordem de chaves dos literais) — independe do refetch em background, então
+  // logo após salvar (form == baseline) a guarda NÃO pergunta.
+  const allocDirty = JSON.stringify(allocForm) !== JSON.stringify(allocBaseline);
+  const cargoDirty = JSON.stringify(cargoForm) !== JSON.stringify(cargoBaseline);
+  const isDirty = row.source === "sistema" ? cargoDirty : allocDirty;
+  // Tentativa de fechar (X / Esc / clique fora): com alterações não salvas, pergunta antes.
+  const attemptClose = () => { if (isDirty) setConfirmClose(true); else onClose(); };
+
+  const requestSave = (closeAfter = false) => {
+    // "Salvar e sair" (guarda) marca p/ fechar após o save; save normal mantém aberto.
+    closeAfterSaveRef.current = closeAfter;
     // Trocou m/v → exige o modal "Confirmar troca" com a descrição (motivo).
     if (row.source === "sistema") {
       // Valida rota/agenda antes de abrir o modal de motivo (espelha o save do sistema).
@@ -3044,7 +3315,7 @@ function RowDetailModal({
 
   return (
     <>
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) attemptClose(); }}>
       <DialogContent className="max-w-2xl p-0 overflow-hidden">
         <div className="flex flex-col" style={{ maxHeight: "88vh" }}>
 
@@ -3105,6 +3376,58 @@ function RowDetailModal({
               ) : null;
             })()}
 
+            {/* ── Pendências & Inconformidades (Angellira / checklist / ASPX) ──
+                Consolidado só-leitura das inconformidades da carga (motorista+veículos):
+                conformidade manual "não aprovado", Angellira derivado "não aprovado",
+                verdito do checklist "Reprovado", semáforo GRIFFI vencido/alerta e
+                motorista ausente do ASPX. Só aparece quando há pendência. */}
+            {(() => {
+              const items: { label: string; high: boolean }[] = [];
+              const push = (label: string, high = true) => items.push({ label, high });
+              const griffiLevel = (placa: string) =>
+                placa ? vehicleChecklist.data?.byPlaca?.[placa]?.level : undefined;
+              if (row.motoristas) {
+                if (enriched?.angellira_driver_manual?.decision === "NOT_APPROVED") push("Motorista — não aprovado (conformidade manual)");
+                else if (enriched?.angellira_driver_found === false) push("Motorista — não aprovado no Angellira");
+                if (isSpxTrip(row.lh) && !enriched?.aspx_cpf) push("Motorista não encontrado no ASPX", false);
+              }
+              if (row.cavalo) {
+                if (enriched?.cavalo_angellira_manual?.decision === "NOT_APPROVED") push(`Cavalo ${row.cavalo} — não aprovado (manual)`);
+                else if (enriched?.cavalo_angellira_found === false) push(`Cavalo ${row.cavalo} — não aprovado no Angellira`);
+                if ((alloc?.alloc_checklist_cavalo ?? row.checklistCavalo) === "Reprovado") push("Checklist do cavalo — reprovado");
+                const lvl = griffiLevel(checklistCavalo);
+                if (lvl === "overdue") push("Checklist GRIFFI (cavalo) — vencido");
+                else if (lvl === "warning") push("Checklist GRIFFI (cavalo) — alerta", false);
+              }
+              if (row.carreta) {
+                if (enriched?.carreta_angellira_manual?.decision === "NOT_APPROVED") push(`Carreta ${row.carreta} — não aprovado (manual)`);
+                else if (enriched?.carreta_angellira_found === false) push(`Carreta ${row.carreta} — não aprovado no Angellira`);
+                if ((alloc?.alloc_checklist_carreta ?? row.checklistCarreta) === "Reprovado") push("Checklist da carreta — reprovado");
+                const lvl = griffiLevel(checklistCarreta);
+                if (lvl === "overdue") push("Checklist GRIFFI (carreta) — vencido");
+                else if (lvl === "warning") push("Checklist GRIFFI (carreta) — alerta", false);
+              }
+              if (items.length === 0) return null;
+              return (
+                <ModalSection title="Pendências & Inconformidades">
+                  <ul className="space-y-1">
+                    {items.map((it, i) => (
+                      <li
+                        key={i}
+                        className={cn(
+                          "flex items-start gap-1.5 text-xs",
+                          it.high ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400",
+                        )}
+                      >
+                        {it.high ? <ShieldX className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+                        <span>{it.label}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </ModalSection>
+              );
+            })()}
+
             {/* ── Histórico (reserva, aprovação, write-back na planilha) ── */}
             {/* DC-237: minimizável (a timeline fica longa e empurra as seções de
                 ação); começa aberto e a preferência persiste por operador. */}
@@ -3148,10 +3471,49 @@ function RowDetailModal({
                      lock de ASPX aqui — a carga é a fonte da verdade). */
                   <>
                     <MonitorCargoFields form={cargoForm} setForm={setCargoForm} statusOptions={OPERATIONAL_STATUS_OPTIONS} />
+                    {/* Observação de checklist (tratativas) — mesma nota livre da linha da planilha. */}
+                    <div className="pt-1">
+                      <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Observação do checklist (tratativas)</label>
+                      <textarea
+                        value={cargoForm.tratativas}
+                        onChange={(e) => setCargoForm((f) => ({ ...f, tratativas: e.target.value }))}
+                        placeholder="Ex.: aguardando 2ª via do CRLV; liberado pela torre; pendência de rastreador…"
+                        rows={3}
+                        maxLength={1000}
+                        className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+                      />
+                    </div>
+                    {/* Verdito do checklist por veículo (Aprovado/Reprovado). */}
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <div>
+                        <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Checklist cavalo</label>
+                        <select
+                          value={cargoForm.checklistCavalo}
+                          onChange={(e) => setCargoForm((f) => ({ ...f, checklistCavalo: e.target.value }))}
+                          className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+                        >
+                          {CHECKLIST_VERDICT_OPTIONS.map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Checklist carreta</label>
+                        <select
+                          value={cargoForm.checklistCarreta}
+                          onChange={(e) => setCargoForm((f) => ({ ...f, checklistCarreta: e.target.value }))}
+                          className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+                        >
+                          {CHECKLIST_VERDICT_OPTIONS.map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
                     <div className="flex items-center justify-end gap-2 pt-1">
                       <button
                         type="button"
-                        onClick={requestSave}
+                        onClick={() => requestSave()}
                         disabled={saveSystemCargo.isPending}
                         className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
                       >
@@ -3271,6 +3633,48 @@ function RowDetailModal({
                     ))}
                   </datalist>
                 </div>
+                {/* Observação de checklist (tratativas): nota livre do operador sobre a
+                    tratativa de uma pendência/inconformidade do checklist. Editável mesmo
+                    com motorista/veículo travados (não é uma alocação, é uma anotação). */}
+                <div>
+                  <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Observação do checklist (tratativas)</label>
+                  <textarea
+                    value={allocForm.tratativas}
+                    onChange={(e) => setAllocForm((f) => ({ ...f, tratativas: e.target.value }))}
+                    placeholder="Ex.: aguardando 2ª via do CRLV; liberado pela torre; pendência de rastreador…"
+                    rows={3}
+                    maxLength={1000}
+                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+                {/* Verdito do checklist por veículo (Aprovado/Reprovado) — espelhado
+                    nas colunas CheckList Cavalo / CheckList Carreta1 da planilha ao salvar. */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Checklist cavalo</label>
+                    <select
+                      value={allocForm.checklistCavalo}
+                      onChange={(e) => setAllocForm((f) => ({ ...f, checklistCavalo: e.target.value }))}
+                      className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+                    >
+                      {CHECKLIST_VERDICT_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Checklist carreta</label>
+                    <select
+                      value={allocForm.checklistCarreta}
+                      onChange={(e) => setAllocForm((f) => ({ ...f, checklistCarreta: e.target.value }))}
+                      className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+                    >
+                      {CHECKLIST_VERDICT_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
                 <div className="flex items-center justify-between gap-2 pt-1">
                   <span className="text-[0.58rem] leading-tight text-muted-foreground/60">
                     {alloc?.alloc_updated_at
@@ -3279,7 +3683,7 @@ function RowDetailModal({
                   </span>
                   <button
                     type="button"
-                    onClick={requestSave}
+                    onClick={() => requestSave()}
                     disabled={saveAllocation.isPending}
                     className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
                   >
@@ -3347,11 +3751,22 @@ function RowDetailModal({
                       })()}
                       <ModalRow
                         label="Angellira"
-                        value={<AngelliraStatusBadge found={enriched.angellira_driver_found} statusText={enriched.angellira_driver_status_text} />}
+                        value={
+                          <span className="inline-flex flex-wrap items-center gap-1.5">
+                            <AngelliraStatusBadge found={enriched.angellira_driver_found} statusText={enriched.angellira_driver_status_text} />
+                            <ManualVerdictBadge verdict={enriched.angellira_driver_manual} />
+                          </span>
+                        }
                       />
                       {enriched.angellira_driver_valid_until && (
                         <ModalRow label="Validade" value={enriched.angellira_driver_valid_until} />
                       )}
+                      <ConformityOverrideControl
+                        subjectType="DRIVER"
+                        subjectKey={enriched.aspx_cpf ?? (enriched.angellira_driver_details as { cpf?: string | null } | null)?.cpf ?? null}
+                        verdict={enriched.angellira_driver_manual}
+                        onSaved={() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] })}
+                      />
                     </>
                   ) : (
                     <p className="mt-1 text-xs text-muted-foreground/50 italic">Consulta Angellira/ASPX pendente.</p>
@@ -3406,10 +3821,21 @@ function RowDetailModal({
                           {enriched.cavalo_type && <ModalRow label="Tipo" value={enriched.cavalo_type} />}
                           <ModalRow
                             label="Angellira"
-                            value={<AngelliraStatusBadge found={enriched.cavalo_angellira_found} statusText={enriched.cavalo_angellira_status_text} />}
+                            value={
+                              <span className="inline-flex flex-wrap items-center gap-1.5">
+                                <AngelliraStatusBadge found={enriched.cavalo_angellira_found} statusText={enriched.cavalo_angellira_status_text} />
+                                <ManualVerdictBadge verdict={enriched.cavalo_angellira_manual} />
+                              </span>
+                            }
                           />
                           {enriched.cavalo_angellira_valid_until && <ModalRow label="Validade" value={enriched.cavalo_angellira_valid_until} />}
                           {enriched.cavalo_angellira_display && <ModalRow label="Proprietário" value={enriched.cavalo_angellira_display} />}
+                          <ConformityOverrideControl
+                            subjectType="VEHICLE"
+                            subjectKey={enriched.cavalo_plate ?? row.cavalo ?? null}
+                            verdict={enriched.cavalo_angellira_manual}
+                            onSaved={() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] })}
+                          />
                         </>
                       ) : (
                         <p className="text-xs text-muted-foreground/50 italic">Consulta pendente.</p>
@@ -3433,10 +3859,21 @@ function RowDetailModal({
                           {enriched.carreta_type && <ModalRow label="Tipo" value={enriched.carreta_type} />}
                           <ModalRow
                             label="Angellira"
-                            value={<AngelliraStatusBadge found={enriched.carreta_angellira_found} statusText={enriched.carreta_angellira_status_text} />}
+                            value={
+                              <span className="inline-flex flex-wrap items-center gap-1.5">
+                                <AngelliraStatusBadge found={enriched.carreta_angellira_found} statusText={enriched.carreta_angellira_status_text} />
+                                <ManualVerdictBadge verdict={enriched.carreta_angellira_manual} />
+                              </span>
+                            }
                           />
                           {enriched.carreta_angellira_valid_until && <ModalRow label="Validade" value={enriched.carreta_angellira_valid_until} />}
                           {enriched.carreta_angellira_display && <ModalRow label="Proprietário" value={enriched.carreta_angellira_display} />}
+                          <ConformityOverrideControl
+                            subjectType="VEHICLE"
+                            subjectKey={enriched.carreta_plate ?? row.carreta ?? null}
+                            verdict={enriched.carreta_angellira_manual}
+                            onSaved={() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] })}
+                          />
                         </>
                       ) : (
                         <p className="text-xs text-muted-foreground/50 italic">Consulta pendente.</p>
@@ -3458,6 +3895,41 @@ function RowDetailModal({
       onConfirm={(reason) => { setConfirmChange(false); if (row.source === "sistema") buildAndMutateSystem(reason); else doSave(reason); }}
       onCancel={() => setConfirmChange(false)}
     />
+
+    {/* Guarda de alterações não salvas — ao tentar fechar o modal com edições pendentes. */}
+    <Dialog open={confirmClose} onOpenChange={(o) => { if (!o) setConfirmClose(false); }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="text-base">Alterações não salvas</DialogTitle>
+          <DialogDescription>
+            Você alterou esta carga e ainda não salvou. Deseja salvar antes de sair?
+          </DialogDescription>
+        </DialogHeader>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={() => setConfirmClose(false)}
+            className="rounded-lg border border-border/80 px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Continuar editando
+          </button>
+          <button
+            type="button"
+            onClick={() => { setConfirmClose(false); onClose(); }}
+            className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-600 transition-colors hover:bg-red-50 dark:border-red-500/40 dark:text-red-300 dark:hover:bg-red-500/10"
+          >
+            Sair sem salvar
+          </button>
+          <button
+            type="button"
+            onClick={() => { setConfirmClose(false); requestSave(true); }}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            <CheckCircle2 className="h-3.5 w-3.5" /> Salvar e sair
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
     </>
   );
 }

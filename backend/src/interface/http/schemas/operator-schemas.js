@@ -1,6 +1,19 @@
 import { z } from "zod";
 import { positiveIntSchema } from "./common.js";
 
+/** Verdito manual do checklist por veículo: só "Aprovado" / "Reprovado" (ou ""/null
+ *  = sem verdito). Defesa em profundidade — a UI já é um select restrito, mas o
+ *  backend recusa qualquer outro valor (não deixa gravar lixo via requisição crua). */
+const checklistVerdictSchema = z
+  .string()
+  .trim()
+  .max(40)
+  .refine((v) => v === "" || v === "Aprovado" || v === "Reprovado", {
+    message: "Verdito de checklist inválido (use \"Aprovado\", \"Reprovado\" ou vazio).",
+  })
+  .nullable()
+  .optional();
+
 /** Query params for GET /api/operator/motoristas/:driverId (PATCH body) — params handled by driver-schemas */
 
 /** Query params for sheet monitor */
@@ -39,6 +52,15 @@ export const sheetMonitorAllocationBodySchema = z.object({
   descricao: z.string().trim().max(500).nullable().optional(),
   // Vínculo do motorista (col H da planilha: AGREGADO/TERCEIRO/PME/FROTA…).
   vinculo: z.string().trim().max(80).nullable().optional(),
+  // Observação de checklist (tratativas) — nota livre do operador sobre a
+  // tratativa de uma pendência/inconformidade do checklist. Ausente preserva;
+  // "" limpa. Gravada em alloc_tratativas.
+  tratativas: z.string().trim().max(1000).nullable().optional(),
+  // Verdito manual do checklist por veículo ("Aprovado"/"Reprovado"/"" = sem
+  // verdito). Gravados em alloc_checklist_cavalo/carreta e espelhados nas colunas
+  // CheckList Cavalo / CheckList Carreta1 da planilha.
+  checklistCavalo: checklistVerdictSchema,
+  checklistCarreta: checklistVerdictSchema,
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/reassign — reordenar a fila de
@@ -169,7 +191,30 @@ export const sheetMonitorCargoUpdateBodySchema = z.object({
   descricao: z.string().trim().max(500).nullable().optional(),
   // Vínculo do motorista → alloc_vinculo.
   vinculo: z.string().trim().max(80).nullable().optional(),
+  // Observação de checklist (tratativas) → alloc_tratativas.
+  tratativas: z.string().trim().max(1000).nullable().optional(),
+  // Verdito manual do checklist por veículo → alloc_checklist_cavalo/carreta.
+  checklistCavalo: checklistVerdictSchema,
+  checklistCarreta: checklistVerdictSchema,
 }).strict();
+
+/** Body for POST /api/operator/sheet-monitor/conformity-override — verdito manual de
+ *  conformidade Angellira (Aprovado/Não aprovado) por entidade (motorista=CPF, veículo=placa).
+ *  observação OBRIGATÓRIA ao aprovar/reprovar; decision null = LIMPA o verdito. */
+export const sheetMonitorConformityOverrideBodySchema = z.object({
+  subjectType: z.enum(["DRIVER", "VEHICLE"]),
+  subjectKey: z.string().trim().min(1).max(40),
+  decision: z.enum(["APPROVED", "NOT_APPROVED"]).nullable(),
+  observacao: z.string().trim().max(1000).optional(),
+}).strict().superRefine((v, ctx) => {
+  if (v.decision !== null && (!v.observacao || v.observacao.trim().length < 1)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["observacao"],
+      message: "Observação é obrigatória ao aprovar/reprovar.",
+    });
+  }
+});
 
 /** Body for POST /api/operator/sheet-monitor/aspx-assign — confirma a atribuição
  *  no ASPX das cargas (LHs) selecionadas. dryRun força simulação mesmo com o

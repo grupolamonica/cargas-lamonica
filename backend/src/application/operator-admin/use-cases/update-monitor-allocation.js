@@ -50,7 +50,8 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     const sheetRow = await ensureMonitorSheetCargo(client, lh, {
       columns: `id, sheet_lh, sheet_source, sheet_motorista, sheet_cavalo, sheet_carreta, sheet_status,
                 alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
-                alloc_descricao, alloc_vinculo, status, reserved_public_lead_id,
+                alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta,
+                status, reserved_public_lead_id,
                 origem, destino, sheet_data_carregamento, sheet_data_descarga`,
     });
 
@@ -98,6 +99,11 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     const finalDescricao = has("descricao") ? norm(payload.descricao) : (sheetRow.alloc_descricao ?? null);
     // Vínculo (col H da planilha): override do operador. Ausente preserva; ""=limpa.
     const finalVinculo = has("vinculo") ? norm(payload.vinculo) : (sheetRow.alloc_vinculo ?? null);
+    // Observação de checklist (tratativas): nota livre do operador. Ausente preserva; ""=limpa.
+    const finalTratativas = has("tratativas") ? norm(payload.tratativas) : (sheetRow.alloc_tratativas ?? null);
+    // Verdito manual do checklist por veículo ("Aprovado"/"Reprovado"). Ausente preserva; ""=limpa.
+    const finalChecklistCavalo = has("checklistCavalo") ? norm(payload.checklistCavalo) : (sheetRow.alloc_checklist_cavalo ?? null);
+    const finalChecklistCarreta = has("checklistCarreta") ? norm(payload.checklistCarreta) : (sheetRow.alloc_checklist_carreta ?? null);
 
     await client.query(
       `
@@ -109,13 +115,16 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
             alloc_tipo = $7,
             alloc_descricao = $8,
             alloc_vinculo = $9,
+            alloc_tratativas = $10,
+            alloc_checklist_cavalo = $11,
+            alloc_checklist_carreta = $12,
             alloc_source = 'operator',
             alloc_updated_at = now(),
             alloc_updated_by = $6,
             updated_at = now()
         WHERE id = $1
       `,
-      [cargoId, finalMotorista, finalCavalo, finalCarreta, finalStatus, operatorId, finalTipo, finalDescricao, finalVinculo],
+      [cargoId, finalMotorista, finalCavalo, finalCarreta, finalStatus, operatorId, finalTipo, finalDescricao, finalVinculo, finalTratativas, finalChecklistCavalo, finalChecklistCarreta],
     );
 
     await insertSecurityAuditEvent(client, {
@@ -165,13 +174,24 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
             status: sheetRow.alloc_status,
             tipo: sheetRow.alloc_tipo,
             vinculo: sheetRow.alloc_vinculo,
+            checklistCavalo: sheetRow.alloc_checklist_cavalo,
+            checklistCarreta: sheetRow.alloc_checklist_carreta,
           },
-          { motorista: finalMotorista, status: finalStatus, tipo: finalTipo, vinculo: finalVinculo },
+          {
+            motorista: finalMotorista, status: finalStatus, tipo: finalTipo, vinculo: finalVinculo,
+            checklistCavalo: finalChecklistCavalo, checklistCarreta: finalChecklistCarreta,
+          },
           [
             { key: "motorista", label: "Motorista" },
             { key: "status", label: "Status" },
             { key: "tipo", label: "Tipo" },
             { key: "vinculo", label: "Vínculo" },
+            // `tratativas` (texto livre, pode ter PII) NÃO entra no diff do audit —
+            // mesma política das placas (linhas acima) e da observação de conformidade;
+            // o valor fica só na coluna alloc_tratativas. O verdito do checklist
+            // (Aprovado/Reprovado) é enum, não PII, então pode ficar.
+            { key: "checklistCavalo", label: "Checklist cavalo" },
+            { key: "checklistCarreta", label: "Checklist carreta" },
           ],
         ),
       },
@@ -269,6 +289,11 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
         // Vínculo (col H) só espelha quando o modal envia o campo (senão o robô
         // não toca H — evita apagar o vínculo de linhas não editadas).
         ...(has("vinculo") ? { vinculo: finalVinculo ?? "" } : {}),
+        // Verdito do checklist (cols "CheckList Cavalo"/"CheckList Carreta1") só
+        // espelha quando o modal envia o campo — não toca a célula de linhas não
+        // editadas (evita sobrescrever o valor existente do robô/planilha).
+        ...(has("checklistCavalo") ? { checklistCavalo: finalChecklistCavalo ?? "" } : {}),
+        ...(has("checklistCarreta") ? { checklistCarreta: finalChecklistCarreta ?? "" } : {}),
       },
     };
   });

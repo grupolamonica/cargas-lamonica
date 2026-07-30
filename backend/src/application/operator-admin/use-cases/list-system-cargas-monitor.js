@@ -10,7 +10,7 @@
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 
 const SELECT_COLS =
-  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_pinned, status, driver_visibility, lh_manual, cliente_id";
+  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta, alloc_pinned, status, driver_visibility, lh_manual, cliente_id";
 
 /** DATE do Postgres pode chegar como '2026-06-25' ou ISO '2026-06-25T00:00:00.000Z'.
  *  Fatiar os 10 primeiros chars dá a data de parede correta (igual ao fix do
@@ -108,8 +108,11 @@ export function mapSystemCargoToMonitorRow(c, clientesById = {}, now = null) {
     carreta,
     descricao: (c.alloc_descricao || "").trim() || null,
     vinculo: (c.alloc_vinculo || "").trim() || null,
-    checklistCavalo: "",
-    checklistCarreta: "",
+    tratativas: (c.alloc_tratativas || "").trim() || null,
+    // Verdito manual do checklist (Aprovado/Reprovado) — carga do sistema não tem
+    // planilha por baixo, então a linha carrega o próprio override alloc_checklist_*.
+    checklistCavalo: (c.alloc_checklist_cavalo || "").trim(),
+    checklistCarreta: (c.alloc_checklist_carreta || "").trim(),
     isAvailable: motoristas === "" && status === "",
     hasDriver: motoristas !== "",
     // ── unificação ──

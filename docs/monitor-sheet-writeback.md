@@ -13,7 +13,8 @@ em tempo real.
   planilha falhar, a edição já está salva e só logamos um aviso.
 - Ligado **apenas** se `GOOGLE_SHEET_WRITEBACK_URL` estiver setado (senão no-op).
 - Escreve o valor **efetivo** (`alloc_* ?? sheet_*`) nas colunas Motoristas/CAVALO/CARRETA
-  (E/F/G) da linha do LH; `status` (L) e `vínculo` (H) só quando enviados. `""` limpa a célula.
+  (E/F/G) da linha do LH; `status` (L), `vínculo` (H) e o **verdito do checklist**
+  (`checklistCavalo` → N, `checklistCarreta` → O) só quando enviados. `""` limpa a célula.
 - No **update** também grava `dataCarregamento` (C), `dataDescarga` (D), `origem` (I) e
   `destino` (J) quando enviados — usado pelo **sync de status ASPX** (`reconcile-aspx-status.js`,
   DC-316; ver [DC-316-aspx-status-backend.md](./DC-316-aspx-status-backend.md)).
@@ -74,10 +75,11 @@ Na planilha alvo: **Extensões → Apps Script**, cole o script abaixo (troque o
 ```javascript
 // Colunas: A=LH B=TIPO C=DATA CARREGAMENTO D=DATA DESCARGA E=Motoristas F=CAVALO
 //          G=CARRETA H=VINCULO I=Origem J=Destino L=STATUS
+//          N=CheckList Cavalo O=CheckList Carreta1
 const DATA_GID = 438306494;             // gid da aba de dados
 const SECRET   = "TROQUE-ESTE-SEGREDO"; // == GOOGLE_SHEET_WRITEBACK_SECRET
 
-const COL = { LH:1, TIPO:2, CARREG:3, DESCARGA:4, MOTORISTA:5, CAVALO:6, CARRETA:7, VINCULO:8, ORIGEM:9, DESTINO:10, STATUS:12 };
+const COL = { LH:1, TIPO:2, CARREG:3, DESCARGA:4, MOTORISTA:5, CAVALO:6, CARRETA:7, VINCULO:8, ORIGEM:9, DESTINO:10, STATUS:12, CHECKLIST_CAVALO:14, CHECKLIST_CARRETA1:15 };
 
 function doPost(e) {
   try {
@@ -102,6 +104,9 @@ function doPost(e) {
           sheet.getRange(row, COL.MOTORISTA, 1, 3).setValues([[u.motorista||"", u.cavalo||"", u.carreta||""]]);
           if ("status"  in u) sheet.getRange(row, COL.STATUS ).setValue(u.status ||"");
           if ("vinculo" in u) sheet.getRange(row, COL.VINCULO).setValue(u.vinculo||"");
+          // Verdito do checklist por veículo (Aprovado/Reprovado) — cols N/O, condicional.
+          if ("checklistCavalo"  in u) sheet.getRange(row, COL.CHECKLIST_CAVALO  ).setValue(u.checklistCavalo ||"");
+          if ("checklistCarreta" in u) sheet.getRange(row, COL.CHECKLIST_CARRETA1).setValue(u.checklistCarreta||"");
           // Sync de status ASPX (DC-316): datas + origem/destino no UPDATE, condicionais.
           if ("dataCarregamento" in u) sheet.getRange(row, COL.CARREG  ).setValue(u.dataCarregamento||"");
           if ("dataDescarga"     in u) sheet.getRange(row, COL.DESCARGA).setValue(u.dataDescarga||"");
@@ -118,6 +123,8 @@ function doPost(e) {
         if ("dataDescarga"     in u) sheet.getRange(rowIdx, COL.DESCARGA).setValue(u.dataDescarga||"");
         sheet.getRange(rowIdx, COL.MOTORISTA, 1, 3).setValues([[u.motorista||"", u.cavalo||"", u.carreta||""]]);
         if ("vinculo" in u) sheet.getRange(rowIdx, COL.VINCULO).setValue(u.vinculo||"");
+        if ("checklistCavalo"  in u) sheet.getRange(rowIdx, COL.CHECKLIST_CAVALO  ).setValue(u.checklistCavalo ||"");
+        if ("checklistCarreta" in u) sheet.getRange(rowIdx, COL.CHECKLIST_CARRETA1).setValue(u.checklistCarreta||"");
         if ("origem"  in u) sheet.getRange(rowIdx, COL.ORIGEM ).setValue(u.origem ||"");
         if ("destino" in u) sheet.getRange(rowIdx, COL.DESTINO).setValue(u.destino||"");
         sheet.getRange(rowIdx, COL.STATUS).setValue(u.status||""); // status vazio se sem motorista

@@ -113,6 +113,11 @@ export async function writeAllocationsToSheet(updates, { fetchImpl = globalThis.
     // a chave — assim uma edição sem esses campos não sobrescreve a coluna.
     if ("status" in u) item.status = (u.status ?? "").toString();
     if ("vinculo" in u) item.vinculo = (u.vinculo ?? "").toString();
+    // Verdito do checklist por veículo (cols "CheckList Cavalo"/"CheckList Carreta1"):
+    // opcionais, só vão quando o caller manda a chave — assim uma edição sem esses
+    // campos não sobrescreve a célula existente.
+    if ("checklistCavalo" in u) item.checklistCavalo = (u.checklistCavalo ?? "").toString();
+    if ("checklistCarreta" in u) item.checklistCarreta = (u.checklistCarreta ?? "").toString();
     // Campos de linha completa (datas/origem/destino + tipo) só são encaminhados sob um
     // sinal explícito — uma edição normal do Monitor NÃO os toca (mesmo que traga a chave):
     //   - `createIfMissing`/`createOnly`: CRIAÇÃO de linha-casca (lançamento/aceite) — inclui tipo.

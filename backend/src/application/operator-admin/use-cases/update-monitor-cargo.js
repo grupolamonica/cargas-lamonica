@@ -54,7 +54,8 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
   const result = await withPgTransaction(async (client) => {
     const { rows } = await client.query(
       `SELECT id, sheet_lh, alloc_pinned,
-              alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo,
+              alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas,
+              alloc_checklist_cavalo, alloc_checklist_carreta,
               origem, destino, data, horario, lh_manual, sheet_data_carregamento, sheet_data_descarga,
               status, reserved_public_lead_id
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
@@ -87,6 +88,11 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     // preserva o último motivo.
     const allocDescricao = has("descricao") ? normAlloc(payload.descricao) : row.alloc_descricao;
     const allocVinculo = has("vinculo") ? normAlloc(payload.vinculo) : row.alloc_vinculo;
+    // Observação de checklist (tratativas): nota livre do operador. Ausente preserva; "" limpa.
+    const allocTratativas = has("tratativas") ? normAlloc(payload.tratativas) : row.alloc_tratativas;
+    // Verdito manual do checklist por veículo ("Aprovado"/"Reprovado"). Ausente preserva; "" limpa.
+    const allocChecklistCavalo = has("checklistCavalo") ? normAlloc(payload.checklistCavalo) : row.alloc_checklist_cavalo;
+    const allocChecklistCarreta = has("checklistCarreta") ? normAlloc(payload.checklistCarreta) : row.alloc_checklist_carreta;
 
     // Motorista efetivo da carga do sistema = alloc_motorista (não há sheet_* por baixo).
     const effMotorista = (allocMotorista ?? "").toString().trim();
@@ -151,6 +157,9 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             alloc_tipo = $14,
             alloc_descricao = $16,
             alloc_vinculo = $17,
+            alloc_tratativas = $18,
+            alloc_checklist_cavalo = $19,
+            alloc_checklist_carreta = $20,
             origem = $6,
             destino = $7,
             data = $8,
@@ -164,7 +173,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             updated_at = now()
         WHERE id = $1
       `,
-      [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga, allocTipo, carregamento, allocDescricao, allocVinculo],
+      [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga, allocTipo, carregamento, allocDescricao, allocVinculo, allocTratativas, allocChecklistCavalo, allocChecklistCarreta],
     );
 
     // Reabrir a carga NÃO-reservada: "Disponível" sem motorista → força status=OPEN
@@ -215,6 +224,8 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             status: row.alloc_status,
             tipo: row.alloc_tipo,
             vinculo: row.alloc_vinculo,
+            checklistCavalo: row.alloc_checklist_cavalo,
+            checklistCarreta: row.alloc_checklist_carreta,
             origem: row.origem,
             destino: row.destino,
             data: fmtDate(row.data),
@@ -226,6 +237,8 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             status: allocStatus,
             tipo: allocTipo,
             vinculo: allocVinculo,
+            checklistCavalo: allocChecklistCavalo,
+            checklistCarreta: allocChecklistCarreta,
             origem,
             destino,
             data: fmtDate(data),
@@ -237,6 +250,11 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             { key: "status", label: "Status" },
             { key: "tipo", label: "Tipo" },
             { key: "vinculo", label: "Vínculo" },
+            // `tratativas` (texto livre, pode ter PII) fica FORA do diff do audit —
+            // mesma política das placas e da observação de conformidade; valor só na
+            // coluna alloc_tratativas. Verdito do checklist (enum) pode ficar.
+            { key: "checklistCavalo", label: "Checklist cavalo" },
+            { key: "checklistCarreta", label: "Checklist carreta" },
             { key: "origem", label: "Origem" },
             { key: "destino", label: "Destino" },
             { key: "data", label: "Data" },
