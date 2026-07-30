@@ -43,6 +43,11 @@ export const sheetMonitorAllocationBodySchema = z.object({
   // tratativa de uma pendência/inconformidade do checklist. Ausente preserva;
   // "" limpa. Gravada em alloc_tratativas.
   tratativas: z.string().trim().max(1000).nullable().optional(),
+  // Verdito manual do checklist por veículo ("Aprovado"/"Reprovado"/"" = sem
+  // verdito). Gravados em alloc_checklist_cavalo/carreta e espelhados nas colunas
+  // CheckList Cavalo / CheckList Carreta1 da planilha.
+  checklistCavalo: z.string().trim().max(40).nullable().optional(),
+  checklistCarreta: z.string().trim().max(40).nullable().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/reassign — reordenar a fila de
@@ -175,6 +180,9 @@ export const sheetMonitorCargoUpdateBodySchema = z.object({
   vinculo: z.string().trim().max(80).nullable().optional(),
   // Observação de checklist (tratativas) → alloc_tratativas.
   tratativas: z.string().trim().max(1000).nullable().optional(),
+  // Verdito manual do checklist por veículo → alloc_checklist_cavalo/carreta.
+  checklistCavalo: z.string().trim().max(40).nullable().optional(),
+  checklistCarreta: z.string().trim().max(40).nullable().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/aspx-assign — confirma a atribuição

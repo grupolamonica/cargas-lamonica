@@ -1297,6 +1297,9 @@ export interface SheetMonitorAllocation {
   alloc_descricao: string | null;
   alloc_vinculo: string | null;
   alloc_tratativas: string | null;
+  /** Verdito manual do checklist por veículo ("Aprovado"/"Reprovado"/null). */
+  alloc_checklist_cavalo: string | null;
+  alloc_checklist_carreta: string | null;
   alloc_pinned: boolean | null;
   alloc_updated_at: string | null;
 }
@@ -1337,6 +1340,8 @@ export async function updateMonitorAllocation(input: {
   descricao?: string | null; // motivo da troca de motorista/veículo
   vinculo?: string | null; // vínculo do motorista (col H da planilha)
   tratativas?: string | null; // observação de checklist (tratativas)
+  checklistCavalo?: string | null; // verdito do checklist do cavalo (Aprovado/Reprovado)
+  checklistCarreta?: string | null; // verdito do checklist da carreta (Aprovado/Reprovado)
 }) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{
@@ -1604,6 +1609,8 @@ export interface MonitorCargoUpdate {
   descricao?: string | null; // motivo da troca de motorista/veículo
   vinculo?: string | null; // vínculo do motorista
   tratativas?: string | null; // observação de checklist (tratativas)
+  checklistCavalo?: string | null; // verdito do checklist do cavalo (Aprovado/Reprovado)
+  checklistCarreta?: string | null; // verdito do checklist da carreta (Aprovado/Reprovado)
 }
 
 /**

@@ -365,6 +365,46 @@ describe("updateMonitorAllocation", () => {
     expect(res.rows[0].alloc_tratativas).toBe("");
   });
 
+  it("grava o verdito do checklist por veículo e espelha em CheckList Cavalo/Carreta1 na planilha", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-chk@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { checklistCavalo: "Aprovado", checklistCarreta: "Reprovado" },
+      correlationId: "corr-monitor-chk-1",
+    });
+    let res = await query(
+      `SELECT alloc_checklist_cavalo, alloc_checklist_carreta FROM public.cargas WHERE id = $1`,
+      [id],
+    );
+    expect(res.rows[0].alloc_checklist_cavalo).toBe("Aprovado");
+    expect(res.rows[0].alloc_checklist_carreta).toBe("Reprovado");
+
+    // Write-back para a planilha carrega o verdito (colunas CheckList Cavalo/Carreta1).
+    const lastCall = writeSpy.mock.calls.at(-1)?.[0]?.[0];
+    expect(lastCall).toMatchObject({ lh: LH, checklistCavalo: "Aprovado", checklistCarreta: "Reprovado" });
+
+    // Edição posterior sem os campos preserva o verdito registrado.
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { status: "CARREGADO" },
+      correlationId: "corr-monitor-chk-2",
+    });
+    res = await query(
+      `SELECT alloc_checklist_cavalo, alloc_checklist_carreta FROM public.cargas WHERE id = $1`,
+      [id],
+    );
+    expect(res.rows[0].alloc_checklist_cavalo).toBe("Aprovado");
+    expect(res.rows[0].alloc_checklist_carreta).toBe("Reprovado");
+    // ...e o write-back dessa edição NÃO reenvia os campos de checklist (não sobrescreve a célula).
+    const lastCall2 = writeSpy.mock.calls.at(-1)?.[0]?.[0];
+    expect(lastCall2).not.toHaveProperty("checklistCavalo");
+    expect(lastCall2).not.toHaveProperty("checklistCarreta");
+  });
+
   it("carga do SISTEMA (lh_manual) com motorista: CRIA-ou-preenche a linha na planilha (createIfMissing + rota/agenda)", async () => {
     // Viagem lançada na Programação: id ALEATÓRIO, sheet_lh nulo, lh_manual = LH.
     // A "linha-casca" só é criada no lançamento quando a viagem está ACEITA, então um

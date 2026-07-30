@@ -1294,7 +1294,7 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
 // Cargas do sistema (sheet_lh nulo) são editadas como uma planilha: Status, LH,
 // Rota, Agenda, Motorista/Placa — todos editáveis (a carga é a fonte da verdade).
 
-type CargoForm = { lh: string; status: string; tipo: string; origem: string; destino: string; carregamento: string; descarga: string; motorista: string; cavalo: string; carreta: string; vinculo: string; tratativas: string };
+type CargoForm = { lh: string; status: string; tipo: string; origem: string; destino: string; carregamento: string; descarga: string; motorista: string; cavalo: string; carreta: string; vinculo: string; tratativas: string; checklistCavalo: string; checklistCarreta: string };
 
 function MonitorCargoFields({ form, setForm, statusOptions }: {
   form: CargoForm;
@@ -1348,7 +1348,15 @@ function MonitorCargoFields({ form, setForm, statusOptions }: {
   );
 }
 
-const EMPTY_CARGO_FORM: CargoForm = { lh: "", status: "", tipo: "", origem: "", destino: "", carregamento: "", descarga: "", motorista: "", cavalo: "", carreta: "", vinculo: "", tratativas: "" };
+const EMPTY_CARGO_FORM: CargoForm = { lh: "", status: "", tipo: "", origem: "", destino: "", carregamento: "", descarga: "", motorista: "", cavalo: "", carreta: "", vinculo: "", tratativas: "", checklistCavalo: "", checklistCarreta: "" };
+
+// Verdito manual do checklist por veículo (gravado em alloc_checklist_* e espelhado
+// nas colunas CheckList Cavalo / CheckList Carreta1 da planilha). "" = sem verdito.
+const CHECKLIST_VERDICT_OPTIONS = [
+  { value: "", label: "— sem verdito —" },
+  { value: "Aprovado", label: "Aprovado" },
+  { value: "Reprovado", label: "Reprovado" },
+] as const;
 
 // datetime-local 'YYYY-MM-DDTHH:MM' → { data:'YYYY-MM-DD', horario:'HH:MM' }
 function splitCarregamento(dt: string): { data: string; horario: string } {
@@ -2747,7 +2755,7 @@ function RowDetailModal({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "", tipo: "", vinculo: "", tratativas: "" });
+  const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "", tipo: "", vinculo: "", tratativas: "", checklistCavalo: "", checklistCarreta: "" });
   // Carga do SISTEMA (source='sistema'): no modal unificado ela é editada AQUI como
   // uma planilha — LH/rota/agenda inclusive (é a fonte da verdade). Form canônico
   // completo, salvo via updateMonitorCargo (por cargoId). Cargas da planilha ignoram.
@@ -2771,6 +2779,10 @@ function RowDetailModal({
       // Observação de checklist (tratativas): planilha vem via allocByLh (alloc_tratativas),
       // sistema vem denormalizado na linha (row.tratativas).
       tratativas: alloc?.alloc_tratativas ?? row.tratativas ?? "",
+      // Verdito do checklist por veículo (Aprovado/Reprovado): override do operador
+      // (alloc_checklist_*) ?? valor da planilha (row.checklistCavalo/carreta, col N/O).
+      checklistCavalo: alloc?.alloc_checklist_cavalo ?? row.checklistCavalo ?? "",
+      checklistCarreta: alloc?.alloc_checklist_carreta ?? row.checklistCarreta ?? "",
     });
   }, [row, alloc, open]);
 
@@ -2793,6 +2805,9 @@ function RowDetailModal({
       carreta: row.carreta ?? "",
       vinculo: row.vinculo ?? "",
       tratativas: row.tratativas ?? "",
+      // Carga do sistema: o verdito vem denormalizado na linha (row.checklistCavalo/carreta).
+      checklistCavalo: row.checklistCavalo ?? "",
+      checklistCarreta: row.checklistCarreta ?? "",
     });
   }, [open, row]);
 
@@ -2983,6 +2998,14 @@ function RowDetailModal({
       // Observação de checklist (tratativas): sempre enviada (prefilled com o
       // valor efetivo). Editável mesmo com m/v travado (é uma nota, não alocação).
       tratativas: allocForm.tratativas,
+      // Verdito do checklist por veículo (Aprovado/Reprovado): só vai quando o
+      // operador REALMENTE mudou. Como ele é espelhado em CheckList Cavalo/Carreta1
+      // (colunas do robô GRIFFI), reenviá-lo sem mudança poderia sobrescrever um
+      // valor mais novo do robô numa edição não relacionada (ex.: só status).
+      ...(allocForm.checklistCavalo !== (alloc?.alloc_checklist_cavalo ?? row.checklistCavalo ?? "")
+        ? { checklistCavalo: allocForm.checklistCavalo } : {}),
+      ...(allocForm.checklistCarreta !== (alloc?.alloc_checklist_carreta ?? row.checklistCarreta ?? "")
+        ? { checklistCarreta: allocForm.checklistCarreta } : {}),
       // Motorista/veículo SÓ vão no payload quando a linha é editável E o operador
       // REALMENTE trocou (mvChanged). Editar só o status NÃO reenvia o motorista →
       // o backend preserva o override atual (has()=false). Antes reenviávamos o
@@ -3029,6 +3052,12 @@ function RowDetailModal({
       carreta: cargoForm.carreta.trim(),
       vinculo: cargoForm.vinculo.trim(),
       tratativas: cargoForm.tratativas.trim(),
+      // Verdito do checklist: só quando mudou (ver doSave — evita reescrever a célula
+      // do robô GRIFFI numa edição não relacionada).
+      ...(cargoForm.checklistCavalo.trim() !== (row.checklistCavalo ?? "").trim()
+        ? { checklistCavalo: cargoForm.checklistCavalo.trim() } : {}),
+      ...(cargoForm.checklistCarreta.trim() !== (row.checklistCarreta ?? "").trim()
+        ? { checklistCarreta: cargoForm.checklistCarreta.trim() } : {}),
       ...(descricao ? { descricao } : {}),
     });
   };
@@ -3168,6 +3197,33 @@ function RowDetailModal({
                         className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
                       />
                     </div>
+                    {/* Verdito do checklist por veículo (Aprovado/Reprovado). */}
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <div>
+                        <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Checklist cavalo</label>
+                        <select
+                          value={cargoForm.checklistCavalo}
+                          onChange={(e) => setCargoForm((f) => ({ ...f, checklistCavalo: e.target.value }))}
+                          className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+                        >
+                          {CHECKLIST_VERDICT_OPTIONS.map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Checklist carreta</label>
+                        <select
+                          value={cargoForm.checklistCarreta}
+                          onChange={(e) => setCargoForm((f) => ({ ...f, checklistCarreta: e.target.value }))}
+                          className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+                        >
+                          {CHECKLIST_VERDICT_OPTIONS.map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
                     <div className="flex items-center justify-end gap-2 pt-1">
                       <button
                         type="button"
@@ -3304,6 +3360,34 @@ function RowDetailModal({
                     maxLength={1000}
                     className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
                   />
+                </div>
+                {/* Verdito do checklist por veículo (Aprovado/Reprovado) — espelhado
+                    nas colunas CheckList Cavalo / CheckList Carreta1 da planilha ao salvar. */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Checklist cavalo</label>
+                    <select
+                      value={allocForm.checklistCavalo}
+                      onChange={(e) => setAllocForm((f) => ({ ...f, checklistCavalo: e.target.value }))}
+                      className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+                    >
+                      {CHECKLIST_VERDICT_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Checklist carreta</label>
+                    <select
+                      value={allocForm.checklistCarreta}
+                      onChange={(e) => setAllocForm((f) => ({ ...f, checklistCarreta: e.target.value }))}
+                      className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+                    >
+                      {CHECKLIST_VERDICT_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
                 <div className="flex items-center justify-between gap-2 pt-1">
                   <span className="text-[0.58rem] leading-tight text-muted-foreground/60">

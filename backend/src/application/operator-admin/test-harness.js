@@ -90,6 +90,8 @@ const schemaSql = `
     alloc_descricao text,
     alloc_vinculo text,
     alloc_tratativas text,
+    alloc_checklist_cavalo text,
+    alloc_checklist_carreta text,
     alloc_source text,
     alloc_updated_at timestamptz,
     alloc_updated_by uuid,
