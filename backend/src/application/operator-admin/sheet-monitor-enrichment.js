@@ -536,13 +536,13 @@ async function enrichRows(supabaseClient, batch, correlationId, { forceLive = fa
     }
     const aspx = matchAspxDriver(name, aspxList);
     if (aspx) {
-      // ASPX serve SÓ ao selo "cadastrado no ASPX" (aspx_cpf/display). NÃO alimenta
-      // a consulta Angellira: o CPF do diretório Shopee não é confiável o bastante
-      // p/ consultar risco (casava pessoa errada). Angellira só AUTO via
-      // motoristas_historico (base do próprio Angellira, casada estritamente);
-      // quem não está lá → "não consultado" e o operador informa o CPF manualmente
-      // (consulta por CPF no modal), que persiste na base p/ virar automático.
+      // FALLBACK: quem não está no banco de motorista cai no aspx_drivers. O match
+      // agora é ESTRITO (driverNamesMatch) → resolve a pessoa CERTA do ASPX (ou
+      // ninguém), então é seguro alimentar a consulta Angellira ao vivo pelo CPF do
+      // ASPX. Quem não casar em lugar nenhum → "não consultado" → consulta manual
+      // por CPF no modal (que persiste na base p/ virar automático).
       driverByName[name] = { cpf: aspx.cpf, aspxFound: true, aspxDisplayName: aspx.display_name, angellira: null };
+      if (aspx.cpf) aspxFallbackCpfs.push(aspx.cpf);
     }
   }
 
