@@ -513,8 +513,13 @@ async function enrichRows(supabaseClient, batch, correlationId, { forceLive = fa
     }
     const aspx = matchAspxDriver(name, aspxList);
     if (aspx) {
+      // ASPX serve SÓ ao selo "cadastrado no ASPX" (aspx_cpf/display). NÃO alimenta
+      // a consulta Angellira: o CPF do diretório Shopee não é confiável o bastante
+      // p/ consultar risco (casava pessoa errada). Angellira só AUTO via
+      // motoristas_historico (base do próprio Angellira, casada estritamente);
+      // quem não está lá → "não consultado" e o operador informa o CPF manualmente
+      // (consulta por CPF no modal), que persiste na base p/ virar automático.
       driverByName[name] = { cpf: aspx.cpf, aspxFound: true, aspxDisplayName: aspx.display_name, angellira: null };
-      if (aspx.cpf) aspxFallbackCpfs.push(aspx.cpf);
     }
   }
 
@@ -928,5 +933,103 @@ export async function enrichSystemCargoById(supabaseClient, cargoId, { correlati
       cargoId,
       message: err instanceof Error ? err.message : String(err),
     });
+  }
+}
+
+// Campos do motorista a gravar na linha enriquecida a partir de uma consulta por
+// CPF (puro/testável). `source: 'manual'` marca que o CPF foi informado pelo
+// operador (não resolvido por nome).
+export function buildDriverCpfFields(cpf, motorista, result) {
+  const norm = String(cpf || "").replace(/\D/g, "");
+  const angName = result?.driverDetails?.name || result?.displayName || null;
+  return {
+    driver_name: ((motorista || angName || "").toString().trim()) || null,
+    angellira_driver_found: result?.found ?? false,
+    angellira_driver_status: result?.status ?? null,
+    angellira_driver_valid_until: result?.validUntil ?? null,
+    angellira_driver_status_text: result?.statusText ?? null,
+    angellira_driver_details: { name: angName, cpf: norm, source: "manual" },
+  };
+}
+
+/**
+ * Consulta MANUAL por CPF de UM item do Monitor. Usado quando o motorista NÃO está
+ * na base do Angellira (motoristas_historico) e o auto não conseguiu resolver: o
+ * operador informa o CPF e consultamos o Angellira AO VIVO por ele. Grava só as
+ * colunas do motorista na linha (preserva veículos) e PERSISTE na base
+ * (motoristas_historico + driver_profiles) p/ virar automático na próxima passada.
+ * Não lança — devolve { ok, found, name, cpf, status, statusText, validUntil } ou
+ * { ok:false, reason }.
+ */
+export async function enrichItemDriverByCpf(supabaseClient, { lh, cargoId, cpf, motorista = "" }, { correlationId = null } = {}) {
+  const norm = String(cpf || "").replace(/\D/g, "");
+  const key = cargoId ? `cargo:${cargoId}` : (lh ?? "").toString().trim();
+  if (!key || norm.length !== 11) return { ok: false, reason: "INVALID_INPUT" };
+  try {
+    const { lookupAngelliraDriverByCpf } = await import("../../infrastructure/angellira/angellira-client.js");
+    let result;
+    try {
+      result = await withTimeout(lookupAngelliraDriverByCpf(norm, { correlationId }), CALL_TIMEOUT_MS);
+    } catch {
+      result = { availability: "UNAVAILABLE", status: "UNAVAILABLE", found: false };
+    }
+    if (!result || result.availability !== "OK") {
+      return { ok: false, reason: "ANGELLIRA_UNAVAILABLE" };
+    }
+
+    const driverFields = { ...buildDriverCpfFields(norm, motorista, result), enriched_at: new Date().toISOString() };
+
+    // UPDATE só as colunas do motorista (preserva veículos/selos). Se a linha ainda
+    // não existe (carga fora do snapshot), cria a mínima.
+    const { data: updated } = await supabaseClient
+      .from("sheet_monitor_enriched")
+      .update(driverFields)
+      .eq("lh", key)
+      .select("lh");
+    if (!updated || updated.length === 0) {
+      await supabaseClient
+        .from("sheet_monitor_enriched")
+        .upsert([{ lh: key, cargo_id: cargoId ?? null, ...driverFields }], { onConflict: "lh" });
+    }
+    bustSheetMonitorEnrichedCache();
+
+    // Persiste na base do Angellira p/ a próxima consulta ser AUTOMÁTICA (só FOUND).
+    try {
+      if (result.found === true) {
+        const angName = result.driverDetails?.name || result.displayName || null;
+        await upsertDriverHistoricoRows(getPostgresPool(), [{
+          cpf: norm,
+          nome: (angName || motorista || "").toString().trim(),
+          angelliraQueryId: result.queryId ?? null,
+          angelliraSentDate: result.lastSeenAt ?? null,
+          angelliraLimitDate: result.validUntil ?? null,
+          aspxFound: false,
+          aspxDisplayName: null,
+        }]);
+      }
+      const { syncDriverAngelliraValidation } = await import("./use-cases/angellira-cache.js");
+      await syncDriverAngelliraValidation({ documentNumber: norm, angelliraResult: result, correlationId });
+    } catch {
+      /* persistência é bônus — a linha do item já foi gravada */
+    }
+
+    logStructuredEvent("info", "sheet-monitor-enrich.driver-by-cpf", {
+      correlationId, lh: key, found: result.found === true, cpf: `***${norm.slice(-3)}`,
+    });
+    return {
+      ok: true,
+      found: result.found === true,
+      name: result.driverDetails?.name || result.displayName || null,
+      cpf: norm,
+      status: result.status ?? null,
+      statusText: result.statusText ?? null,
+      validUntil: result.validUntil ?? null,
+    };
+  } catch (err) {
+    logStructuredEvent("warn", "sheet-monitor-enrich.driver-by-cpf-failed", {
+      correlationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return { ok: false, reason: "ERROR" };
   }
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildEnrichedUpsertRow,
   buildDriverHistoricoUpsertRows,
+  buildDriverCpfFields,
   planForceLiveDriverWrites,
   mergePreservingGood,
   matchAspxDriver,
@@ -10,6 +11,28 @@ import {
   fetchEnrichedLhSet,
   filterRowsToProcess,
 } from "./sheet-monitor-enrichment.js";
+
+describe("buildDriverCpfFields — consulta manual por CPF", () => {
+  it("FOUND: grava status/validade e marca source=manual", () => {
+    const f = buildDriverCpfFields("013.906.643-84", "MAGNO GABRIEL DOS SANTOS", {
+      availability: "OK", found: true, status: "FOUND", statusText: "Conforme",
+      validUntil: "2026-10-14", displayName: "MAGNO GABRIEL DOS SANTOS",
+      driverDetails: { name: "MAGNO GABRIEL DOS SANTOS" },
+    });
+    expect(f.angellira_driver_found).toBe(true);
+    expect(f.angellira_driver_valid_until).toBe("2026-10-14");
+    expect(f.angellira_driver_details).toEqual({ name: "MAGNO GABRIEL DOS SANTOS", cpf: "01390664384", source: "manual" });
+    expect(f.driver_name).toBe("MAGNO GABRIEL DOS SANTOS");
+  });
+
+  it("NOT_FOUND: found=false, sem validade, ainda marca source=manual", () => {
+    const f = buildDriverCpfFields("01390664384", "FULANO", { availability: "OK", found: false, status: "NOT_FOUND" });
+    expect(f.angellira_driver_found).toBe(false);
+    expect(f.angellira_driver_valid_until).toBeNull();
+    expect(f.angellira_driver_details).toMatchObject({ cpf: "01390664384", source: "manual" });
+    expect(f.driver_name).toBe("FULANO");
+  });
+});
 
 describe("planForceLiveDriverWrites — Consultar item (força ao vivo)", () => {
   const driverByName = {
