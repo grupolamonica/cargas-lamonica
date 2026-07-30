@@ -799,6 +799,72 @@ describe.sequential("public load leads", () => {
     expect(types).toContain(PUBLIC_LEAD_EVENT_TYPE.SHEET_WRITEBACK);
   });
 
+  it("reservar pela Fila grava a alocação no SISTEMA (alloc_*) e cancelar limpa — Monitor reflete o motorista", async () => {
+    const { id: loadId } = await harness.seedLoad({ sheet_lh: "LT-ALLOC-1" });
+    const operator = await harness.seedOperator();
+
+    // Em produção o validation_summary_json guarda o nome do motorista (Angellira)
+    // — o MESMO nome que vai para a planilha e que agora também alimenta o alloc_*.
+    // O fixture default omite o displayName do storedSummary, então aqui o incluímos.
+    const summaryWithName = {
+      schemaVersion: 1,
+      checkedAt: "2026-05-25T10:00:00.000Z",
+      candidateSubmittedAt: "2026-05-25T09:00:00.000Z",
+      overallStatus: "VALID",
+      missingFields: [],
+      warnings: [],
+      driver: {
+        angelira: { status: "FOUND", found: true, displayName: "Motorista Teste", validUntil: "2026-12-31" },
+        aspx: { status: "FOUND", found: true },
+      },
+      plates: [],
+      vigency: { status: "VALID", validUntil: "2026-12-31", daysUntilExpiry: 200, source: "ANGELLIRA_DRIVER" },
+      support: { whatsappNumber: "5571999999999", whatsappUrl: "https://wa.me/5571999999999" },
+      sources: { angelira: { status: "OK" }, aspx: { status: "OK" } },
+    };
+    mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+      summary: summaryWithName,
+      storedSummary: summaryWithName,
+    });
+
+    const preregistered = await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-alloc-prereg",
+    });
+    const leadId = preregistered.payload.lead.id;
+
+    await service.approvePublicLoadLead({
+      loadId,
+      leadId,
+      operatorId: operator.id,
+      correlationId: "corr-alloc-approve",
+    });
+
+    // Reservar reflete a alocação no sistema (o que o Monitor lê via alloc_*),
+    // não só na planilha. Antes ficava em branco no sistema (bug reportado).
+    const reserved = await harness.getLoad(loadId);
+    expect(reserved.status).toBe(LOAD_STATUS.RESERVED);
+    expect(reserved.alloc_motorista).toBe("Motorista Teste");
+    expect(reserved.alloc_cavalo).toBe("ABC1D23"); // horsePlate do buildPayload
+    expect(reserved.alloc_carreta).toBe("DEF4G56"); // trailerPlate do buildPayload
+    expect(reserved.alloc_source).toBe("operator");
+
+    // Cancelar/trocar reabre a carga E limpa a alocação do sistema — a carga
+    // volta a ficar disponível (Monitor em branco + reaparece no portal).
+    await service.cancelPublicLoadLead({
+      loadId,
+      leadId,
+      operatorId: operator.id,
+      correlationId: "corr-alloc-cancel",
+    });
+    const reopened = await harness.getLoad(loadId);
+    expect(reopened.status).toBe(LOAD_STATUS.OPEN);
+    expect(reopened.alloc_motorista).toBe("");
+    expect(reopened.alloc_cavalo).toBe("");
+    expect(reopened.alloc_carreta).toBe("");
+  });
+
   const isoDateOf = (value) =>
     value instanceof Date
       ? `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, "0")}-${String(value.getUTCDate()).padStart(2, "0")}`

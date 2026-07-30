@@ -647,6 +647,43 @@ async function reflectReservationOnSheet(client, { loadId, leadId, trigger, acto
   const carreta = info?.trailer_plate ? String(info.trailer_plate).trim() : "";
   const enabled = isSheetWritebackEnabled();
 
+  // Persiste a alocação no SISTEMA (cargas.alloc_*) além do write-back na
+  // planilha, para a carga refletir o motorista reservado na tela do Monitor
+  // (/planilha). Antes, reservar pela Fila gravava SÓ na planilha (write-back) e
+  // o alloc_* do sistema ficava em branco — a carga aparecia "vazia" no Monitor
+  // mesmo reservada (relato do operador). O Monitor mostra o efetivo
+  // COALESCE(alloc_motorista, sheet_motorista); sem gravar o alloc, dependia do
+  // sync trazer o motorista de volta da planilha (que a re-exportação da Shopee
+  // limpa). Só grava quando há motorista resolvido (candidatura com nome
+  // Angellira) — sem nome, NÃO sobrescreve com vazio (não apaga um motorista já
+  // vindo da planilha). Best-effort: falha é logada, não derruba a reserva
+  // (status + planilha já foram efetivados).
+  if (motorista) {
+    try {
+      await client.query(
+        `
+          UPDATE public.cargas
+          SET alloc_motorista = $2,
+              alloc_cavalo = $3,
+              alloc_carreta = $4,
+              alloc_source = 'operator',
+              alloc_updated_at = now(),
+              alloc_updated_by = $5,
+              updated_at = now()
+          WHERE id = $1
+        `,
+        [loadId, motorista, cavalo, carreta, actorId ?? null],
+      );
+    } catch (error) {
+      logLoadClaimEvent("warn", "load-public-leads.reserve.alloc-persist-failed", {
+        load_id: loadId,
+        lead_id: leadId,
+        trigger: trigger ?? null,
+        message: error?.message,
+      });
+    }
+  }
+
   // Evento do histórico (atômico com a reserva). Registra a INTENÇÃO/valores
   // gravados; o resultado do POST fica no log do sheet-writeback.
   try {
@@ -2703,6 +2740,12 @@ export async function cancelPublicLoadLead({ loadId, leadId, operatorId, correla
               reserved_driver_id = null,
               reserved_claim_id = null,
               reserved_public_lead_id = null,
+              alloc_motorista = '',
+              alloc_cavalo = '',
+              alloc_carreta = '',
+              alloc_source = 'operator',
+              alloc_updated_at = now(),
+              alloc_updated_by = $3,
               version = version + 1,
               updated_at = now()
           WHERE id = $1
@@ -2719,7 +2762,7 @@ export async function cancelPublicLoadLead({ loadId, leadId, operatorId, correla
             reserved_public_lead_id,
             version
         `,
-        [loadId, LOAD_STATUS.OPEN],
+        [loadId, LOAD_STATUS.OPEN, operatorId],
       );
       nextLoadRow = reopenedLoadRows[0] ?? loadRow;
     }
