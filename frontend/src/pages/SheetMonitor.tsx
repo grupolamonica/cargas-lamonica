@@ -24,7 +24,6 @@ import {
   PinOff,
   Plus,
   RefreshCw,
-  Search,
   RotateCcw,
   Search,
   Send,
