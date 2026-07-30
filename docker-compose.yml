@@ -123,6 +123,8 @@ services:
     networks:
       - lamonica-net
       - platform_public
+      # platform_monitoring: permite o blackbox-exporter sondar /api/status
+      - platform_monitoring
     # Sidecar OCR — chamadas externas (Infosimples/GPT-4o Vision) + PDF parse
     # podem consumir RAM em rajadas. 768m cobre processamento concorrente
     # sem permitir leak indefinido.
@@ -189,6 +191,8 @@ services:
     restart: unless-stopped
     networks:
       - lamonica-net
+      # platform_monitoring: permite o blackbox-exporter sondar /api/status
+      - platform_monitoring
     # Le credenciais do mesmo backend.env do backend Node (ANGELLIRA_USER,
     # ANGELLIRA_PASSWORD, ANGELLIRA_EMPRESA_ID — auth.py do bot ja aceita
     # esses aliases com 2 Ls).
@@ -234,6 +238,8 @@ services:
     restart: unless-stopped
     networks:
       - lamonica-net
+      # platform_monitoring: permite o blackbox-exporter sondar /health
+      - platform_monitoring
     # Mesma fonte do backend.env (ANGELLIRA_USER/PASSWORD/EMPRESA_ID).
     env_file:
       - backend.env
@@ -302,6 +308,8 @@ services:
     restart: unless-stopped
     networks:
       - lamonica-net
+      # platform_monitoring: permite o blackbox-exporter sondar /spx/status
+      - platform_monitoring
     # Le SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY do backend.env (mesma fonte
     # do aspx-renewal). Não precisa cookies em texto-claro: lê do Supabase.
     env_file:

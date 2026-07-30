@@ -1,0 +1,32 @@
+# traefik-labels.example.yml — Exposição segura do Prometheus da platform.
+#
+# Adicionar estes labels ao serviço `prometheus` em
+# /opt/platform/docker-compose.yml (VPS) e recriar o container:
+#   docker compose -f /opt/platform/docker-compose.yml up -d prometheus
+#
+# Pré-requisitos:
+#   1. DNS A: prometheus.grupolamonica.com -> 76.13.169.177
+#   2. Hash htpasswd gerado (a senha em claro fica com o Danilo):
+#        docker run --rm httpd:2.4-alpine htpasswd -nbB grafana '<senha>' \
+#          | sed -e 's/\$/\$\$/g'
+#      (o sed duplica os $ para escapar no compose)
+#
+# O Traefik alcança o Prometheus pela network platform_monitoring (ambos já
+# estão nela) — por isso o traefik.docker.network aponta pra ela.
+
+services:
+  prometheus:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=platform_monitoring"
+      # HTTPS + Let's Encrypt (mesmo resolver do app)
+      - "traefik.http.routers.prometheus.rule=Host(`prometheus.grupolamonica.com`)"
+      - "traefik.http.routers.prometheus.entrypoints=websecure"
+      - "traefik.http.routers.prometheus.tls.certresolver=letsencrypt"
+      - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
+      # Basic auth obrigatório (o Grafana da empresa usa este usuário/senha)
+      - "traefik.http.routers.prometheus.middlewares=prometheus-auth"
+      - "traefik.http.middlewares.prometheus-auth.basicauth.users=<HASH_HTPASSWD_COM_$$>"
+      # Hardening opcional: allowlist do IP fixo da empresa
+      # - "traefik.http.routers.prometheus.middlewares=prometheus-auth,prometheus-allowlist"
+      # - "traefik.http.middlewares.prometheus-allowlist.ipallowlist.sourcerange=<IP_DA_EMPRESA>/32"

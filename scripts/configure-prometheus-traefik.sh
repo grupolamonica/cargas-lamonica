@@ -52,14 +52,17 @@ if [ ! -w "$PROM_CONFIG" ]; then
   exit 1
 fi
 
-# Adicionar scrape target do Traefik
+# Adicionar scrape target do Traefik.
+# Nota: heredoc sem <<- exige terminador na coluna 0; a indentação do bloco
+# assume itens de scrape_configs a 2 espaços e scrape_configs como última
+# chave do arquivo (padrão do prometheus.yml da platform).
 cat >> "$PROM_CONFIG" << 'SCRAPE_EOF'
 
-    # Traefik metrics — adicionado por configure-prometheus-traefik.sh
-      - job_name: 'traefik'
-        static_configs:
-          - targets: ['traefik:8080']
-    SCRAPE_EOF
+  # Traefik metrics — adicionado por configure-prometheus-traefik.sh
+  - job_name: 'traefik'
+    static_configs:
+      - targets: ['traefik:8080']
+SCRAPE_EOF
 
 echo "[prometheus-traefik] Scrape target adicionado a $PROM_CONFIG"
 echo "[prometheus-traefik] Reiniciando Prometheus para aplicar configuração..."
