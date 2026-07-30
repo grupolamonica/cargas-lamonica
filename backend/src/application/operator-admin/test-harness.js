@@ -124,6 +124,19 @@ const schemaSql = `
 
   CREATE UNIQUE INDEX ux_cargas_codigo_viagem ON public.cargas (codigo_viagem);
 
+  CREATE TABLE public.angellira_conformity_overrides (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    subject_type text NOT NULL,
+    subject_key text NOT NULL,
+    decision text NOT NULL,
+    observacao text NOT NULL,
+    set_by uuid,
+    set_by_name text,
+    set_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (subject_type, subject_key)
+  );
+
   CREATE TABLE public.nestle_ofertas (
     codprogcoleta text PRIMARY KEY,
     codembarque text,

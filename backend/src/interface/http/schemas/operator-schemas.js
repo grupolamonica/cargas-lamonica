@@ -185,6 +185,24 @@ export const sheetMonitorCargoUpdateBodySchema = z.object({
   checklistCarreta: z.string().trim().max(40).nullable().optional(),
 }).strict();
 
+/** Body for POST /api/operator/sheet-monitor/conformity-override — verdito manual de
+ *  conformidade Angellira (Aprovado/Não aprovado) por entidade (motorista=CPF, veículo=placa).
+ *  observação OBRIGATÓRIA ao aprovar/reprovar; decision null = LIMPA o verdito. */
+export const sheetMonitorConformityOverrideBodySchema = z.object({
+  subjectType: z.enum(["DRIVER", "VEHICLE"]),
+  subjectKey: z.string().trim().min(1).max(40),
+  decision: z.enum(["APPROVED", "NOT_APPROVED"]).nullable(),
+  observacao: z.string().trim().max(1000).optional(),
+}).strict().superRefine((v, ctx) => {
+  if (v.decision !== null && (!v.observacao || v.observacao.trim().length < 1)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["observacao"],
+      message: "Observação é obrigatória ao aprovar/reprovar.",
+    });
+  }
+});
+
 /** Body for POST /api/operator/sheet-monitor/aspx-assign — confirma a atribuição
  *  no ASPX das cargas (LHs) selecionadas. dryRun força simulação mesmo com o
  *  kill switch ligado. */

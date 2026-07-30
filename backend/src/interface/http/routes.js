@@ -109,6 +109,7 @@ import {
   resolveUpdateReservaResponse,
   resolveDeleteReservaResponse,
   resolveSetMonitorAllocationPinResponse,
+  resolveSetConformityOverrideResponse,
   resolveSetMonitorRodoparStatusResponse,
   resolveUpdateMonitorCargoResponse,
   resolvePreviewAspxAllocationResponse,
@@ -551,6 +552,7 @@ export function registerRoutes(app) {
   router.delete("/api/operator/sheet-monitor/reserva", wrap(resolveDeleteReservaResponse));
   router.post("/api/operator/sheet-monitor/pin", wrap(resolveSetMonitorAllocationPinResponse));
   router.post("/api/operator/sheet-monitor/rodopar", wrap(resolveSetMonitorRodoparStatusResponse));
+  router.post("/api/operator/sheet-monitor/conformity-override", wrap(resolveSetConformityOverrideResponse));
   router.patch("/api/operator/sheet-monitor/cargo", wrap(resolveUpdateMonitorCargoResponse));
   router.post("/api/operator/sheet-monitor/aspx-preview", wrap(resolvePreviewAspxAllocationResponse));
   router.post("/api/operator/sheet-monitor/aspx-assign", wrap(resolveAssignAspxAllocationsResponse));

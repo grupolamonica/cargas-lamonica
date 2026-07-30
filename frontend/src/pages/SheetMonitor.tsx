@@ -74,6 +74,8 @@ import {
   setMonitorRodoparStatus,
   updateMonitorAllocation,
   updateMonitorCargo,
+  setConformityOverride,
+  type ConformityManualVerdict,
   updateReserva,
   type AspxAllocationItem,
   type AspxAllocationPreview,
@@ -2651,6 +2653,140 @@ function AngelliraStatusBadge({ found, statusText }: { found: boolean | null | u
   );
 }
 
+/** Selo do verdito MANUAL de conformidade (aprovado/não aprovado), mostrado ao lado
+ *  do selo Angellira derivado. Só aparece quando há verdito manual. */
+function ManualVerdictBadge({ verdict }: { verdict: ConformityManualVerdict | null | undefined }) {
+  if (!verdict) return null;
+  const approved = verdict.decision === "APPROVED";
+  return (
+    <span
+      title={verdict.observacao || undefined}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[0.6rem] font-semibold",
+        approved
+          ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+          : "bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-300",
+      )}
+    >
+      {approved ? <BadgeCheck className="h-3 w-3" /> : <ShieldX className="h-3 w-3" />}
+      {approved ? "Aprovado (manual)" : "Não aprovado (manual)"}
+    </span>
+  );
+}
+
+/** Controle para o operador definir/limpar o verdito MANUAL de conformidade de uma
+ *  entidade (motorista=CPF, veículo=placa). Observação OBRIGATÓRIA ao aprovar/reprovar.
+ *  Sem CPF/placa resolvida, mostra aviso (não dá pra chavear o verdito). */
+function ConformityOverrideControl({
+  subjectType,
+  subjectKey,
+  verdict,
+  onSaved,
+}: {
+  subjectType: "DRIVER" | "VEHICLE";
+  subjectKey: string | null | undefined;
+  verdict: ConformityManualVerdict | null | undefined;
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [decision, setDecision] = useState<"APPROVED" | "NOT_APPROVED">(verdict?.decision ?? "APPROVED");
+  const [obs, setObs] = useState(verdict?.observacao ?? "");
+  useEffect(() => {
+    setDecision(verdict?.decision ?? "APPROVED");
+    setObs(verdict?.observacao ?? "");
+  }, [verdict, open]);
+
+  const mutation = useMutation({
+    mutationFn: setConformityOverride,
+    onSuccess: () => { toast.success("Conformidade atualizada."); setOpen(false); onSaved(); },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Não foi possível salvar a conformidade."),
+  });
+
+  const key = (subjectKey ?? "").toString().trim();
+  if (!key) {
+    return (
+      <p className="mt-1 flex items-start gap-1 text-[0.62rem] leading-tight text-muted-foreground/60">
+        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+        Consulte ao vivo (CPF/placa) para habilitar o verdito manual de conformidade.
+      </p>
+    );
+  }
+
+  if (!open) {
+    // O selo do verdito já aparece na linha "Angellira" acima — aqui só o gatilho.
+    return (
+      <div className="mt-1">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="text-[0.62rem] font-semibold text-primary underline-offset-2 hover:underline"
+        >
+          {verdict ? "Alterar conformidade manual" : "Definir conformidade manual"}
+        </button>
+      </div>
+    );
+  }
+
+  const canSave = obs.trim().length > 0 && !mutation.isPending;
+  return (
+    <div className="mt-1 space-y-1.5 rounded-md border border-border/60 bg-muted/30 p-2">
+      <div className="flex gap-1">
+        {(["APPROVED", "NOT_APPROVED"] as const).map((d) => (
+          <button
+            key={d}
+            type="button"
+            onClick={() => setDecision(d)}
+            className={cn(
+              "flex-1 rounded-md border px-2 py-1 text-[0.68rem] font-semibold transition-colors",
+              decision === d
+                ? d === "APPROVED"
+                  ? "border-emerald-400 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                  : "border-red-400 bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-300"
+                : "border-border/80 text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {d === "APPROVED" ? "Aprovado" : "Não aprovado"}
+          </button>
+        ))}
+      </div>
+      <textarea
+        value={obs}
+        onChange={(e) => setObs(e.target.value)}
+        placeholder="Observação (obrigatória) — motivo/tratativa da conformidade"
+        rows={2}
+        maxLength={1000}
+        className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+      />
+      <div className="flex items-center justify-between gap-2">
+        {verdict ? (
+          <button
+            type="button"
+            disabled={mutation.isPending}
+            onClick={() => mutation.mutate({ subjectType, subjectKey: key, decision: null })}
+            className="text-[0.62rem] font-semibold text-muted-foreground hover:text-red-500 disabled:opacity-60"
+          >
+            Limpar (voltar ao derivado)
+          </button>
+        ) : <span />}
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={() => setOpen(false)} className="text-[0.62rem] text-muted-foreground hover:text-foreground">
+            Cancelar
+          </button>
+          <button
+            type="button"
+            disabled={!canSave}
+            onClick={() => mutation.mutate({ subjectType, subjectKey: key, decision, observacao: obs.trim() })}
+            className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-[0.68rem] font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {mutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+            Salvar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SourceBadge({ source }: { source: string | null | undefined }) {
   if (!source) return null;
   const map: Record<string, string> = {
@@ -3142,6 +3278,58 @@ function RowDetailModal({
               ) : null;
             })()}
 
+            {/* ── Pendências & Inconformidades (Angellira / checklist / ASPX) ──
+                Consolidado só-leitura das inconformidades da carga (motorista+veículos):
+                conformidade manual "não aprovado", Angellira derivado "não aprovado",
+                verdito do checklist "Reprovado", semáforo GRIFFI vencido/alerta e
+                motorista ausente do ASPX. Só aparece quando há pendência. */}
+            {(() => {
+              const items: { label: string; high: boolean }[] = [];
+              const push = (label: string, high = true) => items.push({ label, high });
+              const griffiLevel = (placa: string) =>
+                placa ? vehicleChecklist.data?.byPlaca?.[placa]?.level : undefined;
+              if (row.motoristas) {
+                if (enriched?.angellira_driver_manual?.decision === "NOT_APPROVED") push("Motorista — não aprovado (conformidade manual)");
+                else if (enriched?.angellira_driver_found === false) push("Motorista — não aprovado no Angellira");
+                if (isSpxTrip(row.lh) && !enriched?.aspx_cpf) push("Motorista não encontrado no ASPX", false);
+              }
+              if (row.cavalo) {
+                if (enriched?.cavalo_angellira_manual?.decision === "NOT_APPROVED") push(`Cavalo ${row.cavalo} — não aprovado (manual)`);
+                else if (enriched?.cavalo_angellira_found === false) push(`Cavalo ${row.cavalo} — não aprovado no Angellira`);
+                if (row.checklistCavalo === "Reprovado") push("Checklist do cavalo — reprovado");
+                const lvl = griffiLevel(checklistCavalo);
+                if (lvl === "overdue") push("Checklist GRIFFI (cavalo) — vencido");
+                else if (lvl === "warning") push("Checklist GRIFFI (cavalo) — alerta", false);
+              }
+              if (row.carreta) {
+                if (enriched?.carreta_angellira_manual?.decision === "NOT_APPROVED") push(`Carreta ${row.carreta} — não aprovado (manual)`);
+                else if (enriched?.carreta_angellira_found === false) push(`Carreta ${row.carreta} — não aprovado no Angellira`);
+                if (row.checklistCarreta === "Reprovado") push("Checklist da carreta — reprovado");
+                const lvl = griffiLevel(checklistCarreta);
+                if (lvl === "overdue") push("Checklist GRIFFI (carreta) — vencido");
+                else if (lvl === "warning") push("Checklist GRIFFI (carreta) — alerta", false);
+              }
+              if (items.length === 0) return null;
+              return (
+                <ModalSection title="Pendências & Inconformidades">
+                  <ul className="space-y-1">
+                    {items.map((it, i) => (
+                      <li
+                        key={i}
+                        className={cn(
+                          "flex items-start gap-1.5 text-xs",
+                          it.high ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400",
+                        )}
+                      >
+                        {it.high ? <ShieldX className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+                        <span>{it.label}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </ModalSection>
+              );
+            })()}
+
             {/* ── Histórico (reserva, aprovação, write-back na planilha) ── */}
             {/* DC-237: minimizável (a timeline fica longa e empurra as seções de
                 ação); começa aberto e a preferência persiste por operador. */}
@@ -3465,11 +3653,22 @@ function RowDetailModal({
                       })()}
                       <ModalRow
                         label="Angellira"
-                        value={<AngelliraStatusBadge found={enriched.angellira_driver_found} statusText={enriched.angellira_driver_status_text} />}
+                        value={
+                          <span className="inline-flex flex-wrap items-center gap-1.5">
+                            <AngelliraStatusBadge found={enriched.angellira_driver_found} statusText={enriched.angellira_driver_status_text} />
+                            <ManualVerdictBadge verdict={enriched.angellira_driver_manual} />
+                          </span>
+                        }
                       />
                       {enriched.angellira_driver_valid_until && (
                         <ModalRow label="Validade" value={enriched.angellira_driver_valid_until} />
                       )}
+                      <ConformityOverrideControl
+                        subjectType="DRIVER"
+                        subjectKey={enriched.aspx_cpf ?? (enriched.angellira_driver_details as { cpf?: string | null } | null)?.cpf ?? null}
+                        verdict={enriched.angellira_driver_manual}
+                        onSaved={() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] })}
+                      />
                     </>
                   ) : (
                     <p className="mt-1 text-xs text-muted-foreground/50 italic">Consulta Angellira/ASPX pendente.</p>
@@ -3524,10 +3723,21 @@ function RowDetailModal({
                           {enriched.cavalo_type && <ModalRow label="Tipo" value={enriched.cavalo_type} />}
                           <ModalRow
                             label="Angellira"
-                            value={<AngelliraStatusBadge found={enriched.cavalo_angellira_found} statusText={enriched.cavalo_angellira_status_text} />}
+                            value={
+                              <span className="inline-flex flex-wrap items-center gap-1.5">
+                                <AngelliraStatusBadge found={enriched.cavalo_angellira_found} statusText={enriched.cavalo_angellira_status_text} />
+                                <ManualVerdictBadge verdict={enriched.cavalo_angellira_manual} />
+                              </span>
+                            }
                           />
                           {enriched.cavalo_angellira_valid_until && <ModalRow label="Validade" value={enriched.cavalo_angellira_valid_until} />}
                           {enriched.cavalo_angellira_display && <ModalRow label="Proprietário" value={enriched.cavalo_angellira_display} />}
+                          <ConformityOverrideControl
+                            subjectType="VEHICLE"
+                            subjectKey={enriched.cavalo_plate ?? row.cavalo ?? null}
+                            verdict={enriched.cavalo_angellira_manual}
+                            onSaved={() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] })}
+                          />
                         </>
                       ) : (
                         <p className="text-xs text-muted-foreground/50 italic">Consulta pendente.</p>
@@ -3551,10 +3761,21 @@ function RowDetailModal({
                           {enriched.carreta_type && <ModalRow label="Tipo" value={enriched.carreta_type} />}
                           <ModalRow
                             label="Angellira"
-                            value={<AngelliraStatusBadge found={enriched.carreta_angellira_found} statusText={enriched.carreta_angellira_status_text} />}
+                            value={
+                              <span className="inline-flex flex-wrap items-center gap-1.5">
+                                <AngelliraStatusBadge found={enriched.carreta_angellira_found} statusText={enriched.carreta_angellira_status_text} />
+                                <ManualVerdictBadge verdict={enriched.carreta_angellira_manual} />
+                              </span>
+                            }
                           />
                           {enriched.carreta_angellira_valid_until && <ModalRow label="Validade" value={enriched.carreta_angellira_valid_until} />}
                           {enriched.carreta_angellira_display && <ModalRow label="Proprietário" value={enriched.carreta_angellira_display} />}
+                          <ConformityOverrideControl
+                            subjectType="VEHICLE"
+                            subjectKey={enriched.carreta_plate ?? row.carreta ?? null}
+                            verdict={enriched.carreta_angellira_manual}
+                            onSaved={() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] })}
+                          />
                         </>
                       ) : (
                         <p className="text-xs text-muted-foreground/50 italic">Consulta pendente.</p>

@@ -9,6 +9,7 @@ import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 import { notifyRegistrationApproved } from "../../../application/operator-admin/use-cases/registration-approved-outreach.js";
 import { selectAllPaginated } from "../../../infrastructure/supabase/paginate.js";
 import { readEnrichedMapsCached } from "../../../application/operator-admin/sheet-monitor-enriched-cache.js";
+import { loadConformityOverrides, applyConformityOverridesToEnriched } from "../../../application/operator-admin/conformity-overrides.js";
 import {
   getAuthorizationHeader,
   getCorrelationId,
@@ -39,7 +40,7 @@ import {
 } from "../schemas/cliente-schemas.js";
 import { routeIdParamsSchema } from "../schemas/route-schemas.js";
 import { driverIdParamsSchema } from "../schemas/driver-schemas.js";
-import { allocationChangesQuerySchema, allocationChangesRevertBodySchema, dashboardQuerySchema, programacaoLaunchBodySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAcceptBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAspxAssignedBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorDescendBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorRodoparBodySchema, sheetMonitorUpdateReservaBodySchema, vehicleChecklistQuerySchema } from "../schemas/operator-schemas.js";
+import { allocationChangesQuerySchema, allocationChangesRevertBodySchema, dashboardQuerySchema, programacaoLaunchBodySchema, sheetMonitorAllocationBodySchema, sheetMonitorAspxAcceptBodySchema, sheetMonitorAspxAssignBodySchema, sheetMonitorAspxAssignedBodySchema, sheetMonitorAssignReservaBodySchema, sheetMonitorCargoUpdateBodySchema, sheetMonitorConformityOverrideBodySchema, sheetMonitorCreateReservaBodySchema, sheetMonitorDeleteReservaBodySchema, sheetMonitorDescendBodySchema, sheetMonitorPinBodySchema, sheetMonitorReassignBodySchema, sheetMonitorRodoparBodySchema, sheetMonitorUpdateReservaBodySchema, vehicleChecklistQuerySchema } from "../schemas/operator-schemas.js";
 import {
   attachClienteRota,
   createOperatorCargo,
@@ -104,6 +105,7 @@ import { attachRouteCodes } from "../../../application/operator-admin/use-cases/
 import { attachRouteRegistration } from "../../../application/operator-admin/use-cases/attach-route-registration.js";
 import { attachRodoparStatus } from "../../../application/operator-admin/use-cases/attach-rodopar-status.js";
 import { updateMonitorCargo } from "../../../application/operator-admin/use-cases/update-monitor-cargo.js";
+import { setConformityOverride } from "../../../application/operator-admin/use-cases/set-conformity-override.js";
 import { buildSheetSummary, getSheetClientName } from "../../../application/google-sheets/google-sheet-loads.js";
 import { previewAspxAllocation } from "../../../application/operator-admin/use-cases/preview-aspx-allocation.js";
 import { assignAspxAllocations } from "../../../application/operator-admin/use-cases/assign-aspx-allocations.js";
@@ -878,7 +880,15 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, o
 // de página LANÇA (não devolve mapa parcial) — resposta 200 sempre com selos
 // completos; blip transitório vira erro (cliente mantém o último estado bom).
 async function readEnrichedMaps(supabaseClient, correlationId) {
-  return readEnrichedMapsCached(supabaseClient, correlationId);
+  // Selos enriquecidos (cache) + verdito MANUAL de conformidade Angellira aplicado
+  // em read-time (overlay, nunca persistido no enriched). Os overrides são uma tabela
+  // pequena; o overlay clona só as linhas que têm verdito (não muta o cache). Best-
+  // effort: se a tabela ainda não existe, loadConformityOverrides devolve vazio.
+  const [maps, overrides] = await Promise.all([
+    readEnrichedMapsCached(supabaseClient, correlationId),
+    loadConformityOverrides(supabaseClient, correlationId),
+  ]);
+  return applyConformityOverridesToEnriched(maps, overrides);
 }
 
 export async function resolveSheetMonitorResponse(request) {
@@ -1355,6 +1365,32 @@ export async function resolveUpdateMonitorAllocationResponse(request) {
       // forget (não bloqueia o save; o front faz refetch atrasado). Nunca lança.
       const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
       void enrichSheetRowsByLh(createSupabaseAdminClient(), [lh, ...(result.movedLhs ?? [])], { correlationId }).catch(() => {});
+      return { statusCode: result.statusCode, payload: result.payload };
+    },
+  );
+}
+
+export async function resolveSetConformityOverrideResponse(request) {
+  return withOperatorSession(
+    request,
+    "set-conformity-override",
+    {
+      requiredPermission: "cargos:write",
+      forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar a conformidade.",
+    },
+    async ({ correlationId, requestIp, operatorId }) => {
+      const body = sheetMonitorConformityOverrideBodySchema.parse(await parseJsonBody(request));
+      const result = await setConformityOverride({
+        subjectType: body.subjectType,
+        subjectKey: body.subjectKey,
+        decision: body.decision,
+        observacao: body.observacao,
+        operatorId,
+        requestIp,
+        correlationId,
+      });
+      // Overlay é read-time (loadConformityOverrides não é cacheado) → o verdito aparece
+      // no próximo fetch do Monitor sem precisar bustar o cache de enriquecimento.
       return { statusCode: result.statusCode, payload: result.payload };
     },
   );

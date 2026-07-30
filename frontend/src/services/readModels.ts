@@ -1252,6 +1252,15 @@ export interface SheetMonitorSummary {
   tipos: Record<string, number>;
 }
 
+/** Verdito MANUAL de conformidade Angellira (selo visual) de um motorista/veículo,
+ *  aplicado em read-time sobre a linha enriquecida do Monitor. null = sem verdito. */
+export interface ConformityManualVerdict {
+  decision: "APPROVED" | "NOT_APPROVED";
+  observacao: string;
+  setBy?: string | null;
+  setAt?: string | null;
+}
+
 export interface SheetMonitorEnrichedRow {
   lh: string;
   driver_name: string | null;
@@ -1281,6 +1290,10 @@ export interface SheetMonitorEnrichedRow {
   carreta_angellira_display: string | null;
   carreta_details: unknown;
   enriched_at: string | null;
+  /** Verdito manual de conformidade (overlay read-time) — por CPF do motorista / placa. */
+  angellira_driver_manual?: ConformityManualVerdict | null;
+  cavalo_angellira_manual?: ConformityManualVerdict | null;
+  carreta_angellira_manual?: ConformityManualVerdict | null;
 }
 
 /**
@@ -1631,6 +1644,24 @@ export async function updateMonitorCargo(input: MonitorCargoUpdate) {
     };
     meta: { correlationId: string };
   }>("/api/operator/sheet-monitor/cargo", { accessToken, method: "PATCH", body: input });
+}
+
+/**
+ * Define (ou limpa) o verdito MANUAL de conformidade Angellira de uma entidade
+ * (motorista por CPF, veículo por placa) — selo visual no Monitor. observação
+ * obrigatória ao aprovar/reprovar; decision null LIMPA o verdito.
+ */
+export async function setConformityOverride(input: {
+  subjectType: "DRIVER" | "VEHICLE";
+  subjectKey: string;
+  decision: "APPROVED" | "NOT_APPROVED" | null;
+  observacao?: string;
+}) {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{ ok: boolean; meta: { correlationId: string } }>(
+    "/api/operator/sheet-monitor/conformity-override",
+    { accessToken, method: "POST", body: input },
+  );
 }
 
 /** Cria uma carga do SISTEMA a partir do grid do Monitor ("Nova carga").
