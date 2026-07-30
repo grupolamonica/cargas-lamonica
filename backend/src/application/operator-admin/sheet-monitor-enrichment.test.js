@@ -217,6 +217,33 @@ describe("matchAspxDriver — tolerante a acento e mojibake", () => {
   });
 });
 
+describe("matchAspxDriver — NÃO casa pessoas diferentes de mesmo 1º nome (bug MAGNO, LT0Q8102C34J1)", () => {
+  const dir = indexAspxList([
+    { cpf: "384", display_name: "MAGNO WELLINGTON CHAVES LIMA" },
+    { cpf: "575", display_name: "MAGNO DO NASCIMENTO RODRIGUES" },
+    { cpf: "505", display_name: "MAGNO GABRIEL DOS SANTOS" },
+  ]);
+
+  it("resolve o PRÓPRIO CPF quando o nome existe no diretório", () => {
+    expect(matchAspxDriver("MAGNO GABRIEL DOS SANTOS", dir)?.cpf).toBe("505");
+  });
+
+  it("NÃO casa outra pessoa só pelo primeiro nome (retorna null, não o CPF errado)", () => {
+    // Motorista fora deste diretório (ex.: só existe no aspx_drivers, não na
+    // motoristas_historico). Antes o fallback startsWith('magno') casava WELLINGTON.
+    const semGabriel = indexAspxList([
+      { cpf: "384", display_name: "MAGNO WELLINGTON CHAVES LIMA" },
+      { cpf: "575", display_name: "MAGNO DO NASCIMENTO RODRIGUES" },
+    ]);
+    expect(matchAspxDriver("MAGNO GABRIEL DOS SANTOS", semGabriel)).toBeNull();
+  });
+
+  it("não confunde primeiro nome no meio do outro (CARLOS MAGNO ≠ MAGNO ...)", () => {
+    const dir2 = indexAspxList([{ cpf: "542", display_name: "CARLOS MAGNO SILVA SANTOS" }]);
+    expect(matchAspxDriver("MAGNO GABRIEL DOS SANTOS", dir2)).toBeNull();
+  });
+});
+
 const ctx = (over = {}) => ({
   driverByName: {},
   vehiclesByPlate: {},

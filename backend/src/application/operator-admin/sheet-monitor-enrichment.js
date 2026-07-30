@@ -91,37 +91,41 @@ export function indexAspxList(aspxList) {
 const NON_DRIVER = new Set(["noshow", "no show", "agregado", "sem motorista"]);
 
 /**
- * Match difuso nome→ASPX, tolerante a ACENTO (normaliza) e a MOJIBAKE (`?` que
- * substitui acento corrompido) — o `?` vira coringa de 1 char. Recebe a lista já
- * indexada (com `.norm`). Conservador: o coringa só roda quando há `?` no nome.
+ * Resolve nome→registro (ASPX / motoristas_historico) para descobrir o CPF do
+ * motorista. CONSERVADOR: só casa quando é a MESMA PESSOA (via driverNamesMatch —
+ * exato, mesmo conjunto de tokens, ou subconjunto com 1º+último iguais). Tolera
+ * acento e MOJIBAKE (`?` = acento corrompido → coringa de 1 char, ancorado no nome
+ * inteiro).
+ *
+ * NÃO casa mais por PREFIXO/primeiro-nome: "MAGNO GABRIEL DOS SANTOS" NÃO casa
+ * "MAGNO WELLINGTON CHAVES LIMA" (pessoas diferentes que só dividem o 1º nome).
+ * Antes, o fallback `startsWith(primeiroNome)` resolvia o CPF ERRADO → consultava
+ * o Angellira do motorista errado. Melhor "não consultado" do que dado de outra
+ * pessoa: sem match confiável, devolve null (o selo fica cinza, não vermelho/errado).
  */
 export function matchAspxDriver(name, aspxIndexed) {
   const nl = normNameForMatch(name);
   if (!nl || NON_DRIVER.has(nl)) return null;
   const list = aspxIndexed && aspxIndexed[0] && "norm" in aspxIndexed[0] ? aspxIndexed : indexAspxList(aspxIndexed);
 
-  let m = list.find((d) => d.norm.includes(nl));
-  if (m) return m;
-  m = list.find((d) => d.norm.length > 4 && nl.includes(d.norm));
+  // Mesma pessoa (conservador). Cobre acento/caixa/espaço/conectivo/nome-do-meio.
+  const m = list.find((d) => driverNamesMatch(nl, d.norm));
   if (m) return m;
 
-  // Mojibake: "flor?ncio" → /flor.ncio/ casa "florencio". Só quando há '?'.
+  // Mojibake ('?' = acento corrompido): coringa de 1 char, ANCORADO (^...$) — casa
+  // "flor?ncio"→"florencio" sem virar substring solta nem casar outra estrutura.
   if (nl.includes("?")) {
     const pattern = nl.split("").map((c) => (c === "?" ? "." : c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("");
     try {
-      const rx = new RegExp(pattern);
-      m = list.find((d) => rx.test(d.norm));
-      if (m) return m;
+      const rx = new RegExp(`^${pattern}$`);
+      const mj = list.find((d) => rx.test(d.norm));
+      if (mj) return mj;
     } catch {
       /* regex inválida — ignora */
     }
   }
 
-  const firstWord = nl.split(/\s+/)[0];
-  if (firstWord.length > 3 && !firstWord.includes("?")) {
-    m = list.find((d) => d.norm.startsWith(firstWord));
-  }
-  return m ?? null;
+  return null;
 }
 
 /**
