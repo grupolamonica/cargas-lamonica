@@ -2,20 +2,34 @@
   "__comment": "TV — Operação Lamonica. Importar no Grafana da empresa após criar os datasources com UIDs lmc-prometheus e lmc-postgres (ver monitoring/README.md). Painéis do job 'supabase' podem precisar de ajuste de nome de métrica após o 1º scrape.",
   "uid": "tv-operacao",
   "title": "TV — Operação Lamonica",
-  "tags": ["lamonica", "tv"],
+  "tags": [
+    "lamonica",
+    "tv"
+  ],
   "timezone": "America/Sao_Paulo",
   "editable": true,
   "graphTooltip": 0,
   "refresh": "30s",
   "schemaVersion": 39,
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "panels": [
     {
       "id": 1,
       "type": "stat",
       "title": "Site (cargas.grupolamonica.com)",
-      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "lmc-prometheus" },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "lmc-prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -29,18 +43,44 @@
             {
               "type": "value",
               "options": {
-                "0": { "text": "FORA DO AR", "color": "red", "index": 1 },
-                "1": { "text": "NO AR", "color": "green", "index": 0 }
+                "0": {
+                  "text": "FORA DO AR",
+                  "color": "red",
+                  "index": 1
+                },
+                "1": {
+                  "text": "NO AR",
+                  "color": "green",
+                  "index": 0
+                }
               }
             }
           ],
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
           "noValue": "SEM DADO"
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "background",
         "graphMode": "none",
         "textMode": "value",
@@ -51,10 +91,22 @@
       "id": 2,
       "type": "stat",
       "title": "Backend",
-      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "lmc-prometheus" },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "lmc-prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "up{job=\"lamonica-backend\"}", "instant": true }
+        {
+          "refId": "A",
+          "expr": "up{job=\"lamonica-backend\"}",
+          "instant": true
+        }
       ],
       "fieldConfig": {
         "defaults": {
@@ -62,18 +114,44 @@
             {
               "type": "value",
               "options": {
-                "0": { "text": "FORA", "color": "red", "index": 1 },
-                "1": { "text": "OK", "color": "green", "index": 0 }
+                "0": {
+                  "text": "FORA",
+                  "color": "red",
+                  "index": 1
+                },
+                "1": {
+                  "text": "OK",
+                  "color": "green",
+                  "index": 0
+                }
               }
             }
           ],
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
           "noValue": "SEM DADO"
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "background",
         "graphMode": "none",
         "textMode": "value",
@@ -84,8 +162,16 @@
       "id": 3,
       "type": "stat",
       "title": "Bots (Angellira · SPX · Unificada · OCR)",
-      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "lmc-prometheus" },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "lmc-prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -100,18 +186,44 @@
             {
               "type": "value",
               "options": {
-                "0": { "text": "FORA", "color": "red", "index": 1 },
-                "1": { "text": "OK", "color": "green", "index": 0 }
+                "0": {
+                  "text": "FORA",
+                  "color": "red",
+                  "index": 1
+                },
+                "1": {
+                  "text": "OK",
+                  "color": "green",
+                  "index": 0
+                }
               }
             }
           ],
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
           "noValue": "SEM DADO"
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "background",
         "graphMode": "none",
         "textMode": "value_and_name",
@@ -123,20 +235,50 @@
       "type": "stat",
       "title": "Uptime do backend",
       "description": "Se zerar, o container reiniciou.",
-      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "lmc-prometheus" },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "lmc-prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "lamonica_process_uptime_seconds", "instant": true }
+        {
+          "refId": "A",
+          "expr": "lamonica_process_uptime_seconds",
+          "instant": true
+        }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "yellow", "value": null }, { "color": "green", "value": 3600 } ] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "yellow",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 3600
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "none",
         "textMode": "value",
@@ -148,8 +290,16 @@
       "type": "stat",
       "title": "Erros 5xx agora",
       "description": "% das requisições nos últimos 5 min.",
-      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "lmc-prometheus" },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "lmc-prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -161,13 +311,35 @@
         "defaults": {
           "unit": "percent",
           "decimals": 1,
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 } ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
           "noValue": "0"
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "background",
         "graphMode": "none",
         "textMode": "value",
@@ -178,8 +350,16 @@
       "id": 10,
       "type": "timeseries",
       "title": "Requisições/s (Traefik)",
-      "gridPos": { "h": 8, "w": 10, "x": 0, "y": 5 },
-      "datasource": { "type": "prometheus", "uid": "lmc-prometheus" },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "lmc-prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -190,21 +370,39 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
-          "custom": { "fillOpacity": 15, "lineWidth": 2, "showPoints": "never" }
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false },
-        "tooltip": { "mode": "single" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
       }
     },
     {
       "id": 11,
       "type": "timeseries",
       "title": "% erros 5xx",
-      "gridPos": { "h": 8, "w": 7, "x": 10, "y": 5 },
-      "datasource": { "type": "prometheus", "uid": "lmc-prometheus" },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "lmc-prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -216,22 +414,55 @@
         "defaults": {
           "unit": "percent",
           "min": 0,
-          "custom": { "fillOpacity": 25, "lineWidth": 2, "showPoints": "never", "thresholdsStyle": { "mode": "line" } },
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 5 } ] }
+          "custom": {
+            "fillOpacity": 25,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false },
-        "tooltip": { "mode": "single" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
       }
     },
     {
       "id": 12,
       "type": "timeseries",
       "title": "Latência p95",
-      "gridPos": { "h": 8, "w": 7, "x": 17, "y": 5 },
-      "datasource": { "type": "prometheus", "uid": "lmc-prometheus" },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "lmc-prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -242,14 +473,40 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "custom": { "fillOpacity": 15, "lineWidth": 2, "showPoints": "never" },
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 3 } ] }
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false },
-        "tooltip": { "mode": "single" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
       }
     },
     {
@@ -257,19 +514,53 @@
       "type": "stat",
       "title": "Fila do pool pg (waiting)",
       "description": "Requisições esperando conexão com o banco. >0 sustentado = pool saturado.",
-      "gridPos": { "h": 8, "w": 4, "x": 0, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "lmc-prometheus" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 0,
+        "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "lmc-prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "lamonica_pg_pool_waiting", "instant": false }
+        {
+          "refId": "A",
+          "expr": "lamonica_pg_pool_waiting",
+          "instant": false
+        }
       ],
       "fieldConfig": {
         "defaults": {
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 3 } ] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "background",
         "graphMode": "area",
         "textMode": "value",
@@ -280,51 +571,117 @@
       "id": 21,
       "type": "timeseries",
       "title": "Pool pg (conexões vs teto)",
-      "gridPos": { "h": 8, "w": 6, "x": 4, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "lmc-prometheus" },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 4,
+        "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "lmc-prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "lamonica_pg_pool_total", "legendFormat": "em uso" },
-        { "refId": "B", "expr": "lamonica_pg_pool_max", "legendFormat": "teto" }
+        {
+          "refId": "A",
+          "expr": "lamonica_pg_pool_total",
+          "legendFormat": "em uso"
+        },
+        {
+          "refId": "B",
+          "expr": "lamonica_pg_pool_max",
+          "legendFormat": "teto"
+        }
       ],
       "fieldConfig": {
         "defaults": {
           "min": 0,
-          "custom": { "fillOpacity": 10, "lineWidth": 2, "showPoints": "never" }
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "teto" },
+            "matcher": {
+              "id": "byName",
+              "options": "teto"
+            },
             "properties": [
-              { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
-              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    10,
+                    10
+                  ],
+                  "fill": "dash"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
             ]
           }
         ]
       },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
       }
     },
     {
       "id": 22,
       "type": "timeseries",
       "title": "Memória do backend (RSS)",
-      "gridPos": { "h": 8, "w": 6, "x": 10, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "lmc-prometheus" },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 10,
+        "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "lmc-prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "lamonica_process_memory_rss_bytes", "legendFormat": "RSS" }
+        {
+          "refId": "A",
+          "expr": "lamonica_process_memory_rss_bytes",
+          "legendFormat": "RSS"
+        }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "bytes",
-          "custom": { "fillOpacity": 15, "lineWidth": 2, "showPoints": "never" }
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false },
-        "tooltip": { "mode": "single" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
       }
     },
     {
@@ -332,20 +689,54 @@
       "type": "stat",
       "title": "Supabase — conexões",
       "description": "Ajustar nome da métrica após o 1º scrape do job supabase.",
-      "gridPos": { "h": 8, "w": 4, "x": 16, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "lmc-prometheus" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 16,
+        "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "lmc-prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "sum(pg_stat_database_num_backends{job=\"supabase\"})", "instant": true }
+        {
+          "refId": "A",
+          "expr": "sum(pg_stat_database_num_backends{job=\"supabase\"})",
+          "instant": true
+        }
       ],
       "fieldConfig": {
         "defaults": {
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 40 }, { "color": "red", "value": 55 } ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 40
+              },
+              {
+                "color": "red",
+                "value": 55
+              }
+            ]
+          },
           "noValue": "AJUSTAR QUERY"
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "area",
         "textMode": "value",
@@ -357,8 +748,16 @@
       "type": "gauge",
       "title": "Supabase — disco usado",
       "description": "Ajustar nome/labels da métrica após o 1º scrape do job supabase.",
-      "gridPos": { "h": 8, "w": 4, "x": 20, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "lmc-prometheus" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 20,
+        "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "lmc-prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -371,13 +770,35 @@
           "unit": "percent",
           "min": 0,
           "max": 100,
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 85 } ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 85
+              }
+            ]
+          },
           "noValue": "AJUSTAR QUERY"
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "showThresholdLabels": false,
         "showThresholdMarkers": true
       }
@@ -386,8 +807,16 @@
       "id": 30,
       "type": "stat",
       "title": "Cadastros pendentes",
-      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 21 },
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "lmc-postgres" },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "lmc-postgres"
+      },
       "targets": [
         {
           "refId": "A",
@@ -398,12 +827,34 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 15 } ] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 15
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "background",
         "graphMode": "none",
         "textMode": "value",
@@ -414,8 +865,16 @@
       "id": 31,
       "type": "stat",
       "title": "Candidaturas hoje",
-      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 21 },
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "lmc-postgres" },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 16
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "lmc-postgres"
+      },
       "targets": [
         {
           "refId": "A",
@@ -426,12 +885,26 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": null } ] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "none",
         "textMode": "value",
@@ -442,8 +915,16 @@
       "id": 32,
       "type": "stat",
       "title": "Aprovados hoje (leads)",
-      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 21 },
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "lmc-postgres" },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 16
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "lmc-postgres"
+      },
       "targets": [
         {
           "refId": "A",
@@ -454,12 +935,26 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "none",
         "textMode": "value",
@@ -471,8 +966,16 @@
       "type": "stat",
       "title": "Automação com ERRO (24h)",
       "description": "Jobs Angellira/SPX/Unificada em ERROR nas últimas 24h.",
-      "gridPos": { "h": 6, "w": 4, "x": 12, "y": 21 },
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "lmc-postgres" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 16
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "lmc-postgres"
+      },
       "targets": [
         {
           "refId": "A",
@@ -483,12 +986,30 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "background",
         "graphMode": "none",
         "textMode": "value",
@@ -499,8 +1020,16 @@
       "id": 34,
       "type": "barchart",
       "title": "Cargas por status",
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 21 },
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "lmc-postgres" },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 20
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "lmc-postgres"
+      },
       "targets": [
         {
           "refId": "A",
@@ -511,15 +1040,26 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "axisLabel": "", "fillOpacity": 80 }
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "fillOpacity": 80
+          }
         },
         "overrides": []
       },
       "options": {
         "orientation": "auto",
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false },
-        "tooltip": { "mode": "single" },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        },
         "xTickLabelRotation": 0
       }
     },
@@ -527,8 +1067,16 @@
       "id": 35,
       "type": "timeseries",
       "title": "Funil de candidaturas — últimos 7 dias",
-      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 27 },
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "lmc-postgres" },
+      "gridPos": {
+        "h": 6,
+        "w": 16,
+        "x": 0,
+        "y": 20
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "lmc-postgres"
+      },
       "targets": [
         {
           "refId": "A",
@@ -540,13 +1088,24 @@
       "fieldConfig": {
         "defaults": {
           "min": 0,
-          "custom": { "fillOpacity": 15, "lineWidth": 2, "showPoints": "always", "spanNulls": false }
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "showPoints": "always",
+            "spanNulls": false
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
       }
     },
     {
@@ -554,8 +1113,16 @@
       "type": "stat",
       "title": "Claims hoje",
       "description": "Candidaturas a cargas registradas hoje (load_claims).",
-      "gridPos": { "h": 8, "w": 4, "x": 16, "y": 27 },
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "lmc-postgres" },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "lmc-postgres"
+      },
       "targets": [
         {
           "refId": "A",
@@ -566,12 +1133,26 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": null } ] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "none",
         "textMode": "value",
@@ -583,8 +1164,16 @@
       "type": "stat",
       "title": "Confirmadas hoje",
       "description": "Claims confirmadas hoje (CLAIM_CONFIRMED).",
-      "gridPos": { "h": 8, "w": 4, "x": 20, "y": 27 },
-      "datasource": { "type": "grafana-postgresql-datasource", "uid": "lmc-postgres" },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 15,
+        "y": 16
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "lmc-postgres"
+      },
       "targets": [
         {
           "refId": "A",
@@ -595,12 +1184,26 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "none",
         "textMode": "value",
