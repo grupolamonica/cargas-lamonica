@@ -110,9 +110,23 @@ describe("driverNamesMatch — mesma pessoa entre planilha e ASPX", () => {
     expect(driverNamesMatch("WESLEY ARAUJO SOARES", "WESLEY DE ARAUJO SOARES")).toBe(true);
     expect(driverNamesMatch("ANTONIO DOS SANTOS", "ANTONIO SANTOS")).toBe(true);
   });
-  it("nome do meio a mais/menos (mesmo 1º e último) não separa", () => {
-    expect(driverNamesMatch("JOAO SILVA", "JOAO PEDRO SILVA")).toBe(true);
+  it("nome do meio a mais/menos (subconjunto, mesmo 1º e último) — default tolera 2 tokens", () => {
     expect(driverNamesMatch("MARIA CLARA SOUZA LIMA", "MARIA SOUZA LIMA")).toBe(true);
+    expect(driverNamesMatch("JOAO SILVA", "JOAO PEDRO SILVA")).toBe(true);
+  });
+  it("reordenação dos MESMOS tokens não separa", () => {
+    expect(driverNamesMatch("MARCELO SILVA SANTOS", "MARCELO SANTOS SILVA")).toBe(true);
+    expect(driverNamesMatch("MARCOS JOSE DA SILVA", "JOSE MARCOS DA SILVA")).toBe(true);
+  });
+  it("modo ESTRITO (minSubsetTokens:3, diretório) — nome genérico de 2 tokens NÃO casa outra pessoa", () => {
+    const s = { minSubsetTokens: 3 };
+    expect(driverNamesMatch("MARCELO SANTOS SILVA", "MARCELO DA SILVA", s)).toBe(false);
+    expect(driverNamesMatch("JOSE TEOFILO NOGUEIRA DOS SANTOS", "JOSE DOS SANTOS", s)).toBe(false);
+    expect(driverNamesMatch("ALEX PEREIRA", "ALEX BARBOZA PEREIRA", s)).toBe(false);
+    expect(driverNamesMatch("MARIA CLARA SOUZA LIMA", "MARIA SOUZA LIMA", s)).toBe(true); // 3 tokens ainda casa
+  });
+  it("token repetido não mascara diferença (multiset, não set)", () => {
+    expect(driverNamesMatch("LEANDRO DOS SANTOS SANTOS", "LEANDRO FARIA DOS SANTOS")).toBe(false);
   });
   it("pessoas DIFERENTES não casam (evita esconder motorista trocado)", () => {
     expect(driverNamesMatch("NESTOR DE LIMA", "GABRIEL WESLEY MORAIS DE LIMA")).toBe(false); // só sobrenome
@@ -264,6 +278,18 @@ describe("matchAspxDriver — NÃO casa pessoas diferentes de mesmo 1º nome (bu
   it("não confunde primeiro nome no meio do outro (CARLOS MAGNO ≠ MAGNO ...)", () => {
     const dir2 = indexAspxList([{ cpf: "542", display_name: "CARLOS MAGNO SILVA SANTOS" }]);
     expect(matchAspxDriver("MAGNO GABRIEL DOS SANTOS", dir2)).toBeNull();
+  });
+
+  it("no diretório NÃO casa nome completo com nome genérico de 2 tokens (estrito)", () => {
+    // Caso real: "MARCELO SANTOS SILVA" (planilha) não pode pegar "MARCELO DA SILVA".
+    const dir3 = indexAspxList([
+      { cpf: "1", display_name: "MARCELO DA SILVA" },
+      { cpf: "2", display_name: "JOSE DOS SANTOS" },
+    ]);
+    expect(matchAspxDriver("MARCELO SANTOS SILVA", dir3)).toBeNull();
+    expect(matchAspxDriver("JOSE TEOFILO NOGUEIRA DOS SANTOS", dir3)).toBeNull();
+    // mas casa o próprio nome exato
+    expect(matchAspxDriver("MARCELO DA SILVA", dir3)?.cpf).toBe("1");
   });
 });
 

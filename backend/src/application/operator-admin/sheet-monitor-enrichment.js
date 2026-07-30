@@ -57,12 +57,17 @@ function significantNameTokens(norm) {
  * SOARES") e nome do meio a mais/a menos ("JOAO SILVA" ⇄ "JOAO PEDRO SILVA").
  *
  * Conservador p/ NÃO gerar falso-positivo (que esconderia motorista trocado):
- *  - conjuntos de tokens significativos IGUAIS (ordem/conectivo à parte), OU
- *  - um nome é SUBCONJUNTO do outro (≥2 tokens) COM o MESMO primeiro e último
- *    token significativo. Pessoas diferentes ("NESTOR LIMA" vs "GABRIEL … LIMA")
- *    não passam (primeiro token difere).
+ *  - MULTISET de tokens significativos IGUAL (ordem/conectivo à parte) — usa
+ *    multiset, não set, p/ token repetido não mascarar diferença; OU
+ *  - um nome é SUBCONJUNTO do outro (>= minSubsetTokens) COM o MESMO primeiro e
+ *    último token e o multiset do curto cabendo no do longo.
+ *
+ * minSubsetTokens (default 2): no DIRETÓRIO (matchAspxDriver, milhares de nomes)
+ * use 3 p/ não casar nome genérico de 2 tokens ("MARCELO DA SILVA") com outra
+ * pessoa. Na comparação da MESMA carga (selo ASPX) o default 2 basta (só há 1
+ * candidato — o motorista daquela viagem).
  */
-export function driverNamesMatch(a, b) {
+export function driverNamesMatch(a, b, { minSubsetTokens = 2 } = {}) {
   const na = normNameForMatch(a);
   const nb = normNameForMatch(b);
   if (!na || !nb) return false;
@@ -70,19 +75,30 @@ export function driverNamesMatch(a, b) {
   const ta = significantNameTokens(na);
   const tb = significantNameTokens(nb);
   if (ta.length === 0 || tb.length === 0) return false;
-  const sa = new Set(ta);
-  const sb = new Set(tb);
-  // Mesmos tokens significativos (só conectivo/ordem mudou) → mesma pessoa.
-  if (ta.length === tb.length && ta.every((t) => sb.has(t))) return true;
-  // Subconjunto (nome do meio a mais/menos), guardado por primeiro+último token.
-  const [short, long, longSet] = ta.length <= tb.length ? [ta, tb, sb] : [tb, ta, sa];
-  if (
-    short.length >= 2 &&
-    short.every((t) => longSet.has(t)) &&
-    short[0] === long[0] &&
-    short[short.length - 1] === long[long.length - 1]
-  ) {
+
+  // Mesmo MULTISET de tokens significativos (só ordem/conectivo mudou) → mesma
+  // pessoa. Multiset (arrays ordenados), NÃO set: token repetido não pode mascarar
+  // diferença — ex.: "LEANDRO SANTOS SANTOS" ≠ "LEANDRO FARIA SANTOS".
+  if (ta.length === tb.length && [...ta].sort().join("") === [...tb].sort().join("")) {
     return true;
+  }
+
+  // Subconjunto (nome do meio a mais/menos): exige >=3 tokens no nome MAIS CURTO,
+  // 1º e último iguais, e o multiset do curto cabendo no do longo. O piso de 3
+  // evita casar nome GENÉRICO de 2 tokens ("MARCELO DA SILVA", "JOSE DOS SANTOS",
+  // "ALEX PEREIRA") com um nome completo de outra pessoa. Nome de 2 tokens sem
+  // igualdade exata → "não consultado" (o operador informa o CPF).
+  const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+  if (short.length >= minSubsetTokens && short[0] === long[0] && short[short.length - 1] === long[long.length - 1]) {
+    const longCounts = new Map();
+    for (const t of long) longCounts.set(t, (longCounts.get(t) || 0) + 1);
+    let fits = true;
+    const shortCounts = new Map();
+    for (const t of short) shortCounts.set(t, (shortCounts.get(t) || 0) + 1);
+    for (const [t, c] of shortCounts) {
+      if ((longCounts.get(t) || 0) < c) { fits = false; break; }
+    }
+    if (fits) return true;
   }
   return false;
 }
@@ -113,7 +129,9 @@ export function matchAspxDriver(name, aspxIndexed) {
   const list = aspxIndexed && aspxIndexed[0] && "norm" in aspxIndexed[0] ? aspxIndexed : indexAspxList(aspxIndexed);
 
   // Mesma pessoa (conservador). Cobre acento/caixa/espaço/conectivo/nome-do-meio.
-  const m = list.find((d) => driverNamesMatch(nl, d.norm));
+  // ESTRITO (minSubsetTokens:3): é busca num diretório de milhares → nome genérico
+  // de 2 tokens não pode casar outra pessoa.
+  const m = list.find((d) => driverNamesMatch(nl, d.norm, { minSubsetTokens: 3 }));
   if (m) return m;
 
   // Mojibake ('?' = acento corrompido): coringa de 1 char, ANCORADO (^...$) — casa
