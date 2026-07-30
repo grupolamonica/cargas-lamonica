@@ -56,6 +56,37 @@ import {
   type WizardStepKind as ComputedStepKind,
 } from "./lib/computeNextStep";
 
+/**
+ * UUID v4 resiliente a ambientes SEM `crypto.randomUUID`.
+ *
+ * `crypto.randomUUID` só existe em navegadores recentes E em secure context;
+ * WebViews antigas do Android e navegadores in-app (WhatsApp/Instagram/Facebook)
+ * — por onde grande parte dos motoristas abre o link da carga — NÃO têm o método.
+ * Chamar direto quebrava o render do wizard (TypeError capturado pelo
+ * WizardErrorBoundary → tela "Recarregar"), impedindo a candidatura. Aqui caímos
+ * para `crypto.getRandomValues` (suporte muito mais amplo, inclusive fora de
+ * secure context) e, em último caso, `Math.random` — sempre devolvendo um UUID
+ * VÁLIDO, exigido pelo caminho de upload (pasta do bucket) e chave de draft.
+ */
+function safeRandomUUID(): string {
+  const cryptoObj = globalThis.crypto;
+  if (typeof cryptoObj?.randomUUID === "function") {
+    return cryptoObj.randomUUID();
+  }
+  if (typeof cryptoObj?.getRandomValues === "function") {
+    const bytes = cryptoObj.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // versão 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variante RFC 4122
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0"));
+    return `${hex[0]}${hex[1]}${hex[2]}${hex[3]}-${hex[4]}${hex[5]}-${hex[6]}${hex[7]}-${hex[8]}${hex[9]}-${hex[10]}${hex[11]}${hex[12]}${hex[13]}${hex[14]}${hex[15]}`;
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
+    const rand = (Math.random() * 16) | 0;
+    const value = ch === "x" ? rand : (rand & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
+
 export interface DriverRegistrationWizardContext {
   cargaId?: string;
   horsePlate: string;
@@ -328,7 +359,7 @@ export function DriverRegistrationWizard({
   // chega undefined. Geramos um UUID estável por sessão para servir de pasta
   // dos uploads (bucket exige cargaId UUID) e chave do draft (endpoint exige
   // cargaId não-vazio). No SUBMIT, porém, enviamos cargaId vazio → carga_id=NULL.
-  const standaloneSessionId = useMemo(() => crypto.randomUUID(), []);
+  const standaloneSessionId = useMemo(() => safeRandomUUID(), []);
   const uploadCargaId = cargaId ?? standaloneSessionId;
 
   // Passa cpf pro hook quando NÃO ha sessão Supabase — sem isso o hook trata
