@@ -312,15 +312,18 @@ def _header_footer(canvas, doc):
         for child in _LOGO_DRAWING.contents:
             d.add(child)
         renderPDF.draw(d, canvas, 2 * cm, header_y - 0.1 * cm)
-        text_x = 2 * cm + d.width + 0.4 * cm
+        # Razão social à direita do logo.
+        canvas.setFillColor(colors.black)
+        canvas.setFont("Helvetica-Bold", 9)
+        canvas.drawString(2 * cm + d.width + 0.4 * cm, header_y + 0.2 * cm, MARCA_NOME)
     else:
+        # Sem logo: título (esquerda) + razão social alinhada à direita — sem sobrepor.
         canvas.setFillColor(colors.HexColor(MARCA_AZUL))
         canvas.setFont("Helvetica-Bold", 14)
         canvas.drawString(2 * cm, header_y, MARCA_TITULO)
-        text_x = 4.5 * cm
-    canvas.setFillColor(colors.black)
-    canvas.setFont("Helvetica-Bold", 9)
-    canvas.drawString(text_x, header_y + 0.2 * cm, MARCA_NOME)
+        canvas.setFillColor(colors.HexColor("#64748b"))
+        canvas.setFont("Helvetica", 8)
+        canvas.drawRightString(A4[0] - 2 * cm, header_y + 0.15 * cm, MARCA_NOME)
     canvas.setStrokeColor(colors.HexColor("#cbd5e1"))
     canvas.setLineWidth(0.5)
     canvas.line(2 * cm, header_y - 0.4 * cm, A4[0] - 2 * cm, header_y - 0.4 * cm)
