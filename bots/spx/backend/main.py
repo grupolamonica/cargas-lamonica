@@ -210,6 +210,17 @@ class AlocarRequest(BaseModel):
     dry_run: bool = True
 
 
+class AceitarRequest(BaseModel):
+    """Aceite de uma viagem de line_haul (POST trip/accept). Espelha o contrato
+    do backend Node (spx-allocation-client.js -> POST /spx/trips/accept).
+
+    Aceitar reserva/compromete a viagem com a agência (acceptance_status 0->1) e é
+    PRÉ-REQUISITO do atribuir: só viagens aceitas entram no pool de assign."""
+    trip_id: int
+    station_id: int = 0
+    dry_run: bool = True
+
+
 class MotoristaPayload(BaseModel):
     cpf: str
     driver_name: str
@@ -413,6 +424,26 @@ def trips_alocar(req: AlocarRequest):
             trip_id=req.trip_id,
             driver_ids=req.driver_ids,
             vehicle_plates=req.vehicle_plates,
+            agency_current_station_id=req.station_id or None,
+            dry_run=req.dry_run,
+        )
+    except SessaoExpirada as exc:
+        reset_client()
+        raise HTTPException(status_code=502, detail=f"sessao expirada: {exc}")
+    except (APIErro, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.post("/spx/trips/accept")
+def trips_accept(req: AceitarRequest):
+    """Aceita/reserva uma viagem para a agência (POST trip/accept). dry_run=True
+    (default) só monta o body sem enviar; o backend Node ainda guarda o write real
+    atrás do kill-switch SPX_ACCEPT_WRITE_ENABLED. Aceitar é pré-requisito do
+    atribuir (só viagem aceita entra no pool de assign)."""
+    try:
+        return trips_mod.accept_trip(
+            get_client(),
+            req.trip_id,
             agency_current_station_id=req.station_id or None,
             dry_run=req.dry_run,
         )
