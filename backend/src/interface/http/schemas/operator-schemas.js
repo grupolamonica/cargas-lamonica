@@ -1,6 +1,19 @@
 import { z } from "zod";
 import { positiveIntSchema } from "./common.js";
 
+/** Verdito manual do checklist por veículo: só "Aprovado" / "Reprovado" (ou ""/null
+ *  = sem verdito). Defesa em profundidade — a UI já é um select restrito, mas o
+ *  backend recusa qualquer outro valor (não deixa gravar lixo via requisição crua). */
+const checklistVerdictSchema = z
+  .string()
+  .trim()
+  .max(40)
+  .refine((v) => v === "" || v === "Aprovado" || v === "Reprovado", {
+    message: "Verdito de checklist inválido (use \"Aprovado\", \"Reprovado\" ou vazio).",
+  })
+  .nullable()
+  .optional();
+
 /** Query params for GET /api/operator/motoristas/:driverId (PATCH body) — params handled by driver-schemas */
 
 /** Query params for sheet monitor */
@@ -46,8 +59,8 @@ export const sheetMonitorAllocationBodySchema = z.object({
   // Verdito manual do checklist por veículo ("Aprovado"/"Reprovado"/"" = sem
   // verdito). Gravados em alloc_checklist_cavalo/carreta e espelhados nas colunas
   // CheckList Cavalo / CheckList Carreta1 da planilha.
-  checklistCavalo: z.string().trim().max(40).nullable().optional(),
-  checklistCarreta: z.string().trim().max(40).nullable().optional(),
+  checklistCavalo: checklistVerdictSchema,
+  checklistCarreta: checklistVerdictSchema,
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/reassign — reordenar a fila de
@@ -181,8 +194,8 @@ export const sheetMonitorCargoUpdateBodySchema = z.object({
   // Observação de checklist (tratativas) → alloc_tratativas.
   tratativas: z.string().trim().max(1000).nullable().optional(),
   // Verdito manual do checklist por veículo → alloc_checklist_cavalo/carreta.
-  checklistCavalo: z.string().trim().max(40).nullable().optional(),
-  checklistCarreta: z.string().trim().max(40).nullable().optional(),
+  checklistCavalo: checklistVerdictSchema,
+  checklistCarreta: checklistVerdictSchema,
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/conformity-override — verdito manual de
