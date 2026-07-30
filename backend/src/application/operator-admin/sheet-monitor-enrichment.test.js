@@ -370,11 +370,24 @@ describe("mergePreservingGood — não perde dado bom em falha transitória", ()
     expect(m.angellira_driver_valid_until).toBe("2027-01-01");
   });
 
-  it("aspx_cpf sumiu (match ASPX falhou) mesmo motorista → mantém o cpf anterior", () => {
-    const next = { lh: "LH1", driver_name: "João Silva", aspx_cpf: null, aspx_display_name: null, angellira_driver_status: null };
+  it("motorista deixou de casar (null, não UNAVAILABLE) → NÃO preserva (limpa dado que pode ser de OUTRA pessoa)", () => {
+    // Matcher estrito rejeitou um match frouxo antigo: a nova passada não resolve o
+    // motorista (status null). O dado anterior pode ser de outra pessoa → deve SAIR.
+    const next = { lh: "LH1", driver_name: "João Silva", aspx_cpf: null, aspx_display_name: null, angellira_driver_found: null, angellira_driver_status: null };
     const m = mergePreservingGood(next, prevFound);
-    expect(m.aspx_cpf).toBe("123");
-    expect(m.angellira_driver_found).toBe(true); // sem cpf → angellira null → preserva
+    expect(m.aspx_cpf).toBeNull();
+    expect(m.angellira_driver_found).toBeNull();
+    expect(m.angellira_driver_status).toBeNull();
+  });
+
+  it("mesmo nome de planilha mas OUTRO CPF (match frouxo antigo era de outra pessoa) → NÃO preserva", () => {
+    // prevFound.aspx_cpf = "123" (pessoa A). A nova passada resolve o CPF "999"
+    // (pessoa B, correta) e a API caiu (UNAVAILABLE). Não pode carregar o FOUND de A.
+    const next = { lh: "LH1", driver_name: "João Silva", aspx_cpf: "999", angellira_driver_found: false, angellira_driver_status: "UNAVAILABLE", angellira_driver_valid_until: null };
+    const m = mergePreservingGood(next, prevFound);
+    expect(m.angellira_driver_found).toBe(false);
+    expect(m.angellira_driver_status).toBe("UNAVAILABLE");
+    expect(m.aspx_cpf).toBe("999");
   });
 
   it("motorista DIFERENTE → NÃO preserva (usa o novo, mesmo UNAVAILABLE)", () => {

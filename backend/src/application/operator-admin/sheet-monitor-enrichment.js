@@ -219,6 +219,11 @@ export function buildEnrichedUpsertRow(row, ctx) {
 const isUnavail = (s) => !s || s === "UNAVAILABLE";
 const isReal = (s) => Boolean(s) && s !== "UNAVAILABLE";
 
+// Identidade resolvida do motorista (CPF) numa linha enriquecida — usada p/ não
+// preservar dado de OUTRA pessoa que tinha o mesmo nome na planilha (match frouxo).
+const driverIdentityCpf = (r) =>
+  (r?.aspx_cpf || (r?.angellira_driver_details && r.angellira_driver_details.cpf) || null);
+
 /**
  * Funde a nova linha enriquecida com a ANTERIOR preservando dado bom: se a nova
  * consulta veio UNAVAILABLE/vazia (falha transitória) mas já havia status real,
@@ -229,19 +234,33 @@ export function mergePreservingGood(next, prev) {
   if (!prev) return next;
   const m = { ...next };
 
-  // Motorista (Angellira + cadastro ASPX) — só se for o mesmo motorista
-  if (next.driver_name && next.driver_name === prev.driver_name) {
+  // Motorista — só preserva o dado bom anterior numa falha TRANSITÓRIA real: o
+  // motorista foi resolvido mas a API do Angellira caiu (status UNAVAILABLE). Se a
+  // nova passada NÃO resolveu o motorista (status null — ex.: o matcher estrito
+  // rejeitou corretamente um match errado, ou o motorista saiu da base), NÃO
+  // preserva: o dado anterior pode ser de OUTRA pessoa (match frouxo antigo) e deve
+  // SAIR. Assim o enriquecimento/"Consultar item" auto-limpa os matches errados.
+  // Só para o MESMO motorista (senão troca de motorista carregaria dado errado).
+  const nextIdCpf = driverIdentityCpf(next);
+  const prevIdCpf = driverIdentityCpf(prev);
+  if (
+    next.driver_name &&
+    next.driver_name === prev.driver_name &&
+    next.angellira_driver_status === "UNAVAILABLE" &&
+    isReal(prev.angellira_driver_status) &&
+    nextIdCpf &&
+    prevIdCpf &&
+    nextIdCpf === prevIdCpf
+  ) {
     if (!next.aspx_cpf && prev.aspx_cpf) {
       m.aspx_cpf = prev.aspx_cpf;
       m.aspx_display_name = prev.aspx_display_name ?? m.aspx_display_name;
     }
-    if (isUnavail(next.angellira_driver_status) && isReal(prev.angellira_driver_status)) {
-      m.angellira_driver_found = prev.angellira_driver_found;
-      m.angellira_driver_status = prev.angellira_driver_status;
-      m.angellira_driver_valid_until = prev.angellira_driver_valid_until;
-      m.angellira_driver_status_text = prev.angellira_driver_status_text;
-      m.angellira_driver_details = prev.angellira_driver_details ?? m.angellira_driver_details;
-    }
+    m.angellira_driver_found = prev.angellira_driver_found;
+    m.angellira_driver_status = prev.angellira_driver_status;
+    m.angellira_driver_valid_until = prev.angellira_driver_valid_until;
+    m.angellira_driver_status_text = prev.angellira_driver_status_text;
+    m.angellira_driver_details = prev.angellira_driver_details ?? m.angellira_driver_details;
   }
 
   // Cavalo — só se for a mesma placa

@@ -3424,9 +3424,10 @@ function RowDetailModal({
                   ) : (
                     <p className="mt-1 text-xs text-muted-foreground/50 italic">Consulta Angellira/ASPX pendente.</p>
                   )}
-                  {/* Motorista fora da base do Angellira (não consultado) → consulta
-                      manual por CPF. Aparece quando o auto não achou vigência. */}
-                  {(!enriched || enriched.angellira_driver_found == null) && (
+                  {/* Motorista não aprovado no Angellira (não consultado, não
+                      encontrado ou indisponível) → consulta manual por CPF, pra o
+                      operador informar o CPF certo. Só some quando está aprovado. */}
+                  {(!enriched || enriched.angellira_driver_found !== true) && (
                     <ManualCpfConsult
                       scope={
                         row.source === "sistema" && row.cargoId
