@@ -24,7 +24,9 @@ const DEFAULT_BATCH = 100;
 const DEFAULT_STALE_HOURS = 20;
 const DEFAULT_CONCURRENCY = 3;
 const DEFAULT_DELAY_MS = 250;
-const CALL_TIMEOUT_MS = 8_000;
+// A API do Angellira às vezes fica LENTA (~12-13s por resposta em prod); 8s cortava
+// consulta boa e virava "indisponível". Fica abaixo do timeout do cliente (30s).
+const CALL_TIMEOUT_MS = Math.max(1_000, Number(process.env.ANGELLIRA_ENRICH_TIMEOUT_MS) || 25_000);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

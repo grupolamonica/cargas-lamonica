@@ -7,7 +7,11 @@ import { listSystemCargasForMonitor } from "./use-cases/list-system-cargas-monit
 const STALE_HOURS = 6;
 const BATCH_SIZE = 60;
 const CONCURRENCY = 8;
-const CALL_TIMEOUT_MS = 8_000;
+// Timeout por consulta ao Angellira. A API deles às vezes fica LENTA (~12-13s por
+// resposta em prod). 8s era curto demais → consulta boa mas lenta era abortada e
+// virava "indisponível". Fica abaixo do timeout do cliente (ANGELLIRA_TIMEOUT_MS,
+// 30s). Configurável por env p/ ajustar sem deploy.
+const CALL_TIMEOUT_MS = Math.max(1_000, Number(process.env.ANGELLIRA_ENRICH_TIMEOUT_MS) || 25_000);
 
 function normalizePlate(p) {
   return (p || "").replace(/[\s\-.]/g, "").toUpperCase();
@@ -53,12 +57,17 @@ function significantNameTokens(norm) {
  * SOARES") e nome do meio a mais/a menos ("JOAO SILVA" ⇄ "JOAO PEDRO SILVA").
  *
  * Conservador p/ NÃO gerar falso-positivo (que esconderia motorista trocado):
- *  - conjuntos de tokens significativos IGUAIS (ordem/conectivo à parte), OU
- *  - um nome é SUBCONJUNTO do outro (≥2 tokens) COM o MESMO primeiro e último
- *    token significativo. Pessoas diferentes ("NESTOR LIMA" vs "GABRIEL … LIMA")
- *    não passam (primeiro token difere).
+ *  - MULTISET de tokens significativos IGUAL (ordem/conectivo à parte) — usa
+ *    multiset, não set, p/ token repetido não mascarar diferença; OU
+ *  - um nome é SUBCONJUNTO do outro (>= minSubsetTokens) COM o MESMO primeiro e
+ *    último token e o multiset do curto cabendo no do longo.
+ *
+ * minSubsetTokens (default 2): no DIRETÓRIO (matchAspxDriver, milhares de nomes)
+ * use 3 p/ não casar nome genérico de 2 tokens ("MARCELO DA SILVA") com outra
+ * pessoa. Na comparação da MESMA carga (selo ASPX) o default 2 basta (só há 1
+ * candidato — o motorista daquela viagem).
  */
-export function driverNamesMatch(a, b) {
+export function driverNamesMatch(a, b, { minSubsetTokens = 2 } = {}) {
   const na = normNameForMatch(a);
   const nb = normNameForMatch(b);
   if (!na || !nb) return false;
@@ -66,19 +75,30 @@ export function driverNamesMatch(a, b) {
   const ta = significantNameTokens(na);
   const tb = significantNameTokens(nb);
   if (ta.length === 0 || tb.length === 0) return false;
-  const sa = new Set(ta);
-  const sb = new Set(tb);
-  // Mesmos tokens significativos (só conectivo/ordem mudou) → mesma pessoa.
-  if (ta.length === tb.length && ta.every((t) => sb.has(t))) return true;
-  // Subconjunto (nome do meio a mais/menos), guardado por primeiro+último token.
-  const [short, long, longSet] = ta.length <= tb.length ? [ta, tb, sb] : [tb, ta, sa];
-  if (
-    short.length >= 2 &&
-    short.every((t) => longSet.has(t)) &&
-    short[0] === long[0] &&
-    short[short.length - 1] === long[long.length - 1]
-  ) {
+
+  // Mesmo MULTISET de tokens significativos (só ordem/conectivo mudou) → mesma
+  // pessoa. Multiset (arrays ordenados), NÃO set: token repetido não pode mascarar
+  // diferença — ex.: "LEANDRO SANTOS SANTOS" ≠ "LEANDRO FARIA SANTOS".
+  if (ta.length === tb.length && [...ta].sort().join("") === [...tb].sort().join("")) {
     return true;
+  }
+
+  // Subconjunto (nome do meio a mais/menos): exige >=3 tokens no nome MAIS CURTO,
+  // 1º e último iguais, e o multiset do curto cabendo no do longo. O piso de 3
+  // evita casar nome GENÉRICO de 2 tokens ("MARCELO DA SILVA", "JOSE DOS SANTOS",
+  // "ALEX PEREIRA") com um nome completo de outra pessoa. Nome de 2 tokens sem
+  // igualdade exata → "não consultado" (o operador informa o CPF).
+  const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+  if (short.length >= minSubsetTokens && short[0] === long[0] && short[short.length - 1] === long[long.length - 1]) {
+    const longCounts = new Map();
+    for (const t of long) longCounts.set(t, (longCounts.get(t) || 0) + 1);
+    let fits = true;
+    const shortCounts = new Map();
+    for (const t of short) shortCounts.set(t, (shortCounts.get(t) || 0) + 1);
+    for (const [t, c] of shortCounts) {
+      if ((longCounts.get(t) || 0) < c) { fits = false; break; }
+    }
+    if (fits) return true;
   }
   return false;
 }
@@ -91,37 +111,43 @@ export function indexAspxList(aspxList) {
 const NON_DRIVER = new Set(["noshow", "no show", "agregado", "sem motorista"]);
 
 /**
- * Match difuso nome→ASPX, tolerante a ACENTO (normaliza) e a MOJIBAKE (`?` que
- * substitui acento corrompido) — o `?` vira coringa de 1 char. Recebe a lista já
- * indexada (com `.norm`). Conservador: o coringa só roda quando há `?` no nome.
+ * Resolve nome→registro (ASPX / motoristas_historico) para descobrir o CPF do
+ * motorista. CONSERVADOR: só casa quando é a MESMA PESSOA (via driverNamesMatch —
+ * exato, mesmo conjunto de tokens, ou subconjunto com 1º+último iguais). Tolera
+ * acento e MOJIBAKE (`?` = acento corrompido → coringa de 1 char, ancorado no nome
+ * inteiro).
+ *
+ * NÃO casa mais por PREFIXO/primeiro-nome: "MAGNO GABRIEL DOS SANTOS" NÃO casa
+ * "MAGNO WELLINGTON CHAVES LIMA" (pessoas diferentes que só dividem o 1º nome).
+ * Antes, o fallback `startsWith(primeiroNome)` resolvia o CPF ERRADO → consultava
+ * o Angellira do motorista errado. Melhor "não consultado" do que dado de outra
+ * pessoa: sem match confiável, devolve null (o selo fica cinza, não vermelho/errado).
  */
 export function matchAspxDriver(name, aspxIndexed) {
   const nl = normNameForMatch(name);
   if (!nl || NON_DRIVER.has(nl)) return null;
   const list = aspxIndexed && aspxIndexed[0] && "norm" in aspxIndexed[0] ? aspxIndexed : indexAspxList(aspxIndexed);
 
-  let m = list.find((d) => d.norm.includes(nl));
-  if (m) return m;
-  m = list.find((d) => d.norm.length > 4 && nl.includes(d.norm));
+  // Mesma pessoa (conservador). Cobre acento/caixa/espaço/conectivo/nome-do-meio.
+  // ESTRITO (minSubsetTokens:3): é busca num diretório de milhares → nome genérico
+  // de 2 tokens não pode casar outra pessoa.
+  const m = list.find((d) => driverNamesMatch(nl, d.norm, { minSubsetTokens: 3 }));
   if (m) return m;
 
-  // Mojibake: "flor?ncio" → /flor.ncio/ casa "florencio". Só quando há '?'.
+  // Mojibake ('?' = acento corrompido): coringa de 1 char, ANCORADO (^...$) — casa
+  // "flor?ncio"→"florencio" sem virar substring solta nem casar outra estrutura.
   if (nl.includes("?")) {
     const pattern = nl.split("").map((c) => (c === "?" ? "." : c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("");
     try {
-      const rx = new RegExp(pattern);
-      m = list.find((d) => rx.test(d.norm));
-      if (m) return m;
+      const rx = new RegExp(`^${pattern}$`);
+      const mj = list.find((d) => rx.test(d.norm));
+      if (mj) return mj;
     } catch {
       /* regex inválida — ignora */
     }
   }
 
-  const firstWord = nl.split(/\s+/)[0];
-  if (firstWord.length > 3 && !firstWord.includes("?")) {
-    m = list.find((d) => d.norm.startsWith(firstWord));
-  }
-  return m ?? null;
+  return null;
 }
 
 /**
@@ -215,6 +241,11 @@ export function buildEnrichedUpsertRow(row, ctx) {
 const isUnavail = (s) => !s || s === "UNAVAILABLE";
 const isReal = (s) => Boolean(s) && s !== "UNAVAILABLE";
 
+// Identidade resolvida do motorista (CPF) numa linha enriquecida — usada p/ não
+// preservar dado de OUTRA pessoa que tinha o mesmo nome na planilha (match frouxo).
+const driverIdentityCpf = (r) =>
+  (r?.aspx_cpf || (r?.angellira_driver_details && r.angellira_driver_details.cpf) || null);
+
 /**
  * Funde a nova linha enriquecida com a ANTERIOR preservando dado bom: se a nova
  * consulta veio UNAVAILABLE/vazia (falha transitória) mas já havia status real,
@@ -225,19 +256,33 @@ export function mergePreservingGood(next, prev) {
   if (!prev) return next;
   const m = { ...next };
 
-  // Motorista (Angellira + cadastro ASPX) — só se for o mesmo motorista
-  if (next.driver_name && next.driver_name === prev.driver_name) {
+  // Motorista — só preserva o dado bom anterior numa falha TRANSITÓRIA real: o
+  // motorista foi resolvido mas a API do Angellira caiu (status UNAVAILABLE). Se a
+  // nova passada NÃO resolveu o motorista (status null — ex.: o matcher estrito
+  // rejeitou corretamente um match errado, ou o motorista saiu da base), NÃO
+  // preserva: o dado anterior pode ser de OUTRA pessoa (match frouxo antigo) e deve
+  // SAIR. Assim o enriquecimento/"Consultar item" auto-limpa os matches errados.
+  // Só para o MESMO motorista (senão troca de motorista carregaria dado errado).
+  const nextIdCpf = driverIdentityCpf(next);
+  const prevIdCpf = driverIdentityCpf(prev);
+  if (
+    next.driver_name &&
+    next.driver_name === prev.driver_name &&
+    next.angellira_driver_status === "UNAVAILABLE" &&
+    isReal(prev.angellira_driver_status) &&
+    nextIdCpf &&
+    prevIdCpf &&
+    nextIdCpf === prevIdCpf
+  ) {
     if (!next.aspx_cpf && prev.aspx_cpf) {
       m.aspx_cpf = prev.aspx_cpf;
       m.aspx_display_name = prev.aspx_display_name ?? m.aspx_display_name;
     }
-    if (isUnavail(next.angellira_driver_status) && isReal(prev.angellira_driver_status)) {
-      m.angellira_driver_found = prev.angellira_driver_found;
-      m.angellira_driver_status = prev.angellira_driver_status;
-      m.angellira_driver_valid_until = prev.angellira_driver_valid_until;
-      m.angellira_driver_status_text = prev.angellira_driver_status_text;
-      m.angellira_driver_details = prev.angellira_driver_details ?? m.angellira_driver_details;
-    }
+    m.angellira_driver_found = prev.angellira_driver_found;
+    m.angellira_driver_status = prev.angellira_driver_status;
+    m.angellira_driver_valid_until = prev.angellira_driver_valid_until;
+    m.angellira_driver_status_text = prev.angellira_driver_status_text;
+    m.angellira_driver_details = prev.angellira_driver_details ?? m.angellira_driver_details;
   }
 
   // Cavalo — só se for a mesma placa
@@ -509,6 +554,11 @@ async function enrichRows(supabaseClient, batch, correlationId, { forceLive = fa
     }
     const aspx = matchAspxDriver(name, aspxList);
     if (aspx) {
+      // FALLBACK: quem não está no banco de motorista cai no aspx_drivers. O match
+      // agora é ESTRITO (driverNamesMatch) → resolve a pessoa CERTA do ASPX (ou
+      // ninguém), então é seguro alimentar a consulta Angellira ao vivo pelo CPF do
+      // ASPX. Quem não casar em lugar nenhum → "não consultado" → consulta manual
+      // por CPF no modal (que persiste na base p/ virar automático).
       driverByName[name] = { cpf: aspx.cpf, aspxFound: true, aspxDisplayName: aspx.display_name, angellira: null };
       if (aspx.cpf) aspxFallbackCpfs.push(aspx.cpf);
     }
@@ -924,5 +974,103 @@ export async function enrichSystemCargoById(supabaseClient, cargoId, { correlati
       cargoId,
       message: err instanceof Error ? err.message : String(err),
     });
+  }
+}
+
+// Campos do motorista a gravar na linha enriquecida a partir de uma consulta por
+// CPF (puro/testável). `source: 'manual'` marca que o CPF foi informado pelo
+// operador (não resolvido por nome).
+export function buildDriverCpfFields(cpf, motorista, result) {
+  const norm = String(cpf || "").replace(/\D/g, "");
+  const angName = result?.driverDetails?.name || result?.displayName || null;
+  return {
+    driver_name: ((motorista || angName || "").toString().trim()) || null,
+    angellira_driver_found: result?.found ?? false,
+    angellira_driver_status: result?.status ?? null,
+    angellira_driver_valid_until: result?.validUntil ?? null,
+    angellira_driver_status_text: result?.statusText ?? null,
+    angellira_driver_details: { name: angName, cpf: norm, source: "manual" },
+  };
+}
+
+/**
+ * Consulta MANUAL por CPF de UM item do Monitor. Usado quando o motorista NÃO está
+ * na base do Angellira (motoristas_historico) e o auto não conseguiu resolver: o
+ * operador informa o CPF e consultamos o Angellira AO VIVO por ele. Grava só as
+ * colunas do motorista na linha (preserva veículos) e PERSISTE na base
+ * (motoristas_historico + driver_profiles) p/ virar automático na próxima passada.
+ * Não lança — devolve { ok, found, name, cpf, status, statusText, validUntil } ou
+ * { ok:false, reason }.
+ */
+export async function enrichItemDriverByCpf(supabaseClient, { lh, cargoId, cpf, motorista = "" }, { correlationId = null } = {}) {
+  const norm = String(cpf || "").replace(/\D/g, "");
+  const key = cargoId ? `cargo:${cargoId}` : (lh ?? "").toString().trim();
+  if (!key || norm.length !== 11) return { ok: false, reason: "INVALID_INPUT" };
+  try {
+    const { lookupAngelliraDriverByCpf } = await import("../../infrastructure/angellira/angellira-client.js");
+    let result;
+    try {
+      result = await withTimeout(lookupAngelliraDriverByCpf(norm, { correlationId }), CALL_TIMEOUT_MS);
+    } catch {
+      result = { availability: "UNAVAILABLE", status: "UNAVAILABLE", found: false };
+    }
+    if (!result || result.availability !== "OK") {
+      return { ok: false, reason: "ANGELLIRA_UNAVAILABLE" };
+    }
+
+    const driverFields = { ...buildDriverCpfFields(norm, motorista, result), enriched_at: new Date().toISOString() };
+
+    // UPDATE só as colunas do motorista (preserva veículos/selos). Se a linha ainda
+    // não existe (carga fora do snapshot), cria a mínima.
+    const { data: updated } = await supabaseClient
+      .from("sheet_monitor_enriched")
+      .update(driverFields)
+      .eq("lh", key)
+      .select("lh");
+    if (!updated || updated.length === 0) {
+      await supabaseClient
+        .from("sheet_monitor_enriched")
+        .upsert([{ lh: key, cargo_id: cargoId ?? null, ...driverFields }], { onConflict: "lh" });
+    }
+    bustSheetMonitorEnrichedCache();
+
+    // Persiste na base do Angellira p/ a próxima consulta ser AUTOMÁTICA (só FOUND).
+    try {
+      if (result.found === true) {
+        const angName = result.driverDetails?.name || result.displayName || null;
+        await upsertDriverHistoricoRows(getPostgresPool(), [{
+          cpf: norm,
+          nome: (angName || motorista || "").toString().trim(),
+          angelliraQueryId: result.queryId ?? null,
+          angelliraSentDate: result.lastSeenAt ?? null,
+          angelliraLimitDate: result.validUntil ?? null,
+          aspxFound: false,
+          aspxDisplayName: null,
+        }]);
+      }
+      const { syncDriverAngelliraValidation } = await import("./use-cases/angellira-cache.js");
+      await syncDriverAngelliraValidation({ documentNumber: norm, angelliraResult: result, correlationId });
+    } catch {
+      /* persistência é bônus — a linha do item já foi gravada */
+    }
+
+    logStructuredEvent("info", "sheet-monitor-enrich.driver-by-cpf", {
+      correlationId, lh: key, found: result.found === true, cpf: `***${norm.slice(-3)}`,
+    });
+    return {
+      ok: true,
+      found: result.found === true,
+      name: result.driverDetails?.name || result.displayName || null,
+      cpf: norm,
+      status: result.status ?? null,
+      statusText: result.statusText ?? null,
+      validUntil: result.validUntil ?? null,
+    };
+  } catch (err) {
+    logStructuredEvent("warn", "sheet-monitor-enrich.driver-by-cpf-failed", {
+      correlationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return { ok: false, reason: "ERROR" };
   }
 }

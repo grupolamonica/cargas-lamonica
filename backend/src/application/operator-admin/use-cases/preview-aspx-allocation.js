@@ -5,6 +5,7 @@ import {
   fetchTripIndex,
   isAspxWriteEnabled,
 } from "../../../infrastructure/spx/spx-allocation-client.js";
+import { prepareAspxRoster, resolveAspxDriverId } from "./aspx-driver-resolver.js";
 
 // Normaliza nome p/ casar com o motorista do ASPX (sem acento, maiúsculo, espaço único).
 function normName(v) {
@@ -164,7 +165,7 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
   }
 
   const tripByLh = new Map((trips || []).map((t) => [String(t.trip_number ?? "").trim(), t]));
-  const driverByName = new Map((drivers || []).map((d) => [normName(d.name), d.driver_id]));
+  const roster = prepareAspxRoster(drivers);
   const statusByLh = index?.byNumber instanceof Map ? index.byNumber : new Map();
 
   const allItems = candidates.map((c) => {
@@ -188,7 +189,7 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
 
     // 1) Atribuível agora (status 4, sem motorista) → vai ser ALTERADA.
     if (trip) {
-      const driverId = driverByName.get(normName(c.motorista)) ?? null;
+      const driverId = resolveAspxDriverId(c.motorista, roster).driverId;
       if (!driverId) {
         return { ...base, tripId: trip.trip_id, driverId: null, state: "pending", realStatus: real?.statusName ?? null, assignedDriver: "", divergent: false, reassignable: false, reason: "motorista não encontrado no ASPX" };
       }
@@ -202,7 +203,7 @@ export async function previewAspxAllocation({ correlationId, deps = {} } = {}) {
       // Divergente: resolve trip_id (do índice) + driver_id do motorista do SISTEMA
       // p/ permitir TROCAR no ASPX (reassign). Só é acionável se ambos resolverem.
       const tripId = divergent ? (real.tripId ?? null) : null;
-      const driverId = divergent ? (driverByName.get(normName(c.motorista)) ?? null) : null;
+      const driverId = divergent ? resolveAspxDriverId(c.motorista, roster).driverId : null;
       const reassignable = divergent && tripId != null && driverId != null;
       const reasonByState = {
         assigned: real.driver ? `já atribuída a ${real.driver}` : "já atribuída no ASPX",

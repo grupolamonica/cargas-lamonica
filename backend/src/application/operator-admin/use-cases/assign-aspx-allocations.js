@@ -8,10 +8,7 @@ import {
   assignTrip,
   isAspxWriteEnabled,
 } from "../../../infrastructure/spx/spx-allocation-client.js";
-
-function normName(v) {
-  return (v ?? "").toString().normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
-}
+import { prepareAspxRoster, resolveAspxDriverId } from "./aspx-driver-resolver.js";
 
 // Só line-hauls reais do SPX (código LT…) são atribuíveis no ASPX. Cargas sem
 // código LT (manuais / sem viagem correspondente no portal) nunca são enviadas.
@@ -97,7 +94,7 @@ export async function assignAspxAllocations({ lhs, operatorId, dryRun = false, r
   }
 
   const tripByLh = new Map((trips || []).map((t) => [String(t.trip_number ?? "").trim(), t]));
-  const driverByName = new Map((drivers || []).map((d) => [normName(d.name), d.driver_id]));
+  const roster = prepareAspxRoster(drivers);
   const indexByLh = index?.byNumber instanceof Map ? index.byNumber : new Map();
 
   const results = [];
@@ -118,9 +115,9 @@ export async function assignAspxAllocations({ lhs, operatorId, dryRun = false, r
     // trip_id: da fila atribuível (assign novo) OU do índice (reassign/trocar).
     const tripId = assignableTrip?.trip_id ?? (idx?.tripId ?? null);
     const isReassign = !assignableTrip && tripId != null;
-    const driverId = driverByName.get(normName(c.motorista)) ?? null;
+    const { driverId, reason: driverUnresolvedReason } = resolveAspxDriverId(c.motorista, roster);
     if (tripId == null) { results.push({ lh, state: "skipped", reason: "não atribuível (não está na fila nem no índice do ASPX)" }); continue; }
-    if (!driverId) { results.push({ lh, state: "pending", reason: "motorista não encontrado no ASPX" }); continue; }
+    if (!driverId) { results.push({ lh, state: "pending", reason: driverUnresolvedReason || "motorista não encontrado no ASPX" }); continue; }
 
     const plates = [c.cavalo, c.carreta].filter((p) => (p || "").trim() !== "");
     try {

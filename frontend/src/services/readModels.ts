@@ -2086,6 +2086,40 @@ export async function enrichSheetMonitorRow(
   );
 }
 
+export interface SheetMonitorCpfDriver {
+  ok: boolean;
+  found: boolean;
+  name: string | null;
+  cpf: string;
+  status: string | null;
+  statusText: string | null;
+  validUntil: string | null;
+}
+
+// Consulta MANUAL por CPF de UM item do Monitor — usada quando o motorista NÃO está
+// na base do Angellira e o auto não resolveu. O operador informa o CPF; o backend
+// consulta o Angellira AO VIVO por ele, grava na linha e persiste na base (vira
+// automático depois). CPF vai no CORPO (PII). Retorna o motorista encontrado p/ o
+// operador conferir se é a pessoa certa.
+export async function consultDriverByCpf(
+  scope: { lh: string; motorista?: string } | { cargoId: string },
+  cpf: string,
+): Promise<{ scoped: boolean; byCpf: boolean; driver: SheetMonitorCpfDriver }> {
+  const accessToken = await getOperatorAccessToken();
+  const params = new URLSearchParams();
+  const body: { cpf: string; motorista?: string } = { cpf: cpf.replace(/\D/g, "") };
+  if ("cargoId" in scope && scope.cargoId) {
+    params.set("cargoId", scope.cargoId);
+  } else if ("lh" in scope && scope.lh) {
+    params.set("lh", scope.lh);
+    if (scope.motorista) body.motorista = scope.motorista;
+  }
+  return requestJson<{ scoped: boolean; byCpf: boolean; driver: SheetMonitorCpfDriver }>(
+    `/api/operator/sheet-monitor/enrich?${params.toString()}`,
+    { accessToken, method: "POST", body },
+  );
+}
+
 export interface SheetMonitorVehicleDetail {
   plate: string;
   source: "db" | "angellira" | "not_found";

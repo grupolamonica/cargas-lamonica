@@ -60,6 +60,8 @@ import {
   createMonitorCargo,
   descendQueueCascade,
   enrichSheetMonitorRow,
+  consultDriverByCpf,
+  type SheetMonitorCpfDriver,
   fetchAspxAssigned,
   fetchOperatorDrivers,
   fetchOperatorVehicles,
@@ -2641,6 +2643,72 @@ function BoolBadge({ value }: { value: boolean | null | undefined }) {
   );
 }
 
+// Consulta MANUAL por CPF — aparece quando o motorista NÃO está na base do
+// Angellira (auto = "não consultado"). O operador digita o CPF e consultamos o
+// Angellira AO VIVO por ele (e salva na base, virando automático depois).
+function ManualCpfConsult({ scope }: { scope: { lh: string; motorista?: string } | { cargoId: string } }) {
+  const queryClient = useQueryClient();
+  const [cpf, setCpf] = useState("");
+  const [result, setResult] = useState<SheetMonitorCpfDriver | null>(null);
+  const mut = useMutation({
+    mutationFn: (v: string) => consultDriverByCpf(scope, v),
+    onSuccess: (res) => {
+      setResult(res.driver);
+      if (res.driver.found) toast.success(`Angellira: ${res.driver.name ?? "encontrado"}`);
+      else toast.info("CPF consultado — não encontrado no Angellira.");
+      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 1500);
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Não foi possível consultar por CPF."),
+  });
+  const digits = cpf.replace(/\D/g, "");
+  return (
+    <div className="mt-2 rounded-lg border border-dashed border-border/70 bg-muted/30 p-2.5">
+      <p className="mb-1.5 text-[0.7rem] font-medium text-muted-foreground">
+        Motorista não está na base do Angellira. Informe o CPF para consultar:
+      </p>
+      <div className="flex items-center gap-2">
+        <input
+          value={cpf}
+          onChange={(e) => setCpf(e.target.value)}
+          inputMode="numeric"
+          placeholder="CPF (só números)"
+          maxLength={14}
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 font-mono text-xs outline-none focus:border-primary"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && digits.length === 11 && !mut.isPending) mut.mutate(digits);
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => mut.mutate(digits)}
+          disabled={mut.isPending || digits.length !== 11}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/80 px-2.5 py-1 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {mut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+          Consultar
+        </button>
+      </div>
+      {result && (
+        <div className="mt-2 text-[0.7rem] leading-snug">
+          {result.found ? (
+            <span className="text-primary">
+              ✓ {result.name ?? "Encontrado"}
+              {result.statusText || result.status ? ` — ${result.statusText ?? result.status}` : ""}
+              {result.validUntil ? ` · vence ${result.validUntil}` : ""}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="h-3 w-3" />
+              CPF não encontrado no Angellira.
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AngelliraStatusBadge({ found, statusText }: { found: boolean | null | undefined; statusText?: string | null }) {
   if (found == null)
     return <span className="text-xs text-muted-foreground/40">Não consultado</span>;
@@ -3770,6 +3838,18 @@ function RowDetailModal({
                     </>
                   ) : (
                     <p className="mt-1 text-xs text-muted-foreground/50 italic">Consulta Angellira/ASPX pendente.</p>
+                  )}
+                  {/* Motorista não aprovado no Angellira (não consultado, não
+                      encontrado ou indisponível) → consulta manual por CPF, pra o
+                      operador informar o CPF certo. Só some quando está aprovado. */}
+                  {(!enriched || enriched.angellira_driver_found !== true) && (
+                    <ManualCpfConsult
+                      scope={
+                        row.source === "sistema" && row.cargoId
+                          ? { cargoId: row.cargoId }
+                          : { lh: row.lh, motorista: row.motoristas ?? "" }
+                      }
+                    />
                   )}
                 </div>
               )}

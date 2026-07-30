@@ -1968,20 +1968,56 @@ export async function resolveSheetMonitorEnrichResponse(request) {
     const supabaseClient = createSupabaseAdminClient();
     const enrichment = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
     if (cargoId || lh) {
+      // Corpo (opcional): motorista/veículo EFETIVO exibidos e/ou `cpf` manual.
+      // Nome/CPF são PII → sempre no corpo, nunca na URL.
+      let body;
+      try {
+        body = (await parseJsonBody(request)) || {};
+      } catch {
+        body = {};
+      }
+
+      // CONSULTA MANUAL POR CPF: motorista fora da base do Angellira. O operador
+      // informa o CPF → consulta ao vivo por ele, grava na linha e persiste na base
+      // (vira automático depois). Retorna o resultado p/ o modal confirmar a pessoa.
+      const manualCpf = typeof body.cpf === "string" ? body.cpf.replace(/\D/g, "") : "";
+      if (manualCpf) {
+        const r = await enrichment.enrichItemDriverByCpf(
+          supabaseClient,
+          { lh, cargoId, cpf: manualCpf, motorista: body.motorista ?? "" },
+          { correlationId },
+        );
+        if (!r.ok) {
+          return {
+            statusCode: r.reason === "INVALID_INPUT" ? 400 : 422,
+            payload: {
+              error: "AngelliraConsult",
+              reason: r.reason,
+              message:
+                r.reason === "ANGELLIRA_UNAVAILABLE"
+                  ? "Angellira indisponível no momento — tente novamente em instantes."
+                  : r.reason === "INVALID_INPUT"
+                    ? "CPF inválido (precisa de 11 dígitos)."
+                    : "Não foi possível consultar por CPF.",
+              meta: { correlationId },
+            },
+          };
+        }
+        try {
+          const { bustVehicleChecklistCache } = await import("../../../application/operator-admin/vehicle-checklist-cache.js");
+          bustVehicleChecklistCache();
+        } catch {
+          /* best-effort */
+        }
+        return { statusCode: 200, payload: { scoped: true, byCpf: true, driver: r } };
+      }
+
       if (cargoId) {
         // "Consultar item" força consulta AO VIVO no Angellira e salva (forceLive).
         await enrichment.enrichSystemCargoById(supabaseClient, cargoId, { correlationId, forceLive: true });
       } else {
-        // Motorista/veículo EFETIVO enviados no corpo (o que o operador vê na
-        // tela). O nome é PII → vai no corpo, nunca na URL. Com os valores,
-        // enriquece exatamente aquela linha — cobre cargas fora do snapshot
-        // (Nestlé/importadas). Sem corpo, cai no resolvedor por lh (cargas/snapshot).
-        let body;
-        try {
-          body = (await parseJsonBody(request)) || {};
-        } catch {
-          body = {};
-        }
+        // Com os valores, enriquece exatamente aquela linha — cobre cargas fora do
+        // snapshot (Nestlé/importadas). Sem corpo, cai no resolvedor por lh.
         const hasValues =
           body && (body.motorista != null || body.cavalo != null || body.carreta != null);
         if (hasValues) {
