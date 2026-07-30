@@ -60,7 +60,17 @@ export async function assignAspxAllocations({ lhs, operatorId, dryRun = false, r
   const effectiveDryRun = dryRun || !writeEnabled; // kill switch: write off → força dry_run
 
   const cargas = await listByLhs(lhs);
-  const byLh = new Map(cargas.map((c) => [c.sheet_lh, c]));
+  // Uma carga pode ter LINHA GÊMEA (lançada em lh_manual + espelho em sheet_lh):
+  // uma tem o motorista, a outra fica VAZIA. Ao deduplicar por LH, PREFERIR a linha
+  // que TEM motorista — senão o Map pegava a vazia (ordem arbitrária) e a atribuição
+  // falhava "carga sem motorista no sistema" mesmo o motorista estando na gêmea.
+  const byLh = new Map();
+  for (const c of cargas) {
+    const cur = byLh.get(c.sheet_lh);
+    if (!cur || (!(cur.motorista || "").trim() && (c.motorista || "").trim())) {
+      byLh.set(c.sheet_lh, c);
+    }
+  }
 
   // Leitura obrigatória do sidecar SPX. Se estiver fora do ar, audita a tentativa
   // (endpoint cargos:write) e propaga o erro — sem modo simulação, nada enviado.
