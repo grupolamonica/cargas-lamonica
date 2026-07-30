@@ -4,6 +4,7 @@ import { NotFoundError, ValidationError } from "../../../domain/load-claims/erro
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 import { ensureMonitorSheetCargo } from "./_shared.js";
 import { normalizeRouteCodeLocation } from "../../../domain/operator-admin/route-utils.js";
+import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
 
 /**
  * Reatribui (move) a alocação motorista+cavalo+carreta entre cargas do Monitor,
@@ -141,6 +142,13 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
         [m.cargoId, m.motorista, m.cavalo, m.carreta, operatorId],
       );
       updated.push(m.lh || m.cargoId);
+    }
+
+    // Reconcilia o ciclo de vida de CADA carga movida: quem ganhou motorista fecha
+    // (OPEN→RESERVED) e quem ficou vazia reabre (RESERVED→OPEN de Monitor), mantendo
+    // o gate de candidatura coerente com a fila reordenada. Ver reconcile-monitor-load-status.js.
+    for (const m of normalized) {
+      await reconcileMonitorLoadStatus(client, m.cargoId);
     }
 
     await insertSecurityAuditEvent(client, {

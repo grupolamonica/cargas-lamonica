@@ -4,6 +4,7 @@ import { NotFoundError } from "../../../domain/load-claims/errors.js";
 import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 import { computeCancelCascade } from "../monitor-cascade.js";
+import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
 
 /**
  * Cascata de cancelamento da fila do Monitor (Interpretação A).
@@ -101,6 +102,14 @@ export async function cancelLoadCascade({ lh, operatorId, requestIp, correlation
         `,
         [createSheetLoadId(m.lh), m.motorista, m.cavalo, m.carreta, operatorId],
       );
+    }
+
+    // Reconcilia o ciclo de vida de cada carga tocada pela cascata (a gatilho + as
+    // remanejadas): quem ficou com motorista fecha (OPEN→RESERVED); quem ficou vazia
+    // reabre (RESERVED→OPEN de Monitor). Ver reconcile-monitor-load-status.js.
+    const touchedIds = new Set([cargoId, ...moves.map((m) => createSheetLoadId(m.lh))]);
+    for (const id of touchedIds) {
+      await reconcileMonitorLoadStatus(client, id);
     }
 
     let reservaCreated = false;

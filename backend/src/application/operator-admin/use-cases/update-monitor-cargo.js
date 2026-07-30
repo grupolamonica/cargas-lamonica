@@ -4,6 +4,7 @@ import { buildAuditChanges } from "../../../domain/operator-admin/audit-diff.js"
 import { ConflictError, NotFoundError, ValidationError } from "../../../domain/load-claims/errors.js";
 import { syncedCarregamentoLabel } from "../../../domain/cargo-schedule.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
+import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
 
 // pg devolve DATE como Date (UTC-midnight) e TIME como string. Normaliza pro
 // formato de parede 'YYYY-MM-DD' / 'HH:MM' (UTC, evita off-by-one).
@@ -173,6 +174,12 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     if (reopening && !reopenLeadId && row.status !== "OPEN") {
       await client.query(`UPDATE public.cargas SET status = 'OPEN', updated_at = now() WHERE id = $1`, [cargoId]);
     }
+
+    // Fecha/reabre a carga do sistema conforme a alocação efetiva: com motorista +
+    // OPEN → RESERVED (para de aceitar candidatura pública); sem motorista +
+    // RESERVED de Monitor → OPEN. Reserva real de lead (reopenLeadId acima) /
+    // claim / pacote nunca é tocada. Ver reconcile-monitor-load-status.js.
+    await reconcileMonitorLoadStatus(client, cargoId);
 
     await insertSecurityAuditEvent(client, {
       eventType: "operator.cargo.monitor_system_updated",

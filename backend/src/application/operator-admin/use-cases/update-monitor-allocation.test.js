@@ -591,4 +591,56 @@ describe("updateMonitorAllocation", () => {
     const { rows } = await query(`SELECT status FROM public.cargas WHERE id = $1`, [id]);
     expect(rows[0].status).toBe("BOOKED");
   });
+
+  // ── Fechar a carga ao alocar (bug: carga alocada continuava OPEN/candidatável) ──
+  it("alocar um motorista FECHA a carga pro portal: cargas.status OPEN → RESERVED", async () => {
+    const id = createSheetLoadId("LT-CLOSE-1");
+    await seedCargo({ id, sheet_lh: "LT-CLOSE-1", status: "OPEN" }); // OPEN, sem motorista
+    const operator = await seedUser({ email: "op-close@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: "LT-CLOSE-1",
+      operatorId: operator.id,
+      payload: { motorista: "JOAO AGREGADO", cavalo: "ABC1D23", carreta: "DEF4G56" },
+      correlationId: "corr-close",
+    });
+
+    const { rows } = await query(
+      `SELECT status, reserved_at, reserved_public_lead_id, reserved_claim_id, reserved_driver_id
+       FROM public.cargas WHERE id = $1`,
+      [id],
+    );
+    expect(rows[0].status).toBe("RESERVED"); // candidatura pública bloqueada (gate status='OPEN')
+    expect(rows[0].reserved_at).toBeTruthy();
+    // Reserva de Monitor: SEM marcadores de reserva real (lead/claim/driver).
+    expect(rows[0].reserved_public_lead_id).toBeNull();
+    expect(rows[0].reserved_claim_id).toBeNull();
+    expect(rows[0].reserved_driver_id).toBeNull();
+  });
+
+  it("limpar o motorista de carga fechada por Monitor reabre pro portal: RESERVED → OPEN", async () => {
+    const id = createSheetLoadId("LT-CLOSE-2");
+    await seedCargo({ id, sheet_lh: "LT-CLOSE-2", status: "OPEN" });
+    const operator = await seedUser({ email: "op-reopen-mon@teste.local" });
+
+    // aloca → fecha
+    await updateMonitorAllocation({
+      lh: "LT-CLOSE-2",
+      operatorId: operator.id,
+      payload: { motorista: "JOAO" },
+      correlationId: "c-close",
+    });
+    expect((await query(`SELECT status FROM public.cargas WHERE id = $1`, [id])).rows[0].status).toBe("RESERVED");
+
+    // limpa → reabre (SEM marcar "Disponível"; é a reserva sintética de Monitor)
+    await updateMonitorAllocation({
+      lh: "LT-CLOSE-2",
+      operatorId: operator.id,
+      payload: { motorista: "" },
+      correlationId: "c-reopen",
+    });
+    const { rows } = await query(`SELECT status, reserved_at FROM public.cargas WHERE id = $1`, [id]);
+    expect(rows[0].status).toBe("OPEN");
+    expect(rows[0].reserved_at).toBeNull();
+  });
 });

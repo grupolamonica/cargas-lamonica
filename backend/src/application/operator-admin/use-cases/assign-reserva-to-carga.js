@@ -4,6 +4,7 @@ import { NotFoundError, ValidationError } from "../../../domain/load-claims/erro
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 import { ensureMonitorSheetCargo } from "./_shared.js";
 import { normalizeRouteCodeLocation } from "../../../domain/operator-admin/route-utils.js";
+import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
 
 /**
  * Puxa um motorista em STANDBY (monitor_reservas) para uma carga da planilha
@@ -110,6 +111,11 @@ export async function assignReservaToCarga({ reservaId, targetLh, operatorId, re
       );
       bumped = true;
     }
+
+    // A carga de destino recebeu o standby → fecha (OPEN→RESERVED) p/ sair da fila
+    // pública. O motorista trocado (bumped) vira reserva (standby), não vai pra
+    // outra carga, então só a carga de destino muda de ciclo. Ver reconcile-monitor-load-status.js.
+    await reconcileMonitorLoadStatus(client, cargoId);
 
     await insertSecurityAuditEvent(client, {
       eventType: "operator.cargo.reserva_assigned",

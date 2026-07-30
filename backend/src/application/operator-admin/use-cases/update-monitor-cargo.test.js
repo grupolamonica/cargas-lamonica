@@ -33,6 +33,24 @@ describe("updateMonitorCargo", () => {
     await closeTestDatabase();
   });
 
+  it("alocar motorista na carga do sistema FECHA (OPEN → RESERVED); limpar REABRE (→ OPEN)", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    const op = await seedUser({ email: "op-sys-close@teste.local" });
+
+    // aloca → fecha (sai da fila pública, para de aceitar candidatura)
+    await updateMonitorCargo({ cargoId: id, operatorId: op.id, payload: { motorista: "João Silva" }, correlationId: "c-close" });
+    let { rows } = await query(`SELECT status, reserved_at, reserved_public_lead_id FROM public.cargas WHERE id = $1`, [id]);
+    expect(rows[0].status).toBe("RESERVED");
+    expect(rows[0].reserved_at).toBeTruthy();
+    expect(rows[0].reserved_public_lead_id).toBeNull();
+
+    // limpa → reabre (reserva sintética de Monitor, sem lead)
+    await updateMonitorCargo({ cargoId: id, operatorId: op.id, payload: { motorista: "" }, correlationId: "c-reopen" });
+    ({ rows } = await query(`SELECT status, reserved_at FROM public.cargas WHERE id = $1`, [id]));
+    expect(rows[0].status).toBe("OPEN");
+    expect(rows[0].reserved_at).toBeNull();
+  });
+
   it("grava a descrição da troca de motorista/veículo em alloc_descricao", async () => {
     const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
     const op = await seedUser({ email: "op-sys-desc@teste.local" });

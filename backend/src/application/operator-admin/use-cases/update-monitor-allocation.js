@@ -6,6 +6,7 @@ import { writeAllocationsToSheet, formatSheetDateLabel } from "../../google-shee
 import { cancelLoadCascade } from "./cancel-load-cascade.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
 import { ensureMonitorSheetCargo } from "./_shared.js";
+import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
 
 /**
  * Grava a ALOCAÇÃO editada no Monitor (motorista/cavalo/carreta/status operacional)
@@ -216,6 +217,14 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     if (reopening && !reopenLeadId) {
       await client.query(`UPDATE public.cargas SET status = 'OPEN', updated_at = now() WHERE id = $1`, [cargoId]);
     }
+
+    // Fecha/reabre a carga conforme a alocação EFETIVA do Monitor: com motorista +
+    // status OPEN → RESERVED (sai da fila pública e para de aceitar candidatura de
+    // outros motoristas — era o bug: alocar deixava a carga OPEN/candidatável); sem
+    // motorista + RESERVED de Monitor → OPEN. Reserva REAL de lead público (o
+    // reopenLeadId acima) ou de claim/pacote (marcador reserved_* preenchido) nunca
+    // é tocada aqui. Ver reconcile-monitor-load-status.js.
+    await reconcileMonitorLoadStatus(client, cargoId);
 
     return {
       statusCode: 200,

@@ -5,6 +5,7 @@ import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
 import { computeDescendFromDrop } from "../monitor-cascade.js";
 import { normalizeRouteCodeLocation } from "../../../domain/operator-admin/route-utils.js";
+import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
 
 // Regra de editabilidade (espelha o allocEditPolicy do front): Disponível/Reservado
 // (sem status) e o pré-carregamento ("aguardando chegar/carregamento") podem ceder/
@@ -165,6 +166,15 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
         `,
         [target.id, m.motorista, m.cavalo, m.carreta, operatorId],
       );
+    }
+
+    // Reconcilia o ciclo de vida de cada carga movida na descida da fila: quem
+    // ganhou motorista fecha (OPEN→RESERVED); quem ficou vazia reabre
+    // (RESERVED→OPEN de Monitor). Usa o id REAL resolvido (planilha OU lançada).
+    // Ver reconcile-monitor-load-status.js.
+    for (const m of moves) {
+      const moved = byLh.get(m.lh);
+      if (moved) await reconcileMonitorLoadStatus(client, moved.id);
     }
 
     // Motorista que sobrou no fim → RESERVA (standby na rota). Supersede reserva
