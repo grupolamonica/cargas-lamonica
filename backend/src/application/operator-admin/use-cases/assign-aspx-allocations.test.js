@@ -44,6 +44,42 @@ describe("assignAspxAllocations", () => {
     await expect(assignAspxAllocations({ lhs: [], operatorId: "op" })).rejects.toThrow();
   });
 
+  it("linha gêmea (vazia + com motorista) → usa a que TEM motorista, não 'carga sem motorista'", async () => {
+    const spy = vi.fn().mockResolvedValue({ dry_run: true });
+    const res = await assignAspxAllocations({
+      lhs: ["LT1"],
+      operatorId: "op",
+      dryRun: true,
+      deps: {
+        ...baseDeps(spy),
+        listByLhs: async () => [
+          { sheet_lh: "LT1", motorista: "", cavalo: "", carreta: "" }, // gêmea vazia (lh_manual)
+          { sheet_lh: "LT1", motorista: "João Silva", cavalo: "ABC1234", carreta: "" }, // com motorista (sheet_lh)
+        ],
+      },
+    });
+    const r = res.payload.results.find((x) => x.lh === "LT1");
+    expect(r.state).toBe("dry_run");
+    expect(r.driverId).toBe(91);
+  });
+
+  it("linha gêmea na ordem inversa (com motorista primeiro) → ainda usa a com motorista", async () => {
+    const spy = vi.fn().mockResolvedValue({ dry_run: true });
+    const res = await assignAspxAllocations({
+      lhs: ["LT1"],
+      operatorId: "op",
+      dryRun: true,
+      deps: {
+        ...baseDeps(spy),
+        listByLhs: async () => [
+          { sheet_lh: "LT1", motorista: "João Silva", cavalo: "ABC1234", carreta: "" },
+          { sheet_lh: "LT1", motorista: "", cavalo: "", carreta: "" },
+        ],
+      },
+    });
+    expect(res.payload.results.find((x) => x.lh === "LT1").driverId).toBe(91);
+  });
+
   it("reassign: LH fora da fila mas no índice → usa trip_id do índice (trocar motorista)", async () => {
     const spy = vi.fn().mockResolvedValue({ dry_run: true });
     const res = await assignAspxAllocations({
