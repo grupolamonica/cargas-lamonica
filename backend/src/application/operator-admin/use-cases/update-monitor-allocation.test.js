@@ -331,6 +331,40 @@ describe("updateMonitorAllocation", () => {
     expect(rows[0].alloc_vinculo).toBe("AGREGADO DEDICADO");
   });
 
+  it("grava a observação de checklist (tratativas) em alloc_tratativas e preserva quando não reenviada", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-trat@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { tratativas: "aguardando 2a via do CRLV" },
+      correlationId: "corr-monitor-trat-1",
+    });
+    let res = await query(`SELECT alloc_tratativas FROM public.cargas WHERE id = $1`, [id]);
+    expect(res.rows[0].alloc_tratativas).toBe("aguardando 2a via do CRLV");
+
+    // Edição posterior só de status (sem tratativas) preserva a observação registrada.
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { status: "DESCARREGADO" },
+      correlationId: "corr-monitor-trat-2",
+    });
+    res = await query(`SELECT alloc_tratativas FROM public.cargas WHERE id = $1`, [id]);
+    expect(res.rows[0].alloc_tratativas).toBe("aguardando 2a via do CRLV");
+
+    // "" limpa a observação (vazio explícito).
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { tratativas: "" },
+      correlationId: "corr-monitor-trat-3",
+    });
+    res = await query(`SELECT alloc_tratativas FROM public.cargas WHERE id = $1`, [id]);
+    expect(res.rows[0].alloc_tratativas).toBe("");
+  });
+
   it("carga do SISTEMA (lh_manual) com motorista: CRIA-ou-preenche a linha na planilha (createIfMissing + rota/agenda)", async () => {
     // Viagem lançada na Programação: id ALEATÓRIO, sheet_lh nulo, lh_manual = LH.
     // A "linha-casca" só é criada no lançamento quando a viagem está ACEITA, então um

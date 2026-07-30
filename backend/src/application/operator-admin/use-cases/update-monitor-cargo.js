@@ -53,7 +53,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
   const result = await withPgTransaction(async (client) => {
     const { rows } = await client.query(
       `SELECT id, sheet_lh, alloc_pinned,
-              alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo,
+              alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas,
               origem, destino, data, horario, lh_manual, sheet_data_carregamento, sheet_data_descarga,
               status, reserved_public_lead_id
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
@@ -86,6 +86,8 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     // preserva o último motivo.
     const allocDescricao = has("descricao") ? normAlloc(payload.descricao) : row.alloc_descricao;
     const allocVinculo = has("vinculo") ? normAlloc(payload.vinculo) : row.alloc_vinculo;
+    // Observação de checklist (tratativas): nota livre do operador. Ausente preserva; "" limpa.
+    const allocTratativas = has("tratativas") ? normAlloc(payload.tratativas) : row.alloc_tratativas;
 
     // Motorista efetivo da carga do sistema = alloc_motorista (não há sheet_* por baixo).
     const effMotorista = (allocMotorista ?? "").toString().trim();
@@ -150,6 +152,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             alloc_tipo = $14,
             alloc_descricao = $16,
             alloc_vinculo = $17,
+            alloc_tratativas = $18,
             origem = $6,
             destino = $7,
             data = $8,
@@ -163,7 +166,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             updated_at = now()
         WHERE id = $1
       `,
-      [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga, allocTipo, carregamento, allocDescricao, allocVinculo],
+      [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga, allocTipo, carregamento, allocDescricao, allocVinculo, allocTratativas],
     );
 
     // Reabrir a carga NÃO-reservada: "Disponível" sem motorista → força status=OPEN
@@ -208,6 +211,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             status: row.alloc_status,
             tipo: row.alloc_tipo,
             vinculo: row.alloc_vinculo,
+            tratativas: row.alloc_tratativas,
             origem: row.origem,
             destino: row.destino,
             data: fmtDate(row.data),
@@ -219,6 +223,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             status: allocStatus,
             tipo: allocTipo,
             vinculo: allocVinculo,
+            tratativas: allocTratativas,
             origem,
             destino,
             data: fmtDate(data),
@@ -230,6 +235,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             { key: "status", label: "Status" },
             { key: "tipo", label: "Tipo" },
             { key: "vinculo", label: "Vínculo" },
+            { key: "tratativas", label: "Observação (checklist)" },
             { key: "origem", label: "Origem" },
             { key: "destino", label: "Destino" },
             { key: "data", label: "Data" },

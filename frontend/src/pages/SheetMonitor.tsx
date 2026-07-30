@@ -1294,7 +1294,7 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
 // Cargas do sistema (sheet_lh nulo) são editadas como uma planilha: Status, LH,
 // Rota, Agenda, Motorista/Placa — todos editáveis (a carga é a fonte da verdade).
 
-type CargoForm = { lh: string; status: string; tipo: string; origem: string; destino: string; carregamento: string; descarga: string; motorista: string; cavalo: string; carreta: string; vinculo: string };
+type CargoForm = { lh: string; status: string; tipo: string; origem: string; destino: string; carregamento: string; descarga: string; motorista: string; cavalo: string; carreta: string; vinculo: string; tratativas: string };
 
 function MonitorCargoFields({ form, setForm, statusOptions }: {
   form: CargoForm;
@@ -1348,7 +1348,7 @@ function MonitorCargoFields({ form, setForm, statusOptions }: {
   );
 }
 
-const EMPTY_CARGO_FORM: CargoForm = { lh: "", status: "", tipo: "", origem: "", destino: "", carregamento: "", descarga: "", motorista: "", cavalo: "", carreta: "", vinculo: "" };
+const EMPTY_CARGO_FORM: CargoForm = { lh: "", status: "", tipo: "", origem: "", destino: "", carregamento: "", descarga: "", motorista: "", cavalo: "", carreta: "", vinculo: "", tratativas: "" };
 
 // datetime-local 'YYYY-MM-DDTHH:MM' → { data:'YYYY-MM-DD', horario:'HH:MM' }
 function splitCarregamento(dt: string): { data: string; horario: string } {
@@ -2747,7 +2747,7 @@ function RowDetailModal({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "", tipo: "", vinculo: "" });
+  const [allocForm, setAllocForm] = useState({ motorista: "", cavalo: "", carreta: "", status: "", tipo: "", vinculo: "", tratativas: "" });
   // Carga do SISTEMA (source='sistema'): no modal unificado ela é editada AQUI como
   // uma planilha — LH/rota/agenda inclusive (é a fonte da verdade). Form canônico
   // completo, salvo via updateMonitorCargo (por cargoId). Cargas da planilha ignoram.
@@ -2768,6 +2768,9 @@ function RowDetailModal({
       status: alloc?.alloc_status || row.status || "",
       tipo: alloc?.alloc_tipo ?? (row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "") ?? "",
       vinculo: alloc?.alloc_vinculo ?? row.vinculo ?? "",
+      // Observação de checklist (tratativas): planilha vem via allocByLh (alloc_tratativas),
+      // sistema vem denormalizado na linha (row.tratativas).
+      tratativas: alloc?.alloc_tratativas ?? row.tratativas ?? "",
     });
   }, [row, alloc, open]);
 
@@ -2789,6 +2792,7 @@ function RowDetailModal({
       cavalo: row.cavalo ?? "",
       carreta: row.carreta ?? "",
       vinculo: row.vinculo ?? "",
+      tratativas: row.tratativas ?? "",
     });
   }, [open, row]);
 
@@ -2976,6 +2980,9 @@ function RowDetailModal({
       // Vínculo (col H): sempre enviado (prefilled com o valor efetivo) — o
       // backend espelha na planilha; se não mudou, reescreve o mesmo valor.
       vinculo: allocForm.vinculo,
+      // Observação de checklist (tratativas): sempre enviada (prefilled com o
+      // valor efetivo). Editável mesmo com m/v travado (é uma nota, não alocação).
+      tratativas: allocForm.tratativas,
       // Motorista/veículo SÓ vão no payload quando a linha é editável E o operador
       // REALMENTE trocou (mvChanged). Editar só o status NÃO reenvia o motorista →
       // o backend preserva o override atual (has()=false). Antes reenviávamos o
@@ -3021,6 +3028,7 @@ function RowDetailModal({
       cavalo: cargoForm.cavalo.trim(),
       carreta: cargoForm.carreta.trim(),
       vinculo: cargoForm.vinculo.trim(),
+      tratativas: cargoForm.tratativas.trim(),
       ...(descricao ? { descricao } : {}),
     });
   };
@@ -3148,6 +3156,18 @@ function RowDetailModal({
                      lock de ASPX aqui — a carga é a fonte da verdade). */
                   <>
                     <MonitorCargoFields form={cargoForm} setForm={setCargoForm} statusOptions={OPERATIONAL_STATUS_OPTIONS} />
+                    {/* Observação de checklist (tratativas) — mesma nota livre da linha da planilha. */}
+                    <div className="pt-1">
+                      <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Observação do checklist (tratativas)</label>
+                      <textarea
+                        value={cargoForm.tratativas}
+                        onChange={(e) => setCargoForm((f) => ({ ...f, tratativas: e.target.value }))}
+                        placeholder="Ex.: aguardando 2ª via do CRLV; liberado pela torre; pendência de rastreador…"
+                        rows={3}
+                        maxLength={1000}
+                        className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+                      />
+                    </div>
                     <div className="flex items-center justify-end gap-2 pt-1">
                       <button
                         type="button"
@@ -3270,6 +3290,20 @@ function RowDetailModal({
                       <option key={v} value={v} />
                     ))}
                   </datalist>
+                </div>
+                {/* Observação de checklist (tratativas): nota livre do operador sobre a
+                    tratativa de uma pendência/inconformidade do checklist. Editável mesmo
+                    com motorista/veículo travados (não é uma alocação, é uma anotação). */}
+                <div>
+                  <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Observação do checklist (tratativas)</label>
+                  <textarea
+                    value={allocForm.tratativas}
+                    onChange={(e) => setAllocForm((f) => ({ ...f, tratativas: e.target.value }))}
+                    placeholder="Ex.: aguardando 2ª via do CRLV; liberado pela torre; pendência de rastreador…"
+                    rows={3}
+                    maxLength={1000}
+                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+                  />
                 </div>
                 <div className="flex items-center justify-between gap-2 pt-1">
                   <span className="text-[0.58rem] leading-tight text-muted-foreground/60">

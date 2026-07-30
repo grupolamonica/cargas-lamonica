@@ -39,6 +39,10 @@ export const sheetMonitorAllocationBodySchema = z.object({
   descricao: z.string().trim().max(500).nullable().optional(),
   // Vínculo do motorista (col H da planilha: AGREGADO/TERCEIRO/PME/FROTA…).
   vinculo: z.string().trim().max(80).nullable().optional(),
+  // Observação de checklist (tratativas) — nota livre do operador sobre a
+  // tratativa de uma pendência/inconformidade do checklist. Ausente preserva;
+  // "" limpa. Gravada em alloc_tratativas.
+  tratativas: z.string().trim().max(1000).nullable().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/reassign — reordenar a fila de
@@ -169,6 +173,8 @@ export const sheetMonitorCargoUpdateBodySchema = z.object({
   descricao: z.string().trim().max(500).nullable().optional(),
   // Vínculo do motorista → alloc_vinculo.
   vinculo: z.string().trim().max(80).nullable().optional(),
+  // Observação de checklist (tratativas) → alloc_tratativas.
+  tratativas: z.string().trim().max(1000).nullable().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/aspx-assign — confirma a atribuição

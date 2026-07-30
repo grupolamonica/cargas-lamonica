@@ -49,7 +49,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     const sheetRow = await ensureMonitorSheetCargo(client, lh, {
       columns: `id, sheet_lh, sheet_source, sheet_motorista, sheet_cavalo, sheet_carreta, sheet_status,
                 alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
-                alloc_descricao, alloc_vinculo, status, reserved_public_lead_id,
+                alloc_descricao, alloc_vinculo, alloc_tratativas, status, reserved_public_lead_id,
                 origem, destino, sheet_data_carregamento, sheet_data_descarga`,
     });
 
@@ -97,6 +97,8 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     const finalDescricao = has("descricao") ? norm(payload.descricao) : (sheetRow.alloc_descricao ?? null);
     // Vínculo (col H da planilha): override do operador. Ausente preserva; ""=limpa.
     const finalVinculo = has("vinculo") ? norm(payload.vinculo) : (sheetRow.alloc_vinculo ?? null);
+    // Observação de checklist (tratativas): nota livre do operador. Ausente preserva; ""=limpa.
+    const finalTratativas = has("tratativas") ? norm(payload.tratativas) : (sheetRow.alloc_tratativas ?? null);
 
     await client.query(
       `
@@ -108,13 +110,14 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
             alloc_tipo = $7,
             alloc_descricao = $8,
             alloc_vinculo = $9,
+            alloc_tratativas = $10,
             alloc_source = 'operator',
             alloc_updated_at = now(),
             alloc_updated_by = $6,
             updated_at = now()
         WHERE id = $1
       `,
-      [cargoId, finalMotorista, finalCavalo, finalCarreta, finalStatus, operatorId, finalTipo, finalDescricao, finalVinculo],
+      [cargoId, finalMotorista, finalCavalo, finalCarreta, finalStatus, operatorId, finalTipo, finalDescricao, finalVinculo, finalTratativas],
     );
 
     await insertSecurityAuditEvent(client, {
@@ -164,13 +167,15 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
             status: sheetRow.alloc_status,
             tipo: sheetRow.alloc_tipo,
             vinculo: sheetRow.alloc_vinculo,
+            tratativas: sheetRow.alloc_tratativas,
           },
-          { motorista: finalMotorista, status: finalStatus, tipo: finalTipo, vinculo: finalVinculo },
+          { motorista: finalMotorista, status: finalStatus, tipo: finalTipo, vinculo: finalVinculo, tratativas: finalTratativas },
           [
             { key: "motorista", label: "Motorista" },
             { key: "status", label: "Status" },
             { key: "tipo", label: "Tipo" },
             { key: "vinculo", label: "Vínculo" },
+            { key: "tratativas", label: "Observação (checklist)" },
           ],
         ),
       },

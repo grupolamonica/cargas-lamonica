@@ -909,7 +909,7 @@ export async function resolveSheetMonitorResponse(request) {
             (from, to) =>
               supabaseClient
                 .from("cargas")
-                .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_pinned, alloc_updated_at")
+                .select("sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_pinned, alloc_updated_at")
                 .not("sheet_lh", "is", null)
                 .not("alloc_updated_at", "is", null)
                 .order("sheet_lh", { ascending: true })
@@ -937,7 +937,7 @@ export async function resolveSheetMonitorResponse(request) {
             (from, to) =>
               supabaseClient
                 .from("cargas")
-                .select("lh_manual, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_pinned, alloc_updated_at")
+                .select("lh_manual, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_pinned, alloc_updated_at")
                 .is("sheet_lh", null)
                 .not("lh_manual", "is", null)
                 .not("alloc_updated_at", "is", null)

@@ -1203,6 +1203,8 @@ export interface SheetMonitorRow {
   descricao?: string | null;
   /** Vínculo do motorista vindo da planilha (col H) — override efetivo via allocByLh. */
   vinculo?: string | null;
+  /** Observação de checklist (tratativas) do operador (carga do sistema; planilha usa allocByLh). */
+  tratativas?: string | null;
   checklistCavalo: string;
   checklistCarreta: string;
   isAvailable: boolean;
@@ -1294,6 +1296,7 @@ export interface SheetMonitorAllocation {
   alloc_tipo: string | null;
   alloc_descricao: string | null;
   alloc_vinculo: string | null;
+  alloc_tratativas: string | null;
   alloc_pinned: boolean | null;
   alloc_updated_at: string | null;
 }
@@ -1333,6 +1336,7 @@ export async function updateMonitorAllocation(input: {
   tipo?: string | null;
   descricao?: string | null; // motivo da troca de motorista/veículo
   vinculo?: string | null; // vínculo do motorista (col H da planilha)
+  tratativas?: string | null; // observação de checklist (tratativas)
 }) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{
@@ -1599,6 +1603,7 @@ export interface MonitorCargoUpdate {
   tipo?: string | null;
   descricao?: string | null; // motivo da troca de motorista/veículo
   vinculo?: string | null; // vínculo do motorista
+  tratativas?: string | null; // observação de checklist (tratativas)
 }
 
 /**

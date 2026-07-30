@@ -46,6 +46,30 @@ describe("updateMonitorCargo", () => {
     expect(rows[0].alloc_descricao).toBe("troca por indisponibilidade do titular");
   });
 
+  it("grava a observação de checklist (tratativas) em alloc_tratativas e preserva quando não reenviada", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    const op = await seedUser({ email: "op-sys-trat@teste.local" });
+
+    await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { origem: "A", destino: "B", data: "2026-07-01", horario: "09:30", tratativas: "liberado pela torre" },
+      correlationId: "c-trat-1",
+    });
+    let res = await query(`SELECT alloc_tratativas FROM public.cargas WHERE id = $1`, [id]);
+    expect(res.rows[0].alloc_tratativas).toBe("liberado pela torre");
+
+    // Edição posterior sem tratativas preserva a observação registrada.
+    await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { origem: "A", destino: "B", data: "2026-07-01", horario: "09:30", status: "CARREGADO" },
+      correlationId: "c-trat-2",
+    });
+    res = await query(`SELECT alloc_tratativas FROM public.cargas WHERE id = $1`, [id]);
+    expect(res.rows[0].alloc_tratativas).toBe("liberado pela torre");
+  });
+
   it("edita carga do sistema: rota, agenda, LH, status e motorista persistem", async () => {
     const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
     const op = await seedUser({ email: "op-sys@teste.local" });
