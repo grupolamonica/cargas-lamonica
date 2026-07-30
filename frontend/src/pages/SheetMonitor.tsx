@@ -2974,11 +2974,40 @@ function RowDetailModal({
 
   const saveAllocation = useMutation({
     mutationFn: updateMonitorAllocation,
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       toast.success("Alocação salva no sistema.");
-      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
-      // O selo Angellira/ASPX é re-enriquecido no backend em background (motorista
-      // efetivo) — refetch atrasado p/ ele aparecer sem ficar "não consultado".
+      // OTIMISTA: reflete a alocação NA HORA no cache (allocByLh) — o grid/modal
+      // atualizam instantâneo, sem esperar o refetch pesado (~2s / ~13MB). Fonte:
+      // a RESPOSTA (motorista/cavalo/carreta/status autoritativos) + o payload
+      // (tipo/vínculo/tratativas/checklist). Um único refetch atrasado reconcilia os
+      // selos (Angellira/ASPX) e o que o patch não cobre — antes eram DOIS refetches.
+      const lh = data?.lh;
+      const a = data?.allocation;
+      if (lh && a) {
+        const v = variables ?? {};
+        queryClient.setQueryData<Awaited<ReturnType<typeof fetchSheetMonitor>>>([...SHEET_MONITOR_QUERY_KEY], (old) => {
+          if (!old?.allocByLh) return old;
+          const prev = old.allocByLh[lh];
+          const next: SheetMonitorAllocation = {
+            sheet_lh: lh,
+            alloc_motorista: a.motorista,
+            alloc_cavalo: a.cavalo,
+            alloc_carreta: a.carreta,
+            alloc_status: a.status,
+            alloc_tipo: "tipo" in v ? (v.tipo ?? null) : (prev?.alloc_tipo ?? null),
+            alloc_descricao: "descricao" in v ? (v.descricao ?? null) : (prev?.alloc_descricao ?? null),
+            alloc_vinculo: "vinculo" in v ? (v.vinculo ?? null) : (prev?.alloc_vinculo ?? null),
+            alloc_tratativas: "tratativas" in v ? (v.tratativas ?? null) : (prev?.alloc_tratativas ?? null),
+            alloc_checklist_cavalo: "checklistCavalo" in v ? (v.checklistCavalo ?? null) : (prev?.alloc_checklist_cavalo ?? null),
+            alloc_checklist_carreta: "checklistCarreta" in v ? (v.checklistCarreta ?? null) : (prev?.alloc_checklist_carreta ?? null),
+            alloc_pinned: prev?.alloc_pinned ?? false,
+            alloc_updated_at: new Date().toISOString(),
+          };
+          return { ...old, allocByLh: { ...old.allocByLh, [lh]: next } };
+        });
+      }
+      // Único refetch em background p/ reconciliar selos (Angellira/ASPX são
+      // eventualmente-consistentes; o enrich roda fire-and-forget no backend).
       setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
       // Mantém o modal ABERTO após salvar; só fecha quando o operador pediu "Salvar e sair".
       if (closeAfterSaveRef.current) { closeAfterSaveRef.current = false; onClose(); }
@@ -2995,9 +3024,35 @@ function RowDetailModal({
   // sistema usa este caminho, não o saveAllocation.
   const saveSystemCargo = useMutation({
     mutationFn: updateMonitorCargo,
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       toast.success("Carga atualizada.");
-      void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      // OTIMISTA (carga do sistema): a linha do Monitor também mescla allocByLh pelo
+      // lh_manual, então atualizamos allocByLh[lh] na hora com a RESPOSTA + payload.
+      const c = data?.cargo;
+      const lh = c?.lh;
+      if (c && lh) {
+        const v = variables ?? {};
+        queryClient.setQueryData<Awaited<ReturnType<typeof fetchSheetMonitor>>>([...SHEET_MONITOR_QUERY_KEY], (old) => {
+          if (!old?.allocByLh) return old;
+          const prev = old.allocByLh[lh];
+          const next: SheetMonitorAllocation = {
+            sheet_lh: lh,
+            alloc_motorista: c.motorista ?? "",
+            alloc_cavalo: c.cavalo ?? "",
+            alloc_carreta: c.carreta ?? "",
+            alloc_status: c.status ?? "",
+            alloc_tipo: "tipo" in v ? (v.tipo ?? null) : (prev?.alloc_tipo ?? null),
+            alloc_descricao: "descricao" in v ? (v.descricao ?? null) : (prev?.alloc_descricao ?? null),
+            alloc_vinculo: "vinculo" in v ? (v.vinculo ?? null) : (prev?.alloc_vinculo ?? null),
+            alloc_tratativas: "tratativas" in v ? (v.tratativas ?? null) : (prev?.alloc_tratativas ?? null),
+            alloc_checklist_cavalo: "checklistCavalo" in v ? (v.checklistCavalo ?? null) : (prev?.alloc_checklist_cavalo ?? null),
+            alloc_checklist_carreta: "checklistCarreta" in v ? (v.checklistCarreta ?? null) : (prev?.alloc_checklist_carreta ?? null),
+            alloc_pinned: prev?.alloc_pinned ?? false,
+            alloc_updated_at: new Date().toISOString(),
+          };
+          return { ...old, allocByLh: { ...old.allocByLh, [lh]: next } };
+        });
+      }
       setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
       if (closeAfterSaveRef.current) { closeAfterSaveRef.current = false; onClose(); }
     },
