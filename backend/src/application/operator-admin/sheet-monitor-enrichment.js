@@ -7,7 +7,11 @@ import { listSystemCargasForMonitor } from "./use-cases/list-system-cargas-monit
 const STALE_HOURS = 6;
 const BATCH_SIZE = 60;
 const CONCURRENCY = 8;
-const CALL_TIMEOUT_MS = 8_000;
+// Timeout por consulta ao Angellira. A API deles às vezes fica LENTA (~12-13s por
+// resposta em prod). 8s era curto demais → consulta boa mas lenta era abortada e
+// virava "indisponível". Fica abaixo do timeout do cliente (ANGELLIRA_TIMEOUT_MS,
+// 30s). Configurável por env p/ ajustar sem deploy.
+const CALL_TIMEOUT_MS = Math.max(1_000, Number(process.env.ANGELLIRA_ENRICH_TIMEOUT_MS) || 25_000);
 
 function normalizePlate(p) {
   return (p || "").replace(/[\s\-.]/g, "").toUpperCase();
