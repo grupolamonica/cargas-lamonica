@@ -2901,6 +2901,15 @@ function RowDetailModal({
   // completo, salvo via updateMonitorCargo (por cargoId). Cargas da planilha ignoram.
   const [cargoForm, setCargoForm] = useState<CargoForm>(EMPTY_CARGO_FORM);
   const [confirmChange, setConfirmChange] = useState(false);
+  // Guarda de "alterações não salvas" ao tentar fechar o modal.
+  const [confirmClose, setConfirmClose] = useState(false);
+  // Fecha o modal DEPOIS de um save bem-sucedido — só quando o operador escolhe
+  // "Salvar e sair" na guarda. Save normal (botão Salvar) mantém o modal ABERTO.
+  const closeAfterSaveRef = useRef(false);
+  // Identidade estável da linha: o prefill re-preenche o form só ao ABRIR o modal ou
+  // ao TROCAR de linha — NUNCA num refetch em background (poll de 2min / invalidate
+  // pós-save), senão apagaria o que o operador está digitando com o modal aberto.
+  const rowIdentity = row ? (row.rowKey ?? row.lh ?? null) : null;
 
   // Pré-preenche com a alocação EFETIVA: override do operador (alloc_*) ?? planilha.
   useEffect(() => {
@@ -2924,7 +2933,8 @@ function RowDetailModal({
       checklistCavalo: alloc?.alloc_checklist_cavalo ?? row.checklistCavalo ?? "",
       checklistCarreta: alloc?.alloc_checklist_carreta ?? row.checklistCarreta ?? "",
     });
-  }, [row, alloc, open]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- só ao abrir/trocar de linha (não em refetch → preserva edições não salvas)
+  }, [rowIdentity, open]);
 
   // Carga do SISTEMA: pré-preenche o form canônico completo (mesmos campos e origem
   // que o antigo editor de carga do sistema). Fonte da verdade = a própria carga
@@ -2949,7 +2959,8 @@ function RowDetailModal({
       checklistCavalo: row.checklistCavalo ?? "",
       checklistCarreta: row.checklistCarreta ?? "",
     });
-  }, [open, row]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- idem: só ao abrir/trocar de linha
+  }, [open, rowIdentity]);
 
   const saveAllocation = useMutation({
     mutationFn: updateMonitorAllocation,
@@ -2959,9 +2970,11 @@ function RowDetailModal({
       // O selo Angellira/ASPX é re-enriquecido no backend em background (motorista
       // efetivo) — refetch atrasado p/ ele aparecer sem ficar "não consultado".
       setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
-      onClose();
+      // Mantém o modal ABERTO após salvar; só fecha quando o operador pediu "Salvar e sair".
+      if (closeAfterSaveRef.current) { closeAfterSaveRef.current = false; onClose(); }
     },
     onError: (err) => {
+      closeAfterSaveRef.current = false;
       toast.error(err instanceof Error ? err.message : "Não foi possível salvar a alocação.");
     },
   });
@@ -2976,9 +2989,9 @@ function RowDetailModal({
       toast.success("Carga atualizada.");
       void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
       setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
-      onClose();
+      if (closeAfterSaveRef.current) { closeAfterSaveRef.current = false; onClose(); }
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Não foi possível salvar a carga."),
+    onError: (e) => { closeAfterSaveRef.current = false; toast.error(e instanceof Error ? e.message : "Não foi possível salvar a carga."); },
   });
 
   const pinMutation = useMutation({
@@ -3202,7 +3215,36 @@ function RowDetailModal({
     });
   };
 
-  const requestSave = () => {
+  // Alterações não salvas (guarda ao fechar): compara o form com o baseline do prefill.
+  // (motorista já entra via mvChanged/mvChangedSystem, que consideram o sufixo de homônimo.)
+  const allocDirty =
+    mvChanged ||
+    allocForm.status !== (alloc?.alloc_status || row.status || "") ||
+    allocForm.tipo !== (alloc?.alloc_tipo ?? (row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "") ?? "") ||
+    allocForm.vinculo !== (alloc?.alloc_vinculo ?? row.vinculo ?? "") ||
+    allocForm.tratativas !== (alloc?.alloc_tratativas ?? row.tratativas ?? "") ||
+    allocForm.checklistCavalo !== (alloc?.alloc_checklist_cavalo ?? row.checklistCavalo ?? "") ||
+    allocForm.checklistCarreta !== (alloc?.alloc_checklist_carreta ?? row.checklistCarreta ?? "");
+  const cargoDirty =
+    mvChangedSystem ||
+    cargoForm.lh !== (row.lh ?? "") ||
+    cargoForm.status !== (row.status ?? "") ||
+    cargoForm.tipo !== (row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "") ||
+    cargoForm.origem !== (row.origem ?? "") ||
+    cargoForm.destino !== (row.destino ?? "") ||
+    cargoForm.carregamento !== (row.cargaAt ?? (row.data ? `${row.data}T${(row.horario ?? "00:00").slice(0, 5)}` : "")) ||
+    cargoForm.descarga !== (row.descargaAt ?? "") ||
+    cargoForm.vinculo !== (row.vinculo ?? "") ||
+    cargoForm.tratativas !== (row.tratativas ?? "") ||
+    cargoForm.checklistCavalo !== (row.checklistCavalo ?? "") ||
+    cargoForm.checklistCarreta !== (row.checklistCarreta ?? "");
+  const isDirty = row.source === "sistema" ? cargoDirty : allocDirty;
+  // Tentativa de fechar (X / Esc / clique fora): com alterações não salvas, pergunta antes.
+  const attemptClose = () => { if (isDirty) setConfirmClose(true); else onClose(); };
+
+  const requestSave = (closeAfter = false) => {
+    // "Salvar e sair" (guarda) marca p/ fechar após o save; save normal mantém aberto.
+    closeAfterSaveRef.current = closeAfter;
     // Trocou m/v → exige o modal "Confirmar troca" com a descrição (motivo).
     if (row.source === "sistema") {
       // Valida rota/agenda antes de abrir o modal de motivo (espelha o save do sistema).
@@ -3221,7 +3263,7 @@ function RowDetailModal({
 
   return (
     <>
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) attemptClose(); }}>
       <DialogContent className="max-w-2xl p-0 overflow-hidden">
         <div className="flex flex-col" style={{ maxHeight: "88vh" }}>
 
@@ -3419,7 +3461,7 @@ function RowDetailModal({
                     <div className="flex items-center justify-end gap-2 pt-1">
                       <button
                         type="button"
-                        onClick={requestSave}
+                        onClick={() => requestSave()}
                         disabled={saveSystemCargo.isPending}
                         className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
                       >
@@ -3589,7 +3631,7 @@ function RowDetailModal({
                   </span>
                   <button
                     type="button"
-                    onClick={requestSave}
+                    onClick={() => requestSave()}
                     disabled={saveAllocation.isPending}
                     className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
                   >
@@ -3801,6 +3843,41 @@ function RowDetailModal({
       onConfirm={(reason) => { setConfirmChange(false); if (row.source === "sistema") buildAndMutateSystem(reason); else doSave(reason); }}
       onCancel={() => setConfirmChange(false)}
     />
+
+    {/* Guarda de alterações não salvas — ao tentar fechar o modal com edições pendentes. */}
+    <Dialog open={confirmClose} onOpenChange={(o) => { if (!o) setConfirmClose(false); }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="text-base">Alterações não salvas</DialogTitle>
+          <DialogDescription>
+            Você alterou esta carga e ainda não salvou. Deseja salvar antes de sair?
+          </DialogDescription>
+        </DialogHeader>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={() => setConfirmClose(false)}
+            className="rounded-lg border border-border/80 px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Continuar editando
+          </button>
+          <button
+            type="button"
+            onClick={() => { setConfirmClose(false); onClose(); }}
+            className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-600 transition-colors hover:bg-red-50 dark:border-red-500/40 dark:text-red-300 dark:hover:bg-red-500/10"
+          >
+            Sair sem salvar
+          </button>
+          <button
+            type="button"
+            onClick={() => { setConfirmClose(false); requestSave(true); }}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            <CheckCircle2 className="h-3.5 w-3.5" /> Salvar e sair
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
     </>
   );
 }
