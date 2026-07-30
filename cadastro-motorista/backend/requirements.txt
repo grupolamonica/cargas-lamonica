@@ -9,3 +9,7 @@ openai>=1.50.0
 pypdf>=4.0.0
 # PDF→JPEG rasterização para GPT-4o Vision (RNTRC, selfie-cnh recebidos como PDF)
 pymupdf>=1.24.0
+# Normalização de imagem p/ OCR (DC-306): HEIC/HEIF (iPhone) e outros formatos
+# → JPEG antes da Infosimples/Vision. pillow-heif registra o opener HEIC no Pillow.
+Pillow>=10.0.0
+pillow-heif>=0.16.0

@@ -14,6 +14,7 @@ import asyncio
 import anexo_storage
 import cnh_recorte
 import gpt4o_vision
+import image_normalize
 import infosimples
 import ocr_router
 from config import (
@@ -437,6 +438,11 @@ def _renomear_pelo_envelope(envelope: dict, id_efetivo: str, prefixo: str) -> st
 @app.post("/api/ocr/cnh")
 async def ocr_cnh(req: OCRRequest):
     try:
+        # DC-306: normaliza a imagem (HEIC/HEIF/WebP/... -> JPEG) ANTES de tudo. A
+        # Infosimples/Vision so aceitam JPG/PNG/PDF; HEIC do iPhone voltava "Link
+        # invalido" (codigo 701). PDF e JPG/PNG passam direto. Fail-open.
+        req.imagem = await asyncio.to_thread(image_normalize.normalizar_para_ocr, req.imagem)
+
         # Compat: ":proprietario" no fim do id_cadastro indica CNH do dono PF
         # (mesmo endpoint OCR, mas salva em proprietario/ em vez de motorista/).
         prefixo = "motorista"
@@ -508,6 +514,8 @@ async def ocr_cnh(req: OCRRequest):
 @app.post("/api/ocr/crlv")
 async def ocr_crlv(req: OCRRequest):
     try:
+        # DC-306: normaliza HEIC/HEIF/... -> JPEG antes do OCR (ver image_normalize).
+        req.imagem = await asyncio.to_thread(image_normalize.normalizar_para_ocr, req.imagem)
         # CRLV nao tem campo no schema pra distinguir cavalo/carreta — o
         # frontend chama /api/ocr/crlv duas vezes e decide. Aqui assumimos
         # cavalo por padrao; se id_cadastro vier com sufixo ":carreta",
@@ -553,6 +561,8 @@ async def ocr_crlv(req: OCRRequest):
 @app.post("/api/ocr/comprovante-residencia")
 async def ocr_comprovante_residencia(req: ComprovanteRequest):
     try:
+        # DC-306: normaliza HEIC/HEIF/... -> JPEG antes do OCR (ver image_normalize).
+        req.imagem = await asyncio.to_thread(image_normalize.normalizar_para_ocr, req.imagem)
         # Compat: ":proprietario" no fim do id_cadastro indica que e o
         # comprovante do dono (PF), nao do motorista.
         tipo = "comprovante_motorista"
@@ -691,6 +701,8 @@ async def ocr_cartao_cnpj(req: CartaoCNPJRequest):
       - infosimples-with-vision-fallback: legacy primary, Vision se falhar
     """
     try:
+        # DC-306: normaliza HEIC/HEIF/... -> JPEG antes do OCR (ver image_normalize).
+        req.imagem = await asyncio.to_thread(image_normalize.normalizar_para_ocr, req.imagem)
         # Compat: ":carreta" indica que e o cartao CNPJ do dono da carreta
         # (quando carreta tem proprietario diferente do cavalo).
         tipo = "cartao_cnpj"
@@ -739,6 +751,8 @@ async def ocr_rntrc(req: OCRRequest):
     carreta (RNTRC eventualmente diferente do cavalo).
     """
     try:
+        # DC-306: normaliza HEIC/HEIF/... -> JPEG antes do OCR (ver image_normalize).
+        req.imagem = await asyncio.to_thread(image_normalize.normalizar_para_ocr, req.imagem)
         tipo = "rntrc_proprietario"
         id_efetivo = req.id_cadastro
         if id_efetivo.endswith(":carreta"):
@@ -790,6 +804,8 @@ async def ocr_selfie_cnh(req: OCRRequest):
     baixo ou CNH ausente) antes de avancar no wizard.
     """
     try:
+        # DC-306: normaliza HEIC/HEIF/... -> JPEG antes do OCR (ver image_normalize).
+        req.imagem = await asyncio.to_thread(image_normalize.normalizar_para_ocr, req.imagem)
         await asyncio.to_thread(
             _persistir_anexo_basico, "selfie_cnh_motorista", req.imagem, req.id_cadastro
         )
