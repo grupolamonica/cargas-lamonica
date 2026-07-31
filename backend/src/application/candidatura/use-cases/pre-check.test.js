@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockValidatePublicLeadPreRegistration, mockPgClient, canned } = vi.hoisted(() => {
   const mockPgClient = { query: vi.fn() };
@@ -20,6 +20,13 @@ vi.mock("../../load-claims/public-lead-validation.js", () => ({
 // duplicate-check (iter #7). O mock roteia por SQL.
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({
   withPgClient: async (cb) => cb(mockPgClient),
+}));
+
+// Novo gate: pre-check.js consulta o SPX ao vivo (lookupMotorista) quando a flag
+// PRECHECK_SPX_GATE_ENABLED está ligada. Mockado para os testes do gate.
+const { mockLookupMotorista } = vi.hoisted(() => ({ mockLookupMotorista: vi.fn() }));
+vi.mock("../../../infrastructure/cadastro-bots/spx-bot-client.js", () => ({
+  lookupMotorista: mockLookupMotorista,
 }));
 
 import { candidaturaPreCheck } from "./pre-check.js";
@@ -487,6 +494,69 @@ describe("candidaturaPreCheck", () => {
       expect(result.pendencias.find((p) => p.reason === "DUPLICATE_PENDING_REGISTRATION")).toBeUndefined();
       expect(warnSpy).toHaveBeenCalled();
       warnSpy.mockRestore();
+    });
+  });
+
+  // ── Novo gate Angellira + SPX (flag PRECHECK_SPX_GATE_ENABLED) ─────────────
+  describe("gate Angellira + SPX (flag ON)", () => {
+    const OLD_FLAG = process.env.PRECHECK_SPX_GATE_ENABLED;
+    beforeEach(() => {
+      process.env.PRECHECK_SPX_GATE_ENABLED = "1";
+      canned.hasLocalCadastro = false; // sem cadastro local — só o gate externo decide
+    });
+    afterEach(() => {
+      if (OLD_FLAG === undefined) delete process.env.PRECHECK_SPX_GATE_ENABLED;
+      else process.env.PRECHECK_SPX_GATE_ENABLED = OLD_FLAG;
+    });
+
+    it("Angellira Conforme+vigente E SPX ativo na agencia → passa direto (sem pendencia de motorista)", async () => {
+      mockLookupMotorista.mockResolvedValue({ ok: true, encontrado: true, na_minha_agencia: true });
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: {
+          driver: { angelira: { status: "FOUND", found: true, statusText: "Conforme", validUntil: "2027-01-01" }, aspx: { found: true } },
+          plates: [{ field: "horsePlate", status: "FOUND", found: true, validUntil: "2027-01-01" }],
+        },
+      });
+      const r = await candidaturaPreCheck({ driverCpf: "12345678901", horsePlate: "ABC1D23", trailerPlates: [], correlationId: "gate-pass" });
+      expect(r.pendencias.find((p) => p.step === "A")).toBeUndefined();
+      expect(r.pendencias.find((p) => p.reason === "LOCAL_REGISTRATION_REQUIRED")).toBeUndefined();
+      expect(r.completos.length).toBeGreaterThanOrEqual(1); // placa vigente vira completo (sem CRLV)
+    });
+
+    it("Angellira OK mas SPX outra agencia → pendencia SPX_REGISTRATION_REQUIRED", async () => {
+      mockLookupMotorista.mockResolvedValue({ ok: true, encontrado: true, outra_agencia: true });
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: { driver: { angelira: { status: "FOUND", found: true, statusText: "Conforme", validUntil: "2027-01-01" }, aspx: { found: true } }, plates: [] },
+      });
+      const r = await candidaturaPreCheck({ driverCpf: "12345678901", horsePlate: "ABC1D23", trailerPlates: [], correlationId: "gate-nospx" });
+      expect(r.pendencias.find((p) => p.reason === "SPX_REGISTRATION_REQUIRED")).toBeTruthy();
+    });
+
+    it("Angellira Conforme mas VENCIDO → pendencia EXTERNAL_REGISTRATION_EXPIRED", async () => {
+      mockLookupMotorista.mockResolvedValue({ ok: true, encontrado: true, na_minha_agencia: true });
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: { driver: { angelira: { status: "FOUND", found: true, statusText: "Conforme", validUntil: "2020-01-01" }, aspx: { found: true } }, plates: [] },
+      });
+      const r = await candidaturaPreCheck({ driverCpf: "12345678901", horsePlate: "ABC1D23", trailerPlates: [], correlationId: "gate-exp" });
+      expect(r.pendencias.find((p) => p.reason === "EXTERNAL_REGISTRATION_EXPIRED")).toBeTruthy();
+    });
+
+    it("Angellira nao encontrado → LOCAL_REGISTRATION_REQUIRED (cadastrar), mesmo com SPX ativo", async () => {
+      mockLookupMotorista.mockResolvedValue({ ok: true, encontrado: true, na_minha_agencia: true });
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: { driver: { angelira: { status: "NOT_FOUND", found: false }, aspx: { found: false } }, plates: [] },
+      });
+      const r = await candidaturaPreCheck({ driverCpf: "12345678901", horsePlate: "ABC1D23", trailerPlates: [], correlationId: "gate-notfound" });
+      expect(r.pendencias.find((p) => p.reason === "LOCAL_REGISTRATION_REQUIRED")).toBeTruthy();
+    });
+
+    it("SPX indisponivel (lookup falha) → cai no RF001 legado (LOCAL_REGISTRATION_REQUIRED)", async () => {
+      mockLookupMotorista.mockRejectedValue(new Error("spx-bot down"));
+      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+        summary: { driver: { angelira: { status: "FOUND", found: true, statusText: "Conforme", validUntil: "2027-01-01" }, aspx: { found: true } }, plates: [] },
+      });
+      const r = await candidaturaPreCheck({ driverCpf: "12345678901", horsePlate: "ABC1D23", trailerPlates: [], correlationId: "gate-unavail" });
+      expect(r.pendencias.find((p) => p.reason === "LOCAL_REGISTRATION_REQUIRED")).toBeTruthy();
     });
   });
 
