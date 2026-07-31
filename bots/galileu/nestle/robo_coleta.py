@@ -124,6 +124,10 @@ def executar():
         except Exception as e:
             erros_msgs.append(f"[{cod}] erro ao mapear: {e}")
 
+    # A API pode devolver a mesma programação 2x; duplicata dentro do mesmo
+    # lote quebra o upsert inteiro (Postgres 21000). Mantém a última ocorrência.
+    rows = list({r["codprogcoleta"]: r for r in rows}.values())
+
     if not rows:
         print("[INFO] Nenhuma oferta mapeada para registrar")
         if erros_msgs:

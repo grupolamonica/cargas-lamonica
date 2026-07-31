@@ -154,6 +154,10 @@ def executar():
             else:
                 rows.append(r)
 
+    # Duplicata de codembarque no mesmo lote quebra o upsert inteiro
+    # (Postgres 21000). Mantém a última ocorrência.
+    rows = list({r["codembarque"]: r for r in rows}.values())
+
     if rows:
         LOTE = 50
         total = 0
