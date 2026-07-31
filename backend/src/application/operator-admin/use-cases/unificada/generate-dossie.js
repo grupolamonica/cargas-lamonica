@@ -2,11 +2,11 @@
  * Gera o dossiê de gerenciamento de risco (Risk Assessment Document) unificado
  * para um cadastro e persiste no Supabase Storage.
  *
- * Espelha o que a produção faz (lib/spx_payload.gerarRiskDoc): chama o sidecar
- * unificada (API-only AngelLira) que monta o PDF Motorista+Cavalo+Carreta, e
- * guarda o resultado. Idempotente/reuso: um dossiê OK gerado há < 24h NÃO é
- * regenerado (igual ao reuseExisting da produção), evitando martelar a API
- * AngelLira a cada disparo.
+ * Chama o sidecar gerador-mock-angellira (100% local — sem AngelLira) que monta
+ * o PDF Motorista+Cavalo+Carreta a partir do `dados` do cadastro, e guarda o
+ * resultado. Substitui o unificada-bot na geração do PDF (a unificada foi
+ * pausada). Idempotente/reuso: um dossiê OK gerado há < 24h NÃO é regenerado
+ * (igual ao reuseExisting da produção), evitando re-render a cada disparo.
  *
  * Registra um job em external_registration_jobs (target='spx', step='unificada_pdf')
  * — o dossiê é o passo de Risk Doc do fluxo SPX, e essa chave permite a Fase do
@@ -22,9 +22,9 @@ import { getAdminClient } from "../../../load-claims/auth.js";
 import { extractPlacas } from "../angellira/payload-mapper.js";
 import { findExistingOkJob, markJobInProgress, markJobOk, markJobError } from "../angellira/jobs-repository.js";
 import {
-  UnificadaBotError,
-  gerarPdfUnificado,
-} from "../../../../infrastructure/cadastro-bots/unificada-bot-client.js";
+  GeradorMockError,
+  gerarPdfMock,
+} from "../../../../infrastructure/cadastro-bots/gerador-mock-client.js";
 
 const TARGET = "spx";
 const STEP = "unificada_pdf";
@@ -114,10 +114,8 @@ export async function generateDossie({
   });
 
   try {
-    const result = await gerarPdfUnificado({
-      cpf: cpf || null,
-      placaCavalo: placaCavalo || null,
-      placaCarreta: placaCarreta || null,
+    const result = await gerarPdfMock({
+      dados: cadastro?.dados || {},
       correlationId,
     });
 
@@ -127,7 +125,7 @@ export async function generateDossie({
       upsert: false,
     });
     if (upErr) {
-      throw new UnificadaBotError({
+      throw new GeradorMockError({
         code: "RISK_DOC_STORAGE_FAIL",
         message: `Falha ao salvar o dossiê no storage: ${upErr.message || upErr}`,
         acao: "Verifique o bucket do Supabase Storage e as credenciais service-role.",
@@ -162,9 +160,9 @@ export async function generateDossie({
     logStructuredEvent("info", "unificada.dossie.generated", { cadastroId, bytes: result.pdf.length, correlationId });
     return { ok: true, reused: false, storagePath, signedUrl, components: result.components, warnings: result.warnings };
   } catch (err) {
-    const errorPayload = err instanceof UnificadaBotError
+    const errorPayload = err instanceof GeradorMockError
       ? err.toJSON()
-      : { code: "UNIFICADA_PIPELINE_UNEXPECTED", message: err?.message || String(err) };
+      : { code: "DOSSIE_PIPELINE_UNEXPECTED", message: err?.message || String(err) };
     await markJobError({ client, jobId, error: errorPayload });
     try {
       await insertSecurityAuditEvent(client, {
