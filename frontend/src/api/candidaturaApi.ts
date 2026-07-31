@@ -97,6 +97,13 @@ interface ApiRequestOptions {
   accessToken?: string;
   idempotencyKey?: string;
   body?: unknown;
+  /**
+   * Teto de tempo (ms) para a requisição. Quando definido, aborta o fetch e
+   * lança CandidaturaApiError (status 0) em vez de ficar pendente indefinidamente.
+   * Só é aplicado quando presente — chamadas sem `timeoutMs` (uploads/OCR/submit,
+   * legitimamente lentas) mantêm o comportamento anterior, sem signal.
+   */
+  timeoutMs?: number;
 }
 
 export class CandidaturaApiError extends Error {
@@ -192,11 +199,34 @@ async function requestJson<T>(url: string, options: ApiRequestOptions = {}): Pro
 
   const requestUrl = resolveCanonicalApiRequestUrl(url);
 
-  const response = await fetch(requestUrl, {
-    method: options.method || "GET",
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
+  // Timeout opcional (só quando options.timeoutMs está definido). Converte uma
+  // requisição travada (backend sem responder) em erro recuperável, em vez de
+  // deixar a UI presa para sempre (ex.: pré-check no "Verificando seu cadastro…").
+  const controller = new AbortController();
+  const timeoutHandle =
+    options.timeoutMs != null
+      ? setTimeout(() => controller.abort(), options.timeoutMs)
+      : null;
+
+  let response: Response;
+  try {
+    response = await fetch(requestUrl, {
+      method: options.method || "GET",
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: options.timeoutMs != null ? controller.signal : undefined,
+    });
+  } catch (err) {
+    if (options.timeoutMs != null && controller.signal.aborted) {
+      throw new CandidaturaApiError(
+        "A verificação demorou mais que o esperado e foi interrompida. Verifique a conexão e tente novamente.",
+        { status: 0, correlationId },
+      );
+    }
+    throw err;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
 
   // 204 No Content é resposta válida — propaga null para o caller decidir.
   if (response.status === 204) {
@@ -234,12 +264,20 @@ async function requestJson<T>(url: string, options: ApiRequestOptions = {}): Pro
  * Verifica se o motorista autenticado tem pendências cadastrais (motorista + veículos)
  * antes de abrir o fluxo de candidatura para uma carga.
  */
+// Teto de tempo do pré-check. Sem isto, uma verificação travada (Angellira/ASPX
+// não respondendo) deixava a tela presa em "Verificando seu cadastro…" para
+// sempre, sem erro e sem saída. O operador roda cache-only (rápido) → teto
+// curto; o motorista roda ao vivo (Angellira ~30s/chamada, em série) → folgado.
+// Ao estourar, vira CandidaturaApiError e cai no PreCheckError (tem "Tentar de novo").
+const PRE_CHECK_TIMEOUT_MS = { cacheOnly: 30_000, live: 90_000 } as const;
+
 export function useCandidaturaPreCheck() {
   return useMutation<PreCheckResponse, CandidaturaApiError, PreCheckMutationInput>({
     mutationFn: ({ cpf, horsePlate, trailerPlates, preferCache }) =>
       requestJson<PreCheckResponse>("/api/candidatura/pre-check", {
         method: "POST",
         body: { cpf, horsePlate, trailerPlates, ...(preferCache ? { preferCache: true } : {}) },
+        timeoutMs: preferCache ? PRE_CHECK_TIMEOUT_MS.cacheOnly : PRE_CHECK_TIMEOUT_MS.live,
       }),
   });
 }
@@ -259,6 +297,7 @@ export async function requestCandidaturaPreCheck(
       horsePlate: payload.horsePlate,
       trailerPlates: payload.trailerPlates,
     },
+    timeoutMs: payload.preferCache ? PRE_CHECK_TIMEOUT_MS.cacheOnly : PRE_CHECK_TIMEOUT_MS.live,
   });
 }
 
