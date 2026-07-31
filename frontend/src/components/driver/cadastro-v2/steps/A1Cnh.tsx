@@ -195,7 +195,10 @@ export function A1Cnh({
       isValidCpf(data.cpf) &&
       data.categoria.trim().length > 0 &&
       data.validade.trim().length > 0;
-    const fileProvided = tileState === "success" || manualMode;
+    // DC-305: o DOCUMENTO (arquivo) é obrigatório — o motorista pode digitar os
+    // dados (manualMode), mas só avança com a CNH anexada (storage_path). Antes,
+    // `manualMode` liberava sem arquivo. `documentUrl` cobre drafts legados.
+    const fileProvided = Boolean(data.storage_path || data.documentUrl);
     onValid(fileProvided && baseFilled && cpfMatches && !cpfMismatch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, tileState, manualMode, cpfMismatch]);

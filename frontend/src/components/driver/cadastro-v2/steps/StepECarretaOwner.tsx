@@ -514,9 +514,15 @@ function StepECarretaOwnerImpl({
   const complementaryFulfilled =
     ownerDocType === "cpf" ? isValidOwnerPFData(pfData) : isValidOwnerPJData(pjData);
 
+  // DC-305: o documento do proprietário da carreta (cartão-CNPJ / CNH) é
+  // obrigatório — pode digitar os dados, mas só avança com o arquivo anexado.
+  // Quando o dono é reusado (mesmo já coletado no cavalo/outra carreta), o doc
+  // já foi anexado lá → não exige re-upload aqui.
+  const ownerDocProvided = Boolean(reusedSource) || Boolean(ownerDocStoragePath);
   const continueEnabled =
     ownerData.nome.trim().length > 0 &&
     ownerDocValid &&
+    ownerDocProvided &&
     anttFulfilled &&
     complementaryFulfilled;
 
