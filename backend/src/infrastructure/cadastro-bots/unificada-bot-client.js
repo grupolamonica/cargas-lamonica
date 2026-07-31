@@ -274,6 +274,44 @@ export async function gerarPdfUnificado({ cpf, placaCavalo, placaCarreta, correl
   throw mapBotError({ httpStatus, body, fallbackMessage: "Falha ao gerar o dossiê unificado." });
 }
 
+/**
+ * Gera o Gerenciador de Risco (layout Lamônica) a partir do NOSSO cadastro,
+ * SEM consultar o AngelLira. Substitui gerarPdfUnificado no fluxo SPX-first.
+ * Mesmo retorno (PDF Buffer) — o downstream (upload/stager) não muda.
+ *
+ * @param {object} args
+ * @param {object} args.dados  pending_driver_registrations.dados ({ motorista, cavalo, carretas[] }).
+ * @param {string} [args.protocolo]
+ * @returns {Promise<{ok:true, pdf:Buffer, contentType:string, components:string|null, warnings:string|null}>}
+ */
+export async function gerarPdfLamonica({ dados, protocolo, correlationId }) {
+  if (!dados || typeof dados !== "object" || !dados.motorista) {
+    throw new UnificadaBotError({
+      code: "UNIFICADA_BAD_REQUEST",
+      message: "Informe 'dados' do cadastro (com ao menos o motorista).",
+      acao: "Verifique os dados do cadastro.",
+      httpStatus: 400,
+    });
+  }
+  const { httpStatus, headers, body, pdf } = await request({
+    method: "POST",
+    path: "/relatorio/pdf_lamonica",
+    body: { dados, ...(protocolo ? { protocolo } : {}) },
+    correlationId,
+    parse: "binary",
+  });
+  if (httpStatus === 200 && pdf && pdf.length > 0) {
+    return {
+      ok: true,
+      pdf,
+      contentType: headers?.get?.("content-type") || "application/pdf",
+      components: headers?.get?.("x-components") || null,
+      warnings: headers?.get?.("x-warnings") || null,
+    };
+  }
+  throw mapBotError({ httpStatus, body, fallbackMessage: "Falha ao gerar o gerenciador de risco." });
+}
+
 export function __resetCircuitForTests() {
   circuitState.failures = 0;
   circuitState.openUntil = 0;

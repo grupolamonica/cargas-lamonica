@@ -2,11 +2,13 @@
  * Gera o dossiê de gerenciamento de risco (Risk Assessment Document) unificado
  * para um cadastro e persiste no Supabase Storage.
  *
- * Espelha o que a produção faz (lib/spx_payload.gerarRiskDoc): chama o sidecar
- * unificada (API-only AngelLira) que monta o PDF Motorista+Cavalo+Carreta, e
- * guarda o resultado. Idempotente/reuso: um dossiê OK gerado há < 24h NÃO é
- * regenerado (igual ao reuseExisting da produção), evitando martelar a API
- * AngelLira a cada disparo.
+ * SPX-first: chama o sidecar unificada (endpoint /relatorio/pdf_lamonica) que
+ * monta o PDF Motorista+Cavalo+Carreta a partir do NOSSO cadastro (dados), com
+ * layout Lamônica — SEM depender do AngelLira. Isso permite gerar o dossiê
+ * antes de qualquer cadastro externo. Idempotente/reuso: um dossiê OK gerado há
+ * < 24h NÃO é regenerado. (A validade de risco/vigência — rad_expire_date — é
+ * consultada à parte em risk-expiry.js e degrada p/ hoje+90d se o AngelLira
+ * não responder; não faz parte da geração do PDF.)
  *
  * Registra um job em external_registration_jobs (target='spx', step='unificada_pdf')
  * — o dossiê é o passo de Risk Doc do fluxo SPX, e essa chave permite a Fase do
@@ -23,7 +25,7 @@ import { extractPlacas } from "../angellira/payload-mapper.js";
 import { findExistingOkJob, markJobInProgress, markJobOk, markJobError } from "../angellira/jobs-repository.js";
 import {
   UnificadaBotError,
-  gerarPdfUnificado,
+  gerarPdfLamonica,
 } from "../../../../infrastructure/cadastro-bots/unificada-bot-client.js";
 
 const TARGET = "spx";
@@ -114,10 +116,12 @@ export async function generateDossie({
   });
 
   try {
-    const result = await gerarPdfUnificado({
-      cpf: cpf || null,
-      placaCavalo: placaCavalo || null,
-      placaCarreta: placaCarreta || null,
+    // SPX-first: gera o Gerenciador de Risco a partir do NOSSO cadastro (layout
+    // Lamônica), SEM consultar o AngelLira. O PDF resultante e o downstream
+    // (upload/stager/risk_doc_path) seguem idênticos ao fluxo anterior.
+    const result = await gerarPdfLamonica({
+      dados: cadastro?.dados || {},
+      protocolo: cadastro?.dados?.protocolo || null,
       correlationId,
     });
 

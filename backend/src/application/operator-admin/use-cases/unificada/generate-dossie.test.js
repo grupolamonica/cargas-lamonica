@@ -18,7 +18,7 @@ vi.mock("../../../../infrastructure/cadastro-bots/unificada-bot-client.js", () =
       return { code: this.code, message: this.message, httpStatus: this.httpStatus, acao: this.acao };
     }
   },
-  gerarPdfUnificado: vi.fn(),
+  gerarPdfLamonica: vi.fn(),
 }));
 
 vi.mock("../../../../infrastructure/security-audit.js", () => ({
@@ -35,7 +35,7 @@ vi.mock("../../../load-claims/auth.js", () => ({
 
 import {
   UnificadaBotError,
-  gerarPdfUnificado,
+  gerarPdfLamonica,
 } from "../../../../infrastructure/cadastro-bots/unificada-bot-client.js";
 import { generateDossie } from "./generate-dossie.js";
 
@@ -117,7 +117,7 @@ afterEach(() => {
 
 describe("generateDossie / happy path", () => {
   it("gera o PDF, sobe no storage, marca job OK e retorna signedUrl", async () => {
-    gerarPdfUnificado.mockResolvedValue({
+    gerarPdfLamonica.mockResolvedValue({
       ok: true, pdf: Buffer.from("%PDF-1.4 fake-dossie"),
       components: "{'motorista': True}", warnings: "[]",
     });
@@ -130,11 +130,12 @@ describe("generateDossie / happy path", () => {
     expect(r.storagePath).toMatch(/^risk-docs\/11111111-1111-1111-1111-111111111111\/dossie_\d+\.pdf$/);
     expect(r.signedUrl).toBe("http://signed/dossie.pdf");
 
-    // gerarPdfUnificado recebeu cpf + placa do cavalo
-    expect(gerarPdfUnificado).toHaveBeenCalledOnce();
-    const callArg = gerarPdfUnificado.mock.calls[0][0];
-    expect(callArg.cpf).toBe("12345678909");
-    expect(callArg.placaCavalo).toBe("ABC1234");
+    // gerarPdfLamonica recebeu o `dados` do cadastro (não mais cpf/placas soltos)
+    expect(gerarPdfLamonica).toHaveBeenCalledOnce();
+    const callArg = gerarPdfLamonica.mock.calls[0][0];
+    expect(callArg.dados).toEqual(SAMPLE_CADASTRO.dados);
+    expect(callArg.dados.motorista.cpf).toBe("12345678909");
+    expect(callArg.dados.cavalo.placa).toBe("ABC1234");
 
     // upload com contentType pdf + buffer
     expect(storageMock.upload).toHaveBeenCalledOnce();
@@ -164,13 +165,13 @@ describe("generateDossie / reuso (<24h)", () => {
     expect(r.ok).toBe(true);
     expect(r.reused).toBe(true);
     expect(r.storagePath).toBe("risk-docs/old/dossie_old.pdf");
-    expect(gerarPdfUnificado).not.toHaveBeenCalled();
+    expect(gerarPdfLamonica).not.toHaveBeenCalled();
     expect(storageMock.upload).not.toHaveBeenCalled();
     expect(storageMock.createSignedUrl).toHaveBeenCalled(); // re-assina a URL
   });
 
   it("REGENERA quando force:true mesmo com dossiê recente", async () => {
-    gerarPdfUnificado.mockResolvedValue({ ok: true, pdf: Buffer.from("%PDF novo"), components: "{}", warnings: "[]" });
+    gerarPdfLamonica.mockResolvedValue({ ok: true, pdf: Buffer.from("%PDF novo"), components: "{}", warnings: "[]" });
     const client = makeFakeClient();
     client._seedJob({
       id: "old", cadastro_id: SAMPLE_CADASTRO.id, target: "spx", step: "unificada_pdf",
@@ -182,7 +183,7 @@ describe("generateDossie / reuso (<24h)", () => {
 
     expect(r.ok).toBe(true);
     expect(r.reused).toBe(false);
-    expect(gerarPdfUnificado).toHaveBeenCalledOnce();
+    expect(gerarPdfLamonica).toHaveBeenCalledOnce();
   });
 });
 
@@ -192,13 +193,13 @@ describe("generateDossie / dados insuficientes", () => {
     const r = await generateDossie({ client, cadastro: { id: "x", dados: { motorista: {} } } });
     expect(r.ok).toBe(false);
     expect(r.error.code).toBe("DADOS_INSUFICIENTES");
-    expect(gerarPdfUnificado).not.toHaveBeenCalled();
+    expect(gerarPdfLamonica).not.toHaveBeenCalled();
   });
 });
 
 describe("generateDossie / falha no sidecar", () => {
   it("marca job ERROR e retorna erro estruturado", async () => {
-    gerarPdfUnificado.mockRejectedValue(
+    gerarPdfLamonica.mockRejectedValue(
       new UnificadaBotError({ code: "UNIFICADA_DOWNSTREAM_FAIL", message: "AngelLira fora" }),
     );
     const client = makeFakeClient();
