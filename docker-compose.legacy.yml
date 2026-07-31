@@ -1,0 +1,55 @@
+# docker-compose.legacy.yml — serviços PAUSADOS (fora do deploy ativo)
+#
+# Este arquivo NÃO é passado no `-f` do deploy (.github/workflows/deploy.yml),
+# então os serviços abaixo NÃO sobem no deploy e são derrubados como órfãos
+# pelo `up -d --remove-orphans`. Ficam aqui apenas parkeados para reativação.
+#
+# ── unificada-bot (PAUSADO em 2026-07-31) ────────────────────────────────
+# Gerava o Risk Assessment Document (PDF) via API AngelLira. Substituído pelo
+# gerador-mock-angellira (render local). Reativar (quando a gestão pedir):
+#   1. mover o bloco de volta pro docker-compose.yml e re-add ao build list do
+#      deploy.yml (linha `... build ... unificada-bot ...`);
+#   2. repointar generate-dossie.js e cadastro-bots-health.js de volta pro
+#      unificada-bot-client.js (gerarPdfUnificado / health).
+#   3. religar a consulta de vigência do risco: setar RISK_EXPIRY_ANGELLIRA_ENABLED=1
+#      no backend.env (risk-expiry.js volta a consultar /relatorio/status; enquanto
+#      OFF, a vigência do SPX cai no default hoje+RISK_DOC_VALIDITY_DAYS).
+#
+# Uso manual (subir só a unificada p/ teste, SEM deploy):
+#   docker compose -f docker-compose.yml -f docker-compose.legacy.yml up -d unificada-bot
+
+services:
+  unificada-bot:
+    build:
+      context: ./bots/unificada
+      dockerfile: Dockerfile
+    image: lamonica-unificada-bot:latest
+    restart: unless-stopped
+    networks:
+      - lamonica-net
+      # platform_monitoring: permite o blackbox-exporter sondar /health
+      - platform_monitoring
+    # Mesma fonte do backend.env (ANGELLIRA_USER/PASSWORD/EMPRESA_ID).
+    env_file:
+      - backend.env
+    environment:
+      ANGELIRA_AUTH_BASE: ${ANGELIRA_AUTH_BASE:-https://auth.angellira.com.br}
+      UNIFICADA_HOST: "0.0.0.0"
+      UNIFICADA_PORT: "8001"
+      PYTHONUNBUFFERED: "1"
+    mem_limit: 384m
+    mem_reservation: 96m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    expose:
+      - "8001"

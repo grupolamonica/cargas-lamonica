@@ -3,7 +3,7 @@
 // está fora do ar; senão os cadastros falham "sem motivo aparente" e ele tenta às cegas.
 import * as angelliraBot from "../../../infrastructure/cadastro-bots/angellira-bot-client.js";
 import * as spxBot from "../../../infrastructure/cadastro-bots/spx-bot-client.js";
-import * as unificadaBot from "../../../infrastructure/cadastro-bots/unificada-bot-client.js";
+import * as geradorMock from "../../../infrastructure/cadastro-bots/gerador-mock-client.js";
 
 // Cada probe usa o método de liveness mais leve do respectivo client (todos já
 // têm timeout interno e devolvem { ok, httpStatus, body }). SPX não tem health(),
@@ -11,7 +11,9 @@ import * as unificadaBot from "../../../infrastructure/cadastro-bots/unificada-b
 const BOTS = [
   { key: "angellira", label: "Angellira", probe: () => angelliraBot.health() },
   { key: "spx", label: "SPX / Shopee", probe: () => spxBot.status() },
-  { key: "unificada", label: "Dossiê de risco", probe: () => unificadaBot.health() },
+  // key mantido "unificada" (contrato do frontend/TS); agora probeia o
+  // gerador-mock — a unificada foi pausada e o dossiê passou a ser gerado por ele.
+  { key: "unificada", label: "Dossiê de risco", probe: () => geradorMock.health() },
 ];
 
 function normalizeProbe(result) {

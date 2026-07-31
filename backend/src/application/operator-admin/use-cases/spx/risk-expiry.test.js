@@ -10,12 +10,16 @@ vi.mock("../../../../infrastructure/security-log.js", () => ({
 import { consultarStatus } from "../../../../infrastructure/cadastro-bots/unificada-bot-client.js";
 import { consultRiskExpiry, defaultExpiryIso, __clearRiskExpiryCacheForTests } from "./risk-expiry.js";
 
+const originalEnv = { ...process.env };
+
 beforeEach(() => {
   vi.clearAllMocks();
   __clearRiskExpiryCacheForTests();
+  process.env = { ...originalEnv };
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  process.env = originalEnv;
 });
 
 describe("defaultExpiryIso", () => {
@@ -26,7 +30,19 @@ describe("defaultExpiryIso", () => {
   });
 });
 
-describe("consultRiskExpiry", () => {
+describe("consultRiskExpiry — unificada pausada (flag OFF, default)", () => {
+  it("NÃO consulta e retorna found:false (pipeline usa defaultExpiryIso)", async () => {
+    const r = await consultRiskExpiry({ cpf: "01972412639" });
+    expect(r).toMatchObject({ found: false, rad_expire_date: null });
+    expect(consultarStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe("consultRiskExpiry — RISK_EXPIRY_ANGELLIRA_ENABLED=1", () => {
+  beforeEach(() => {
+    process.env.RISK_EXPIRY_ANGELLIRA_ENABLED = "1";
+  });
+
   it("extrai item.limitDate (ISO datetime) → YYYY-MM-DD, found:true", async () => {
     consultarStatus.mockResolvedValue({
       ok: true, status: "CONFORME", status_description: "Conforme",

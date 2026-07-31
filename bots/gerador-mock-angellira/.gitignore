@@ -1,0 +1,7 @@
+# Runtime / build — nunca versionar
+.venv/
+__pycache__/
+*.pyc
+data/out/
+*.pdf
+.env

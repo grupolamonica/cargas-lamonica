@@ -60,7 +60,7 @@
       - targets:
           - 'http://angelira-bot:8765/api/status'
           - 'http://spx-bot:8766/spx/status'
-          - 'http://unificada-bot:8001/health'
+          - 'http://gerador-mock-angellira:8000/health'
           - 'http://cadastro-ocr:8765/api/status'
     relabel_configs:
       - source_labels: [__address__]

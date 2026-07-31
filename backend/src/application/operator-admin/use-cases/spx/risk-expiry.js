@@ -20,6 +20,15 @@ const RISK_DOC_VALIDITY_DAYS = Number(process.env.RISK_DOC_VALIDITY_DAYS || 90);
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const _cache = new Map(); // cpf(dígitos) -> { at, value }
 
+// A unificada-bot (única fonte de /relatorio/status) foi PAUSADA e o gerador-mock
+// não expõe vigência. Enquanto OFF (default), consultRiskExpiry NÃO faz o
+// round-trip morto ao container removido (evita warn/circuit/latência por
+// disparo) — cai direto no default. Reativar junto com a unificada:
+// RISK_EXPIRY_ANGELLIRA_ENABLED=1. Ver docker-compose.legacy.yml.
+function isAngelliraStatusEnabled() {
+  return String(process.env.RISK_EXPIRY_ANGELLIRA_ENABLED || "").trim() === "1";
+}
+
 /** Data de validade default: hoje + N dias, em 'YYYY-MM-DD'. Nunca retorna null. */
 export function defaultExpiryIso(days = RISK_DOC_VALIDITY_DAYS) {
   const n = Number.isFinite(days) ? days : 90;
@@ -61,6 +70,11 @@ function normalizeIsoDate(value) {
 export async function consultRiskExpiry({ cpf, correlationId } = {}) {
   const key = String(cpf || "").replace(/\D/g, "");
   if (!key) return { ok: false, found: false, rad_expire_date: null };
+
+  // Unificada pausada → sem fonte de vigência viva: cai no default (nunca null).
+  if (!isAngelliraStatusEnabled()) {
+    return { ok: true, found: false, rad_expire_date: null };
+  }
 
   const cached = _cache.get(key);
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
