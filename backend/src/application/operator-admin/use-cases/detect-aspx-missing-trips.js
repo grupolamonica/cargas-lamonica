@@ -49,6 +49,20 @@ function realertHours() {
   return Number.isFinite(n) && n > 0 ? n : 6;
 }
 
+// DISJUNTOR de marcação em massa. Sumir 1-2 viagens é rotina (cancelamento); sumir
+// "quase todas" é sintoma de índice degradado (sessão trocada, station_id/agência
+// diferente, portal devolvendo recorte menor) — e marcar em massa esvaziaria o
+// Monitor. Nesse caso NÃO marca nada: emite UM aviso agregado e espera o próximo
+// ciclo. Limite = maior entre o absoluto e a fração do que foi verificado.
+function massMarkLimits() {
+  const abs = Number(process.env.ASPX_MISSING_MAX_MARK_ABS);
+  const ratio = Number(process.env.ASPX_MISSING_MAX_MARK_RATIO);
+  return {
+    abs: Number.isFinite(abs) && abs > 0 ? abs : 5,
+    ratio: Number.isFinite(ratio) && ratio > 0 && ratio <= 1 ? ratio : 0.3,
+  };
+}
+
 const trim = (v) => String(v ?? "").trim();
 
 /** `cargas.data` é uma data de CALENDÁRIO (wall-clock BRT), mas o driver pg entrega
@@ -91,7 +105,7 @@ export async function detectAspxMissingTrips({ correlationId = null, deps = {} }
   const getIndex = deps.fetchTripIndex || fetchTripIndex;
   const now = deps.now ? deps.now() : new Date();
 
-  const empty = { checked: 0, marked: 0, cleared: 0, renotified: 0, notified: 0, deferred: 0 };
+  const empty = { checked: 0, marked: 0, cleared: 0, renotified: 0, notified: 0, deferred: 0, massMarkAborted: 0 };
 
   // 1. Índice das viagens VIVAS no portal (3 abas). Qualquer degradação → no-op.
   let index;
@@ -137,9 +151,21 @@ export async function detectAspxMissingTrips({ correlationId = null, deps = {} }
         [hoje, DAYS_BACK - WINDOW_MARGIN_DAYS, DAYS_FORWARD - WINDOW_MARGIN_DAYS],
       );
 
-      const result = { checked: 0, marked: 0, cleared: 0, renotified: 0, notified: 0, deferred: 0 };
-      const pending = [];
+      const result = {
+        checked: 0,
+        marked: 0,
+        cleared: 0,
+        renotified: 0,
+        notified: 0,
+        deferred: 0,
+        massMarkAborted: 0,
+      };
 
+      // 2. CLASSIFICA tudo antes de escrever — o disjuntor de marcação em massa
+      //    precisa saber quantas cargas sumiriam de uma vez.
+      const toMark = [];
+      const toRenotify = [];
+      const toClear = [];
       for (const row of rows) {
         const lh = trim(row.lh_manual);
         if (!isSpxTripNumber(lh)) continue; // cinto e suspensório (o LIKE já filtra)
@@ -152,43 +178,90 @@ export async function detectAspxMissingTrips({ correlationId = null, deps = {} }
           now,
           realertHours: hours,
         });
-        if (action === "none") continue;
-
-        if (action === "clear") {
-          await client.query(
-            `UPDATE public.cargas
-                SET aspx_missing_since = NULL,
-                    aspx_missing_lh = NULL,
-                    aspx_missing_notified_at = NULL,
-                    updated_at = now()
-              WHERE id = $1`,
-            [row.id],
-          );
-          result.cleared += 1;
-          pending.push({ row, lh, kind: "aspx_trip_restored" });
-          continue;
-        }
-
-        if (action === "mark") {
-          await client.query(
-            `UPDATE public.cargas
-                SET aspx_missing_since = now(),
-                    aspx_missing_lh = $2,
-                    updated_at = now()
-              WHERE id = $1`,
-            [row.id, lh],
-          );
-          result.marked += 1;
-        } else {
-          result.renotified += 1;
-        }
-        pending.push({ row, lh, kind: "aspx_trip_missing", renotify: action === "renotify" });
+        if (action === "mark") toMark.push({ row, lh });
+        else if (action === "renotify") toRenotify.push({ row, lh });
+        else if (action === "clear") toClear.push({ row, lh });
       }
 
-      // 2. Avisos (sino). Teto por ciclo; o excedente é pego no próximo tick — e o
-      //    aviso pendente NÃO marca notified_at, então nada se perde.
+      // 3. Disjuntor: marcação em massa é sintoma de índice degradado, não de
+      //    cancelamento real → não marca ninguém e emite UM aviso agregado.
+      const limits = massMarkLimits();
+      const massLimit = Math.max(limits.abs, Math.floor(result.checked * limits.ratio));
+      const massMark = toMark.length > massLimit;
+      if (massMark) {
+        result.massMarkAborted = toMark.length;
+        toMark.length = 0;
+      }
+
+      // 4. Escreve as marcas/limpezas sobreviventes.
+      for (const { row, lh } of toMark) {
+        await client.query(
+          `UPDATE public.cargas
+              SET aspx_missing_since = now(),
+                  aspx_missing_lh = $2,
+                  updated_at = now()
+            WHERE id = $1`,
+          [row.id, lh],
+        );
+        result.marked += 1;
+      }
+      for (const { row } of toClear) {
+        await client.query(
+          `UPDATE public.cargas
+              SET aspx_missing_since = NULL,
+                  aspx_missing_lh = NULL,
+                  aspx_missing_notified_at = NULL,
+                  updated_at = now()
+            WHERE id = $1`,
+          [row.id],
+        );
+        result.cleared += 1;
+      }
+      result.renotified = toRenotify.length;
+
+      // 5. Avisos (sino). Ordem: detecções NOVAS primeiro, depois retornos, depois
+      //    re-avisos — o teto por ciclo nunca deixa uma detecção nova esperando
+      //    atrás de uma fila de re-avisos. O excedente é pego no próximo tick (o
+      //    aviso pendente NÃO marca notified_at, então nada se perde).
+      const pending = [
+        ...toMark.map((m) => ({ ...m, kind: "aspx_trip_missing", renotify: false })),
+        ...toClear.map((m) => ({ ...m, kind: "aspx_trip_restored" })),
+        ...toRenotify.map((m) => ({ ...m, kind: "aspx_trip_missing", renotify: true })),
+      ];
       const toNotify = pending.slice(0, MAX_NOTIFY_PER_RUN);
       result.deferred = pending.length - toNotify.length;
+
+      // Aviso agregado do disjuntor (1 por janela de re-aviso — não repete a cada tick).
+      if (massMark) {
+        // Corte calculado aqui (não em SQL) — parâmetro timestamptz é portável e não
+        // depende de make_interval.
+        const cutoff = new Date(now.getTime() - hours * 3600_000).toISOString();
+        const { rows: recent } = await client.query(
+          `SELECT 1 FROM public.operator_notifications
+            WHERE kind = 'aspx_trip_missing'
+              AND metadata->>'bulk' = 'true'
+              AND created_at > $1
+            LIMIT 1`,
+          [cutoff],
+        );
+        if (recent.length === 0) {
+          await client.query(
+            `INSERT INTO public.operator_notifications (kind, title, body, metadata)
+             VALUES ('aspx_trip_missing', $1, $2, $3::jsonb)`,
+            [
+              `${result.massMarkAborted} cargas lançadas fora do ASPX — confira o portal`,
+              "Muitas viagens sumiram de uma vez: pode ser sessão/estação do portal, não cancelamento. Nada foi marcado.",
+              JSON.stringify({
+                bulk: true,
+                missing: result.massMarkAborted,
+                checked: result.checked,
+                correlation_id: correlationId || null,
+              }),
+            ],
+          );
+          result.notified += 1;
+        }
+      }
 
       for (const item of toNotify) {
         const { row, lh, kind } = item;
@@ -244,6 +317,14 @@ export async function detectAspxMissingTrips({ correlationId = null, deps = {} }
     return { ok: false, reason: "query_failed", ...empty };
   }
 
+  if (outcome.massMarkAborted) {
+    // Nada foi marcado de propósito — sinaliza alto p/ o operador/observabilidade.
+    logStructuredEvent("warn", "detect-aspx-missing-trips.mass-mark-aborted", {
+      correlationId,
+      checked: outcome.checked,
+      missing: outcome.massMarkAborted,
+    });
+  }
   if (outcome.marked || outcome.cleared || outcome.renotified) {
     logStructuredEvent("warn", "detect-aspx-missing-trips.changed", {
       correlationId,

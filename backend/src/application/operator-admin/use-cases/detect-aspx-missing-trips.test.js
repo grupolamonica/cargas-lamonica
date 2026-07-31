@@ -146,6 +146,48 @@ describe("detectAspxMissingTrips", () => {
     expect(await notifications()).toHaveLength(0);
   });
 
+  it("disjuntor: índice degradado (quase tudo 'sumiu') não marca ninguém e emite 1 aviso agregado", async () => {
+    // 8 cargas lançadas, nenhuma no índice → acima do limite (max(5, 30%)) → aborta.
+    const cargas = [];
+    for (let i = 0; i < 8; i += 1) {
+      cargas.push(await seedLaunched({ clienteId, lh: `LT-MASSA-${i}` }));
+    }
+
+    const r = await detectAspxMissingTrips({ deps: deps([]) });
+
+    expect(r.ok).toBe(true);
+    expect(r.checked).toBe(8);
+    expect(r.marked).toBe(0);
+    expect(r.massMarkAborted).toBe(8);
+    for (const c of cargas) {
+      expect((await stateOf(c.id)).aspx_missing_since).toBeNull();
+    }
+    const avisos = await notifications();
+    expect(avisos).toHaveLength(1);
+    expect(avisos[0].metadata.bulk).toBe(true);
+    expect(avisos[0].title).toContain("8 cargas");
+
+    // Não repete o agregado no ciclo seguinte (dedup pela janela de re-aviso).
+    const r2 = await detectAspxMissingTrips({ deps: deps([]) });
+    expect(r2.massMarkAborted).toBe(8);
+    expect(r2.notified).toBe(0);
+    expect(await notifications()).toHaveLength(1);
+  });
+
+  it("disjuntor não atrapalha o caso normal: poucas viagens sumidas são marcadas", async () => {
+    const somem = [await seedLaunched({ clienteId, lh: "LT-SOME-1" }), await seedLaunched({ clienteId, lh: "LT-SOME-2" })];
+    const ficam = [];
+    for (let i = 0; i < 8; i += 1) ficam.push(await seedLaunched({ clienteId, lh: `LT-VIVA-${i}` }));
+
+    const r = await detectAspxMissingTrips({ deps: deps(ficam.map((_, i) => `LT-VIVA-${i}`)) });
+
+    expect(r.checked).toBe(10);
+    expect(r.marked).toBe(2);
+    expect(r.massMarkAborted).toBe(0);
+    for (const c of somem) expect((await stateOf(c.id)).aspx_missing_since).not.toBeNull();
+    for (const c of ficam) expect((await stateOf(c.id)).aspx_missing_since).toBeNull();
+  });
+
   it("no-op quando o sidecar do SPX está fora do ar", async () => {
     const carga = await seedLaunched({ clienteId, lh: "LT1Q8102CLEN1" });
 
