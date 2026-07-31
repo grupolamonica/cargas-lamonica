@@ -164,5 +164,42 @@ describe("listSystemCargasForMonitor", () => {
     expect(neqCalls).toContainEqual(["status", "DRAFT"]); // rascunho fora do Monitor
     expect(isCalls).toContainEqual(["sheet_lh", null]);
     expect(eqCalls).toContainEqual(["is_template", false]);
+    // Carga cuja VIAGEM saiu do ASPX sai do Monitor (continua em /cargas).
+    expect(isCalls).toContainEqual(["aspx_missing_since", null]);
+  });
+
+  it("banco sem a coluna aspx_missing_since: repete a leitura sem o filtro (não derruba o Monitor)", async () => {
+    const isCalls = [];
+    let attempt = 0;
+    const api = {
+      from: () => api,
+      select: () => api,
+      is: (col, val) => { isCalls.push([col, val]); return api; },
+      eq: () => api,
+      neq: () => api,
+      order: () => api,
+      range: async () => {
+        attempt += 1;
+        // 1ª tentativa (com o filtro) → coluna ausente; 2ª (sem o filtro) → OK.
+        if (attempt === 1) {
+          return { data: null, error: { code: "42703", message: 'column cargas.aspx_missing_since does not exist' } };
+        }
+        return { data: [{ id: "a0", origem: "X", destino: "Y", data: "2026-06-01", horario: "07:00:00" }], error: null };
+      },
+    };
+
+    const rows = await listSystemCargasForMonitor(api, { pageSize: 2, maxRows: 4 });
+
+    expect(rows.map((r) => r.rowKey)).toEqual(["cargo:a0"]);
+    expect(isCalls).toContainEqual(["aspx_missing_since", null]); // tentou filtrar
+    expect(attempt).toBe(2); // e caiu no fallback sem o filtro
+  });
+
+  it("propaga erro que não é 'coluna ausente' mesmo na 1ª tentativa", async () => {
+    const api = {
+      from: () => api, select: () => api, is: () => api, eq: () => api, neq: () => api, order: () => api,
+      range: async () => ({ data: null, error: new Error("timeout") }),
+    };
+    await expect(listSystemCargasForMonitor(api)).rejects.toThrow("timeout");
   });
 });

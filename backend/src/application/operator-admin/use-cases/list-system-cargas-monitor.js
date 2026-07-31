@@ -154,21 +154,43 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
   const { dateIso, timeIso } = getSaoPauloWallClock();
   const now = { todayIso: dateIso, nowTimeIso: timeIso };
 
-  const out = [];
-  for (let from = 0; from < maxRows; from += pageSize) {
-    const { data, error } = await supabaseClient
+  // Carga cuja VIAGEM SAIU DO ASPX (aspx_missing_since preenchido pelo job
+  // detect-aspx-missing-trips) não é mais operável: sai do Monitor mas CONTINUA na
+  // tela de Cargas (com o selo "Fora do ASPX"). Nunca é apagada — política do
+  // operador. Tolerante a banco sem a coluna (migration não aplicada): repete a
+  // leitura sem o filtro em vez de derrubar a fonte "sistema" do Monitor.
+  let filterAspxMissing = true;
+  const page = (from) => {
+    let q = supabaseClient
       .from("cargas")
       .select(SELECT_COLS)
       .is("sheet_lh", null)
       .eq("is_template", false)
       .neq("status", "EXPIRED")
-      .neq("status", "DRAFT") // rascunho não aparece no Monitor
-      .order("data", { ascending: false })
-      .range(from, from + pageSize - 1);
+      .neq("status", "DRAFT"); // rascunho não aparece no Monitor
+    if (filterAspxMissing) q = q.is("aspx_missing_since", null);
+    return q.order("data", { ascending: false }).range(from, from + pageSize - 1);
+  };
+
+  const out = [];
+  for (let from = 0; from < maxRows; from += pageSize) {
+    let { data, error } = await page(from);
+    if (error && filterAspxMissing && isMissingAspxColumnError(error)) {
+      filterAspxMissing = false;
+      ({ data, error } = await page(from));
+    }
     if (error) throw error;
     const batch = data || [];
     for (const c of batch) out.push(mapSystemCargoToMonitorRow(c, clientesById, now));
     if (batch.length < pageSize) break;
   }
   return out;
+}
+
+/** Coluna aspx_missing_since ausente (migration ainda não aplicada) — PostgREST
+ *  devolve 42703/"column ... does not exist". Qualquer outro erro sobe. */
+function isMissingAspxColumnError(error) {
+  if (!error) return false;
+  if (error.code === "42703") return true;
+  return /aspx_missing_since/i.test(String(error.message ?? ""));
 }
