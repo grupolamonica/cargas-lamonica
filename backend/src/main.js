@@ -688,6 +688,41 @@ async function bootstrap() {
     console.info("[reconcile-aspx-status] desabilitado (defina ASPX_STATUS_RECONCILE_ENABLED=true para ligar)");
   }
 
+  // 4f-bis. Vigia as cargas LANÇADAS (Programação, lh_manual "LT…") e avisa quando a
+  //     VIAGEM SAIU DO ASPX (Shopee cancelou/removeu do portal depois do lançamento).
+  //     A carga NUNCA é apagada: sai do Monitor, fica em /cargas com o selo "Fora do
+  //     ASPX" e o operador é avisado no sino — com re-aviso a cada
+  //     ASPX_MISSING_REALERT_HOURS (default 6h) enquanto a viagem não voltar. Se
+  //     voltar ao portal, a marca é limpa (volta ao Monitor) e o sino avisa.
+  //     LIGADO por padrão (kill-switch ASPX_MISSING_DETECT_ENABLED=false).
+  //     Intervalo: ASPX_MISSING_DETECT_INTERVAL_MIN (default 10min).
+  if (process.env.ASPX_MISSING_DETECT_ENABLED !== "false") {
+    const intervalMin = Math.max(1, Number(process.env.ASPX_MISSING_DETECT_INTERVAL_MIN || 10));
+    let detectingAspxMissing = false;
+    setInterval(async () => {
+      if (detectingAspxMissing) return;
+      detectingAspxMissing = true;
+      try {
+        const { detectAspxMissingTrips } = await import(
+          "./application/operator-admin/use-cases/detect-aspx-missing-trips.js"
+        );
+        const r = await detectAspxMissingTrips({ correlationId: "aspx-missing-scan" });
+        if (r.marked || r.cleared || r.renotified) {
+          console.info(
+            `[detect-aspx-missing-trips] ${r.marked} carga(s) fora do ASPX, ${r.cleared} de volta, ${r.renotified} re-aviso(s) (${r.checked} verificada(s), ${r.notified} aviso(s))`,
+          );
+        }
+      } catch (err) {
+        console.error("[detect-aspx-missing-trips] erro:", err?.message);
+      } finally {
+        detectingAspxMissing = false;
+      }
+    }, intervalMin * 60 * 1000);
+    console.info(`[detect-aspx-missing-trips] timer ativo (intervalo ${intervalMin}min)`);
+  } else {
+    console.info("[detect-aspx-missing-trips] desabilitado (ASPX_MISSING_DETECT_ENABLED=false)");
+  }
+
   // 4g. Revalida a vigência Angellira dos motoristas (motoristas_historico) AO VIVO,
   //     em ROTAÇÃO: a cada tick pega os N mais defasados (nunca consultados / mais
   //     vencidos / não tocados há > staleHours), reconsulta e grava limit_date

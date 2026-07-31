@@ -200,6 +200,13 @@ export interface OperatorCargoListItem {
   sheet_lh: string | null;
   /** Código da viagem (único, opcional). Para cargas de planilha espelha o LH. */
   codigo_viagem: string | null;
+  /** LH da viagem lançada pela Programação (carga do sistema). NULL nas de planilha. */
+  lh_manual?: string | null;
+  /** Preenchido quando a viagem SAIU do ASPX (job detect-aspx-missing-trips): a carga
+   *  sai do Monitor, fica aqui com o selo "Fora do ASPX" e o sino avisa. */
+  aspx_missing_since?: string | null;
+  /** LH congelado no momento em que a viagem sumiu do portal. */
+  aspx_missing_lh?: string | null;
   /** Preenchido só pelo sync da planilha Shopee; NULL em cargas importadas por CSV. */
   sheet_synced_at: string | null;
   sheet_data_carregamento: string | null;
