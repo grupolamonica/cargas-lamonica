@@ -16,8 +16,32 @@ from datetime import datetime, timezone, timedelta
 
 from nestle.galileu_client import _rpc, get_token
 from nestle.supabase_client import registrar_log, get_client
+from nestle.change_guard import UpsertMirror
 
 _BRT = timezone(timedelta(hours=-3))
+
+# ── Guarda anti no-op do upsert (perf: WAL/bloat/egresso) ─────────────────────
+# Colunas comparadas = as 22 que `_mapear` escreve MENOS `atualizado_em`.
+# `atualizado_em` FICA DE FORA da comparação (é `now()` a cada ciclo — dentro da
+# comparação, toda linha pareceria mudada e a guarda seria no-op) mas CONTINUA sendo
+# gravada nas linhas que realmente mudam. Ninguém lê essa coluna: a Programação usa
+# só mot1_nome / placacarreta / descrstatembarque / entrega_dtahrfim
+# (get-programacao.js). `idcargas` não está no payload e segue intacto — o upsert do
+# PostgREST só faz DO UPDATE das chaves enviadas.
+# ACOPLAMENTO: mexeu em `_mapear`, mexa aqui.
+_ESPELHO = UpsertMirror(
+    tabela="nestle_embarques",
+    chave="codembarque",
+    colunas_texto=(
+        "codembarque", "codstatembarque", "descrstatembarque", "dtahrstatembarque",
+        "descrtpoper", "codmot1", "mot1_nome", "codveic", "veic_id", "placacarreta",
+        "coleta_cidade", "coleta_dtahrprevini", "coleta_dtahrchegada", "coleta_dtahrfim",
+        "entrega_cidade", "entrega_dtahrprevini", "entrega_dtahrchegada", "entrega_dtahrfim",
+    ),
+    colunas_numericas=("totnumvol", "totpeso", "totvol"),
+    colunas_bool=("temocorrencia",),
+    ttl_env="NESTLE_EMBARQUES_SNAPSHOT_TTL_SEC",
+)
 
 
 def _to_ts(val):
@@ -95,26 +119,40 @@ def _mapear(cod: str, detalhe: dict) -> dict:
     }
 
 
-def _codembarques_pendentes(db) -> list[str]:
-    """codembarque das ofertas aceitas que ainda NÃO estão FINALIZADAS em nestle_embarques
-    (idempotência: não re-busca viagens já concluídas). Pagina (teto de 1000 do Supabase)."""
+def _codembarques_pendentes(db, ofertas_codembarques: set[str] | None = None) -> list[str]:
+    """codembarque das ofertas que ainda NÃO estão FINALIZADAS em nestle_embarques
+    (idempotência: não re-busca viagens já concluídas). Pagina (teto de 1000 do Supabase).
+
+    ATENÇÃO ao docstring antigo ("ofertas aceitas"): não há filtro de status aqui — o
+    conjunto é TODA oferta com codembarque, inclusive cancelada/recusada. Mantido.
+
+    `ofertas_codembarques` (perf) vem do espelho de `robo_coleta` — um snapshot da
+    tabela nestle_ofertas INTEIRA, portanto o mesmo conjunto que a varredura do passo
+    (1) devolveria. Quando é None (cold start, snapshot falhou, guarda desligada) a
+    varredura acontece normalmente.
+    """
     # 1) ofertas com codembarque
-    ofertas = set()
-    offset = 0
-    while True:
-        res = db.table("nestle_ofertas").select("codembarque").neq("codembarque", None).range(offset, offset + 999).execute()
-        bloco = res.data or []
-        for r in bloco:
-            if r.get("codembarque"):
-                ofertas.add(str(r["codembarque"]).strip())
-        if len(bloco) < 1000:
-            break
-        offset += 1000
+    if ofertas_codembarques is not None:
+        ofertas = {str(c).strip() for c in ofertas_codembarques if c not in (None, "")}
+    else:
+        ofertas = set()
+        offset = 0
+        while True:
+            # .order(codprogcoleta): sem ORDER BY a paginação pode pular/duplicar
+            # linhas enquanto o próprio coletor escreve na tabela.
+            res = db.table("nestle_ofertas").select("codembarque").neq("codembarque", None).order("codprogcoleta").range(offset, offset + 999).execute()
+            bloco = res.data or []
+            for r in bloco:
+                if r.get("codembarque"):
+                    ofertas.add(str(r["codembarque"]).strip())
+            if len(bloco) < 1000:
+                break
+            offset += 1000
     # 2) embarques já finalizados
     finalizados = set()
     offset = 0
     while True:
-        res = db.table("nestle_embarques").select("codembarque").eq("descrstatembarque", "FINALIZADO").range(offset, offset + 999).execute()
+        res = db.table("nestle_embarques").select("codembarque").eq("descrstatembarque", "FINALIZADO").order("codembarque").range(offset, offset + 999).execute()
         bloco = res.data or []
         for r in bloco:
             finalizados.add(str(r["codembarque"]).strip())
@@ -124,11 +162,11 @@ def _codembarques_pendentes(db) -> list[str]:
     return sorted(ofertas - finalizados)
 
 
-def executar():
+def executar(ofertas_codembarques: set[str] | None = None):
     print("[INFO] Robô Embarques (Lamônica) iniciado")
     db = get_client()
     try:
-        cods = _codembarques_pendentes(db)
+        cods = _codembarques_pendentes(db, ofertas_codembarques)
     except Exception as e:
         registrar_log("ERROR", f"Robô Embarques — falha ao listar codembarque: {e}")
         return
@@ -159,16 +197,26 @@ def executar():
     rows = list({r["codembarque"]: r for r in rows}.values())
 
     if rows:
+        # ── Espelho + guarda anti no-op: só grava o que mudou de verdade ──
+        try:
+            _ESPELHO.sincronizar(db)
+        except Exception as e:
+            # Nunca cacheia erro: mantém o espelho anterior; sem espelho grava tudo.
+            erros.append(f"falha ao espelhar nestle_embarques: {e}")
+        envio = _ESPELHO.selecionar_mudancas(rows)
+        inalterados = len(rows) - len(envio)
         LOTE = 50
         total = 0
-        for i in range(0, len(rows), LOTE):
-            lote = rows[i:i + LOTE]
+        for i in range(0, len(envio), LOTE):
+            lote = envio[i:i + LOTE]
             try:
                 db.table("nestle_embarques").upsert(lote, on_conflict="codembarque", ignore_duplicates=False).execute()
                 total += len(lote)
+                _ESPELHO.confirmar(lote)  # só o que o banco aceitou
             except Exception as e:
+                _ESPELHO.descartar(lote)  # reenviado no próximo ciclo
                 erros.append(f"upsert lote {i // LOTE + 1}: {e}")
-        print(f"[INFO] {total} embarque(s) atualizado(s)")
+        print(f"[INFO] {total} embarque(s) atualizado(s) ({inalterados} inalterado(s))")
 
     if erros:
         registrar_log("ERROR", f"Robô Embarques — erros: {' | '.join(erros[:10])}")
