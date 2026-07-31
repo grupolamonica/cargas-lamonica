@@ -1,6 +1,75 @@
 import { validatePublicLeadPreRegistration } from "../../load-claims/public-lead-validation.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
+import { resolveExternalGate, EXTERNAL_GATE } from "../../../domain/candidatura/external-gate.js";
+import { lookupMotorista } from "../../../infrastructure/cadastro-bots/spx-bot-client.js";
+import { mapSpxLookupToVigency } from "../../operator-admin/use-cases/spx-vigency-cache.js";
+
+// Flag do novo gate: quando ligada, o pré-check decide "pedir dados vs passar
+// direto" pela consulta Angellira + SPX (resolveExternalGate) em vez de exigir
+// cadastro local completo (RF001 legado). OFF por padrão = comportamento atual.
+function isSpxGateEnabled() {
+  return String(process.env.PRECHECK_SPX_GATE_ENABLED || "").trim() === "1";
+}
+
+// Consulta a situação do motorista no SPX (read-only) e reduz a { status,
+// availability } que o resolveExternalGate consome. Inconclusivo / falha →
+// UNAVAILABLE (o gate NÃO auto-passa nesse caso).
+async function resolveSpxStatusForGate({ cpf, contactNumber, correlationId }) {
+  try {
+    const lookup = await lookupMotorista({
+      cpf: String(cpf || "").replace(/\D/g, ""),
+      contactNumber: contactNumber || "",
+      correlationId,
+    });
+    const vigency = mapSpxLookupToVigency(lookup);
+    if (!vigency) return { availability: "UNAVAILABLE", status: null };
+    return { availability: "OK", status: vigency.status };
+  } catch (err) {
+    logStructuredEvent("warn", "candidatura.pre-check.spx-lookup.failed", {
+      correlationId: correlationId || null,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return { availability: "UNAVAILABLE", status: null };
+  }
+}
+
+// Traduz o resultado do gate externo (Angellira + SPX) numa pendência de Step A.
+// PASS → sem pendência. UNAVAILABLE é tratado no caller (cai no RF001 legado).
+function buildDriverPendencyFromGate(gate) {
+  switch (gate.gate) {
+    case EXTERNAL_GATE.PASS:
+      return null;
+    case EXTERNAL_GATE.SEND_DATA_NO_SPX:
+      return {
+        step: "A",
+        reason: "SPX_REGISTRATION_REQUIRED",
+        label: "Complete seu cadastro no Portal",
+        description:
+          "Voce esta regular no Angellira, mas ainda nao tem cadastro ativo no SPX " +
+          "(nossa agencia). Preencha os dados e envie os documentos para concluir.",
+      };
+    case EXTERNAL_GATE.SEND_DATA_EXPIRED:
+      return {
+        step: "A",
+        reason: "EXTERNAL_REGISTRATION_EXPIRED",
+        label: "Atualize seu cadastro",
+        description:
+          "Seu cadastro esta vencido. Reenvie seus dados e os documentos obrigatorios " +
+          "para concluir seu cadastro no Portal.",
+      };
+    case EXTERNAL_GATE.SEND_DATA:
+    default:
+      return {
+        step: "A",
+        reason: "LOCAL_REGISTRATION_REQUIRED",
+        label: "Complete seu cadastro no Portal",
+        description:
+          "Para concluir seu cadastro no Portal e atender aos requisitos operacionais, " +
+          "preencha os dados e envie os documentos obrigatorios.",
+      };
+  }
+}
 
 // Iter #7 — janela de busca para duplicate detection no pre-check.
 // Cadastros enviados ha menos de 30 dias na mesma (CPF, horsePlate) sao
@@ -329,12 +398,50 @@ export async function candidaturaPreCheck({
   // sinal decide se as etapas (motorista + veiculos) sao forcadas mesmo quando
   // o dado externo esta "em dia".
   const localCadastro = await getLocalCadastroStatus({ cpf: driverCpf, correlationId });
-  const hasLocalCadastro = localCadastro.hasCadastro;
+  let hasLocalCadastro = localCadastro.hasCadastro;
 
-  const driverPendency = buildDriverPendency(summary.driver, {
-    hasLocalCadastro,
-    hasLocalSelfie: localCadastro.hasSelfie,
-  });
+  // Novo gate (flag ON): decide por Angellira + SPX ao vivo. No PASS o motorista
+  // passa direto (sem pendencia) e as placas vigentes nao exigem CRLV
+  // (hasLocalCadastro tratado como true). UNAVAILABLE cai no RF001 legado.
+  let externalGate = null;
+  if (isSpxGateEnabled() && !cacheOnly) {
+    const spxStatus = await resolveSpxStatusForGate({
+      cpf: driverCpf,
+      contactNumber: driverPhone,
+      correlationId,
+    });
+    const ang = summary.driver?.angelira || {};
+    externalGate = resolveExternalGate({
+      angellira: {
+        availability: ang.status === "UNAVAILABLE" ? "UNAVAILABLE" : "OK",
+        found: ang.found,
+        statusText: ang.statusText,
+        validUntil: ang.validUntil,
+      },
+      spx: spxStatus,
+      today: candidateSubmittedAt.slice(0, 10),
+    });
+    logStructuredEvent("info", "candidatura.pre-check.external-gate", {
+      correlationId: correlationId || null,
+      gate: externalGate.gate,
+      angelliraConforme: externalGate.angelliraConforme,
+      angelliraVigente: externalGate.angelliraVigente,
+      spxStatus: externalGate.spxStatus,
+    });
+  }
+
+  let driverPendency;
+  if (externalGate && externalGate.gate !== EXTERNAL_GATE.UNAVAILABLE) {
+    driverPendency = buildDriverPendencyFromGate(externalGate);
+    if (externalGate.gate === EXTERNAL_GATE.PASS) {
+      hasLocalCadastro = true; // passa direto — placas vigentes nao exigem CRLV
+    }
+  } else {
+    driverPendency = buildDriverPendency(summary.driver, {
+      hasLocalCadastro,
+      hasLocalSelfie: localCadastro.hasSelfie,
+    });
+  }
   if (driverPendency) {
     pendencias.push(driverPendency);
   }
