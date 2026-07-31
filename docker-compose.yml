@@ -226,29 +226,39 @@ services:
     expose:
       - "8765"
 
-  # ── Unificada bot (sidecar FastAPI :8001) ────────────────────────────────
-  # Gera Risk Assessment Document (PDF unificado) via ReportLab a partir da
-  # API Angellira. Reusa o JWT do mesmo usuario (ANGELIRA_API_*).
-  # Epic DC-111 / Sprint 1 / DC-113.
-  unificada-bot:
+  # ── Gerador Mock AngelLira (sidecar FastAPI :8000) ───────────────────────
+  # Renderiza o dossiê de gerenciamento de risco NO FORMATO AngelLira a partir
+  # do JSON do cadastro (100% local — sem AngelLira, sem login/token). SUBSTITUI
+  # o unificada-bot na geração do PDF do fluxo SPX. Sem acesso externo (Traefik)
+  # — chamado só pelo backend Node via lamonica-net
+  # (http://gerador-mock-angellira:8000).
+  #
+  # Uso autorizado pela AngelLira, condicionado a o motorista também ser
+  # cadastrado no portal deles (ver bots/gerador-mock-angellira/README.md).
+  #
+  # A unificada-bot foi PAUSADA (até a gestão pedir p/ reativar): a definição
+  # ficou parkeada em docker-compose.legacy.yml. Como saiu do config ativo, o
+  # `up -d --remove-orphans` do deploy derruba o container dela em produção.
+  gerador-mock-angellira:
     build:
-      context: ./bots/unificada
+      context: ./bots/gerador-mock-angellira
       dockerfile: Dockerfile
-    image: lamonica-unificada-bot:latest
+    image: lamonica-gerador-mock-angellira:latest
     restart: unless-stopped
     networks:
       - lamonica-net
       # platform_monitoring: permite o blackbox-exporter sondar /health
       - platform_monitoring
-    # Mesma fonte do backend.env (ANGELLIRA_USER/PASSWORD/EMPRESA_ID).
-    env_file:
-      - backend.env
     environment:
-      ANGELIRA_AUTH_BASE: ${ANGELIRA_AUTH_BASE:-https://auth.angellira.com.br}
-      UNIFICADA_HOST: "0.0.0.0"
-      UNIFICADA_PORT: "8001"
+      PORT: "8000"
+      # Auth opcional (default vazio = aberto na rede interna, igual aos demais
+      # bots isolados por lamonica-net). Para LIGAR, a MESMA chave precisa estar
+      # em DOIS lugares: root .env (interpolado aqui, vira API_KEY do sidecar) E
+      # backend.env (lido pelo client como GERADOR_MOCK_API_KEY). Só um lado →
+      # 401 em toda geração de dossiê.
+      API_KEY: ${GERADOR_MOCK_API_KEY:-}
       PYTHONUNBUFFERED: "1"
-    # ReportLab + svglib podem subir picos em PDFs grandes; 384m cobre.
+    # ReportLab + svglib podem subir picos em PDFs; 384m cobre (igual unificada).
     mem_limit: 384m
     mem_reservation: 96m
     cpus: 0.50
@@ -258,13 +268,14 @@ services:
         max-size: "10m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "curl", "-fs", "http://localhost:8001/health"]
+      # python-slim não traz curl — usa urllib (mesma abordagem do Dockerfile).
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
     expose:
-      - "8001"
+      - "8000"
 
   # ── Coletor Nestlé (Galileu TMS → nestle_ofertas/nestle_embarques) ────────
   # Worker em loop (run_coleta.py): coleta ofertas/embarques da Nestlé no
