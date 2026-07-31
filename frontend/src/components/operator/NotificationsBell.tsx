@@ -42,6 +42,8 @@ const KIND_LABEL: Record<string, string> = {
   route_need_converted: "Candidatura via chamado de carga",
   new_spot: "Nova carga spot disponível",
   new_queue_driver: "Novo motorista na fila",
+  aspx_trip_missing: "Carga saiu do ASPX",
+  aspx_trip_restored: "Viagem voltou ao ASPX",
 };
 
 const KIND_TINT: Record<string, string> = {
@@ -60,6 +62,8 @@ const KIND_TINT: Record<string, string> = {
   route_need_converted: "bg-emerald-500",
   new_spot: "bg-blue-600",
   new_queue_driver: "bg-emerald-600",
+  aspx_trip_missing: "bg-red-600",
+  aspx_trip_restored: "bg-emerald-500",
 };
 
 function fmtRelative(iso: string) {
@@ -82,6 +86,13 @@ function spotHref(metadata: Record<string, unknown> | undefined): string {
 function spotHrefMany(lhs: string[]): string {
   const uniq = [...new Set(lhs.map((s) => String(s).trim()).filter(Boolean))];
   return uniq.length ? `/programacao?lh=${uniq.map(encodeURIComponent).join(",")}` : "/programacao";
+}
+
+// Aviso "carga saiu do ASPX" leva à tela de Cargas já filtrada pelo LH da viagem —
+// é lá que a carga continua (ela sai do Monitor, mas nunca do sistema).
+function cargasHref(metadata: Record<string, unknown> | undefined): string {
+  const lh = metadata && typeof metadata.lh === "string" ? metadata.lh.trim() : "";
+  return lh ? `/cargas?busca=${encodeURIComponent(lh)}` : "/cargas";
 }
 
 // DC-299 — alerta de novo motorista na fila leva à Fila (/leads) destacando a(s) carga(s)
@@ -523,8 +534,15 @@ export default function NotificationsBell() {
                 // DC-279/DC-299: notificações clicáveis levam o operador ao contexto —
                 // spot → Programação (?lh=); novo motorista → Fila (?carga=).
                 const isQueue = n.kind === "new_queue_driver";
-                const clickable = n.kind === "new_spot" || isQueue;
+                // Avisos de ASPX levam à tela de Cargas (a carga marcada vive lá).
+                const isAspx = n.kind === "aspx_trip_missing" || n.kind === "aspx_trip_restored";
+                const clickable = n.kind === "new_spot" || isQueue || isAspx;
                 const openRow = () => {
+                  if (isAspx) {
+                    setOpen(false);
+                    navigate(cargasHref(n.metadata as Record<string, unknown> | undefined));
+                    return;
+                  }
                   if (isQueue) {
                     setOpen(false);
                     const cid = (n.metadata as Record<string, unknown> | undefined)?.carga_id;
@@ -567,7 +585,7 @@ export default function NotificationsBell() {
                       </p>
                       {clickable ? (
                         <p className="mt-1 text-[11px] font-semibold text-primary">
-                          {isQueue ? "Abrir na Fila" : "Abrir na Programação"} &rarr;
+                          {isAspx ? "Abrir em Cargas" : isQueue ? "Abrir na Fila" : "Abrir na Programação"} &rarr;
                         </p>
                       ) : null}
                     </div>

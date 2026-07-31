@@ -1,5 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { AlertTriangle, Copy, Eye, EyeOff, Package, Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -13,7 +14,7 @@ import {
   resolveAssignableRouteForCargo,
 } from "@/lib/assignableRoutes";
 import { formatCargoStatusLabel } from "@/lib/cargoStatus";
-import { formatDateOnly, formatScheduleLabel, saoPauloDateIso } from "@/lib/dateDisplay";
+import { formatDateOnly, formatFullDateTime, formatScheduleLabel, saoPauloDateIso } from "@/lib/dateDisplay";
 import { resolveCargoPublicationReadiness } from "@/lib/loadPublication";
 import { normalizeOperatorCargoDate, normalizeOperatorCargoTime } from "@/lib/operatorCargoSchedule";
 import { useAuth } from "@/hooks/useAuth";
@@ -225,6 +226,24 @@ const ManageCargas = () => {
   const [dateTo, setDateTo] = useState<string>(() => saoPauloDateIso(90));
   const [clienteFilter, setClienteFilter] = useState<string>("");
   const [page, setPage] = useState(1);
+
+  // Chegada por link do sino (`/cargas?busca=LT…`): o aviso "carga saiu do ASPX" leva
+  // o operador direto à carga. Abre a tela JÁ ABERTA — busca preenchida, status
+  // "Todos" e sem janela de data —, senão os defaults (ativas / hoje..+90d)
+  // esconderiam justamente a carga do aviso (ex.: já expirada ou de data passada).
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const busca = (searchParams.get("busca") || "").trim();
+    if (!busca) return;
+    setSearch(busca);
+    setStatusFilter("todos");
+    setDateFrom("");
+    setDateTo("");
+    // Consome o parâmetro para o operador poder mexer nos filtros sem o link reaplicar.
+    const next = new URLSearchParams(searchParams);
+    next.delete("busca");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
   const deferredSearch = useDeferredValue(search);
   const deferredStatusFilter = useDeferredValue(statusFilter);
   const deferredVisibilityFilter = useDeferredValue(visibilityFilter);
@@ -953,13 +972,32 @@ const ManageCargas = () => {
                       >
                         {/* LH */}
                         <td className="whitespace-nowrap px-4 py-2 align-middle">
-                          {cargo.sheet_lh ? (
-                            <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
-                              {cargo.sheet_lh}
+                          {/* Carga da planilha mostra o LH sincronizado; carga LANÇADA pela
+                              Programação mostra o LH da viagem (lh_manual) — é por ele que o
+                              operador acha a carga quando o aviso "Fora do ASPX" chega. */}
+                          {cargo.sheet_lh || cargo.lh_manual ? (
+                            <span
+                              className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                cargo.sheet_lh ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
+                              }`}
+                              title={cargo.sheet_lh ? "LH da planilha" : "LH da viagem lançada na Programação"}
+                            >
+                              {cargo.sheet_lh || cargo.lh_manual}
                             </span>
                           ) : (
                             <span className="text-xs text-muted-foreground/60">—</span>
                           )}
+                          {/* A viagem saiu do portal Shopee (ASPX) depois do lançamento: a carga
+                              continua aqui (nunca é apagada) e saiu do Monitor. */}
+                          {cargo.aspx_missing_since ? (
+                            <span
+                              className="mt-1 flex w-fit items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-700"
+                              title={`A viagem ${cargo.aspx_missing_lh || cargo.lh_manual || ""} não está mais no portal Shopee (ASPX) desde ${formatFullDateTime(cargo.aspx_missing_since, "")}. A carga saiu do Monitor e continua aqui para você decidir: cancelar, expirar ou aguardar a viagem voltar.`}
+                            >
+                              <AlertTriangle className="h-2.5 w-2.5" />
+                              Fora do ASPX
+                            </span>
+                          ) : null}
                         </td>
 
                         {/* Carregamento */}

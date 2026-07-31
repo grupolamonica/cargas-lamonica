@@ -162,7 +162,10 @@ function isMissingRouteColumnError(error) {
     combinedMessage.includes("driver_visibility") ||
     combinedMessage.includes("sheet_data_carregamento") ||
     combinedMessage.includes("sheet_data_descarga") ||
-    combinedMessage.includes("eixos")
+    combinedMessage.includes("eixos") ||
+    // Colunas do aviso "viagem saiu do ASPX" (migration aditiva) — sem elas a lista
+    // de cargas cai no SELECT reduzido em vez de estourar 500.
+    combinedMessage.includes("aspx_missing_since")
   );
 }
 
@@ -544,6 +547,7 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
           cargas.origem ILIKE $${index} OR
           cargas.destino ILIKE $${index} OR
           COALESCE(cargas.sheet_lh, '') ILIKE $${index} OR
+          COALESCE(cargas.lh_manual, '') ILIKE $${index} OR
           COALESCE(clientes.nome, '') ILIKE $${index}
         )
       `);
@@ -572,10 +576,14 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
           clauses.push(`cargas.status = $${index}`);
           index += 1;
         }
-      } else {
+      } else if (!search) {
         // Visao padrao "Todos": oculta cargas EXPIRED (que saem automaticamente
         // da planilha quando o LH some do Google Sheets). Para ver essas cargas,
         // o operador pode selecionar explicitamente o filtro "Expiradas".
+        //
+        // EXCEÇÃO: quando há BUSCA explícita (ex.: o operador colou o LH, ou chegou
+        // pelo link do aviso "carga saiu do ASPX"), a expirada aparece — buscar um LH
+        // e receber "nenhuma carga" mentiria sobre uma carga que existe no sistema.
         clauses.push("COALESCE(cargas.status, '') <> 'EXPIRED'");
       }
     }
@@ -683,6 +691,9 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
             ${nextSupportsOptionalColumns ? "COALESCE(cargas.is_recurring, false) AS is_recurring" : "FALSE AS is_recurring"},
             ${nextSupportsOptionalColumns ? "cargas.recurrence_interval_days" : "NULL::int AS recurrence_interval_days"},
             ${nextSupportsOptionalColumns ? "cargas.codigo_viagem" : "NULL::text AS codigo_viagem"},
+            cargas.lh_manual,
+            ${nextSupportsOptionalColumns ? "cargas.aspx_missing_since" : "NULL::timestamptz AS aspx_missing_since"},
+            ${nextSupportsOptionalColumns ? "cargas.aspx_missing_lh" : "NULL::text AS aspx_missing_lh"},
             clientes.nome AS cliente_nome
           FROM public.cargas
           LEFT JOIN public.clientes
@@ -778,6 +789,12 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
           is_recurring: row.is_recurring ?? false,
           recurrence_interval_days: row.recurrence_interval_days ?? null,
           codigo_viagem: row.codigo_viagem ?? null,
+          // LH da viagem lançada pela Programação (carga do sistema) + marca de
+          // "viagem saiu do ASPX" (job detect-aspx-missing-trips). A carga marcada
+          // sai do Monitor mas FICA aqui, com selo — nunca é apagada.
+          lh_manual: row.lh_manual ?? null,
+          aspx_missing_since: row.aspx_missing_since ?? null,
+          aspx_missing_lh: row.aspx_missing_lh ?? null,
           clientes: row.cliente_nome
             ? {
                 nome: row.cliente_nome,
