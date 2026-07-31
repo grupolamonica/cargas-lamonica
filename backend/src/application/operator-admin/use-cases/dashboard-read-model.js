@@ -436,7 +436,74 @@ async function fetchDriverLoadsReadModelUncached({ query, correlationId }) {
   });
 }
 
+// ── Cache + single-flight das FACETS do portal do motorista ──────────────────
+// As facets (opções de origem/destino/perfil/cliente dos filtros) são GLOBAIS:
+// o endpoint `GET /api/driver/loads/facets` é anônimo e não recebe nenhum
+// parâmetro (nem query, nem usuário) — o resultado é idêntico para todos os
+// motoristas. Mesmo assim, cada abertura do portal disparava a varredura
+// COMPLETA das cargas OPEN (+ JOIN de clientes, sem LIMIT) só para destilar 4
+// listas de strings, e o cache do React Query é por aba → N motoristas = N
+// varreduras. Diferente do irmão `fetchDriverLoadsReadModel`, aqui não havia
+// cache nenhum.
+// Chave única (sem filtros) → hit rate praticamente 100%. TTL default 60s em
+// produção; 0 em teste (VITEST) p/ não vazar estado entre casos. O WHERE só
+// depende do relógio na granularidade de minuto (cargas expiradas), então 60s
+// de staleness é equivalente ao que o front já tolera (staleTime de 5 min).
+let _driverLoadFacetsInFlight = null;
+let _driverLoadFacetsCache = { at: 0, payload: null };
+
+function getDriverLoadFacetsCacheTtlMs() {
+  const raw = Number.parseInt(process.env.DRIVER_LOAD_FACETS_CACHE_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
+  return 60_000; // default produção
+}
+
+// Hook de teste: zera o estado de módulo (o cache fica desligado sob VITEST,
+// mas testes que forcem TTL > 0 via env precisam limpar entre casos).
+export function __resetDriverLoadFacetsCache() {
+  _driverLoadFacetsInFlight = null;
+  _driverLoadFacetsCache = { at: 0, payload: null };
+}
+
 export async function fetchDriverLoadFacets({ correlationId }) {
+  const ttl = getDriverLoadFacetsCacheTtlMs();
+  if (ttl <= 0) {
+    return fetchDriverLoadFacetsUncached({ correlationId });
+  }
+
+  const now = Date.now();
+  if (_driverLoadFacetsCache.payload && now - _driverLoadFacetsCache.at < ttl) {
+    return {
+      statusCode: 200,
+      payload: { ..._driverLoadFacetsCache.payload, meta: { correlationId, cached: true } },
+    };
+  }
+
+  if (_driverLoadFacetsInFlight) {
+    const shared = await _driverLoadFacetsInFlight;
+    return { statusCode: 200, payload: { ...shared, meta: { correlationId, cached: true } } };
+  }
+
+  const promise = (async () => {
+    const result = await fetchDriverLoadFacetsUncached({ correlationId });
+    // Só cacheia 200 (erros/fallback de schema não devem grudar).
+    if (result?.statusCode === 200 && result.payload) {
+      _driverLoadFacetsCache = { at: Date.now(), payload: result.payload };
+    }
+    return result.payload;
+  })();
+  _driverLoadFacetsInFlight = promise;
+
+  try {
+    const payload = await promise;
+    return { statusCode: 200, payload };
+  } finally {
+    _driverLoadFacetsInFlight = null;
+  }
+}
+
+async function fetchDriverLoadFacetsUncached({ correlationId }) {
   return withPgClient(async (client) => {
     // Defense-in-depth: tambem cruza com a planilha (sheet_motorista) para que
     // cargas ja alocadas no Google Sheets nao vazem nas facets do driver mesmo
