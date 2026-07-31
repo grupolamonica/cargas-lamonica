@@ -20,12 +20,20 @@
 // reconcile-aspx-status (DC-316); Nestlé/manual/importadas não têm viagem no SPX.
 //
 // Anti-falso-positivo (crítico — marcar carga boa é pior que atrasar o aviso):
-//   - o índice cobre as 3 abas do SPX (Planejado + Aceito + Concluído). Sem o
-//     Concluído, toda viagem que termina "sumiria";
-//   - se QUALQUER aba falhar (index.partial) ou o índice vier vazio, o ciclo é
-//     abortado sem marcar nada;
-//   - só avalia carga cujo carregamento cai DENTRO da janela do índice, com margem
-//     de 1 dia p/ dentro (viagem fora da janela não está no índice por definição).
+//   - SÓ avalia carga com CARREGAMENTO AINDA POR VIR (agenda >= agora, relógio de São
+//     Paulo). Essa é a base sólida: uma viagem que ainda não carregou não pode estar
+//     concluída/arquivada, então PRECISA estar em Planejado(1) ou Aceito(2) — abas
+//     completas. Carga de carregamento passado dependeria do Concluído (janela mtime
+//     + paginação) para provar presença: base frágil (medido em prod: 51 "ausentes"
+//     em 146, quase todas de dias anteriores) e operacionalmente irrelevante — a
+//     carga já rodou, o Monitor a trata como histórico e o expire-past-cargas expira.
+//     No recorte correto o mesmo levantamento deu 5 ausentes em 93 — reais;
+//   - o índice inclui o Concluído (janela curta) só para não marcar uma viagem que
+//     já apareceu como finalizada;
+//   - se QUALQUER aba falhar (index.partial), o índice vier vazio ou o portal truncar
+//     a resposta (index.truncated), o ciclo é abortado sem marcar nada;
+//   - cargas CANCELLED/EXPIRED ficam fora (não estão no Monitor nem em /cargas por
+//     padrão — avisar sobre elas é só ruído).
 
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
@@ -34,13 +42,14 @@ import { classifyAspxPresence, isSpxTripNumber } from "../../../domain/operator-
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 
 // Janela do índice SPX. Espelha o que a Programação/preview usam (45/30) — o Concluído
-// usa uma janela própria (mtime) mais curta, por ser paginado e lento.
+// usa uma janela própria (mtime) curta: ele serve só p/ reconhecer viagem recém
+// finalizada, e janela curta reduz a chance de o portal truncar a resposta.
 const DAYS_BACK = 45;
 const DAYS_FORWARD = 30;
-const CONCLUIDO_DAYS_BACK = 30;
-// Margem p/ dentro da janela: uma carga na borda pode estar fora do índice por
-// arredondamento de fuso/janela do portal — não é ausência real.
-const WINDOW_MARGIN_DAYS = 1;
+const CONCLUIDO_DAYS_BACK = 15;
+// Horizonte à frente das cargas avaliadas, com margem p/ dentro da janela do índice
+// (carga além do horizonte do portal não está no índice por definição).
+const FORWARD_MARGIN_DAYS = 1;
 // Teto de avisos por ciclo (o excedente entra no próximo — nunca truncamos calado).
 const MAX_NOTIFY_PER_RUN = 20;
 
@@ -126,17 +135,20 @@ export async function detectAspxMissingTrips({ correlationId = null, deps = {} }
     });
     return { ok: false, reason: "spx_unavailable", ...empty };
   }
-  // Índice incompleto/vazio não prova ausência de nada.
+  // Índice incompleto/vazio/truncado não prova ausência de nada.
   if (index.partial) return { ok: false, reason: "partial_index", ...empty };
+  if (index.truncated) return { ok: false, reason: "truncated_index", ...empty };
   if (!index.byNumber || index.byNumber.size === 0) return { ok: false, reason: "empty_index", ...empty };
 
-  const { dateIso: hoje } = getSaoPauloWallClock();
+  const { dateIso: hoje, timeIso: agora } = getSaoPauloWallClock();
   const hours = realertHours();
 
   let outcome;
   try {
     outcome = await run(async (client) => {
       const { rows } = await client.query(
+        // Carregamento AINDA POR VIR (data futura, ou hoje com horário que não passou)
+        // e dentro do horizonte do portal. Cancelada/expirada fora — não estão nas telas.
         `SELECT id, lh_manual, data, horario, origem, destino, status,
                 aspx_missing_since, aspx_missing_notified_at
            FROM public.cargas
@@ -144,11 +156,11 @@ export async function detectAspxMissingTrips({ correlationId = null, deps = {} }
             AND COALESCE(lh_manual, '') <> ''
             AND upper(lh_manual) LIKE 'LT%'
             AND COALESCE(is_template, false) = false
-            AND status <> 'CANCELLED'
+            AND status NOT IN ('CANCELLED', 'EXPIRED')
             AND data IS NOT NULL
-            AND data >= ($1::date - $2::int)
+            AND (data > $1::date OR (data = $1::date AND (horario IS NULL OR horario >= $2::time)))
             AND data <= ($1::date + $3::int)`,
-        [hoje, DAYS_BACK - WINDOW_MARGIN_DAYS, DAYS_FORWARD - WINDOW_MARGIN_DAYS],
+        [hoje, agora, DAYS_FORWARD - FORWARD_MARGIN_DAYS],
       );
 
       const result = {

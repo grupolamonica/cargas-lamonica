@@ -27,9 +27,15 @@ const deps = (numbers, extra = {}) => ({
   ...extra,
 });
 
+// Datas relativas ao "hoje" real: o job só olha carga com carregamento AINDA POR VIR,
+// então datas fixas fariam a suíte apodrecer com o passar do tempo.
+const isoEmDias = (dias) => new Date(Date.now() + dias * 86_400_000).toISOString().slice(0, 10);
+const AMANHA = isoEmDias(1);
+const ONTEM = isoEmDias(-1);
+
 /** Carga LANÇADA pela Programação: sheet_lh NULL + lh_manual = viagem "LT…". */
-async function seedLaunched({ clienteId, lh, data = "2026-08-01", status = "OPEN" }) {
-  const carga = await seedCargo({ cliente_id: clienteId, data, status, sheet_lh: null });
+async function seedLaunched({ clienteId, lh, data = AMANHA, status = "OPEN", horario = "08:00:00" }) {
+  const carga = await seedCargo({ cliente_id: clienteId, data, horario, status, sheet_lh: null });
   await query("UPDATE public.cargas SET lh_manual = $2 WHERE id = $1", [carga.id, lh]);
   return carga;
 }
@@ -206,9 +212,9 @@ describe("detectAspxMissingTrips", () => {
   });
 
   it("ignora carga da planilha, Nestlé/manual e template (só viagem LT lançada)", async () => {
-    const planilha = await seedCargo({ cliente_id: clienteId, sheet_lh: "LT1Q8102CLEN1", data: "2026-08-01" });
+    const planilha = await seedCargo({ cliente_id: clienteId, sheet_lh: "LT1Q8102CLEN1", data: AMANHA });
     const nestle = await seedLaunched({ clienteId, lh: "NESTLE-B101462743" });
-    const template = await seedCargo({ cliente_id: clienteId, data: "2026-08-01", is_template: true });
+    const template = await seedCargo({ cliente_id: clienteId, data: AMANHA, is_template: true });
     await query("UPDATE public.cargas SET lh_manual = 'LT1Q8102CLZZ1' WHERE id = $1", [template.id]);
 
     const r = await detectAspxMissingTrips({ deps: deps(["LT-OUTRA"]) });
@@ -220,13 +226,45 @@ describe("detectAspxMissingTrips", () => {
     }
   });
 
-  it("ignora carga fora da janela do índice (carregamento muito antigo)", async () => {
-    const antiga = await seedLaunched({ clienteId, lh: "LT1Q8102CLEN1", data: "2025-01-10" });
+  it("ignora carga cujo carregamento JÁ PASSOU (presença dependeria da aba Concluído)", async () => {
+    // Ontem e um dia bem antigo: a carga já rodou — histórico, não é acionável, e
+    // provar ausência dependeria da janela/paginação do Concluído (falso positivo).
+    const ontem = await seedLaunched({ clienteId, lh: "LT-ONTEM-1", data: ONTEM });
+    const antiga = await seedLaunched({ clienteId, lh: "LT-ANTIGA-1", data: "2025-01-10" });
 
     const r = await detectAspxMissingTrips({ deps: deps(["LT-OUTRA"]) });
 
     expect(r.checked).toBe(0);
+    expect((await stateOf(ontem.id)).aspx_missing_since).toBeNull();
     expect((await stateOf(antiga.id)).aspx_missing_since).toBeNull();
+  });
+
+  it("ignora carga já expirada (não está no Monitor nem em /cargas — avisar é ruído)", async () => {
+    const expirada = await seedLaunched({ clienteId, lh: "LT-EXPIRADA-1", status: "EXPIRED" });
+
+    const r = await detectAspxMissingTrips({ deps: deps(["LT-OUTRA"]) });
+
+    expect(r.checked).toBe(0);
+    expect((await stateOf(expirada.id)).aspx_missing_since).toBeNull();
+  });
+
+  it("no-op quando o portal TRUNCOU a resposta (índice incompleto)", async () => {
+    const carga = await seedLaunched({ clienteId, lh: "LT1Q8102CLEN1" });
+
+    const r = await detectAspxMissingTrips({
+      deps: {
+        withPgClient,
+        fetchTripIndex: async () => ({
+          byNumber: new Map([["LT-OUTRA", { statusName: "Assigning", driver: "" }]]),
+          truncated: true,
+          partial: false,
+        }),
+      },
+    });
+
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("truncated_index");
+    expect((await stateOf(carga.id)).aspx_missing_since).toBeNull();
   });
 
   it("ignora carga já cancelada pelo operador", async () => {
