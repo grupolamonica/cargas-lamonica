@@ -2,6 +2,9 @@
 
 Guia operacional completo do monitoramento do Lamonica Cargas exibido na TV.
 
+> **Para quem acompanha a TV**: o significado de cada painel e as ações a tomar
+> estão no [GUIA-INDICADORES.md](./GUIA-INDICADORES.md).
+
 ## Arquitetura
 
 ```
