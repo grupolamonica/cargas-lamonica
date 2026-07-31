@@ -221,7 +221,8 @@ def _map_motorista(payload: dict, company: dict, vinculo: str, status_desc: str)
     }
     rec = {
         'type': {'description': 'Motorista'},
-        'description': f"Protocolo {protocolo or '—'} — cadastro (mock, sem consulta AngelLira).",
+        # Comentário = situação (igual ao layout do doc AngelLira).
+        'description': status_desc,
         'history': hist,
         'driver': {'name': mot.get('nome'), 'natural': {'cpf': _digits(mot.get('cpf'))}},
         'company': company,
@@ -257,10 +258,11 @@ def _map_veiculo(veic: dict, prefix: str, payload: dict, company: dict,
         f'{prefix}Fleet': '',
         **_company_history(company),
     }
-    tipo_desc = veic.get('tipo') or 'Veículo'
     rec = {
-        'type': {'description': 'Veículo'},
-        'description': f"Protocolo {protocolo or '—'} — {tipo_desc} (mock, sem consulta AngelLira).",
+        # Tipo específico (igual ao doc AngelLira): cab -> Cavalo, tow -> Carreta.
+        'type': {'description': 'Cavalo' if prefix == 'cab' else 'Carreta'},
+        # Comentário = situação (igual ao layout do doc AngelLira).
+        'description': status_desc,
         'history': hist,
         'company': company,
         'legalPersonRelationship': {'description': vinculo},
