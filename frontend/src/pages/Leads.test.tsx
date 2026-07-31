@@ -13,10 +13,11 @@ const { mockApproveOperatorLoadLead } = vi.hoisted(() => ({
   mockApproveOperatorLoadLead: vi.fn(),
 }));
 
-const { realtimeCallbacks, mockSupabaseChannel, mockSupabaseRemoveChannel } = vi.hoisted(() => {
+const { realtimeCallbacks, mockSupabaseChannelOn, mockSupabaseChannel, mockSupabaseRemoveChannel } = vi.hoisted(() => {
   const callbacks = new Map<string, () => void>();
+  const on = vi.fn();
   const channel = {
-    on: vi.fn((event: string, filter: { table?: string }, callback: () => void) => {
+    on: on.mockImplementation((event: string, filter: { table?: string }, callback: () => void) => {
       if (event === "postgres_changes" && filter?.table) {
         callbacks.set(filter.table, callback);
       }
@@ -28,6 +29,7 @@ const { realtimeCallbacks, mockSupabaseChannel, mockSupabaseRemoveChannel } = vi
 
   return {
     realtimeCallbacks: callbacks,
+    mockSupabaseChannelOn: on,
     mockSupabaseChannel: vi.fn(() => channel),
     mockSupabaseRemoveChannel: vi.fn(),
   };
@@ -86,6 +88,7 @@ describe("Leads", () => {
     mockApproveOperatorLoadLead.mockReset();
     realtimeCallbacks.clear();
     mockSupabaseChannel.mockClear();
+    mockSupabaseChannelOn.mockClear();
     mockSupabaseRemoveChannel.mockClear();
 
     mockUseQueryClient.mockReturnValue({
@@ -399,7 +402,7 @@ describe("Leads", () => {
         // Backoff dinâmico: 30s antes do primeiro response, 60s estável.
         refetchInterval: expect.any(Function),
         refetchIntervalInBackground: false,
-        // Desligado para cortar egress do pooler: alternar abas não deve
+        // Desligado na Fila para cortar egress do pooler: alternar abas não deve
         // refetchar a query pesada da fila (polling + realtime já cobrem).
         refetchOnWindowFocus: false,
         refetchOnReconnect: true,
@@ -417,7 +420,13 @@ describe("Leads", () => {
     });
 
     expect(realtimeCallbacks.has("load_public_leads")).toBe(true);
-    expect(realtimeCallbacks.has("cargas")).toBe(true);
+    // INVERSÃO DELIBERADA: antes esta tela também assinava `cargas` com
+    // event:"*" sem filter, e o sheet sync (UPDATE em massa a cada 5min)
+    // entregava uma mensagem realtime POR LINHA para cada aba aberta — o custo
+    // real estava nas mensagens, não nos refetches (que o debounce já colapsava).
+    // O frescor de cargas passou para o poll de 60s da Fila e para o
+    // refetchOnWindowFocus do Histórico.
+    expect(realtimeCallbacks.has("cargas")).toBe(false);
 
     realtimeCallbacks.get("load_public_leads")?.();
 
@@ -431,12 +440,33 @@ describe("Leads", () => {
     }, { timeout: 5_000 });
   });
 
-  it("historico usa escopo proprio na query key e nao faz auto-poll (corta egress)", () => {
+  it("assina APENAS load_public_leads no realtime (nao assina o canal ruidoso de cargas)", () => {
+    render(<MemoryRouter><Leads /></MemoryRouter>);
+
+    // Proxy direto do medidor de Realtime Message Count: quantas tabelas esta
+    // tela assina. Cada tabela assinada = 1 mensagem por linha alterada, por aba
+    // aberta. Antes eram 2 (load_public_leads + cargas) e `cargas` era a que
+    // recebia UPDATE em massa a cada ciclo do sheet sync; agora e 1.
+    const postgresChangesCalls = mockSupabaseChannelOn.mock.calls.filter(
+      ([event]) => event === "postgres_changes",
+    );
+    expect(postgresChangesCalls).toHaveLength(1);
+    expect(postgresChangesCalls.map(([, filter]) => (filter as { table?: string })?.table)).toEqual([
+      "load_public_leads",
+    ]);
+  });
+
+  it("historico usa escopo proprio na query key, nao faz auto-poll e revalida no foco da aba", () => {
     render(<MemoryRouter><Leads historicoMode /></MemoryRouter>);
 
     const leadsCall = mockUseQuery.mock.calls.find(
       (c) => (c[0] as { queryKey?: unknown[] })?.queryKey?.[1] === "public-load-leads",
-    )?.[0] as { queryKey: unknown[]; refetchInterval: unknown; staleTime: number };
+    )?.[0] as {
+      queryKey: unknown[];
+      refetchInterval: unknown;
+      refetchOnWindowFocus: unknown;
+      staleTime: number;
+    };
 
     // Fila e Historico compartilham o modulo — a query key precisa separar por
     // escopo, senao as duas telas colidem no cache do TanStack.
@@ -444,6 +474,11 @@ describe("Leads", () => {
     // Historico (conjunto grande de cargas terminais) abre sob demanda; sem
     // auto-poll para nao reenviar a lista pesada a cada 60s enquanto aberto.
     expect(leadsCall.refetchInterval).toBe(false);
+    // Compensador do listener de `cargas` removido: event-driven (foco da aba),
+    // custo zero em idle e ainda gated pelo staleTime de 5min. Deliberadamente
+    // NAO e um refetchInterval — isso reintroduziria o poll que uma rodada
+    // anterior de egress removeu, na query mais pesada do app.
+    expect(leadsCall.refetchOnWindowFocus).toBe(true);
     expect(leadsCall.staleTime).toBe(5 * 60_000);
   });
 
