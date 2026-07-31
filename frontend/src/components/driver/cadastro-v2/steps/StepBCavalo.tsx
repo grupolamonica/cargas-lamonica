@@ -352,7 +352,10 @@ function StepBCavaloImpl({
   const ownerDocValid =
     (data.ownerDocType === "cpf" && isValidCpf(ownerDocDigits)) ||
     (data.ownerDocType === "cnpj" && isValidCnpj(ownerDocDigits));
-  const crlvCompleted = placaValid && ownerDocValid;
+  // DC-305: o CRLV (arquivo) é obrigatório — pode digitar placa/proprietário,
+  // mas só avança com o CRLV anexado (crlvStoragePath).
+  const crlvProvided = Boolean(data.crlvStoragePath);
+  const crlvCompleted = placaValid && ownerDocValid && crlvProvided;
   const continueEnabled = crlvCompleted && a4Valid && a5Valid && a6Valid;
 
   const handleContinue = () => {

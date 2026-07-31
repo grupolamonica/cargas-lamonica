@@ -400,7 +400,9 @@ function StepDCarretasImpl({
   // BUG-WALK-01 — quando o motorista marca "ANTT diferente desta carreta",
   // exige upload do arquivo antes de liberar Continuar.
   const carretaAnttFulfilled = !carretaAnttSeparado || Boolean(carretaAnttFile);
-  const continueEnabled = Boolean(ownerDocValid && placaValid && carretaAnttFulfilled);
+  // DC-305: o CRLV da carreta (arquivo) é obrigatório — pode digitar placa/dono,
+  // mas só avança com o CRLV anexado (crlvStoragePath).
+  const continueEnabled = Boolean(ownerDocValid && placaValid && carretaAnttFulfilled && crlvStoragePath);
 
   // Auto-attribution preview (banner) — calculado pre-Continue.
   const ownerIsDriver =
@@ -501,7 +503,7 @@ function StepDCarretasImpl({
       />
 
       {(() => {
-        const crlvCardCompleted = Boolean(ownerDocValid && placaValid);
+        const crlvCardCompleted = Boolean(ownerDocValid && placaValid && crlvStoragePath);
         const ownerReused = ownerIsDriver || ownerReusedFromCavalo || ownerReusedFromCarreta;
         const showAnttCard = crlvCardCompleted && ownerReused;
         const anttCardCompleted =

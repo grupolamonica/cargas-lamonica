@@ -561,9 +561,14 @@ function StepCProprietarioCavaloImpl({
       (ownerDocType === "cpf" ? ownerEndereco?.comprovanteUrl : true),
   );
 
+  // DC-305: o documento do proprietário (cartão-CNPJ / CNH) é obrigatório —
+  // pode digitar os dados, mas só avança com o arquivo anexado. Quando o dono é
+  // o próprio motorista, a CNH dele já foi anexada no Step A → não exige aqui.
+  const ownerDocProvided = driverIsOwner || Boolean(ownerDocStoragePath);
   const continueEnabled =
     (driverIsOwner || ownerData.nome.trim().length > 0) &&
     ownerDocValid &&
+    ownerDocProvided &&
     anttFulfilled &&
     complementaryFulfilled &&
     // Endereço (CEP/número/comprovante) agora é coletado exclusivamente em OwnerEnderecoComprovante.
