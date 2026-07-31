@@ -1,0 +1,8 @@
+# Contexto de build enxuto — o Dockerfile faz COPY seletivo, isto blinda o resto.
+.venv/
+__pycache__/
+*.pyc
+data/
+*.pdf
+.env
+examples/

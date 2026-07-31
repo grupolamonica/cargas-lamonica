@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerador Mock AngelLira | Estudo</title>
+    <link rel="stylesheet" href="style.css?v=mock1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="page">
+
+        <!-- TOPBAR -->
+        <header class="topbar">
+            <div class="topbar-left">
+                <div class="brand-logo" aria-hidden="true">L</div>
+                <div class="brand-block">
+                    <span class="brand-title">GERADOR MOCK</span>
+                    <span class="brand-sub">AngelLira · modo estudo</span>
+                </div>
+            </div>
+            <nav class="topbar-nav">
+                <a href="#form-card">Gerar</a>
+                <a href="#log-card">Atividade</a>
+                <a href="#stats">Status</a>
+            </nav>
+        </header>
+
+        <!-- HERO -->
+        <section class="hero-card">
+            <svg class="hero-deco" viewBox="0 0 600 220" fill="none" aria-hidden="true">
+                <rect x="40" y="78" width="120" height="92" rx="8"/>
+                <rect x="170" y="56" width="370" height="114" rx="6"/>
+                <line x1="200" y1="80" x2="510" y2="80" stroke-width="1" opacity="0.5"/>
+                <line x1="200" y1="120" x2="510" y2="120" stroke-width="1" opacity="0.5"/>
+                <line x1="200" y1="150" x2="510" y2="150" stroke-width="1" opacity="0.5"/>
+                <circle cx="80" cy="190" r="22"/>
+                <circle cx="140" cy="190" r="22"/>
+                <circle cx="280" cy="190" r="22"/>
+                <circle cx="340" cy="190" r="22"/>
+                <circle cx="460" cy="190" r="22"/>
+                <circle cx="520" cy="190" r="22"/>
+            </svg>
+
+            <div class="hero-content">
+                <span class="hero-badge"><span class="dot"></span> LAYOUT ANGELLIRA · SEM CONEXÃO</span>
+                <h1 class="hero-title">PDF do dossiê <span class="accent">a partir de um JSON</span></h1>
+                <p class="hero-subtitle">Cole um JSON (payload de cadastro ou registro AngelLira). O sistema fabrica os dados no formato do AngelLira e renderiza o PDF com o mesmo layout, logo e seções — 100% local, sem consultar o portal.</p>
+            </div>
+
+            <aside class="status-panel" id="stats">
+                <span class="status-badge"><span class="dot"></span> MOCK</span>
+                <ul class="status-list">
+                    <li>
+                        <span class="num">1</span>
+                        <span class="label">Fonte</span>
+                        <span class="value">JSON</span>
+                    </li>
+                    <li>
+                        <span class="num">2</span>
+                        <span class="label">Componentes</span>
+                        <span class="value">3</span>
+                    </li>
+                    <li>
+                        <span class="num">3</span>
+                        <span class="label">Conexão</span>
+                        <span class="value">Nenhuma</span>
+                    </li>
+                </ul>
+            </aside>
+        </section>
+
+        <!-- CONTENT -->
+        <main class="content-grid">
+
+            <section class="card form-card" id="form-card">
+                <header class="card-header">
+                    <h2>JSON dos dados</h2>
+                    <span class="card-tag">Estudo</span>
+                </header>
+
+                <div class="card-body">
+                    <p class="form-hint">Aceita o <strong>payload de cadastro</strong> (motorista/cavalo/carretas/cavalo_owner) ou o formato <strong>AngelLira</strong> (rotulado, <code>{data:[...]}</code>, lista ou registro único).</p>
+
+                    <div class="field-group">
+                        <label for="json-input">Cole o JSON aqui</label>
+                        <textarea id="json-input" rows="14" spellcheck="false"
+                                  placeholder='{ "motorista": { ... }, "cavalo": { ... }, "carretas": [ ... ] }'
+                                  style="width:100%;font-family:'IBM Plex Mono',monospace;font-size:12px;resize:vertical;"></textarea>
+                    </div>
+
+                    <div class="grid-fields" style="align-items:center;">
+                        <label style="display:flex;gap:8px;align-items:center;font-size:13px;">
+                            <input type="checkbox" id="enforce-input"> Exigir status "Conforme" (gate abort-all)
+                        </label>
+                        <label style="display:flex;gap:8px;align-items:center;font-size:13px;">
+                            <input type="checkbox" id="downloads-input" checked> Salvar em Downloads
+                        </label>
+                    </div>
+
+                    <div id="progress-section" class="progress-container">
+                        <div class="timer-row">
+                            <span id="timer-display" class="timer">00:00</span>
+                            <span id="timer-label" class="timer-label"></span>
+                        </div>
+                        <div class="progress-track">
+                            <div id="progress-fill" class="progress-fill"></div>
+                        </div>
+                        <div class="progress-label">
+                            <span id="progress-step" class="step-text">Aguardando...</span>
+                            <span id="progress-pct">0%</span>
+                        </div>
+                    </div>
+
+                    <div class="actions">
+                        <button id="gerar-btn" class="btn-primary">Gerar PDF</button>
+                        <button id="exemplo-btn" class="btn-secondary">Carregar exemplo</button>
+                        <button id="limpar-btn" class="btn-secondary">Limpar</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card log-card" id="log-card">
+                <header class="card-header">
+                    <h2>Atividade</h2>
+                    <span class="pulse-dot" aria-label="ao vivo"></span>
+                </header>
+                <div id="log-feed" class="log-feed">
+                    <div class="log-entry info"><strong>[--:--:--]</strong> Cole um JSON e clique em Gerar PDF...</div>
+                </div>
+            </section>
+
+        </main>
+
+        <footer class="page-footer">
+            <p>© 2026 Grupo Lamônica · Gerador Mock AngelLira (estudo/teste) · sem conexão com o portal</p>
+        </footer>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>
