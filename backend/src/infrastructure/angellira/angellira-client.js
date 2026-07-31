@@ -466,8 +466,19 @@ function trimOrNull(value) {
   return value != null ? value : null;
 }
 
-function mapAngelliraRecord(queryFor, queryValue, payload) {
-  const firstMatch = Array.isArray(payload?.data) ? payload.data[0] : null;
+export function mapAngelliraRecord(queryFor, queryValue, payload) {
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+
+  // DC-329: a API do Angellira faz match AMPLO por `q` (pode devolver OUTRA
+  // pessoa quando o CPF vem truncado/parcial) e a lista vem ordenada por
+  // -sentDate — então `data[0]` NÃO garante o CPF certo. Para consulta por CPF,
+  // selecionamos o registro cujo driverCPF bate EXATAMENTE com o CPF consultado;
+  // sem correspondência → NOT_FOUND (evita "motorista errado"). Placa mantém o
+  // comportamento atual (primeiro resultado).
+  const firstMatch =
+    queryFor === "cpf"
+      ? data.find((record) => normalizeCpf(record?.history?.driverCPF) === queryValue) || null
+      : data[0] || null;
 
   if (!firstMatch) {
     return {
@@ -594,6 +605,27 @@ async function runAngelliraLookup(queryFor, rawValue, { correlationId } = {}) {
   const normalizedValue = queryFor === "cpf" ? normalizeCpf(rawValue) : normalizePlate(rawValue);
 
   if (!normalizedValue) {
+    return {
+      queryFor,
+      queryValue: normalizedValue,
+      availability: "OK",
+      status: "NOT_FOUND",
+      found: false,
+      displayName: null,
+      validUntil: null,
+      lastSeenAt: null,
+      statusText: null,
+    };
+  }
+
+  // DC-329: CPF precisa ter 11 dígitos. Um CPF truncado (ex.: zero à esquerda
+  // perdido → 10 dígitos) faz a API do Angellira casar por prefixo/parcial e
+  // devolver OUTRA pessoa. Barra ANTES de consultar — trata como NOT_FOUND.
+  if (queryFor === "cpf" && normalizedValue.length !== 11) {
+    logStructuredEvent("info", "driver-validation.angellira.invalid_cpf", {
+      correlationId: correlationId || null,
+      cpfLength: normalizedValue.length,
+    });
     return {
       queryFor,
       queryValue: normalizedValue,
