@@ -187,6 +187,21 @@ function hasValidContext(horsePlate?: string, trailerPlates?: string[]): boolean
   return Boolean(horsePlate && horsePlate.trim().length > 0 && Array.isArray(trailerPlates));
 }
 
+/**
+ * Resposta de pré-check SINTÉTICA para o resgate de rascunho pelo operador.
+ *
+ * O rascunho já passou pelo pré-check na sessão do motorista e o submit
+ * revalida — então o operador não precisa (nem deve) refazer a verificação ao
+ * vivo (Angellira/ASPX) só para reabrir. Sem isto, rascunhos SEM
+ * `preCheckResponse` persistido (a grande maioria) ou SEM placa de cavalo
+ * (Etapa A / início) ficavam presos no estado "idle", que renderiza o spinner
+ * "Verificando seu cadastro…" para sempre. `pendencias` vazio faz o passo A
+ * renderizar o formulário completo do motorista com os dados já hidratados.
+ */
+function synthesizeOperatorResumePreCheck(): PreCheckResponse {
+  return { pendencias: [], completos: [], meta: { correlationId: "operator-resume" } };
+}
+
 function pendenciasToTrailers(
   pendencias: CandidaturaPendency[],
 ): StepDTrailerInput[] {
@@ -575,29 +590,42 @@ export function DriverRegistrationWizard({
     if (Array.isArray(persistedCarretaOwners)) {
       setCollectedCarretaOwners(persistedCarretaOwners);
     }
-    if (persistedPreCheck) {
-      setPreCheckResponse(persistedPreCheck);
+    // Resposta de pré-check usada para restaurar o passo. No MODO OPERADOR o
+    // rascunho já passou pelo pré-check na sessão do motorista (e o submit
+    // revalida), então usamos uma resposta SINTÉTICA quando não há uma persistida.
+    // Sem isto, rascunhos sem `preCheckResponse` (a maioria) ou sem placa de
+    // cavalo (Etapa A / início) ficavam presos no estado "idle" = spinner eterno.
+    const resumeResponse =
+      persistedPreCheck ?? (isOperatorMode ? synthesizeOperatorResumePreCheck() : null);
+    if (resumeResponse) {
+      setPreCheckResponse(resumeResponse);
     }
 
-    // Restaura o passo persistido (skip pre-check se já tivermos uma resposta válida).
-    if (
-      isPersistedStepKind(draft.currentStep) &&
-      draft.currentStep !== "tela0" &&
-      persistedPreCheck
-    ) {
-      if (draft.currentStep === "step-a") {
-        setState({ kind: "step-a", response: persistedPreCheck });
-      } else if (draft.currentStep === "step-b") {
+    // Passo a restaurar: o persistido quando restaurável; no modo operador,
+    // rascunhos em Etapa A / início / tela0 (passo não restaurável) caem no
+    // passo A, com os dados do motorista já hidratados.
+    const persistedStepRestorable =
+      isPersistedStepKind(draft.currentStep) && draft.currentStep !== "tela0";
+    const stepToRestore: string | null = persistedStepRestorable
+      ? draft.currentStep
+      : isOperatorMode
+        ? "step-a"
+        : null;
+
+    if (resumeResponse && stepToRestore) {
+      if (stepToRestore === "step-a") {
+        setState({ kind: "step-a", response: resumeResponse });
+      } else if (stepToRestore === "step-b") {
         setState({ kind: "step-b" });
-      } else if (draft.currentStep === "step-c") {
+      } else if (stepToRestore === "step-c") {
         setState({ kind: "step-c" });
-      } else if (draft.currentStep === "step-c-antt") {
+      } else if (stepToRestore === "step-c-antt") {
         setState({ kind: "step-c-antt" });
-      } else if (draft.currentStep === "step-d") {
+      } else if (stepToRestore === "step-d") {
         setState({ kind: "step-d" });
-      } else if (draft.currentStep === "step-e-antt") {
+      } else if (stepToRestore === "step-e-antt") {
         setState({ kind: "step-e-antt" });
-      } else if (draft.currentStep === "confirmation") {
+      } else if (stepToRestore === "confirmation") {
         setState({ kind: "confirmation" });
       }
       // step-e não é restaurado diretamente — exige PendingCarreta em memória.
@@ -704,6 +732,15 @@ export function DriverRegistrationWizard({
   // (initialPreCheckResponse) ou dispara um novo — exceto se temos rascunho válido.
   useEffect(() => {
     if (!open) {
+      return;
+    }
+
+    // Modo operador: o estado inicial do wizard é decidido INTEIRAMENTE pelo
+    // efeito de hidratação (restaura o rascunho salvo, sem pré-check ao vivo). O
+    // operador NÃO dispara o pré-check público — senão rascunhos sem placa de
+    // cavalo (Etapa A) ou sem preCheckResponse persistido ficavam presos no
+    // spinner "Verificando…". O submit continua revalidando de forma autoritativa.
+    if (isOperatorMode) {
       return;
     }
 
