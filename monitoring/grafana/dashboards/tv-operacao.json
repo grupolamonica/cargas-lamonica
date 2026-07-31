@@ -809,7 +809,7 @@
       "title": "Automação com ERRO (24h)",
       "description": "Jobs Angellira/SPX/Unificada em ERROR nas últimas 24h.",
       "gridPos": {
-        "h": 4,
+        "h": 6,
         "w": 4,
         "x": 0,
         "y": 16
@@ -859,208 +859,14 @@
       }
     },
     {
-      "id": 34,
-      "type": "barchart",
-      "title": "Cargas por status",
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 16,
-        "y": 20
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "lmc-postgres"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT status, total FROM kpi.cargas_status_atual WHERE status IN ('OPEN','RESERVED','BOOKED','COMPLETED') ORDER BY CASE status WHEN 'OPEN' THEN 1 WHEN 'RESERVED' THEN 2 WHEN 'BOOKED' THEN 3 ELSE 4 END;"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisLabel": "",
-            "fillOpacity": 80
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "orientation": "auto",
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": false
-        },
-        "tooltip": {
-          "mode": "single"
-        },
-        "xTickLabelRotation": 0
-      }
-    },
-    {
-      "id": 35,
-      "type": "timeseries",
-      "title": "Funil de candidaturas — últimos 7 dias",
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 0,
-        "y": 20
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "lmc-postgres"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT dia::timestamp AS \"time\", pre_registered AS \"candidaturas\", queued AS \"na fila\", approved AS \"aprovados\" FROM kpi.leads_funil_dia WHERE dia >= (now() AT TIME ZONE 'America/Sao_Paulo')::date - 6 ORDER BY dia;"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "custom": {
-            "fillOpacity": 15,
-            "lineWidth": 2,
-            "showPoints": "always",
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      }
-    },
-    {
-      "id": 36,
-      "type": "stat",
-      "title": "Claims hoje",
-      "description": "Candidaturas a cargas registradas hoje (load_claims).",
-      "gridPos": {
-        "h": 4,
-        "w": 3,
-        "x": 4,
-        "y": 16
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "lmc-postgres"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT COALESCE((SELECT claims_created FROM kpi.claims_dia WHERE dia = (now() AT TIME ZONE 'America/Sao_Paulo')::date), 0) AS claims_hoje;"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center"
-      }
-    },
-    {
-      "id": 37,
-      "type": "stat",
-      "title": "Confirmadas hoje",
-      "description": "Claims confirmadas hoje (CLAIM_CONFIRMED).",
-      "gridPos": {
-        "h": 4,
-        "w": 3,
-        "x": 7,
-        "y": 16
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "lmc-postgres"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT COALESCE((SELECT claims_confirmed FROM kpi.claims_dia WHERE dia = (now() AT TIME ZONE 'America/Sao_Paulo')::date), 0) AS confirmadas_hoje;"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center"
-      }
-    },
-    {
       "id": 38,
       "type": "stat",
       "title": "Supabase — egress 30d",
       "description": "Banda de saida acumulada. Cota Pro: 250 GB/mes. Historico conta a partir de 30/07/2026 (inicio da coleta).",
       "gridPos": {
-        "h": 4,
-        "w": 3,
-        "x": 16,
+        "h": 6,
+        "w": 4,
+        "x": 12,
         "y": 16
       },
       "datasource": {
@@ -1117,9 +923,9 @@
       "type": "timeseries",
       "title": "Supabase — egress (taxa)",
       "gridPos": {
-        "h": 4,
-        "w": 5,
-        "x": 19,
+        "h": 6,
+        "w": 8,
+        "x": 16,
         "y": 16
       },
       "datasource": {
@@ -1161,9 +967,9 @@
       "title": "Acessos hoje",
       "description": "Visitas ao portal do motorista (1 por IP a cada 30s).",
       "gridPos": {
-        "h": 4,
-        "w": 3,
-        "x": 10,
+        "h": 6,
+        "w": 4,
+        "x": 4,
         "y": 16
       },
       "datasource": {
@@ -1211,9 +1017,9 @@
       "type": "stat",
       "title": "Motoristas únicos hoje",
       "gridPos": {
-        "h": 4,
-        "w": 3,
-        "x": 13,
+        "h": 6,
+        "w": 4,
+        "x": 8,
         "y": 16
       },
       "datasource": {
@@ -1254,50 +1060,6 @@
         "graphMode": "none",
         "textMode": "value",
         "justifyMode": "center"
-      }
-    },
-    {
-      "id": 42,
-      "type": "timeseries",
-      "title": "Acessos ao portal — 7 dias",
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 8,
-        "y": 20
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "lmc-postgres"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT dia::timestamp AS time, visitas, visitantes_unicos AS unicos FROM kpi.portal_visitas_dia WHERE dia >= (now() AT TIME ZONE 'America/Sao_Paulo')::date - 6 ORDER BY dia;"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "custom": {
-            "fillOpacity": 15,
-            "lineWidth": 2,
-            "showPoints": "always"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
       }
     }
   ]
