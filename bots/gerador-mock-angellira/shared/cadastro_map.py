@@ -259,7 +259,8 @@ def _map_veiculo(veic: dict, prefix: str, payload: dict, company: dict,
         **_company_history(company),
     }
     rec = {
-        'type': {'description': 'Veículo'},
+        # Tipo específico (igual ao doc AngelLira): cab -> Cavalo, tow -> Carreta.
+        'type': {'description': 'Cavalo' if prefix == 'cab' else 'Carreta'},
         # Comentário = situação (igual ao layout do doc AngelLira).
         'description': status_desc,
         'history': hist,
