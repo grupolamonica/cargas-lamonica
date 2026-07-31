@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // jsdom não tem Blob.arrayBuffer (validação de magic number do upload).
@@ -113,5 +113,13 @@ describe("StepBCavalo — 'Usar a original' não deixa registro Frankenstein", (
     expect(lastVal?.ownerDoc ?? "").toBe("");
     expect(lastVal?.ownerNome ?? "").toBe("");
     expect(lastVal?.crlvStoragePath ?? undefined).toBeUndefined();
+
+    // Assenta o trabalho assíncrono ainda em voo (debounce de 300ms do
+    // useVerifyDocument, FileReader do upload, checkPlateRegistration) ANTES
+    // do teardown — sem isso, um setState tardio atravessa o fim do teste e
+    // estoura "Should not already be working" de forma intermitente no CI.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 450));
+    });
   });
 });
