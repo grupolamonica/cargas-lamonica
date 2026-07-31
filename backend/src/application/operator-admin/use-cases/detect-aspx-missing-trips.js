@@ -1,0 +1,259 @@
+// backend/src/application/operator-admin/use-cases/detect-aspx-missing-trips.js
+//
+// Vigia as cargas LANÇADAS pela Programação (lh_manual = viagem "LT…" do SPX) e
+// detecta quando a viagem SAIU do ASPX — a Shopee cancelou/removeu a viagem do portal
+// depois de a carga já estar lançada no sistema. Sem isto, a carga ficava aberta e
+// candidatável no portal do motorista, e "operável" no Monitor, sem lastro nenhum no
+// ASPX (caso real: LT1Q8102CLEN1, lançada em 30/07 e sumida do portal no dia seguinte).
+//
+// Política (pedido do operador) — a carga NUNCA sai do sistema:
+//   1. marca a carga (aspx_missing_since) → o Monitor deixa de listá-la (não é mais
+//      viagem operável) e a tela de Cargas mostra o selo "Fora do ASPX";
+//   2. avisa o operador pelo sino (operator_notifications, kind aspx_trip_missing) e
+//      RE-AVISA a cada ASPX_MISSING_REALERT_HOURS enquanto a viagem não voltar;
+//   3. se a viagem reaparecer no portal, limpa a marca (volta ao Monitor) e avisa
+//      (kind aspx_trip_restored).
+// Nada de UPDATE em status/visibilidade: quem decide cancelar/expirar é o operador.
+//
+// Escopo deliberado: só cargas do SISTEMA lançadas (sheet_lh NULL + lh_manual "LT…").
+// Cargas da planilha (sheet_lh) têm a planilha como fonte da verdade e seguem pelo
+// reconcile-aspx-status (DC-316); Nestlé/manual/importadas não têm viagem no SPX.
+//
+// Anti-falso-positivo (crítico — marcar carga boa é pior que atrasar o aviso):
+//   - o índice cobre as 3 abas do SPX (Planejado + Aceito + Concluído). Sem o
+//     Concluído, toda viagem que termina "sumiria";
+//   - se QUALQUER aba falhar (index.partial) ou o índice vier vazio, o ciclo é
+//     abortado sem marcar nada;
+//   - só avalia carga cujo carregamento cai DENTRO da janela do índice, com margem
+//     de 1 dia p/ dentro (viagem fora da janela não está no índice por definição).
+
+import { withPgClient } from "../../../infrastructure/pg/postgres.js";
+import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
+import { fetchTripIndex } from "../../../infrastructure/spx/spx-allocation-client.js";
+import { classifyAspxPresence, isSpxTripNumber } from "../../../domain/operator-admin/aspx-trip-presence.js";
+import { logStructuredEvent } from "../../../infrastructure/security-log.js";
+
+// Janela do índice SPX. Espelha o que a Programação/preview usam (45/30) — o Concluído
+// usa uma janela própria (mtime) mais curta, por ser paginado e lento.
+const DAYS_BACK = 45;
+const DAYS_FORWARD = 30;
+const CONCLUIDO_DAYS_BACK = 30;
+// Margem p/ dentro da janela: uma carga na borda pode estar fora do índice por
+// arredondamento de fuso/janela do portal — não é ausência real.
+const WINDOW_MARGIN_DAYS = 1;
+// Teto de avisos por ciclo (o excedente entra no próximo — nunca truncamos calado).
+const MAX_NOTIFY_PER_RUN = 20;
+
+function realertHours() {
+  const n = Number(process.env.ASPX_MISSING_REALERT_HOURS);
+  return Number.isFinite(n) && n > 0 ? n : 6;
+}
+
+const trim = (v) => String(v ?? "").trim();
+
+/** `cargas.data` é uma data de CALENDÁRIO (wall-clock BRT), mas o driver pg entrega
+ *  DATE como objeto Date — meia-noite LOCAL — e o harness de teste entrega meia-noite
+ *  UTC. Ler com o getter errado desloca o rótulo um dia (o off-by-one conhecido).
+ *  Regra: hora UTC zerada → a data está em UTC; senão, nos getters locais. */
+function toWallClockDateIso(v) {
+  if (!v) return "";
+  if (typeof v === "string") return v.slice(0, 10);
+  if (!(v instanceof Date) || Number.isNaN(v.getTime())) return "";
+  const utcMidnight =
+    v.getUTCHours() === 0 && v.getUTCMinutes() === 0 && v.getUTCSeconds() === 0 && v.getUTCMilliseconds() === 0;
+  const y = utcMidnight ? v.getUTCFullYear() : v.getFullYear();
+  const m = (utcMidnight ? v.getUTCMonth() : v.getMonth()) + 1;
+  const d = utcMidnight ? v.getUTCDate() : v.getDate();
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+/** `cargas.horario` (TIME) chega como 'HH:MM:SS' — só o HH:MM interessa no aviso. */
+function toWallClockTime(v) {
+  return trim(v).slice(0, 5);
+}
+
+/** "DD/MM/YYYY HH:MM" p/ o corpo do aviso (o operador lê data BR, não ISO). */
+function agendaLabel(dateIso, timeHm) {
+  if (!dateIso) return "";
+  const [y, m, dd] = dateIso.split("-");
+  return `${dd}/${m}/${y}${timeHm ? ` ${timeHm}` : ""}`;
+}
+
+/**
+ * @param {{ correlationId?: string|null, deps?: {
+ *   withPgClient?: Function, fetchTripIndex?: typeof fetchTripIndex, now?: () => Date,
+ * } }} [args]
+ * @returns {Promise<{ ok: boolean, reason?: string, checked: number, marked: number,
+ *   cleared: number, renotified: number, notified: number, deferred: number }>}
+ */
+export async function detectAspxMissingTrips({ correlationId = null, deps = {} } = {}) {
+  const run = deps.withPgClient || withPgClient;
+  const getIndex = deps.fetchTripIndex || fetchTripIndex;
+  const now = deps.now ? deps.now() : new Date();
+
+  const empty = { checked: 0, marked: 0, cleared: 0, renotified: 0, notified: 0, deferred: 0 };
+
+  // 1. Índice das viagens VIVAS no portal (3 abas). Qualquer degradação → no-op.
+  let index;
+  try {
+    index = await getIndex(
+      {
+        daysBack: DAYS_BACK,
+        daysForward: DAYS_FORWARD,
+        includeConcluido: true,
+        concluidoDaysBack: CONCLUIDO_DAYS_BACK,
+      },
+      { correlationId },
+    );
+  } catch (err) {
+    logStructuredEvent("warn", "detect-aspx-missing-trips.index-failed", {
+      correlationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return { ok: false, reason: "spx_unavailable", ...empty };
+  }
+  // Índice incompleto/vazio não prova ausência de nada.
+  if (index.partial) return { ok: false, reason: "partial_index", ...empty };
+  if (!index.byNumber || index.byNumber.size === 0) return { ok: false, reason: "empty_index", ...empty };
+
+  const { dateIso: hoje } = getSaoPauloWallClock();
+  const hours = realertHours();
+
+  let outcome;
+  try {
+    outcome = await run(async (client) => {
+      const { rows } = await client.query(
+        `SELECT id, lh_manual, data, horario, origem, destino, status,
+                aspx_missing_since, aspx_missing_notified_at
+           FROM public.cargas
+          WHERE sheet_lh IS NULL
+            AND COALESCE(lh_manual, '') <> ''
+            AND upper(lh_manual) LIKE 'LT%'
+            AND COALESCE(is_template, false) = false
+            AND status <> 'CANCELLED'
+            AND data IS NOT NULL
+            AND data >= ($1::date - $2::int)
+            AND data <= ($1::date + $3::int)`,
+        [hoje, DAYS_BACK - WINDOW_MARGIN_DAYS, DAYS_FORWARD - WINDOW_MARGIN_DAYS],
+      );
+
+      const result = { checked: 0, marked: 0, cleared: 0, renotified: 0, notified: 0, deferred: 0 };
+      const pending = [];
+
+      for (const row of rows) {
+        const lh = trim(row.lh_manual);
+        if (!isSpxTripNumber(lh)) continue; // cinto e suspensório (o LIKE já filtra)
+        result.checked += 1;
+
+        const { action } = classifyAspxPresence({
+          present: index.byNumber.has(lh),
+          missingSince: row.aspx_missing_since,
+          notifiedAt: row.aspx_missing_notified_at,
+          now,
+          realertHours: hours,
+        });
+        if (action === "none") continue;
+
+        if (action === "clear") {
+          await client.query(
+            `UPDATE public.cargas
+                SET aspx_missing_since = NULL,
+                    aspx_missing_lh = NULL,
+                    aspx_missing_notified_at = NULL,
+                    updated_at = now()
+              WHERE id = $1`,
+            [row.id],
+          );
+          result.cleared += 1;
+          pending.push({ row, lh, kind: "aspx_trip_restored" });
+          continue;
+        }
+
+        if (action === "mark") {
+          await client.query(
+            `UPDATE public.cargas
+                SET aspx_missing_since = now(),
+                    aspx_missing_lh = $2,
+                    updated_at = now()
+              WHERE id = $1`,
+            [row.id, lh],
+          );
+          result.marked += 1;
+        } else {
+          result.renotified += 1;
+        }
+        pending.push({ row, lh, kind: "aspx_trip_missing", renotify: action === "renotify" });
+      }
+
+      // 2. Avisos (sino). Teto por ciclo; o excedente é pego no próximo tick — e o
+      //    aviso pendente NÃO marca notified_at, então nada se perde.
+      const toNotify = pending.slice(0, MAX_NOTIFY_PER_RUN);
+      result.deferred = pending.length - toNotify.length;
+
+      for (const item of toNotify) {
+        const { row, lh, kind } = item;
+        const rota = [trim(row.origem), trim(row.destino)].filter(Boolean).join(" → ");
+        const dataIso = toWallClockDateIso(row.data);
+        const horaHm = toWallClockTime(row.horario);
+        const quando = agendaLabel(dataIso, horaHm);
+        const restored = kind === "aspx_trip_restored";
+        const title = restored
+          ? `Viagem voltou ao ASPX: ${lh}`
+          : `Carga fora do ASPX: ${lh}`;
+        const body = restored
+          ? `${rota}${quando ? ` · ${quando}` : ""} · voltou ao Monitor`
+          : `${rota}${quando ? ` · ${quando}` : ""} · a viagem saiu do portal Shopee — confira em Cargas`;
+
+        await client.query(
+          `INSERT INTO public.operator_notifications (kind, title, body, metadata)
+           VALUES ($1, $2, $3, $4::jsonb)`,
+          [
+            kind,
+            title,
+            body,
+            JSON.stringify({
+              lh,
+              cargo_id: row.id,
+              origem: trim(row.origem) || null,
+              destino: trim(row.destino) || null,
+              data: dataIso || null,
+              horario: horaHm || null,
+              status: row.status ?? null,
+              missing_since: row.aspx_missing_since ?? null,
+              renotify: item.renotify === true,
+              correlation_id: correlationId || null,
+            }),
+          ],
+        );
+        result.notified += 1;
+        if (!restored) {
+          await client.query(
+            "UPDATE public.cargas SET aspx_missing_notified_at = now() WHERE id = $1",
+            [row.id],
+          );
+        }
+      }
+
+      return result;
+    });
+  } catch (err) {
+    logStructuredEvent("warn", "detect-aspx-missing-trips.query-failed", {
+      correlationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return { ok: false, reason: "query_failed", ...empty };
+  }
+
+  if (outcome.marked || outcome.cleared || outcome.renotified) {
+    logStructuredEvent("warn", "detect-aspx-missing-trips.changed", {
+      correlationId,
+      checked: outcome.checked,
+      marked: outcome.marked,
+      cleared: outcome.cleared,
+      renotified: outcome.renotified,
+      deferred: outcome.deferred,
+    });
+  }
+
+  return { ok: true, ...outcome };
+}
