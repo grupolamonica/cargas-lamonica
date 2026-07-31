@@ -870,6 +870,12 @@ const Motoristas = () => {
   // Cadastro de motorista pelo operador — mesmo fluxo do DriverPortal
   const [showCadastroRapido, setShowCadastroRapido] = useState(false);
   const [registrationWizardOpen, setRegistrationWizardOpen] = useState(false);
+  // Nonce de sessão de cadastro: muda a cada novo "Cadastrar motorista" e é usado
+  // como `key` do wizard para REMONTÁ-LO limpo. Sem isso, o estado interno do
+  // DriverRegistrationWizard (stepAData, preCheckResponse, adoptedCpf, slices B/C/D/E…)
+  // sobrevivia entre cadastros e o Step A abria pré-preenchido com o motorista
+  // ANTERIOR (bug: puxava outra pessoa). Mesmo padrão do CadastroRascunhoResgateModal.
+  const [registrationSession, setRegistrationSession] = useState(0);
   const [registrationContext, setRegistrationContext] = useState<{
     cpf?: string;
     horsePlate?: string;
@@ -878,6 +884,8 @@ const Motoristas = () => {
   } | null>(null);
 
   const handleCadastroRapidoProceed = ({ cpf, horsePlate, trailerPlates, preCheckResponse }: StandaloneCadastroProceedArgs) => {
+    // Incrementa o nonce → o `key` muda → o wizard remonta LIMPO para este cadastro.
+    setRegistrationSession((n) => n + 1);
     setRegistrationContext({ cpf, horsePlate, trailerPlates, preCheckResponse });
     setShowCadastroRapido(false);
     setRegistrationWizardOpen(true);
@@ -2428,6 +2436,7 @@ const Motoristas = () => {
         onProceed={handleCadastroRapidoProceed}
       />
       <DriverRegistrationWizard
+        key={registrationSession}
         open={registrationWizardOpen}
         onOpenChange={setRegistrationWizardOpen}
         cpf={registrationContext?.cpf}
