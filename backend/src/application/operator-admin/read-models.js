@@ -165,7 +165,8 @@ function isMissingRouteColumnError(error) {
     combinedMessage.includes("eixos") ||
     // Colunas do aviso "viagem saiu do ASPX" (migration aditiva) — sem elas a lista
     // de cargas cai no SELECT reduzido em vez de estourar 500.
-    combinedMessage.includes("aspx_missing_since")
+    combinedMessage.includes("aspx_missing_since") ||
+    combinedMessage.includes("aspx_missing_reason")
   );
 }
 
@@ -694,6 +695,7 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
             cargas.lh_manual,
             ${nextSupportsOptionalColumns ? "cargas.aspx_missing_since" : "NULL::timestamptz AS aspx_missing_since"},
             ${nextSupportsOptionalColumns ? "cargas.aspx_missing_lh" : "NULL::text AS aspx_missing_lh"},
+            ${nextSupportsOptionalColumns ? "cargas.aspx_missing_reason" : "NULL::text AS aspx_missing_reason"},
             clientes.nome AS cliente_nome
           FROM public.cargas
           LEFT JOIN public.clientes
@@ -795,6 +797,8 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
           lh_manual: row.lh_manual ?? null,
           aspx_missing_since: row.aspx_missing_since ?? null,
           aspx_missing_lh: row.aspx_missing_lh ?? null,
+          // 'route_removed' = a ROTA inteira saiu do portal; 'trip_missing'/NULL = só a viagem.
+          aspx_missing_reason: row.aspx_missing_reason ?? null,
           clientes: row.cliente_nome
             ? {
                 nome: row.cliente_nome,

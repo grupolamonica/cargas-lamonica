@@ -16,6 +16,7 @@
 
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
+import { parseStation } from "../../../domain/operator-admin/spx-station.js";
 import { spxTripStatusLabel } from "../../../domain/operator-admin/spx-trip-status.js";
 import {
   fetchSpxTripsByTab,
@@ -55,26 +56,6 @@ function epochToBRT(ts) {
   if (!p.year) return { data: null, horario: null };
   const horario = `${p.hour === "24" ? "00" : p.hour}:${p.minute}`;
   return { data: `${p.year}-${p.month}-${p.day}`, horario };
-}
-
-// Estação SPX: "LM Hub_CE_Juazeiro do Norte" (ou "[10768]LM Hub_CE_..." pela Torre) →
-//   label:  "Cidade/UF · TIPO"     (exibição, mantém o tipo LM Hub/SoC/...)
-//   cityUf: "Cidade/UF"            (casar com catálogo de rotas / prefill do modal)
-//   codigo: "10768"                (código da estação, quando vem entre colchetes pela
-//                                   Torre — usado p/ pintar a linha por rota; "" se ausente)
-function parseStation(raw) {
-  const s = String(raw || "").trim();
-  if (!s) return { label: "", cityUf: "", codigo: "" };
-  const cod = s.match(/^\[(\d+)\]/);
-  const codigo = cod ? cod[1] : "";
-  const body = s.replace(/^\[\d+\]\s*/, "");
-  const m = body.match(/^(.*?)_([A-Z]{2})_(.+)$/);
-  if (!m) return { label: body, cityUf: body, codigo };
-  const tipo = m[1].trim();
-  const uf = m[2];
-  const cidade = m[3].replace(/_/g, " ").trim();
-  const cityUf = `${cidade}/${uf}`;
-  return { label: `${cityUf}${tipo ? ` · ${tipo}` : ""}`, cityUf, codigo };
 }
 
 function normalizeRow(t, tab) {
