@@ -101,6 +101,7 @@ import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-a
 import { fetchSpxScheduleIndex, applySpxSchedule } from "../../../application/operator-admin/use-cases/spx-schedule-overlay.js";
 import { applySpxOperationalStatus, fetchSpxStatusIndexFromSnapshot, isSpxMonitorLiveStatusEnabled } from "../../../application/operator-admin/use-cases/spx-operational-status.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
+import { evaluateCandidaturaCnhCategoria } from "../../../domain/candidatura/cnh-category.js";
 import { attachRouteCodes } from "../../../application/operator-admin/use-cases/route-codes.js";
 import { attachRouteRegistration } from "../../../application/operator-admin/use-cases/attach-route-registration.js";
 import { attachRodoparStatus } from "../../../application/operator-admin/use-cases/attach-rodopar-status.js";
@@ -2246,6 +2247,25 @@ export async function resolveOperatorAprovarCadastroResponse(request) {
 
       if (!cpfClean) {
         return { statusCode: 422, payload: { error: "ValidationError", message: "CPF do motorista ausente nos dados do cadastro.", meta: { correlationId } } };
+      }
+
+      // 2b. Trava de categoria da CNH (D pra cima) — mesma regra do submit,
+      // reavaliada sobre o dado FRESCO no momento da aprovação. Cobre cadastros
+      // que não passaram pelo submit gated (Repom/WhatsApp, criação por operador)
+      // e edições pós-submit. Sem isto, um motorista não-D/E viraria
+      // driver_profile ATIVO (portão real do "puxar carga") ao ser aprovado.
+      // Barra ANTES de criar conta/perfil.
+      const categoriaBlock = evaluateCandidaturaCnhCategoria(registro.dados);
+      if (categoriaBlock) {
+        return {
+          statusCode: 422,
+          payload: {
+            error: categoriaBlock.error,
+            message: categoriaBlock.message,
+            categoria: categoriaBlock.categoria,
+            meta: { correlationId },
+          },
+        };
       }
 
       // 3. Cria usuário Supabase Auth (driver auth client)

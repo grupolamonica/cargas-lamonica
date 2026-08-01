@@ -72,7 +72,10 @@ export interface A1CnhProps {
   accessToken?: string | null;
 }
 
-const CATEGORIA_OPTIONS = ["A", "B", "C", "D", "E", "AB", "AC", "AD", "AE"] as const;
+// Inclui as combinações com E (BE/CE/DE) além das com A — todas elegíveis (D pra
+// cima) precisam ser selecionáveis, senão um motorista legítimo (ex.: CE) ficaria
+// sem a própria categoria no dropdown e cairia na trava.
+const CATEGORIA_OPTIONS = ["A", "B", "C", "D", "E", "AB", "AC", "AD", "AE", "BE", "CE", "DE"] as const;
 const EMPTY_DATA: A1Data = {
   nome: "",
   cpf: "",
@@ -196,9 +199,9 @@ export function A1Cnh({
       isValidCpf(data.cpf) &&
       data.categoria.trim().length > 0 &&
       data.validade.trim().length > 0;
-    // Trava de categoria: só CNH categoria E (AE/BE/CE/DE/E) habilita a puxar
-    // carga. Bloqueia o avanço quando a categoria informada não tem E (backend
-    // reforça com 422 CNH_CATEGORIA_INCOMPATIVEL).
+    // Trava de categoria: só CNH categoria D pra cima (D/E e combinações como
+    // AD/AE/CE/DE) habilita a puxar carga. Bloqueia o avanço quando a categoria
+    // informada não tem D nem E (backend reforça com 422 CNH_CATEGORIA_INCOMPATIVEL).
     const categoriaElegivel = isCnhCategoriaElegivel(data.categoria);
     // DC-305: o DOCUMENTO (arquivo) é obrigatório — o motorista pode digitar os
     // dados (manualMode), mas só avança com a CNH anexada (storage_path). Antes,
@@ -465,6 +468,12 @@ export function A1Cnh({
                 onChange={(event) => updateData({ categoria: event.target.value })}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 required
+                aria-invalid={Boolean(data.categoria) && !isCnhCategoriaElegivel(data.categoria)}
+                aria-describedby={
+                  data.categoria && !isCnhCategoriaElegivel(data.categoria)
+                    ? "a1-categoria-erro"
+                    : undefined
+                }
               >
                 <option value="">Selecione</option>
                 {CATEGORIA_OPTIONS.map((cat) => (
@@ -474,7 +483,11 @@ export function A1Cnh({
                 ))}
               </select>
               {data.categoria && !isCnhCategoriaElegivel(data.categoria) ? (
-                <p className="flex items-center gap-1 text-xs font-medium text-destructive">
+                <p
+                  id="a1-categoria-erro"
+                  role="alert"
+                  className="flex items-center gap-1 text-xs font-medium text-destructive"
+                >
                   <XCircle className="h-3.5 w-3.5" aria-hidden="true" />
                   {CNH_CATEGORIA_REQUER_E_MENSAGEM}
                 </p>
