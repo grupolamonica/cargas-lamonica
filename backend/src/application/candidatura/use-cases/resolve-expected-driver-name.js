@@ -13,26 +13,34 @@ import { lookupAspxDriverByCpf } from "../../../infrastructure/aspx/aspx-directo
  * (o pré-check costuma tê-las aquecido).
  *
  * @param {string} cpf
- * @param {{correlationId?:string}} [options]
+ * @param {{correlationId?:string, timeoutMs?:number}} [options]
  * @returns {Promise<string>} displayName resolvido, ou "" quando indisponível.
  */
-export async function resolveExpectedDriverName(cpf, { correlationId } = {}) {
+export async function resolveExpectedDriverName(cpf, { correlationId, timeoutMs = 4000 } = {}) {
   const digits = String(cpf || "").replace(/\D/g, "");
   if (digits.length !== 11) return "";
 
-  try {
-    const ang = await lookupAngelliraDriverByCpf(digits, { correlationId });
-    if (ang?.found && ang.displayName) return String(ang.displayName).trim();
-  } catch {
-    /* fail-open — indisponibilidade não pode travar o cadastro */
-  }
+  const resolveName = async () => {
+    try {
+      const ang = await lookupAngelliraDriverByCpf(digits, { correlationId });
+      if (ang?.found && ang.displayName) return String(ang.displayName).trim();
+    } catch {
+      /* fail-open — indisponibilidade não pode travar o cadastro */
+    }
+    try {
+      const aspx = await lookupAspxDriverByCpf(digits, { correlationId });
+      if (aspx?.displayName) return String(aspx.displayName).trim();
+    } catch {
+      /* fail-open */
+    }
+    return "";
+  };
 
-  try {
-    const aspx = await lookupAspxDriverByCpf(digits, { correlationId });
-    if (aspx?.displayName) return String(aspx.displayName).trim();
-  } catch {
-    /* fail-open */
-  }
-
-  return "";
+  // Deadline curto: no onset de uma queda do Angellira (antes do circuit breaker
+  // abrir) a consulta pode levar dezenas de segundos. Fail-open ("") mantém o
+  // submit responsivo; a consulta pendente ainda popula o cache p/ a próxima.
+  const deadline = new Promise((resolve) => {
+    setTimeout(() => resolve(""), timeoutMs);
+  });
+  return Promise.race([resolveName(), deadline]);
 }

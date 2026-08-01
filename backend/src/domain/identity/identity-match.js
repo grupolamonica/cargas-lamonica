@@ -20,6 +20,9 @@ export function normalizeName(value) {
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
+    // Junta apóstrofos ANTES de trocar pontuação por espaço: "sant'anna" →
+    // "santanna" (casa com a forma juntada que a base externa costuma gravar).
+    .replace(/['’`´]/g, "")
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();

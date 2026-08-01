@@ -12,6 +12,9 @@ export function normalizeName(value: string | null | undefined): string {
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
+    // Junta apóstrofos antes de trocar pontuação por espaço ("sant'anna" →
+    // "santanna") — paridade com o backend.
+    .replace(/['’`´]/g, "")
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
