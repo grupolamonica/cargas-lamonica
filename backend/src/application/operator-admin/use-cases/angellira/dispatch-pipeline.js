@@ -477,6 +477,10 @@ async function stepMotorista(ctx) {
     idCadastro: ctx.cadastroId,
     payload,
     anexos,
+    // Vínculo padrão do escritório = Agregado (type 26 em /types/drivers).
+    // Explícito aqui (camada da decisão de negócio) além do default do client.
+    // UPDATE de motorista já existente preserva o vínculo real (flow_motorista.py).
+    typeId: 26,
     correlationId: ctx.correlationId,
   });
   ctx.state.motoristaDriverId = result.driverId;

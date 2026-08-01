@@ -199,6 +199,8 @@ describe("runAngelliraPipeline / happy path", () => {
     expect(cadastrarProprietario).toHaveBeenCalledOnce();
     expect(cadastrarVeiculo).toHaveBeenCalledOnce();
     expect(cadastrarMotorista).toHaveBeenCalledOnce();
+    // Vínculo padrão do escritório = Agregado (type 26).
+    expect(cadastrarMotorista).toHaveBeenCalledWith(expect.objectContaining({ typeId: 26 }));
 
     // driver_profiles atualizado com status OK
     const dp = client._getDriverProfile();
