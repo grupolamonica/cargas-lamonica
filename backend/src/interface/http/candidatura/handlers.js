@@ -4,7 +4,8 @@ import { ZodError } from "zod";
 
 import { ForbiddenError, UnauthorizedError } from "../../../domain/load-claims/errors.js";
 import { evaluateCandidaturaCnhCategoria } from "../../../domain/candidatura/cnh-category.js";
-import { checkTypedVsCnh } from "../../../domain/identity/identity-match.js";
+import { checkTypedVsCnh, namesMatch } from "../../../domain/identity/identity-match.js";
+import { resolveExpectedDriverName } from "../../../application/candidatura/use-cases/resolve-expected-driver-name.js";
 import { requireDriverSession } from "../../../application/load-claims/auth.js";
 import { resolveCandidaturaActor } from "../../../application/load-claims/candidatura-actor.js";
 import { getDriverProfileByUserId } from "../../../application/load-claims/profile-service.js";
@@ -969,6 +970,26 @@ export async function resolveCandidaturaSubmitResponse(request) {
         code: identity.code,
         message: identity.message,
         issues: identity.issues,
+        meta: { correlationId },
+      },
+    };
+  }
+
+  // #3 — coerência da candidatura (checagem INFORJÁVEL): o nome digitado tem de
+  // conferir com o nome registrado para o CPF nas bases externas (Angellira/ASPX).
+  // O CPF identifica a pessoa e o nome vem de FORA do payload, então nem omitir/
+  // forjar o snapshot da CNH (motorista.cnh.nome) burla. Fail-open quando o CPF
+  // não está cadastrado externamente (motorista novo) ou a consulta falha.
+  const expectedName = await resolveExpectedDriverName(driverCpf, { correlationId });
+  if (expectedName && !namesMatch(parsedInput.dados?.motorista?.nome, expectedName)) {
+    return {
+      statusCode: 422,
+      payload: {
+        error: "IDENTITY_MISMATCH",
+        code: "NOME_DIVERGENTE_CANDIDATURA",
+        message:
+          "O nome informado não confere com o cadastro do CPF na nossa base. "
+          + "Confira o nome digitado ou o documento anexado.",
         meta: { correlationId },
       },
     };
