@@ -80,8 +80,112 @@ function isEvolutionConfigured() {
   return Boolean((process.env.EVOLUTION_API_TOKEN || "").trim());
 }
 
+// ── Cache + single-flight do overview da tela de Mensagens ───────────────────
+// O payload é GLOBAL, não por operador. Evidência: o handler
+// (interface/http/driver-outreach/handlers.js) chama getOutreachOverview com SÓ
+// `{ correlationId }` — nenhuma identidade de usuário entra na função — e
+// nenhuma das tabelas lidas tem coluna de escopo por operador: fila
+// (pending_driver_outreach, migration 20260707130000), log e opt-outs
+// (20260707120000) só têm `created_by` de AUDITORIA, que nunca aparece num
+// WHERE, e driver_outreach_settings é linha singleton (id = 1). Logo UMA entrada
+// de módulo serve todos os operadores — não há identidade a chavear (se
+// houvesse, o payload de um operador vazaria para o outro).
+// Custo por chamada: 7 a 9 queries — settings ×2 (getOutreachConfig +
+// loadOutreachSettings), GROUP BY de status, count do log de 24h, fila
+// (LIMIT 200), até 2 de resolução de nome, log (LIMIT 25) e opt-outs
+// (LIMIT 100). A tela faz poll de 15s enquanto aberta (refetchInterval em
+// frontend/src/pages/Outreach.tsx), por operador e por aba, sem dedupe nenhum →
+// N abas = N × 9 queries a cada 15s. TTL default 10s (< poll de 15s, então cada
+// ciclo da tela continua trazendo dados novos) + single-flight: a rajada de
+// polls concorrentes vira UMA execução por janela. 0 em teste.
+// A chave inclui os TRÊS LIMITs efetivos. Hoje são constantes (o handler não
+// aceita limite na query string — o único parâmetro é o correlationId), mas
+// entregar 200 itens a quem pediu 25 é exatamente o bug que a chave previne se
+// algum dia virarem parâmetro.
+// Ficam FORA do corpo cacheado os dois campos que não custam query e não podem
+// envelhecer: `evolutionConfigured` (leitura de env) e `meta.correlationId` (é
+// do REQUEST — devolver o correlationId de outro operador quebraria o rastro).
+// `meta.generatedAt` continua sendo o instante em que os dados foram lidos, e
+// não o do request: é o que informa a idade real do payload.
+const OUTREACH_OVERVIEW_LIMITS = { queue: 200, log: 25, optouts: 100 };
+
+let _overviewInFlight = null;
+let _overviewCache = { at: 0, key: "", body: null };
+// Epoch das mutações da tela (settings, opt-out, fila): uma leitura que COMEÇOU
+// antes do write não pode repovoar o cache com o estado pré-mutação, senão a
+// ação do operador só apareceria no fim do TTL.
+let _overviewEpoch = 0;
+
+function getOutreachOverviewCacheTtlMs() {
+  const raw = Number.parseInt(process.env.OPERATOR_OUTREACH_OVERVIEW_CACHE_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
+  return 10_000; // default produção
+}
+
+function outreachOverviewCacheKey(limits) {
+  return `q${limits.queue}|l${limits.log}|o${limits.optouts}`;
+}
+
+/** Invalida o overview (as mutações abaixo leem o próprio write). Nunca lança. */
+function bustOutreachOverviewCache() {
+  _overviewEpoch += 1;
+  _overviewCache = { at: 0, key: "", body: null };
+}
+
+/** Hook de teste: zera o estado de módulo do cache do overview. */
+export function __resetOutreachOverviewCache() {
+  _overviewInFlight = null;
+  _overviewCache = { at: 0, key: "", body: null };
+  _overviewEpoch = 0;
+}
+
 /** Painel: settings efetivas + estatísticas + fila + log + opt-outs. */
 export async function getOutreachOverview({ correlationId } = {}) {
+  const limits = OUTREACH_OVERVIEW_LIMITS;
+  const key = outreachOverviewCacheKey(limits);
+  const ttl = getOutreachOverviewCacheTtlMs();
+  // Reafirma os campos por-request SEM mudar a ordem das chaves (spread sobre
+  // chave existente preserva a posição original).
+  const withRequestFields = (body, cached) => ({
+    ...body,
+    evolutionConfigured: isEvolutionConfigured(),
+    meta: {
+      correlationId: correlationId || null,
+      generatedAt: body.meta.generatedAt,
+      ...(cached ? { cached: true } : {}),
+    },
+  });
+
+  if (ttl <= 0) return withRequestFields(await loadOutreachOverviewBody(limits), false);
+
+  const now = Date.now();
+  if (_overviewCache.body && _overviewCache.key === key && now - _overviewCache.at < ttl) {
+    return withRequestFields(_overviewCache.body, true);
+  }
+  if (_overviewInFlight && _overviewInFlight.key === key) {
+    return withRequestFields(await _overviewInFlight.promise, true);
+  }
+
+  const epoch = _overviewEpoch;
+  const promise = (async () => {
+    // Só cacheia sucesso: qualquer erro (schema ausente na fila/log/opt-outs não
+    // é engolido) rejeita aqui e nada gruda no cache.
+    const body = await loadOutreachOverviewBody(limits);
+    if (_overviewEpoch === epoch) _overviewCache = { at: Date.now(), key, body };
+    return body;
+  })();
+  _overviewInFlight = { key, promise };
+
+  try {
+    return withRequestFields(await promise, false);
+  } finally {
+    if (_overviewInFlight?.promise === promise) _overviewInFlight = null;
+  }
+}
+
+/** Leitura crua do overview (o corpo cacheável, sem os campos por-request). */
+async function loadOutreachOverviewBody(limits) {
   return withPgClient(async (client) => {
     const cfg = await getOutreachConfig(client);
     const settingsRow = await loadOutreachSettings(client);
@@ -102,7 +206,8 @@ export async function getOutreachOverview({ correlationId } = {}) {
 
     const { rows: queue } = await client.query(
       `SELECT id, driver_key, trigger, phone, message, status, retry_count, last_error, created_at, sent_at
-         FROM public.pending_driver_outreach ORDER BY created_at DESC LIMIT 200`,
+         FROM public.pending_driver_outreach ORDER BY created_at DESC LIMIT $1`,
+      [limits.queue],
     );
     // Resolve o NOME do motorista (coluna Motorista exibe nome, não CPF).
     const nameByCpf = await resolveDriverNames(client, queue.map((q) => q.driver_key));
@@ -111,11 +216,13 @@ export async function getOutreachOverview({ correlationId } = {}) {
     }
     const { rows: log } = await client.query(
       `SELECT driver_key, trigger, status, created_at
-         FROM public.driver_outreach_log ORDER BY created_at DESC LIMIT 25`,
+         FROM public.driver_outreach_log ORDER BY created_at DESC LIMIT $1`,
+      [limits.log],
     );
     const { rows: optouts } = await client.query(
       `SELECT driver_key, phone, reason, created_at
-         FROM public.driver_outreach_optout ORDER BY created_at DESC LIMIT 100`,
+         FROM public.driver_outreach_optout ORDER BY created_at DESC LIMIT $1`,
+      [limits.optouts],
     );
 
     return {
@@ -142,7 +249,8 @@ export async function getOutreachOverview({ correlationId } = {}) {
       queue,
       log,
       optouts,
-      meta: { correlationId: correlationId || null, generatedAt: new Date().toISOString() },
+      // correlationId é reafirmado por chamada no wrapper (nunca vem do cache).
+      meta: { generatedAt: new Date().toISOString() },
     };
   });
 }
@@ -161,6 +269,7 @@ export async function saveOutreachSettings(patch = {}, updatedBy = null) {
   if (patch.routeNeedWaveSize !== undefined)
     clean.route_need_wave_size = clampInt(patch.routeNeedWaveSize, 1, 50, 5);
   const row = await withPgTransaction((client) => updateOutreachSettings(client, clean, updatedBy));
+  bustOutreachOverviewCache(); // o operador tem que ver o toggle novo no refetch
   return {
     enabled: Boolean(row.enabled),
     coldEnabled: Boolean(row.cold_enabled),
@@ -186,6 +295,7 @@ export async function addOutreachOptout({ cpf, nome, phone, reason } = {}, creat
       [driverKey, onlyDigits(phone) || null, reason || null, createdBy || null],
     ),
   );
+  bustOutreachOverviewCache();
   return { driverKey };
 }
 
@@ -195,6 +305,7 @@ export async function removeOutreachOptout(driverKey) {
   await withPgClient((client) =>
     client.query(`DELETE FROM public.driver_outreach_optout WHERE driver_key = $1`, [key]),
   );
+  bustOutreachOverviewCache();
   return { ok: true };
 }
 
@@ -209,12 +320,18 @@ export async function cancelQueuedOutreach(id) {
       [id],
     ),
   );
+  bustOutreachOverviewCache();
   return { ok: true };
 }
 
 /** Dispara uma varredura de detecção+enfileiramento na hora. */
 export async function triggerOutreachScan() {
-  return scanAndEnqueueOutreach();
+  try {
+    return await scanAndEnqueueOutreach();
+  } finally {
+    // A varredura enfileira/pula itens — a fila da tela muda.
+    bustOutreachOverviewCache();
+  }
 }
 
 // ─── Detalhe / edição / envio de um item da fila ──────────────────────────────
@@ -362,6 +479,7 @@ export async function updateOutreachQueueItem(id, patch = {}) {
     throw err;
   }
   if (!rows[0]) throw new ValidationError("Só é possível editar itens que ainda estão pendentes.");
+  bustOutreachOverviewCache();
 
   // Best-effort: registra o CPF↔nome↔telefone em motoristas_historico (casa
   // canônica que resolveDriverNames/opportunities leem depois). Nunca falha o
@@ -395,6 +513,16 @@ export async function updateOutreachQueueItem(id, patch = {}) {
 export async function sendOutreachQueueItemNow(id) {
   if (!id) throw new ValidationError("id obrigatório.");
   if (!isEvolutionConfigured()) throw new ValidationError("Gateway WhatsApp não configurado.");
+  try {
+    return await sendOutreachQueueItemNowUncached(id);
+  } finally {
+    // Sucesso (status='sent' + log) E falha (status='failed', retry_count+1 +
+    // log) mudam a fila e as estatísticas — o operador vê na hora.
+    bustOutreachOverviewCache();
+  }
+}
+
+async function sendOutreachQueueItemNowUncached(id) {
   return withPgClient(async (client) => {
     const { rows } = await client.query(
       `SELECT id, driver_key, trigger, phone, message, status
@@ -496,6 +624,7 @@ export async function revalidateOutreachQueueAgainstAngellira() {
   }
 
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, worker));
+  if (result.cancelled) bustOutreachOverviewCache(); // itens saíram de 'pending'
   return result;
 }
 
@@ -523,6 +652,7 @@ export async function createManualOutreach({ cpf, nome, phone, trigger, message 
     }),
   );
   if (!id) throw new ValidationError("Já existe um envio pendente para este motorista com esse gatilho.");
+  bustOutreachOverviewCache();
   return { ok: true, id };
 }
 
@@ -766,9 +896,59 @@ export async function sendWhatsappTestMessage({ phone, text } = {}) {
 
 // ─── Notificações do operador (sino do menu) ──────────────────────────────────
 
-export async function listOperatorNotifications({ limit = 40 } = {}) {
-  return withPgClient(async (client) => {
-    try {
+// ── Cache + single-flight do sino ────────────────────────────────────────────
+// O feed é GLOBAL: operator_notifications não tem coluna de usuário/operador
+// (migration 20260708120000) e `seen`/`seen_at` são flags globais — é disso que
+// o "Dispensar para todos" depende. Logo UMA entrada de módulo serve todos os
+// operadores (não há chave por usuário a incluir).
+// O sino vive no DashboardHeader (renderizado em cada página do operador) com
+// poll de 30s e remonta a cada navegação → N operadores × N abas executavam
+// DUAS queries sem cache nenhum, uma delas ordenando a tabela inteira. Com o
+// cache, N polls concorrentes viram UMA execução (duas queries) por janela.
+// TTL default 15s (metade do poll do front): a latência extra do alarme de spot
+// é ≤ TTL, irrelevante ao lado do scanner de 3 min. 0 em teste.
+// A chave inclui o LIMIT efetivo (já clampado): ele chega da query string
+// (handlers.js) e define o tamanho do payload — ignorá-lo entregaria 40 itens a
+// quem pediu 200.
+let _notificationsInFlight = null;
+let _notificationsCache = { at: 0, limit: 0, payload: null };
+// Epoch das mutações (visto/limpar): uma leitura que COMEÇOU antes do write não
+// pode repovoar o cache com as linhas pré-mutação, senão o badge vermelho
+// voltaria por até TTL (o front invalida e refaz o fetch na hora).
+let _notificationsEpoch = 0;
+
+function getOperatorNotificationsCacheTtlMs() {
+  const raw = Number.parseInt(process.env.OPERATOR_NOTIFICATIONS_CACHE_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
+  return 15_000; // default produção
+}
+
+/** Invalida o sino (as mutações abaixo leem o próprio write). Nunca lança. */
+function bustOperatorNotificationsCache() {
+  _notificationsEpoch += 1;
+  _notificationsCache = { at: 0, limit: 0, payload: null };
+}
+
+/** Hook de teste: zera o estado de módulo do cache do sino. */
+export function __resetOperatorNotificationsCache() {
+  _notificationsInFlight = null;
+  _notificationsCache = { at: 0, limit: 0, payload: null };
+  _notificationsEpoch = 0;
+}
+
+/**
+ * Leitura crua do sino. Devolve `cacheable: false` no fallback de tabela
+ * ausente (schema degradado não deve grudar por TTL).
+ */
+async function loadOperatorNotifications(cap) {
+  try {
+    const payload = await withPgClient(async (client) => {
+      // Duas queries de propósito. Dobrar o count numa subquery no SELECT
+      // (`(SELECT count(*) ...) AS unseen_count`) cortaria um round trip no
+      // Postgres, mas o pg-mem do harness devolve UMA linha só, toda NULL,
+      // para essa forma — o endpoint ficaria sem cobertura confiável. Quem
+      // reduz o custo aqui é o cache acima (N polls → 1 execução por janela).
       const { rows: unseen } = await client.query(
         `SELECT count(*) AS n FROM public.operator_notifications WHERE seen = false`,
       );
@@ -777,15 +957,46 @@ export async function listOperatorNotifications({ limit = 40 } = {}) {
            FROM public.operator_notifications
           ORDER BY created_at DESC
           LIMIT $1`,
-        [Math.max(1, Math.min(200, Number(limit) || 40))],
+        [cap],
       );
       return { unseenCount: Number(unseen[0]?.n ?? 0), items: rows };
-    } catch (err) {
-      // Tabela pode não existir ainda (migration não aplicada).
-      if (err?.code === "42P01") return { unseenCount: 0, items: [] };
-      throw err;
+    });
+    return { payload, cacheable: true };
+  } catch (err) {
+    // Tabela pode não existir ainda (migration não aplicada).
+    if (err?.code === "42P01") return { payload: { unseenCount: 0, items: [] }, cacheable: false };
+    throw err;
+  }
+}
+
+export async function listOperatorNotifications({ limit = 40 } = {}) {
+  const cap = Math.max(1, Math.min(200, Number(limit) || 40));
+  const ttl = getOperatorNotificationsCacheTtlMs();
+  if (ttl <= 0) return (await loadOperatorNotifications(cap)).payload;
+
+  const now = Date.now();
+  if (_notificationsCache.payload && _notificationsCache.limit === cap && now - _notificationsCache.at < ttl) {
+    return { ..._notificationsCache.payload };
+  }
+  if (_notificationsInFlight && _notificationsInFlight.limit === cap) {
+    return { ...(await _notificationsInFlight.promise) };
+  }
+
+  const epoch = _notificationsEpoch;
+  const promise = (async () => {
+    const { payload, cacheable } = await loadOperatorNotifications(cap);
+    if (cacheable && _notificationsEpoch === epoch) {
+      _notificationsCache = { at: Date.now(), limit: cap, payload };
     }
-  });
+    return payload;
+  })();
+  _notificationsInFlight = { limit: cap, promise };
+
+  try {
+    return { ...(await promise) };
+  } finally {
+    if (_notificationsInFlight?.promise === promise) _notificationsInFlight = null;
+  }
 }
 
 // DC-279 (dev/teste) — cria notificação(ões) de spot REAIS para testar o fluxo
@@ -812,6 +1023,7 @@ export async function createTestSpotNotifications({ count = 1 } = {}) {
         ],
       );
     }
+    bustOperatorNotificationsCache();
     return { ok: true, created: total };
   });
 }
@@ -833,6 +1045,7 @@ export async function markNotificationsSeen(ids) {
         throw err;
       }),
   );
+  bustOperatorNotificationsCache();
   return { updated: rowCount ?? 0 };
 }
 
@@ -843,6 +1056,7 @@ export async function deleteOperatorNotifications({ ids, all } = {}) {
         .query(`DELETE FROM public.operator_notifications`)
         .catch((err) => (err?.code === "42P01" ? { rowCount: 0 } : Promise.reject(err))),
     );
+    bustOperatorNotificationsCache();
     return { deleted: rowCount ?? 0 };
   }
   const list = (Array.isArray(ids) ? ids : []).filter(Boolean);
@@ -853,6 +1067,7 @@ export async function deleteOperatorNotifications({ ids, all } = {}) {
       .query(`DELETE FROM public.operator_notifications WHERE id IN (${ph})`, list)
       .catch((err) => (err?.code === "42P01" ? { rowCount: 0 } : Promise.reject(err))),
   );
+  bustOperatorNotificationsCache();
   return { deleted: rowCount ?? 0 };
 }
 
@@ -869,25 +1084,102 @@ export async function markAllNotificationsSeen() {
         throw err;
       }),
   );
+  bustOperatorNotificationsCache();
   return { updated: rowCount ?? 0 };
 }
 
 // ─── Chat WhatsApp (lista de conversas + histórico + envio manual) ────────────
 
+// ── Cache + single-flight da lista de conversas ──────────────────────────────
+// A lista também é GLOBAL: whatsapp_messages não tem coluna de operador/usuário
+// (migration 20260708120000) e a query não recebe nenhum predicado por usuário —
+// todos os operadores veem as mesmas conversas, então uma entrada de módulo
+// serve todos (nada a chavear por usuário).
+// Cada execução varre whatsapp_messages DUAS vezes (DISTINCT ON (phone) +
+// agregado de não lidas) e o ChatPanel faz poll de 20s enquanto a aba Chat está
+// aberta, sem nenhum dedupe entre operadores. TTL default 10s (metade do poll) +
+// single-flight colapsam a rajada em uma execução; 0 em teste.
+// Só o caminho SEM BUSCA é cacheado (busca é digitada, nunca faz poll → evita
+// Map ilimitado por termo) e a chave inclui o LIMIT efetivo, que chega da query
+// string (handlers.js) e define tanto o `LIMIT` do SQL quanto o
+// `items.slice(0, cap)` — sem isso um `?limit=200` receberia 60 itens.
+let _convInFlight = null;
+let _convCache = { at: 0, limit: 0, payload: null };
+// Epoch das escritas (mensagem nova / marcação de lida): leitura que começou
+// antes do write não repovoa o cache com o estado antigo.
+let _convEpoch = 0;
+
+function getChatConversationsCacheTtlMs() {
+  const raw = Number.parseInt(process.env.OPERATOR_CHAT_CONVERSATIONS_CACHE_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
+  return 10_000; // default produção
+}
+
+/**
+ * Invalida a lista de conversas (mensagem nova, envio manual, marcação de
+ * lida). Síncrona e nunca lança — é chamada de caminhos best-effort.
+ */
+export function bustWhatsappConversationsCache() {
+  _convEpoch += 1;
+  _convCache = { at: 0, limit: 0, payload: null };
+}
+
+/** Hook de teste: zera o estado de módulo do cache de conversas. */
+export function __resetWhatsappConversationsCache() {
+  _convInFlight = null;
+  _convCache = { at: 0, limit: 0, payload: null };
+  _convEpoch = 0;
+}
+
 /**
  * Lista de conversas (uma por telefone) com última mensagem e count de não lidas.
  *
- * Sem busca → só conversas existentes (WhatsApp-like), mais recente primeiro.
+ * Sem busca → só conversas existentes (WhatsApp-like), mais recente primeiro
+ * (caminho do poll, servido pelo cache de módulo acima).
  * Com busca → une (conversas casando) + (motoristas cadastrados casando por
  * nome/CPF/telefone) — permite iniciar chat com qualquer motorista do sistema
- * mesmo sem histórico prévio.
+ * mesmo sem histórico prévio. NÃO passa pelo cache.
  */
 export async function listWhatsappConversations({ limit = 60, search } = {}) {
   const searchTerm = String(search || "").trim();
-  const searchDigits = searchTerm.replace(/\D/g, "");
   const cap = Math.max(1, Math.min(200, Number(limit) || 60));
+  const ttl = getChatConversationsCacheTtlMs();
+  if (ttl <= 0 || searchTerm) return (await loadWhatsappConversations({ cap, searchTerm })).payload;
 
-  return withPgClient(async (client) => {
+  const now = Date.now();
+  if (_convCache.payload && _convCache.limit === cap && now - _convCache.at < ttl) {
+    return { ..._convCache.payload };
+  }
+  if (_convInFlight && _convInFlight.limit === cap) {
+    return { ...(await _convInFlight.promise) };
+  }
+
+  const epoch = _convEpoch;
+  const promise = (async () => {
+    const { payload, cacheable } = await loadWhatsappConversations({ cap, searchTerm: "" });
+    if (cacheable && _convEpoch === epoch) {
+      _convCache = { at: Date.now(), limit: cap, payload };
+    }
+    return payload;
+  })();
+  _convInFlight = { limit: cap, promise };
+
+  try {
+    return { ...(await promise) };
+  } finally {
+    if (_convInFlight?.promise === promise) _convInFlight = null;
+  }
+}
+
+/**
+ * Leitura crua da lista de conversas. Devolve `cacheable: false` no fallback de
+ * tabela ausente (schema degradado não deve grudar por TTL).
+ */
+async function loadWhatsappConversations({ cap, searchTerm }) {
+  const searchDigits = searchTerm.replace(/\D/g, "");
+
+  const payload = await withPgClient(async (client) => {
     try {
       // 1) Conversas existentes (base).
       const convParams = [];
@@ -975,15 +1267,19 @@ export async function listWhatsappConversations({ limit = 60, search } = {}) {
 
       return { items: items.slice(0, cap) };
     } catch (err) {
-      if (err?.code === "42P01") return { items: [] };
+      // Tabela pode não existir ainda (migration não aplicada) — null sinaliza
+      // o fallback para o wrapper (que não cacheia).
+      if (err?.code === "42P01") return null;
       throw err;
     }
   });
+  return payload ? { payload, cacheable: true } : { payload: { items: [] }, cacheable: false };
 }
 
 export async function listWhatsappMessages({ phone, limit = 200 } = {}) {
   const p = onlyDigits(phone);
   if (!p) throw new ValidationError("Telefone obrigatório.");
+  const cap = Math.max(1, Math.min(1000, Number(limit) || 200));
   return withPgClient(async (client) => {
     try {
       const { rows } = await client.query(
@@ -992,17 +1288,30 @@ export async function listWhatsappMessages({ phone, limit = 200 } = {}) {
           WHERE phone = $1
           ORDER BY timestamp ASC
           LIMIT $2`,
-        [p, Math.max(1, Math.min(1000, Number(limit) || 200))],
+        [p, cap],
       );
-      // Marca as IN como lidas.
-      await client
-        .query(
-          `UPDATE public.whatsapp_messages
-              SET status = 'read'
-            WHERE phone = $1 AND direction = 'in' AND status <> 'read'`,
-          [p],
-        )
-        .catch(() => {});
+      // Marca as IN como lidas. Com poll de 8s do ChatPanel isso era um UPDATE
+      // (e WAL) por tick mesmo com a conversa toda lida — só roda quando há o
+      // que marcar. A janela é `timestamp ASC LIMIT n`, ou seja é truncada pelas
+      // mensagens MAIS NOVAS, exatamente onde ficam as não lidas: quando ela
+      // estoura (rows.length >= cap) o UPDATE roda de qualquer jeito, senão o
+      // comportamento mudaria.
+      const truncated = rows.length >= cap;
+      const hasUnreadIn = rows.some((r) => r.direction === "in" && r.status !== "read");
+      if (truncated || hasUnreadIn) {
+        const res = await client
+          .query(
+            `UPDATE public.whatsapp_messages
+                SET status = 'read'
+              WHERE phone = $1 AND direction = 'in' AND status <> 'read'`,
+            [p],
+          )
+          .catch(() => {});
+        // O badge de não lidas vive na lista de conversas (cacheada) — o
+        // operador precisa ver zerar na hora. `res` pode ser undefined (o
+        // .catch acima engole o erro).
+        if ((res?.rowCount ?? 0) > 0) bustWhatsappConversationsCache();
+      }
       return { items: rows };
     } catch (err) {
       if (err?.code === "42P01") return { items: [] };
@@ -1020,5 +1329,8 @@ export async function sendManualChatMessage({ phone, text } = {}) {
   if (!body) throw new ValidationError("A mensagem não pode ficar vazia.");
   // sendWhatsappText já registra a OUT no chat (via evolution-client).
   await sendWhatsappText({ to, text: body, correlationId: "operator-manual-chat" });
+  // A OUT recém-gravada muda a última mensagem da conversa — o operador tem que
+  // ver na hora, não no fim do TTL.
+  bustWhatsappConversationsCache();
   return { ok: true };
 }
