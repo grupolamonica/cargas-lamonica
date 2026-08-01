@@ -4,7 +4,6 @@ import { ZodError } from "zod";
 
 import { ForbiddenError, UnauthorizedError } from "../../../domain/load-claims/errors.js";
 import { evaluateCandidaturaCnhCategoria } from "../../../domain/candidatura/cnh-category.js";
-import { checkTypedVsCnh } from "../../../domain/identity/identity-match.js";
 import { requireDriverSession } from "../../../application/load-claims/auth.js";
 import { resolveCandidaturaActor } from "../../../application/load-claims/candidatura-actor.js";
 import { getDriverProfileByUserId } from "../../../application/load-claims/profile-service.js";
@@ -956,23 +955,9 @@ export async function resolveCandidaturaSubmitResponse(request) {
     }
   }
 
-  // Backstop anti-fraude: NOME/CPF digitado vs CNH (OCR, snapshot em
-  // motorista.cnh.nome). Barra o "documento de outra pessoa" — nome editado que
-  // diverge da CNH, ou CPF da candidatura diferente do CPF da CNH. Fail-open
-  // quando não há snapshot (draft antigo / OCR não leu o nome).
-  const identity = checkTypedVsCnh({ dados: parsedInput.dados, driverCpf });
-  if (!identity.ok) {
-    return {
-      statusCode: 422,
-      payload: {
-        error: "IDENTITY_MISMATCH",
-        code: identity.code,
-        message: identity.message,
-        issues: identity.issues,
-        meta: { correlationId },
-      },
-    };
-  }
+  // Coerência de identidade (nome/CPF × CNH e × Angellira/ASPX) roda dentro de
+  // submitCandidaturaFinal — chokepoint compartilhado que também cobre o resgate
+  // de rascunho pelo operador (submitDraftAsOperator).
 
   try {
     return await submitCandidaturaFinal({
