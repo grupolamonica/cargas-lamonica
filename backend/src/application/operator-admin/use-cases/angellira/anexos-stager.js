@@ -28,6 +28,7 @@
 import { DRAFT_FILE_BUCKET } from "../../../candidatura/use-cases/upload-draft-file.js";
 import { getAdminClient } from "../../../load-claims/auth.js";
 import { logStructuredEvent } from "../../../../infrastructure/security-log.js";
+import { downloadDocBase64Cached } from "../../../../infrastructure/supabase/storage-doc-cache.js";
 
 const DEFAULT_BOT_URL = "http://angelira-bot:8765";
 const STAGE_TIMEOUT_MS = 30_000;
@@ -55,30 +56,12 @@ function stripBucketPrefix(path) {
 }
 
 /**
- * Converte um ArrayBuffer/Blob/Buffer em base64 puro (sem prefixo data:).
- */
-async function toBase64(downloadData) {
-  // supabase-js storage.download() retorna um Blob (Node 18+ tem Blob global).
-  if (downloadData && typeof downloadData.arrayBuffer === "function") {
-    const ab = await downloadData.arrayBuffer();
-    return Buffer.from(ab).toString("base64");
-  }
-  if (downloadData instanceof ArrayBuffer) {
-    return Buffer.from(downloadData).toString("base64");
-  }
-  if (Buffer.isBuffer(downloadData)) {
-    return downloadData.toString("base64");
-  }
-  // Fallback defensivo: Uint8Array / array-like
-  return Buffer.from(downloadData).toString("base64");
-}
-
-/**
  * Baixa um doc do bucket cadastro-drafts e o estaga no sandbox do bot via
  * POST /api/anexo/salvar. Best-effort: retorna o anexo_path em sucesso, ou
  * null (com log) em qualquer falha — NUNCA lança.
  *
  * @param {object} args
+ * @param {object} args.client           — cliente admin (partição do cache de bytes)
  * @param {object} args.storage          — admin storage client já em .from(bucket)
  * @param {string} args.baseUrl          — base URL do sidecar
  * @param {string} args.cadastroId
@@ -89,6 +72,7 @@ async function toBase64(downloadData) {
  * @returns {Promise<string|null>} anexo_path no sandbox do bot, ou null.
  */
 async function stageOneDoc({
+  client,
   storage,
   baseUrl,
   cadastroId,
@@ -100,11 +84,20 @@ async function stageOneDoc({
   const cleanPath = stripBucketPrefix(storagePath);
   if (!cleanPath) return null;
 
-  // 1) Download dos bytes do bucket privado.
+  // 1) Download dos bytes do bucket privado. Passa pelo micro-cache de bytes
+  //    (infrastructure/supabase/storage-doc-cache.js): o MESMO cnh_url é estagiado
+  //    2x por motorista (cnh + rg) e o crlv do cavalo reaparece no disparo SPX do
+  //    mesmo "aprovar" — sem cache cada repetição era um round-trip novo de MBs.
   let base64;
+  let cached; // só lido depois do download (bytes vieram do cache?)
   try {
-    const { data, error } = await storage.download(cleanPath);
-    if (error || !data) {
+    const { base64: bytes, error, failed, cached: fromCache } = await downloadDocBase64Cached({
+      client,
+      storage,
+      bucket: DRAFT_FILE_BUCKET,
+      path: cleanPath,
+    });
+    if (failed) {
       logStructuredEvent("warn", "angellira.anexos.download_failed", {
         cadastroId,
         correlationId: correlationId ?? null,
@@ -115,7 +108,8 @@ async function stageOneDoc({
       });
       return null;
     }
-    base64 = await toBase64(data);
+    base64 = bytes;
+    cached = fromCache;
     if (!base64) {
       logStructuredEvent("warn", "angellira.anexos.empty_after_decode", {
         cadastroId, correlationId: correlationId ?? null, docLabel, tipo, path: cleanPath,
@@ -164,6 +158,7 @@ async function stageOneDoc({
         docLabel,
         tipo,
         bytes: body.bytes ?? null,
+        cached, // bytes vieram do micro-cache (nenhum egress do Storage)
       });
       return body.anexo_path;
     }
@@ -295,8 +290,9 @@ export async function stageAnexosForEntity({
 
   const resolvedBaseUrl = baseUrl || resolveBotBaseUrl();
   let storage;
+  let client;
   try {
-    const client = storageClient || getAdminClient();
+    client = storageClient || getAdminClient();
     storage = client.storage.from(DRAFT_FILE_BUCKET);
   } catch (err) {
     // Sem storage client (env ausente em ambiente sem Supabase) — pula anexos.
@@ -314,6 +310,7 @@ export async function stageAnexosForEntity({
   // ganho relevante (1-3 docs) e mantém o log mais legível.
   for (const doc of docs) {
     const anexoPath = await stageOneDoc({
+      client,
       storage,
       baseUrl: resolvedBaseUrl,
       cadastroId,

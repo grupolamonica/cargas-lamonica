@@ -30,6 +30,7 @@ import { getAdminClient } from "../../load-claims/auth.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
+import { downloadDocBase64Cached } from "../../../infrastructure/supabase/storage-doc-cache.js";
 import {
   extractCnhFromMedia,
   extractComprovanteFromMedia,
@@ -436,24 +437,31 @@ export function filledKeys(partial) {
   return keys;
 }
 
-/** Baixa os bytes do bucket cadastro-drafts e devolve base64 (ou null). */
-async function downloadDocBase64(storage, storagePath, { label, correlationId }) {
+/**
+ * Baixa os bytes do bucket cadastro-drafts e devolve base64 (ou null).
+ *
+ * Delega ao micro-cache de bytes (infrastructure/supabase/storage-doc-cache.js):
+ * um re-clique em "Reprocessar documentos" dentro da janela do TTL não re-baixa
+ * nada, e o single-flight impede que a leva de CONCURRENCY docs baixe 2x o mesmo
+ * path (acontece quando o motorista é o próprio proprietário e a CNH aparece como
+ * motorista.cnh_url E como owner_doc_url).
+ */
+async function downloadDocBase64(storage, storagePath, { label, correlationId, client }) {
   const prefix = `${DRAFT_FILE_BUCKET}/`;
   const p = String(storagePath || "").trim().replace(/^\/+/, "");
   const cleanPath = p.startsWith(prefix) ? p.slice(prefix.length) : p;
   if (!cleanPath) return null;
   try {
-    const { data, error } = await storage.download(cleanPath);
-    if (error || !data) {
+    const { base64, error, failed } = await downloadDocBase64Cached({
+      client, storage, bucket: DRAFT_FILE_BUCKET, path: cleanPath,
+    });
+    if (failed) {
       logStructuredEvent("warn", "operator.reprocess.download_failed", {
         label, correlationId: correlationId ?? null, path: cleanPath, message: error?.message || "vazio",
       });
       return null;
     }
-    if (typeof data.arrayBuffer === "function") {
-      return Buffer.from(await data.arrayBuffer()).toString("base64");
-    }
-    return Buffer.from(data).toString("base64");
+    return base64;
   } catch (err) {
     logStructuredEvent("warn", "operator.reprocess.download_exception", {
       label, correlationId: correlationId ?? null, message: err instanceof Error ? err.message : String(err),
@@ -507,9 +515,13 @@ export async function reprocessCadastroDocuments({ id, correlationId = null, ope
   if (!plan.length) return { dados: snapshot, report: [], changed: false };
 
   // 2) Storage client (service_role). Sem ele (env ausente) → tudo falha suave.
+  //    O cliente também é passado adiante: é ele que define a partição do
+  //    micro-cache de bytes (nunca o rótulo do bucket).
   let storage = null;
+  let adminClient = null;
   try {
-    storage = getAdminClient().storage.from(DRAFT_FILE_BUCKET);
+    adminClient = getAdminClient();
+    storage = adminClient.storage.from(DRAFT_FILE_BUCKET);
   } catch (err) {
     logStructuredEvent("warn", "operator.reprocess.storage_unavailable", {
       correlationId, message: err instanceof Error ? err.message : String(err),
@@ -520,7 +532,9 @@ export async function reprocessCadastroDocuments({ id, correlationId = null, ope
   //    extração crua — o merge acontece no passo 4/5 sobre o dados fresco.
   const extractions = await mapWithConcurrency(plan, CONCURRENCY, async (doc) => {
     if (!storage) return { doc, ok: false, error: "STORAGE_UNAVAILABLE" };
-    const imagemBase64 = await downloadDocBase64(storage, doc.storagePath, { label: doc.label, correlationId });
+    const imagemBase64 = await downloadDocBase64(storage, doc.storagePath, {
+      label: doc.label, correlationId, client: adminClient,
+    });
     if (!imagemBase64) return { doc, ok: false, error: "DOWNLOAD_FAILED" };
     const res = await runExtractor(doc.kind, { imagemBase64, idCadastro, correlationId });
     return { doc, ...res };
