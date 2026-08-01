@@ -80,8 +80,112 @@ function isEvolutionConfigured() {
   return Boolean((process.env.EVOLUTION_API_TOKEN || "").trim());
 }
 
+// ── Cache + single-flight do overview da tela de Mensagens ───────────────────
+// O payload é GLOBAL, não por operador. Evidência: o handler
+// (interface/http/driver-outreach/handlers.js) chama getOutreachOverview com SÓ
+// `{ correlationId }` — nenhuma identidade de usuário entra na função — e
+// nenhuma das tabelas lidas tem coluna de escopo por operador: fila
+// (pending_driver_outreach, migration 20260707130000), log e opt-outs
+// (20260707120000) só têm `created_by` de AUDITORIA, que nunca aparece num
+// WHERE, e driver_outreach_settings é linha singleton (id = 1). Logo UMA entrada
+// de módulo serve todos os operadores — não há identidade a chavear (se
+// houvesse, o payload de um operador vazaria para o outro).
+// Custo por chamada: 7 a 9 queries — settings ×2 (getOutreachConfig +
+// loadOutreachSettings), GROUP BY de status, count do log de 24h, fila
+// (LIMIT 200), até 2 de resolução de nome, log (LIMIT 25) e opt-outs
+// (LIMIT 100). A tela faz poll de 15s enquanto aberta (refetchInterval em
+// frontend/src/pages/Outreach.tsx), por operador e por aba, sem dedupe nenhum →
+// N abas = N × 9 queries a cada 15s. TTL default 10s (< poll de 15s, então cada
+// ciclo da tela continua trazendo dados novos) + single-flight: a rajada de
+// polls concorrentes vira UMA execução por janela. 0 em teste.
+// A chave inclui os TRÊS LIMITs efetivos. Hoje são constantes (o handler não
+// aceita limite na query string — o único parâmetro é o correlationId), mas
+// entregar 200 itens a quem pediu 25 é exatamente o bug que a chave previne se
+// algum dia virarem parâmetro.
+// Ficam FORA do corpo cacheado os dois campos que não custam query e não podem
+// envelhecer: `evolutionConfigured` (leitura de env) e `meta.correlationId` (é
+// do REQUEST — devolver o correlationId de outro operador quebraria o rastro).
+// `meta.generatedAt` continua sendo o instante em que os dados foram lidos, e
+// não o do request: é o que informa a idade real do payload.
+const OUTREACH_OVERVIEW_LIMITS = { queue: 200, log: 25, optouts: 100 };
+
+let _overviewInFlight = null;
+let _overviewCache = { at: 0, key: "", body: null };
+// Epoch das mutações da tela (settings, opt-out, fila): uma leitura que COMEÇOU
+// antes do write não pode repovoar o cache com o estado pré-mutação, senão a
+// ação do operador só apareceria no fim do TTL.
+let _overviewEpoch = 0;
+
+function getOutreachOverviewCacheTtlMs() {
+  const raw = Number.parseInt(process.env.OPERATOR_OUTREACH_OVERVIEW_CACHE_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
+  return 10_000; // default produção
+}
+
+function outreachOverviewCacheKey(limits) {
+  return `q${limits.queue}|l${limits.log}|o${limits.optouts}`;
+}
+
+/** Invalida o overview (as mutações abaixo leem o próprio write). Nunca lança. */
+function bustOutreachOverviewCache() {
+  _overviewEpoch += 1;
+  _overviewCache = { at: 0, key: "", body: null };
+}
+
+/** Hook de teste: zera o estado de módulo do cache do overview. */
+export function __resetOutreachOverviewCache() {
+  _overviewInFlight = null;
+  _overviewCache = { at: 0, key: "", body: null };
+  _overviewEpoch = 0;
+}
+
 /** Painel: settings efetivas + estatísticas + fila + log + opt-outs. */
 export async function getOutreachOverview({ correlationId } = {}) {
+  const limits = OUTREACH_OVERVIEW_LIMITS;
+  const key = outreachOverviewCacheKey(limits);
+  const ttl = getOutreachOverviewCacheTtlMs();
+  // Reafirma os campos por-request SEM mudar a ordem das chaves (spread sobre
+  // chave existente preserva a posição original).
+  const withRequestFields = (body, cached) => ({
+    ...body,
+    evolutionConfigured: isEvolutionConfigured(),
+    meta: {
+      correlationId: correlationId || null,
+      generatedAt: body.meta.generatedAt,
+      ...(cached ? { cached: true } : {}),
+    },
+  });
+
+  if (ttl <= 0) return withRequestFields(await loadOutreachOverviewBody(limits), false);
+
+  const now = Date.now();
+  if (_overviewCache.body && _overviewCache.key === key && now - _overviewCache.at < ttl) {
+    return withRequestFields(_overviewCache.body, true);
+  }
+  if (_overviewInFlight && _overviewInFlight.key === key) {
+    return withRequestFields(await _overviewInFlight.promise, true);
+  }
+
+  const epoch = _overviewEpoch;
+  const promise = (async () => {
+    // Só cacheia sucesso: qualquer erro (schema ausente na fila/log/opt-outs não
+    // é engolido) rejeita aqui e nada gruda no cache.
+    const body = await loadOutreachOverviewBody(limits);
+    if (_overviewEpoch === epoch) _overviewCache = { at: Date.now(), key, body };
+    return body;
+  })();
+  _overviewInFlight = { key, promise };
+
+  try {
+    return withRequestFields(await promise, false);
+  } finally {
+    if (_overviewInFlight?.promise === promise) _overviewInFlight = null;
+  }
+}
+
+/** Leitura crua do overview (o corpo cacheável, sem os campos por-request). */
+async function loadOutreachOverviewBody(limits) {
   return withPgClient(async (client) => {
     const cfg = await getOutreachConfig(client);
     const settingsRow = await loadOutreachSettings(client);
@@ -102,7 +206,8 @@ export async function getOutreachOverview({ correlationId } = {}) {
 
     const { rows: queue } = await client.query(
       `SELECT id, driver_key, trigger, phone, message, status, retry_count, last_error, created_at, sent_at
-         FROM public.pending_driver_outreach ORDER BY created_at DESC LIMIT 200`,
+         FROM public.pending_driver_outreach ORDER BY created_at DESC LIMIT $1`,
+      [limits.queue],
     );
     // Resolve o NOME do motorista (coluna Motorista exibe nome, não CPF).
     const nameByCpf = await resolveDriverNames(client, queue.map((q) => q.driver_key));
@@ -111,11 +216,13 @@ export async function getOutreachOverview({ correlationId } = {}) {
     }
     const { rows: log } = await client.query(
       `SELECT driver_key, trigger, status, created_at
-         FROM public.driver_outreach_log ORDER BY created_at DESC LIMIT 25`,
+         FROM public.driver_outreach_log ORDER BY created_at DESC LIMIT $1`,
+      [limits.log],
     );
     const { rows: optouts } = await client.query(
       `SELECT driver_key, phone, reason, created_at
-         FROM public.driver_outreach_optout ORDER BY created_at DESC LIMIT 100`,
+         FROM public.driver_outreach_optout ORDER BY created_at DESC LIMIT $1`,
+      [limits.optouts],
     );
 
     return {
@@ -142,7 +249,8 @@ export async function getOutreachOverview({ correlationId } = {}) {
       queue,
       log,
       optouts,
-      meta: { correlationId: correlationId || null, generatedAt: new Date().toISOString() },
+      // correlationId é reafirmado por chamada no wrapper (nunca vem do cache).
+      meta: { generatedAt: new Date().toISOString() },
     };
   });
 }
@@ -161,6 +269,7 @@ export async function saveOutreachSettings(patch = {}, updatedBy = null) {
   if (patch.routeNeedWaveSize !== undefined)
     clean.route_need_wave_size = clampInt(patch.routeNeedWaveSize, 1, 50, 5);
   const row = await withPgTransaction((client) => updateOutreachSettings(client, clean, updatedBy));
+  bustOutreachOverviewCache(); // o operador tem que ver o toggle novo no refetch
   return {
     enabled: Boolean(row.enabled),
     coldEnabled: Boolean(row.cold_enabled),
@@ -186,6 +295,7 @@ export async function addOutreachOptout({ cpf, nome, phone, reason } = {}, creat
       [driverKey, onlyDigits(phone) || null, reason || null, createdBy || null],
     ),
   );
+  bustOutreachOverviewCache();
   return { driverKey };
 }
 
@@ -195,6 +305,7 @@ export async function removeOutreachOptout(driverKey) {
   await withPgClient((client) =>
     client.query(`DELETE FROM public.driver_outreach_optout WHERE driver_key = $1`, [key]),
   );
+  bustOutreachOverviewCache();
   return { ok: true };
 }
 
@@ -209,12 +320,18 @@ export async function cancelQueuedOutreach(id) {
       [id],
     ),
   );
+  bustOutreachOverviewCache();
   return { ok: true };
 }
 
 /** Dispara uma varredura de detecção+enfileiramento na hora. */
 export async function triggerOutreachScan() {
-  return scanAndEnqueueOutreach();
+  try {
+    return await scanAndEnqueueOutreach();
+  } finally {
+    // A varredura enfileira/pula itens — a fila da tela muda.
+    bustOutreachOverviewCache();
+  }
 }
 
 // ─── Detalhe / edição / envio de um item da fila ──────────────────────────────
@@ -362,6 +479,7 @@ export async function updateOutreachQueueItem(id, patch = {}) {
     throw err;
   }
   if (!rows[0]) throw new ValidationError("Só é possível editar itens que ainda estão pendentes.");
+  bustOutreachOverviewCache();
 
   // Best-effort: registra o CPF↔nome↔telefone em motoristas_historico (casa
   // canônica que resolveDriverNames/opportunities leem depois). Nunca falha o
@@ -395,6 +513,16 @@ export async function updateOutreachQueueItem(id, patch = {}) {
 export async function sendOutreachQueueItemNow(id) {
   if (!id) throw new ValidationError("id obrigatório.");
   if (!isEvolutionConfigured()) throw new ValidationError("Gateway WhatsApp não configurado.");
+  try {
+    return await sendOutreachQueueItemNowUncached(id);
+  } finally {
+    // Sucesso (status='sent' + log) E falha (status='failed', retry_count+1 +
+    // log) mudam a fila e as estatísticas — o operador vê na hora.
+    bustOutreachOverviewCache();
+  }
+}
+
+async function sendOutreachQueueItemNowUncached(id) {
   return withPgClient(async (client) => {
     const { rows } = await client.query(
       `SELECT id, driver_key, trigger, phone, message, status
@@ -496,6 +624,7 @@ export async function revalidateOutreachQueueAgainstAngellira() {
   }
 
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, worker));
+  if (result.cancelled) bustOutreachOverviewCache(); // itens saíram de 'pending'
   return result;
 }
 
@@ -523,6 +652,7 @@ export async function createManualOutreach({ cpf, nome, phone, trigger, message 
     }),
   );
   if (!id) throw new ValidationError("Já existe um envio pendente para este motorista com esse gatilho.");
+  bustOutreachOverviewCache();
   return { ok: true, id };
 }
 
