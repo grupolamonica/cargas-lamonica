@@ -168,16 +168,53 @@ export async function checkConjuntoConformeNow(dados, { correlationId = null } =
   return checkCadastroConjunto(dados || {}, { today, lookupCpf, lookupPlate });
 }
 
-/** Cria a tabela de settings se não existir (idempotente; espelha analytics_events no bootstrap). */
+// ── Guarda de processo do bootstrap de `app_settings` ────────────────────────
+// `ensureAppSettingsTable` é chamada por TODO acesso a app_settings — 17 pontos
+// (flow-engine, apto-poller, auto-approve, agent-orientador), vários deles em
+// jobs recorrentes. Medido em produção: o `CREATE TABLE IF NOT EXISTS` rodou
+// **6.566 vezes** na janela de 87 dias (~75/dia) sempre para uma tabela que já
+// existe desde o primeiro boot.
+//
+// DDL não é consulta barata: mesmo no-op, cada execução pega ACCESS EXCLUSIVE na
+// tabela por um instante e passa pelo event trigger de DDL do Supabase
+// (`pgrst_ddl_watch`). Como a tabela não pode deixar de existir enquanto o
+// processo vive, basta garantir UMA vez por processo.
+//
+// Memoiza a PROMESSA (não um booleano) para que chamadas concorrentes no boot
+// compartilhem o mesmo CREATE em vez de dispararem N. Em erro, o cache é limpo
+// para a próxima chamada tentar de novo — nunca deixa o processo achar que criou
+// uma tabela que não existe.
+let _appSettingsTableReady = null;
+
+// Exposto para os testes: o estado é de módulo e vazaria entre casos.
+export function __resetAppSettingsTableGuard() {
+  _appSettingsTableReady = null;
+}
+
+/** Cria a tabela de settings se não existir (idempotente; uma vez por processo). */
 export async function ensureAppSettingsTable(client) {
-  await client.query(`
+  if (_appSettingsTableReady) {
+    return _appSettingsTableReady;
+  }
+
+  _appSettingsTableReady = client
+    .query(
+      `
     CREATE TABLE IF NOT EXISTS public.app_settings (
       key text PRIMARY KEY,
       value jsonb NOT NULL DEFAULT '{}'::jsonb,
       updated_at timestamptz NOT NULL DEFAULT now(),
       updated_by text
     )
-  `);
+  `,
+    )
+    .then(() => true)
+    .catch((error) => {
+      _appSettingsTableReady = null; // falhou: permite nova tentativa
+      throw error;
+    });
+
+  return _appSettingsTableReady;
 }
 
 /** Lê o setting do auto-approve. Default: desligado, sem última execução. */
