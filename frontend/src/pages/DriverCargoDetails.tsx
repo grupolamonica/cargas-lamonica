@@ -36,15 +36,9 @@ import {
   getVisibleDriverCargoRequirementLabels,
   hasVisibleDriverCargoClientNotes,
 } from "@/lib/driverCargoDetails";
-import { createRouteLookupKeys } from "@/lib/assignableRoutes";
 import { resolveCargoPublicationReadiness } from "@/lib/loadPublication";
-import {
-  collectMissingDriverClientIds,
-  fetchDriverClientsByIds,
-  mergeDriverClientsIntoRows,
-} from "@/lib/driverClients";
 import { buildLoadingDateTime, buildOperationalDateLabel, formatEstimatedTime } from "@/lib/estimatedTime";
-import { publicSupabase } from "@/integrations/supabase/public-client";
+import { requestJson } from "@/services/apiClient";
 import { formatCurrency, buildTotalPayment } from "@/lib/currency";
 import { fixBrokenPortugueseText } from "@/lib/fixBrokenEncoding";
 
@@ -92,10 +86,44 @@ interface CargoDetailsRow {
   ordem_viagem?: number | null;
 }
 
-const CARGO_DETAILS_SELECT =
-  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, eixos, valor, bonus, bonus_exigencias, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, viagem_id, ordem_viagem, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
-const LEGACY_CARGO_DETAILS_SELECT =
-  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, status, cliente_id, sheet_data_carregamento, sheet_data_descarga, cliente:clientes(id, nome, descricao, forma_pagamento, prazo_pagamento, observacoes, exige_antt, exige_carga_monitorada, exige_rastreamento, exige_seguro, reputacao_boa_comunicacao, reputacao_bom_pagador, reputacao_carga_organizada, reputacao_liberacao_rapida, reputacao_pagamento_rapido, custom_reputacoes, custom_exigencias)";
+/**
+ * Métricas do catálogo de rotas (route_metrics_cache) usadas como fallback dos
+ * campos que a carga não define. Subconjunto exato que esta tela consome — o
+ * backend resolve o match de rota (mesma resolução da lista do portal).
+ */
+interface CargoRouteFallback {
+  distancia_km: number | null;
+  duracao_horas: number | null;
+  tempo_estimado_horas: number | null;
+  perfil_padrao: string | null;
+  eixos: number | null;
+  valor_padrao: number | null;
+  bonus_padrao: number | null;
+}
+
+/** Payload de `GET /api/driver/cargas/:cargoId`. */
+interface DriverCargoDetailResponse {
+  cargo: CargoDetailsRow;
+  routeFallback: CargoRouteFallback | null;
+  /** Distância da última carga conhecida do mesmo trecho (fallback histórico). */
+  historyDistanciaKm: number | null;
+}
+
+/**
+ * Detalhe da carga pelo BACKEND (uma request), em vez das até 4 leituras que
+ * esta tela fazia direto no banco pela chave anônima (`cargas` + JOIN de
+ * `clientes`, `route_metrics_cache`, fallback de distância em `cargas` e
+ * resolução de `clientes`). Anônimo, como o resto do portal: sem
+ * Authorization, o backend só devolve carga em OPEN/RESERVED/BOOKED — a mesma
+ * policy que o cliente anônimo já tinha. Resposta cacheada por carga no
+ * servidor, então uma rajada de aberturas do mesmo link do WhatsApp custa uma
+ * execução só.
+ */
+async function fetchDriverCargoDetail(cargoId: string) {
+  return requestJson<DriverCargoDetailResponse>(
+    `/api/driver/cargas/${encodeURIComponent(cargoId)}`,
+  );
+}
 
 
 const reputationLabels = [
@@ -184,65 +212,22 @@ function parseBonusRequirements(value?: string | null) {
     .filter(Boolean);
 }
 
-function isRouteCatalogLookupError(error: { message?: string; details?: string } | null) {
-  const combinedMessage = `${error?.message || ""} ${error?.details || ""}`.toLowerCase();
-  return combinedMessage.includes("route_metrics_cache") || combinedMessage.includes("permission denied");
-}
-
-async function resolveDriverCargoRouteFallback(cargo: Pick<CargoDetailsRow, "origem" | "destino">) {
-  const routeLookupKeys = createRouteLookupKeys(cargo.origem, cargo.destino);
-  const originKeys = Array.from(new Set(routeLookupKeys.map((routeKey) => routeKey.split("|")[0]).filter(Boolean)));
-  const destinationKeys = Array.from(new Set(routeLookupKeys.map((routeKey) => routeKey.split("|")[1]).filter(Boolean)));
-
-  if (originKeys.length === 0 || destinationKeys.length === 0) {
-    return null;
-  }
-
-  const { data, error } = await publicSupabase
-    .from("route_metrics_cache")
-    .select("origin_key, destination_key, distancia_km, duracao_horas, tempo_estimado_horas, perfil_padrao, eixos, valor_padrao, bonus_padrao")
-    .in("origin_key", originKeys)
-    .in("destination_key", destinationKeys);
-
-  if (error) {
-    if (!isRouteCatalogLookupError(error)) {
-      if (import.meta.env.DEV) console.error("Nao foi possivel consultar o catalogo publico de rotas", error);
-    }
-
-    return null;
-  }
-
-  if (!Array.isArray(data) || data.length === 0) {
-    return null;
-  }
-
-  const routeByKey = new Map(data.map((routeRow) => [`${routeRow.origin_key}|${routeRow.destination_key}`, routeRow]));
-  const matchedRouteKey = routeLookupKeys.find((routeKey) => routeByKey.has(routeKey));
-  return matchedRouteKey ? routeByKey.get(matchedRouteKey) ?? null : null;
-}
-
-async function resolveDriverCargoDistanceKm(cargo: Pick<CargoDetailsRow, "origem" | "destino" | "distancia_km">) {
+/**
+ * Distância usada quando a carga E o catálogo de rotas não têm a própria: a
+ * última distância conhecida do mesmo trecho, que o backend já enviou junto do
+ * detalhe (`historyDistanciaKm`). Mantém a ordem de preferência de antes —
+ * distância da carga primeiro, histórico depois — só sem a ida ao banco.
+ */
+function resolveDriverCargoDistanceKm(
+  cargo: Pick<CargoDetailsRow, "distancia_km">,
+  historyDistanciaKm: number | null,
+) {
   if (typeof cargo.distancia_km === "number" && Number.isFinite(cargo.distancia_km)) {
     return cargo.distancia_km;
   }
 
-  const { data: loadData, error: loadError } = await publicSupabase
-    .from("cargas")
-    .select("distancia_km")
-    .eq("origem", cargo.origem)
-    .eq("destino", cargo.destino)
-    .not("distancia_km", "is", null)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (loadError) {
-    if (import.meta.env.DEV) console.error("Não foi possível consultar o histórico público da rota", loadError);
-    return null;
-  }
-
-  return typeof loadData?.distancia_km === "number" && Number.isFinite(loadData.distancia_km)
-    ? loadData.distancia_km
+  return typeof historyDistanciaKm === "number" && Number.isFinite(historyDistanciaKm)
+    ? historyDistanciaKm
     : null;
 }
 
@@ -495,104 +480,51 @@ const DriverCargoDetails = () => {
     queryKey: ["driver", "cargo", normalizedCargoId],
     enabled: Boolean(normalizedCargoId),
     queryFn: async () => {
-      const resolveClientData = async (cargoRow: CargoDetailsRow) => {
-        const missingClientIds = collectMissingDriverClientIds([cargoRow]);
+      // Uma única request. Toda a resolução que antes acontecia no navegador
+      // (cliente, catálogo de rotas, fallback de distância) já vem no payload;
+      // a decisão de prontidão de publicação continua aqui — é ela que monta o
+      // texto do aviso "Carga em preparação".
+      const detail = await fetchDriverCargoDetail(normalizedCargoId);
+      const cargoRow = detail.cargo;
+      const routeFallback = detail.routeFallback;
+      const fallbackDistanceKm =
+        typeof routeFallback?.distancia_km === "number" && Number.isFinite(routeFallback.distancia_km)
+          ? routeFallback.distancia_km
+          : resolveDriverCargoDistanceKm(cargoRow, detail.historyDistanciaKm);
+      const publication = resolveCargoPublicationReadiness(
+        {
+          perfil: cargoRow.perfil,
+          valor: cargoRow.valor,
+          bonus: cargoRow.bonus,
+          distancia_km:
+            typeof cargoRow.distancia_km === "number" && Number.isFinite(cargoRow.distancia_km)
+              ? cargoRow.distancia_km
+              : fallbackDistanceKm,
+          duracao_horas: cargoRow.duracao_horas,
+          tempo_estimado_horas: routeFallback?.tempo_estimado_horas ?? null,
+        },
+        routeFallback,
+      );
 
-        if (missingClientIds.length === 0) {
-          return cargoRow;
-        }
-
-        try {
-          const clientsById = await fetchDriverClientsByIds(publicSupabase, missingClientIds);
-          return mergeDriverClientsIntoRows([cargoRow], clientsById)[0] as CargoDetailsRow;
-        } catch (clientError) {
-          if (import.meta.env.DEV) console.error("Não foi possível carregar os dados do cliente da carga pública", clientError);
-          return cargoRow;
-        }
+      return {
+        cargo: {
+          ...cargoRow,
+          perfil: publication.perfil || cargoRow.perfil,
+          // Eixos: herda do catálogo (mesma tarifa que define o valor) quando a
+          // carga não tem o seu — igual ao read model do portal (DC-258).
+          eixos: cargoRow.eixos ?? routeFallback?.eixos ?? null,
+          valor: publication.valor,
+          bonus: publication.bonus,
+          distancia_km: publication.distancia_km,
+          duracao_horas: publication.duracao_horas,
+        },
+        publication,
       };
-
-      const resolveCargoDecorations = async (cargoRow: CargoDetailsRow) => {
-        const cargoWithClient = await resolveClientData(cargoRow);
-        const routeFallback = await resolveDriverCargoRouteFallback(cargoWithClient);
-        const fallbackDistanceKm =
-          typeof routeFallback?.distancia_km === "number" && Number.isFinite(routeFallback.distancia_km)
-            ? routeFallback.distancia_km
-            : await resolveDriverCargoDistanceKm(cargoWithClient);
-        const publication = resolveCargoPublicationReadiness(
-          {
-            perfil: cargoWithClient.perfil,
-            valor: cargoWithClient.valor,
-            bonus: cargoWithClient.bonus,
-            distancia_km:
-              typeof cargoWithClient.distancia_km === "number" && Number.isFinite(cargoWithClient.distancia_km)
-                ? cargoWithClient.distancia_km
-                : fallbackDistanceKm,
-            duracao_horas: cargoWithClient.duracao_horas,
-            tempo_estimado_horas: routeFallback?.tempo_estimado_horas ?? null,
-          },
-          routeFallback,
-        );
-
-        return {
-          cargo: {
-            ...cargoWithClient,
-            perfil: publication.perfil || cargoWithClient.perfil,
-            // Eixos: herda do catálogo (mesma tarifa que define o valor) quando a
-            // carga não tem o seu — igual ao read model do portal (DC-258).
-            eixos: cargoWithClient.eixos ?? routeFallback?.eixos ?? null,
-            valor: publication.valor,
-            bonus: publication.bonus,
-            distancia_km: publication.distancia_km,
-            duracao_horas: publication.duracao_horas,
-          },
-          publication,
-        };
-      };
-
-      const { data, error } = await publicSupabase
-        .from("cargas")
-        .select(CARGO_DETAILS_SELECT)
-        .eq("id", normalizedCargoId)
-        .maybeSingle();
-
-      if (error) {
-        const combinedMessage = `${error.message || ""} ${error.details || ""}`.toLowerCase();
-
-        if (!combinedMessage.includes("bonus_exigencias")) {
-          throw error;
-        }
-
-        const fallbackResponse = await publicSupabase
-          .from("cargas")
-          .select(LEGACY_CARGO_DETAILS_SELECT)
-          .eq("id", normalizedCargoId)
-          .maybeSingle();
-
-        if (fallbackResponse.error) {
-          throw fallbackResponse.error;
-        }
-
-        if (!fallbackResponse.data) {
-          throw new Error("Carga não encontrada");
-        }
-
-        return resolveCargoDecorations({
-          ...(fallbackResponse.data as Omit<CargoDetailsRow, "bonus_exigencias">),
-          bonus_exigencias: null,
-        });
-      }
-
-      if (!data) {
-        throw new Error("Carga não encontrada");
-      }
-
-      // viagem_id / ordem_viagem foram adicionados em plan 10-04 mas os tipos
-      // gerados do Supabase ainda não foram regenerados — cast via unknown.
-      return resolveCargoDecorations(data as unknown as CargoDetailsRow);
     },
     // Detalhe de carga muda pouco; sem staleTime (default 0) cada foco de aba
-    // refazia a query + JOINs de cliente/rota. 30s corta refetches redundantes
-    // (egress do pooler) sem prejudicar a navegação do motorista.
+    // refazia a request (e, no servidor, a execução do detalhe). 30s corta
+    // refetches redundantes sem prejudicar a navegação do motorista — em cima
+    // disso o backend ainda cacheia a carga por alguns segundos.
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   });
