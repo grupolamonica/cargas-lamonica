@@ -21,8 +21,8 @@
 //    AGUARDANDO CARREGAMENTO ou CARREGADO.
 //
 // Além do Bloco 1/2 do DC-316, este módulo decide quando o OVERRIDE do operador
-// (`cargas.alloc_status`) pode ceder e voltar a refletir a planilha —
-// `shouldReleaseAllocStatusOverride`, que reusa as regras acima.
+// (`cargas.alloc_status`) ficou ATRASADO em relação à planilha e deve ser solto —
+// `shouldReleaseAllocStatusOverride`, que compara a posição no pipeline.
 
 const STATUS_DESCARGA = ["AGUARDANDO DESCARGA", "DESCARREGANDO", "DESCARREGADO"];
 const STATUS_PERMITEM_DESCARGA = ["CTE ENVIADO", "AGUARDANDO DESCARGA", "DESCARREGANDO"];
@@ -30,11 +30,27 @@ const STATUS_EXCECAO = ["CANCELADO", "DEVOLVIDO"];
 const STATUS_INTOCAVEIS = ["NO SHOW", "CTE EM EMISSÃO"];
 const STATUS_VAZIO_ACEITA = ["AGUARDANDO CARREGAMENTO", "CARREGADO"];
 
-// Intocáveis ao soltar o OVERRIDE do operador (`cargas.alloc_status`). Além dos
-// intocáveis do Bloco 1, inclui CANCELADO: cancelar no Monitor dispara a cascata
-// de rota (cancel-load-cascade — o motorista desce a fila), então reverter esse
-// status pelo ASPX desincronizaria a cascata que já rodou.
-const STATUS_OVERRIDE_INTOCAVEIS = [...STATUS_INTOCAVEIS, "CANCELADO"];
+// Ordem do pipeline operacional (vocabulário DC-136/DC-316). O índice mede o
+// quanto a viagem avançou e serve SÓ para comparar o override do operador com a
+// planilha (ver shouldReleaseAllocStatusOverride).
+//
+// Os estados de EXCEÇÃO (CANCELADO, DEVOLVIDO, NO SHOW) ficam de fora de
+// propósito: não têm posição no pipeline, então nunca são soltos automaticamente.
+// Em particular CANCELADO, que no Monitor já disparou a cascata de rota
+// (cancel-load-cascade — o motorista desce a fila): revertê-lo desincronizaria
+// uma cascata que já rodou.
+const STATUS_PIPELINE = [
+  "AGUARDANDO ACEITE",
+  "AGUARDANDO CHEGAR NO CLIENTE",
+  "AGUARDANDO CARREGAMENTO",
+  "CARREGANDO",
+  "CARREGADO",
+  "CTE EM EMISSÃO",
+  "CTE ENVIADO",
+  "AGUARDANDO DESCARGA",
+  "DESCARREGANDO",
+  "DESCARREGADO",
+];
 
 /** Normaliza para comparação: string, trim, UPPERCASE (a Torre já devolve maiúsculo). */
 export function normalizeAspxStatus(value) {
@@ -77,21 +93,30 @@ export function shouldUpdateAspxStatus(statusAtual, novoStatus) {
 }
 
 /**
- * O OVERRIDE do operador (`cargas.alloc_status`) pode CEDER e voltar a refletir a
- * planilha? Usado pelo sync ASPX para soltar overrides que ficaram para trás — o
- * modal do Monitor já gravou o status EXIBIDO como override sem o operador ter
- * escolhido nada (race do prefill), e sem isso o valor congelado sobrevive para
- * sempre: nada automático limpa `alloc_status`.
+ * O OVERRIDE do operador (`cargas.alloc_status`) está ATRASADO em relação à
+ * planilha e deve ser solto? Usado pelo sync ASPX e pelo saneamento — o modal do
+ * Monitor gravava o status EXIBIDO como override sem o operador ter escolhido
+ * nada (race do prefill) e nada automático limpa `alloc_status`, então o valor
+ * congelado sobreviveria para sempre.
  *
- * Reusa `shouldUpdateAspxStatus` para herdar as MESMAS proteções do DC-316 — a
- * pergunta "o override pode ser substituído por X?" é a mesma que "X pode
- * sobrescrever o status atual?". Assim `CTE EM EMISSÃO`/`CTE ENVIADO` postos à
- * mão continuam valendo (o ASPX não conhece esse vocabulário) e a descarga não
- * regride. `CANCELADO` ganha proteção extra (ver STATUS_OVERRIDE_INTOCAVEIS).
+ * A pergunta aqui NÃO é a de `shouldUpdateAspxStatus`. Aquela decide se um valor
+ * vindo do ASPX pode sobrescrever a planilha, e por isso é conservadora com a
+ * descarga (regra 3: `AGUARDANDO DESCARGA`/`DESCARREGANDO`/`DESCARREGADO` só
+ * entram a partir do CTE) — ela protege a planilha contra o ASPX. Aqui o alvo é
+ * a PRÓPRIA planilha, a fonte que aquela regra protege: soltar o override faz o
+ * status efetivo AVANÇAR até ela, que é justamente o movimento permitido.
+ * Reusá-la deixaria congelado o caso mais comum (override na chegada × planilha
+ * já descarregada).
+ *
+ * Critério: soltar quando a planilha está À FRENTE do override no pipeline.
+ * Assim `CTE EM EMISSÃO`/`CTE ENVIADO` continuam valendo enquanto a planilha não
+ * passa deles (o ASPX não conhece esse vocabulário), e cedem quando ela passa.
+ * Exceções (CANCELADO/DEVOLVIDO/NO SHOW) nunca são soltas: não estão no pipeline.
  *
  * IMPORTANTE: só decide sobre o OVERRIDE. A decisão sobre `sheet_status` continua
- * ancorada no próprio `sheet_status` — ancorá-la no efetivo (`alloc ?? sheet`)
- * faria um override velho derrubar a proteção do CTE na coluna L da planilha.
+ * ancorada no próprio `sheet_status` (via `shouldUpdateAspxStatus`) — ancorá-la no
+ * efetivo (`alloc ?? sheet`) faria um override velho derrubar a proteção do CTE na
+ * coluna L da planilha.
  *
  * @param {string|null} allocStatus       override atual (null = sem override)
  * @param {string} novoStatusPlanilha     status da planilha JÁ reconciliado nesta rodada
@@ -109,9 +134,14 @@ export function shouldReleaseAllocStatusOverride(allocStatus, novoStatusPlanilha
   // Já alinhado com a planilha → o override é inócuo, não mexe.
   if (cur === nw) return false;
 
-  if (STATUS_OVERRIDE_INTOCAVEIS.includes(cur)) return false;
+  const iCur = STATUS_PIPELINE.indexOf(cur);
+  const iNw = STATUS_PIPELINE.indexOf(nw);
 
-  return shouldUpdateAspxStatus(cur, nw);
+  // Fora do pipeline dos dois lados (exceção ou valor legado desconhecido):
+  // não há como afirmar que a planilha está à frente → preserva.
+  if (iCur < 0 || iNw < 0) return false;
+
+  return iNw > iCur;
 }
 
 // ── Campos de DADOS (Bloco 2 do DC-316) ──────────────────────────────────────
@@ -180,7 +210,7 @@ export const __TEST__ = {
   STATUS_PERMITEM_DESCARGA,
   STATUS_EXCECAO,
   STATUS_INTOCAVEIS,
-  STATUS_OVERRIDE_INTOCAVEIS,
+  STATUS_PIPELINE,
   STATUS_VAZIO_ACEITA,
   STATUS_GATE_DADOS,
   STATUS_GATE_DATAS,

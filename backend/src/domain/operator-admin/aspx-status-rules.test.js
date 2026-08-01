@@ -92,31 +92,41 @@ describe("shouldUpdateAspxData (gates DC-316 Bloco 2)", () => {
   });
 });
 
-describe("shouldReleaseAllocStatusOverride (soltar override congelado)", () => {
-  it("solta o override que ficou para trás da planilha", () => {
-    // O caso real: o modal gravou o rótulo do SPX no instante da alocação e a
-    // viagem seguiu. O override cede e a carga volta a refletir a planilha.
+describe("shouldReleaseAllocStatusOverride (soltar override atrasado)", () => {
+  it("solta quando a planilha está À FRENTE do override no pipeline", () => {
+    // O caso real: o modal gravou o rótulo do SPX no instante da alocação
+    // ("AGUARDANDO CHEGAR NO CLIENTE" = `assigned`) e a viagem seguiu.
     expect(shouldReleaseAllocStatusOverride("AGUARDANDO CHEGAR NO CLIENTE", "CARREGADO")).toBe(true);
     expect(shouldReleaseAllocStatusOverride("AGUARDANDO CHEGAR NO CLIENTE", "CTE EM EMISSÃO")).toBe(true);
     expect(shouldReleaseAllocStatusOverride("AGUARDANDO CARREGAMENTO", "CTE ENVIADO")).toBe(true);
+    // O caso MAIS COMUM em produção (26 das 43 cargas): painel na chegada,
+    // planilha já descarregada. `shouldUpdateAspxStatus` diria não (regra 3);
+    // aqui o alvo é a própria planilha, então o override cede.
+    expect(shouldReleaseAllocStatusOverride("AGUARDANDO CHEGAR NO CLIENTE", "DESCARREGADO")).toBe(true);
+    expect(shouldReleaseAllocStatusOverride("CARREGADO", "DESCARREGADO")).toBe(true);
   });
 
-  it("preserva CTE EM EMISSÃO / CTE ENVIADO / NO SHOW postos à mão", () => {
-    // O ASPX não conhece o vocabulário de CTE — esses overrides são a fonte.
-    for (const novo of ["CARREGADO", "AGUARDANDO CARREGAMENTO", "CANCELADO", "DESCARREGADO"]) {
-      expect(shouldReleaseAllocStatusOverride("CTE EM EMISSÃO", novo)).toBe(false);
-      expect(shouldReleaseAllocStatusOverride("NO SHOW", novo)).toBe(false);
-    }
-    // CTE ENVIADO não regride (regra 4)…
+  it("preserva o CTE enquanto a planilha não passa dele", () => {
+    // O ASPX não conhece o vocabulário de CTE — enquanto a planilha está atrás,
+    // o override do operador é a informação boa.
+    expect(shouldReleaseAllocStatusOverride("CTE EM EMISSÃO", "CARREGADO")).toBe(false);
+    expect(shouldReleaseAllocStatusOverride("CTE EM EMISSÃO", "AGUARDANDO CARREGAMENTO")).toBe(false);
     expect(shouldReleaseAllocStatusOverride("CTE ENVIADO", "CARREGADO")).toBe(false);
-    // …mas cede para a descarga, que é o avanço legítimo (regra 3).
+    expect(shouldReleaseAllocStatusOverride("CTE ENVIADO", "CTE EM EMISSÃO")).toBe(false);
+    // …e cede quando a planilha passa dele (avanço legítimo da viagem).
+    expect(shouldReleaseAllocStatusOverride("CTE EM EMISSÃO", "CTE ENVIADO")).toBe(true);
     expect(shouldReleaseAllocStatusOverride("CTE ENVIADO", "AGUARDANDO DESCARGA")).toBe(true);
     expect(shouldReleaseAllocStatusOverride("CTE ENVIADO", "DESCARREGADO")).toBe(true);
   });
 
-  it("CANCELADO manual é intocável (a cascata de rota já rodou)", () => {
-    expect(shouldReleaseAllocStatusOverride("CANCELADO", "CARREGADO")).toBe(false);
-    expect(shouldReleaseAllocStatusOverride("CANCELADO", "DESCARREGADO")).toBe(false);
+  it("exceções (CANCELADO / DEVOLVIDO / NO SHOW) nunca são soltas — não estão no pipeline", () => {
+    for (const excecao of ["CANCELADO", "DEVOLVIDO", "NO SHOW"]) {
+      expect(shouldReleaseAllocStatusOverride(excecao, "CARREGADO")).toBe(false);
+      expect(shouldReleaseAllocStatusOverride(excecao, "DESCARREGADO")).toBe(false);
+    }
+    // Nem entram como destino: uma exceção na planilha não solta o override.
+    expect(shouldReleaseAllocStatusOverride("CARREGADO", "CANCELADO")).toBe(false);
+    expect(shouldReleaseAllocStatusOverride("CTE EM EMISSÃO", "DEVOLVIDO")).toBe(false);
   });
 
   it("não mexe em override ausente, vazio ou já alinhado", () => {
@@ -128,12 +138,12 @@ describe("shouldReleaseAllocStatusOverride (soltar override congelado)", () => {
     expect(shouldReleaseAllocStatusOverride(" carregado ", "CARREGADO")).toBe(false);
   });
 
-  it("não solta quando a planilha está sem status ou regrediria", () => {
+  it("não solta quando a planilha está sem status, atrás ou fora do vocabulário", () => {
     expect(shouldReleaseAllocStatusOverride("CARREGADO", "")).toBe(false);
-    // Descarga no override não volta para carregamento (regra 4).
     expect(shouldReleaseAllocStatusOverride("DESCARREGADO", "CARREGADO")).toBe(false);
-    // Pular direto de carregado para descarga não é permitido (regra 3).
-    expect(shouldReleaseAllocStatusOverride("CARREGADO", "DESCARREGADO")).toBe(false);
+    expect(shouldReleaseAllocStatusOverride("DESCARREGANDO", "AGUARDANDO DESCARGA")).toBe(false);
+    expect(shouldReleaseAllocStatusOverride("CARREGADO", "STATUS LEGADO QUALQUER")).toBe(false);
+    expect(shouldReleaseAllocStatusOverride("STATUS LEGADO QUALQUER", "CARREGADO")).toBe(false);
   });
 });
 
