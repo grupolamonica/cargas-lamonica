@@ -20,6 +20,7 @@ import {
 } from "../../../../infrastructure/cadastro-bots/angellira-bot-client.js";
 import { insertSecurityAuditEvent } from "../../../../infrastructure/security-audit.js";
 import { logStructuredEvent } from "../../../../infrastructure/security-log.js";
+import { evaluateCandidaturaCnhCategoria } from "../../../../domain/candidatura/cnh-category.js";
 
 import { stageAnexosForEntity } from "./anexos-stager.js";
 import { stripUuidIfInvalid } from "./_utils.js";
@@ -76,6 +77,39 @@ export async function runAngelliraPipeline({
   const dados = cadastro?.dados || {};
   const cadastroId = cadastro?.id;
   if (!cadastroId) throw new Error("cadastro.id ausente — pipeline Angellira abortado");
+
+  // Trava de categoria da CNH (D pra cima) — última linha antes do portal
+  // Angellira. Reavalia sobre o dado FRESCO do banco: cobre re-disparo de
+  // cadastro já aprovado e edição de categoria pós-aprovação. Mesma regra da
+  // candidatura/aprovação (D ou E) — distinta do gate do SPX (que exige E).
+  const categoriaBlock = evaluateCandidaturaCnhCategoria(dados);
+  if (categoriaBlock) {
+    logStructuredEvent("warn", "angellira.pipeline.cnh_category_block", {
+      cadastroId, categoria: categoriaBlock.categoria,
+    });
+    const error = {
+      code: "CNH_CATEGORIA_INCOMPATIVEL",
+      message: categoriaBlock.message,
+      categoria: categoriaBlock.categoria,
+      blocked_by: "cnh_category",
+    };
+    const jobId = await markJobInProgress({
+      client, cadastroId, step: "motorista", payload: { step: "motorista", cadastroId },
+    });
+    await markJobError({ client, jobId, error });
+    await insertSecurityAuditEvent(client, {
+      eventType: "operator.cadastro.angellira_pipeline_blocked",
+      actorUserId: operatorId,
+      actorRole: "operator",
+      resourceType: "pending_driver_registration",
+      resourceId: cadastroId,
+      action: "angellira_pipeline",
+      outcome: "blocked",
+      correlationId,
+      metadata: { blocked_by: "cnh_category", categoria: categoriaBlock.categoria },
+    });
+    return { ok: false, blocked: true, results: [{ step: "motorista", status: "BLOCKED", error }] };
+  }
 
   const steps = Array.isArray(onlySteps) && onlySteps.length
     ? onlySteps.filter((s) => ALL_STEPS.includes(s))
