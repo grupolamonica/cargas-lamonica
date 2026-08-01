@@ -14,8 +14,11 @@ import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
  *
  * Resolve a carga pelo id determinístico da planilha (createSheetLoadId(lh)),
  * trava com FOR UPDATE (mesma garantia de writeCargo) e escreve SOMENTE `alloc_*`
- * + metadados. O sync da planilha NUNCA toca `alloc_*`, então a edição do
+ * + metadados. O sync da planilha NUNCA toca `alloc_*`, então a alocação do
  * operador nunca é sobrescrita. Leitura efetiva = COALESCE(alloc_*, sheet_*).
+ * (Única exceção: o sync ASPX solta `alloc_status` quando o override ficou para
+ * trás da planilha e as regras do DC-316 permitem — ver reconcile-aspx-status.js.
+ * Motorista/cavalo/carreta seguem intocados por qualquer automação.)
  *
  * Normalização: "" = vazio EXPLÍCITO → grava "" em alloc_* (NÃO null). Assim
  * COALESCE(alloc_*, sheet_*) devolve "" e a carga fica realmente sem
@@ -93,7 +96,16 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     // "Disponível" ficava preso em alloc_status e a carga aparecia azul
     // "Disponivel" mesmo continuando BOOKED e com motorista (enganoso).
     const wantsAvailable = has("status") && /^dispon[ií]vel$/i.test(norm(payload.status));
-    const finalStatus = has("status") ? (wantsAvailable ? "" : norm(payload.status)) : (sheetRow.alloc_status ?? null);
+    // ECO do que já estava na tela ≠ decisão do operador. O modal vem pré-preenchido
+    // com o status EFETIVO (e, em viagem SPX, com o overlay ao vivo, que muda sozinho
+    // a cada poll) — reenviá-lo criava um override que ninguém escolheu e que nada
+    // automático limpa depois ("congelamento"). Eco é tratado como campo AUSENTE:
+    // preserva o alloc_status atual, inclusive null = "sem override".
+    const statusAtualEfetivo = norm(sheetRow.alloc_status ?? sheetRow.sheet_status).toUpperCase();
+    const statusEcho =
+      has("status") && !wantsAvailable && norm(payload.status).toUpperCase() === statusAtualEfetivo;
+    const statusTouched = has("status") && !statusEcho;
+    const finalStatus = statusTouched ? (wantsAvailable ? "" : norm(payload.status)) : (sheetRow.alloc_status ?? null);
     const finalTipo = has("tipo") ? norm(payload.tipo) : (sheetRow.alloc_tipo ?? null);
     // Motivo da troca (modal "Confirmar troca"): ausente preserva o último motivo.
     const finalDescricao = has("descricao") ? norm(payload.descricao) : (sheetRow.alloc_descricao ?? null);
@@ -283,9 +295,12 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
         motorista: explicit("motorista") ? (finalMotorista ?? "") : (finalMotorista || sheetRow.sheet_motorista || ""),
         cavalo: explicit("cavalo") ? (finalCavalo ?? "") : (finalCavalo || sheetRow.sheet_cavalo || ""),
         carreta: explicit("carreta") ? (finalCarreta ?? "") : (finalCarreta || sheetRow.sheet_carreta || ""),
-        // Status (col L): finalStatus é sempre o status enviado pelo modal ("" p/
-        // Disponível/limpar a etapa) — espelha direto.
-        status: finalStatus ?? sheetRow.sheet_status ?? "",
+        // Status (col L) só é espelhado quando o operador REALMENTE mudou — mesma
+        // política de `vinculo`/`checklist*` abaixo, e pelo mesmo motivo: reenviar
+        // um status que ninguém tocou sobrescrevia na planilha o valor gravado pelo
+        // robô ASPX, inclusive CTE EM EMISSÃO/CTE ENVIADO (que só existem lá). O
+        // Apps Script (PR #322) só grava a col L quando a chave vem.
+        ...(statusTouched ? { status: finalStatus ?? "" } : {}),
         // Vínculo (col H) só espelha quando o modal envia o campo (senão o robô
         // não toca H — evita apagar o vínculo de linhas não editadas).
         ...(has("vinculo") ? { vinculo: finalVinculo ?? "" } : {}),

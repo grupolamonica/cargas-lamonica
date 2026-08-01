@@ -85,6 +85,58 @@ describe("updateMonitorAllocation", () => {
     expect(row.sheet_status).toBe("AGUARDANDO CARREGAMENTO");
   });
 
+  it("ECO do status exibido não cria override nem espelha status na planilha", async () => {
+    // O modal vem pré-preenchido com o status EFETIVO; reenviá-lo ao salvar outro
+    // campo criava um override que ninguém escolheu (congelamento) e sobrescrevia
+    // na col L o valor que o robô ASPX havia gravado.
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-eco@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { vinculo: "AGREGADO", status: "AGUARDANDO CARREGAMENTO" },
+      correlationId: "corr-monitor-eco",
+    });
+
+    const row = await getAlloc(id);
+    expect(row.alloc_status).toBeNull(); // segue "sem override" → reflete a planilha
+    const update = writeSpy.mock.calls[0][0][0];
+    expect(update.status).toBeUndefined(); // col L não é tocada
+    expect(update.vinculo).toBe("AGREGADO"); // o campo realmente editado vai
+  });
+
+  it("editar só o vínculo (sem a chave status) preserva alloc_status e não espelha status", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-vinculo@teste.local" });
+    await query(`UPDATE public.cargas SET alloc_status = 'CTE EM EMISSÃO' WHERE id = $1`, [id]);
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { vinculo: "FROTA" },
+      correlationId: "corr-monitor-vinculo",
+    });
+
+    expect((await getAlloc(id)).alloc_status).toBe("CTE EM EMISSÃO"); // preservado
+    expect(writeSpy.mock.calls[0][0][0].status).toBeUndefined();
+  });
+
+  it("mudança REAL de status grava o override e espelha na planilha", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-status@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { status: "CTE ENVIADO" },
+      correlationId: "corr-monitor-status",
+    });
+
+    expect((await getAlloc(id)).alloc_status).toBe("CTE ENVIADO");
+    expect(writeSpy.mock.calls[0][0][0].status).toBe("CTE ENVIADO");
+  });
+
   it("limpar o campo grava vazio EXPLÍCITO (\"\") — não ressuscita o valor da planilha", async () => {
     const id = await seedSheetCargo();
     const operator = await seedUser({ email: "op-monitor-clear@teste.local" });
