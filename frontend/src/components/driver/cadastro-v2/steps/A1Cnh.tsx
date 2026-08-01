@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ocrCnh, uploadDraftFile, base64ToFile } from "@/services/cadastroApi";
 import { isValidCpf, onlyDigits } from "@/lib/brazilianValidators";
+import { CNH_CATEGORIA_REQUER_E_MENSAGEM, isCnhCategoriaElegivel } from "@/lib/cnhCategoria";
 import { UFS } from "@/lib/ufs";
 
 import { useVerifyDocument } from "../useVerifyDocument";
@@ -195,11 +196,15 @@ export function A1Cnh({
       isValidCpf(data.cpf) &&
       data.categoria.trim().length > 0 &&
       data.validade.trim().length > 0;
+    // Trava de categoria: só CNH categoria E (AE/BE/CE/DE/E) habilita a puxar
+    // carga. Bloqueia o avanço quando a categoria informada não tem E (backend
+    // reforça com 422 CNH_CATEGORIA_INCOMPATIVEL).
+    const categoriaElegivel = isCnhCategoriaElegivel(data.categoria);
     // DC-305: o DOCUMENTO (arquivo) é obrigatório — o motorista pode digitar os
     // dados (manualMode), mas só avança com a CNH anexada (storage_path). Antes,
     // `manualMode` liberava sem arquivo. `documentUrl` cobre drafts legados.
     const fileProvided = Boolean(data.storage_path || data.documentUrl);
-    onValid(fileProvided && baseFilled && cpfMatches && !cpfMismatch);
+    onValid(fileProvided && baseFilled && cpfMatches && !cpfMismatch && categoriaElegivel);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, tileState, manualMode, cpfMismatch]);
 
@@ -468,6 +473,12 @@ export function A1Cnh({
                   </option>
                 ))}
               </select>
+              {data.categoria && !isCnhCategoriaElegivel(data.categoria) ? (
+                <p className="flex items-center gap-1 text-xs font-medium text-destructive">
+                  <XCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                  {CNH_CATEGORIA_REQUER_E_MENSAGEM}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="a1-validade">

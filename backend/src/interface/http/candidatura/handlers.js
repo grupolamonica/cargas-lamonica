@@ -3,6 +3,7 @@ import "../../../infrastructure/config/load-env.js";
 import { ZodError } from "zod";
 
 import { ForbiddenError, UnauthorizedError } from "../../../domain/load-claims/errors.js";
+import { evaluateCandidaturaCnhCategoria } from "../../../domain/candidatura/cnh-category.js";
 import { requireDriverSession } from "../../../application/load-claims/auth.js";
 import { resolveCandidaturaActor } from "../../../application/load-claims/candidatura-actor.js";
 import { getDriverProfileByUserId } from "../../../application/load-claims/profile-service.js";
@@ -902,6 +903,23 @@ export async function resolveCandidaturaSubmitResponse(request) {
           "Anexe os documentos obrigatorios antes de enviar: " +
           missingDocuments.map((doc) => doc.message).join(" "),
         issues: missingDocuments,
+        meta: { correlationId },
+      },
+    };
+  }
+
+  // Trava de categoria da CNH: só motorista com CNH categoria E (AE/BE/CE/DE/E)
+  // pode se cadastrar/puxar carga — cavalo mecânico exige E. Barra A/AB/AC/AD/B/C/D
+  // ANTES do submit (evita disparo Angellira/SPX que o portal rejeitaria). Vazia
+  // não bloqueia (best-effort — re-submit legado sem categoria).
+  const categoriaBlock = evaluateCandidaturaCnhCategoria(parsedInput.dados);
+  if (categoriaBlock) {
+    return {
+      statusCode: 422,
+      payload: {
+        error: categoriaBlock.error,
+        message: categoriaBlock.message,
+        categoria: categoriaBlock.categoria,
         meta: { correlationId },
       },
     };
