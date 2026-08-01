@@ -19,12 +19,22 @@
 //  - Anti-regressão: demais status não sobrescrevem CTE ENVIADO nem descarga.
 //  - Status vazio: só recebe atualização se o novo status for
 //    AGUARDANDO CARREGAMENTO ou CARREGADO.
+//
+// Além do Bloco 1/2 do DC-316, este módulo decide quando o OVERRIDE do operador
+// (`cargas.alloc_status`) pode ceder e voltar a refletir a planilha —
+// `shouldReleaseAllocStatusOverride`, que reusa as regras acima.
 
 const STATUS_DESCARGA = ["AGUARDANDO DESCARGA", "DESCARREGANDO", "DESCARREGADO"];
 const STATUS_PERMITEM_DESCARGA = ["CTE ENVIADO", "AGUARDANDO DESCARGA", "DESCARREGANDO"];
 const STATUS_EXCECAO = ["CANCELADO", "DEVOLVIDO"];
 const STATUS_INTOCAVEIS = ["NO SHOW", "CTE EM EMISSÃO"];
 const STATUS_VAZIO_ACEITA = ["AGUARDANDO CARREGAMENTO", "CARREGADO"];
+
+// Intocáveis ao soltar o OVERRIDE do operador (`cargas.alloc_status`). Além dos
+// intocáveis do Bloco 1, inclui CANCELADO: cancelar no Monitor dispara a cascata
+// de rota (cancel-load-cascade — o motorista desce a fila), então reverter esse
+// status pelo ASPX desincronizaria a cascata que já rodou.
+const STATUS_OVERRIDE_INTOCAVEIS = [...STATUS_INTOCAVEIS, "CANCELADO"];
 
 /** Normaliza para comparação: string, trim, UPPERCASE (a Torre já devolve maiúsculo). */
 export function normalizeAspxStatus(value) {
@@ -64,6 +74,44 @@ export function shouldUpdateAspxStatus(statusAtual, novoStatus) {
 
   // REGRA 4: demais — anti-regressão (não sobrescreve CTE ENVIADO nem descarga).
   return cur !== "CTE ENVIADO" && !STATUS_DESCARGA.includes(cur);
+}
+
+/**
+ * O OVERRIDE do operador (`cargas.alloc_status`) pode CEDER e voltar a refletir a
+ * planilha? Usado pelo sync ASPX para soltar overrides que ficaram para trás — o
+ * modal do Monitor já gravou o status EXIBIDO como override sem o operador ter
+ * escolhido nada (race do prefill), e sem isso o valor congelado sobrevive para
+ * sempre: nada automático limpa `alloc_status`.
+ *
+ * Reusa `shouldUpdateAspxStatus` para herdar as MESMAS proteções do DC-316 — a
+ * pergunta "o override pode ser substituído por X?" é a mesma que "X pode
+ * sobrescrever o status atual?". Assim `CTE EM EMISSÃO`/`CTE ENVIADO` postos à
+ * mão continuam valendo (o ASPX não conhece esse vocabulário) e a descarga não
+ * regride. `CANCELADO` ganha proteção extra (ver STATUS_OVERRIDE_INTOCAVEIS).
+ *
+ * IMPORTANTE: só decide sobre o OVERRIDE. A decisão sobre `sheet_status` continua
+ * ancorada no próprio `sheet_status` — ancorá-la no efetivo (`alloc ?? sheet`)
+ * faria um override velho derrubar a proteção do CTE na coluna L da planilha.
+ *
+ * @param {string|null} allocStatus       override atual (null = sem override)
+ * @param {string} novoStatusPlanilha     status da planilha JÁ reconciliado nesta rodada
+ * @returns {boolean} true se o override deve ser limpo (→ NULL)
+ */
+export function shouldReleaseAllocStatusOverride(allocStatus, novoStatusPlanilha) {
+  const cur = normalizeAspxStatus(allocStatus);
+  const nw = normalizeAspxStatus(novoStatusPlanilha);
+
+  // Sem override, ou override VAZIO ("" = "Disponível", ação deliberada de
+  // reabrir): não há o que soltar. `null` e `""` têm significados diferentes no
+  // Monitor e nenhum dos dois é um status congelado.
+  if (!cur) return false;
+
+  // Já alinhado com a planilha → o override é inócuo, não mexe.
+  if (cur === nw) return false;
+
+  if (STATUS_OVERRIDE_INTOCAVEIS.includes(cur)) return false;
+
+  return shouldUpdateAspxStatus(cur, nw);
 }
 
 // ── Campos de DADOS (Bloco 2 do DC-316) ──────────────────────────────────────
@@ -132,6 +180,7 @@ export const __TEST__ = {
   STATUS_PERMITEM_DESCARGA,
   STATUS_EXCECAO,
   STATUS_INTOCAVEIS,
+  STATUS_OVERRIDE_INTOCAVEIS,
   STATUS_VAZIO_ACEITA,
   STATUS_GATE_DADOS,
   STATUS_GATE_DATAS,

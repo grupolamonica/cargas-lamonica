@@ -33,7 +33,8 @@ const baseDeps = (rows, extra = {}) => ({
 
 const rowOf = async (id) =>
   (await query(
-    `SELECT sheet_status, sheet_motorista, sheet_cavalo, sheet_carreta FROM public.cargas WHERE id = $1`,
+    `SELECT sheet_status, sheet_motorista, sheet_cavalo, sheet_carreta, alloc_status
+       FROM public.cargas WHERE id = $1`,
     [id],
   )).rows[0];
 
@@ -162,6 +163,78 @@ describe("reconcileAspxStatus (DC-316 completo)", () => {
     });
     expect(r).toMatchObject({ ok: true, updated: 1 });
     expect((await rowOf(carga.id)).sheet_status).toBe("AGUARDANDO DESCARGA");
+  });
+
+  it("solta o override congelado que ficou atrás da planilha", async () => {
+    const carga = await seedCargo({ cliente_id: clienteId, sheet_lh: "LT-OVR" });
+    await setSheetFields(carga.id, {
+      sheet_status: "AGUARDANDO CARREGAMENTO",
+      sheet_source: "shopee",
+      // Gravado pelo modal do Monitor no instante da alocação, sem o operador ter
+      // escolhido nada (race do prefill) — e a viagem seguiu desde então.
+      alloc_status: "AGUARDANDO CHEGAR NO CLIENTE",
+    });
+
+    const r = await reconcileAspxStatus({ deps: baseDeps([aspRow({ lh: "LT-OVR", status: "CARREGADO" })]) });
+
+    expect(r).toMatchObject({ ok: true, updated: 1 });
+    const row = await rowOf(carga.id);
+    expect(row.sheet_status).toBe("CARREGADO");
+    expect(row.alloc_status).toBeNull(); // volta a refletir a planilha sozinha
+  });
+
+  it("override congelado NÃO derruba a proteção de CTE EM EMISSÃO na planilha", async () => {
+    // Regressão: ancorar a decisão no status EFETIVO (alloc ?? sheet) faria o
+    // job apagar o CTE da coluna L. A decisão da planilha fica em sheet_status.
+    const carga = await seedCargo({ cliente_id: clienteId, sheet_lh: "LT-OVR-CTE" });
+    await setSheetFields(carga.id, {
+      sheet_status: "CTE EM EMISSÃO",
+      sheet_source: "shopee",
+      alloc_status: "AGUARDANDO CHEGAR NO CLIENTE",
+    });
+
+    const writes = [];
+    const r = await reconcileAspxStatus({
+      deps: baseDeps(
+        [aspRow({ lh: "LT-OVR-CTE", status: "CARREGADO" })],
+        { writeAllocationsToSheet: async (u) => { writes.push(...u); return { ok: true, updated: u.length }; } },
+      ),
+    });
+
+    expect(r).toMatchObject({ ok: true, updated: 1, sheetWrites: 0 });
+    const row = await rowOf(carga.id);
+    expect(row.sheet_status).toBe("CTE EM EMISSÃO"); // intocável, preservado
+    expect(row.alloc_status).toBeNull(); // override solto → painel mostra o CTE
+    expect(writes).toHaveLength(0); // só banco: nada a espelhar na planilha
+  });
+
+  it("override deliberado de CTE EM EMISSÃO é preservado (ASPX não conhece esse vocabulário)", async () => {
+    const carga = await seedCargo({ cliente_id: clienteId, sheet_lh: "LT-OVR-KEEP" });
+    await setSheetFields(carga.id, {
+      sheet_status: "AGUARDANDO CARREGAMENTO",
+      sheet_source: "shopee",
+      alloc_status: "CTE EM EMISSÃO",
+    });
+
+    const r = await reconcileAspxStatus({ deps: baseDeps([aspRow({ lh: "LT-OVR-KEEP", status: "CARREGADO" })]) });
+
+    expect(r).toMatchObject({ ok: true, updated: 1 });
+    const row = await rowOf(carga.id);
+    expect(row.sheet_status).toBe("CARREGADO"); // planilha avança normalmente
+    expect(row.alloc_status).toBe("CTE EM EMISSÃO"); // override do operador vence
+  });
+
+  it("override vazio ('Disponível') não é tocado", async () => {
+    const carga = await seedCargo({ cliente_id: clienteId, sheet_lh: "LT-OVR-VAZIO" });
+    await setSheetFields(carga.id, {
+      sheet_status: "AGUARDANDO CARREGAMENTO",
+      sheet_source: "shopee",
+      alloc_status: "",
+    });
+
+    await reconcileAspxStatus({ deps: baseDeps([aspRow({ lh: "LT-OVR-VAZIO", status: "CARREGADO" })]) });
+
+    expect((await rowOf(carga.id)).alloc_status).toBe(""); // "" ≠ congelado
   });
 
   it("write-back desligado: sistema atualiza, planilha não é chamada", async () => {

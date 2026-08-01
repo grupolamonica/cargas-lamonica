@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   shouldUpdateAspxStatus,
   shouldUpdateAspxData,
+  shouldReleaseAllocStatusOverride,
   parseAspTripRow,
   normalizeAspxStatus,
 } from "./aspx-status-rules.js";
@@ -88,6 +89,51 @@ describe("shouldUpdateAspxData (gates DC-316 Bloco 2)", () => {
     expect(shouldUpdateAspxData("CTE ENVIADO")).toEqual({ dados: false, datas: false });
     expect(shouldUpdateAspxData("AGUARDANDO DESCARGA")).toEqual({ dados: false, datas: false });
     expect(shouldUpdateAspxData("")).toEqual({ dados: false, datas: false });
+  });
+});
+
+describe("shouldReleaseAllocStatusOverride (soltar override congelado)", () => {
+  it("solta o override que ficou para trás da planilha", () => {
+    // O caso real: o modal gravou o rótulo do SPX no instante da alocação e a
+    // viagem seguiu. O override cede e a carga volta a refletir a planilha.
+    expect(shouldReleaseAllocStatusOverride("AGUARDANDO CHEGAR NO CLIENTE", "CARREGADO")).toBe(true);
+    expect(shouldReleaseAllocStatusOverride("AGUARDANDO CHEGAR NO CLIENTE", "CTE EM EMISSÃO")).toBe(true);
+    expect(shouldReleaseAllocStatusOverride("AGUARDANDO CARREGAMENTO", "CTE ENVIADO")).toBe(true);
+  });
+
+  it("preserva CTE EM EMISSÃO / CTE ENVIADO / NO SHOW postos à mão", () => {
+    // O ASPX não conhece o vocabulário de CTE — esses overrides são a fonte.
+    for (const novo of ["CARREGADO", "AGUARDANDO CARREGAMENTO", "CANCELADO", "DESCARREGADO"]) {
+      expect(shouldReleaseAllocStatusOverride("CTE EM EMISSÃO", novo)).toBe(false);
+      expect(shouldReleaseAllocStatusOverride("NO SHOW", novo)).toBe(false);
+    }
+    // CTE ENVIADO não regride (regra 4)…
+    expect(shouldReleaseAllocStatusOverride("CTE ENVIADO", "CARREGADO")).toBe(false);
+    // …mas cede para a descarga, que é o avanço legítimo (regra 3).
+    expect(shouldReleaseAllocStatusOverride("CTE ENVIADO", "AGUARDANDO DESCARGA")).toBe(true);
+    expect(shouldReleaseAllocStatusOverride("CTE ENVIADO", "DESCARREGADO")).toBe(true);
+  });
+
+  it("CANCELADO manual é intocável (a cascata de rota já rodou)", () => {
+    expect(shouldReleaseAllocStatusOverride("CANCELADO", "CARREGADO")).toBe(false);
+    expect(shouldReleaseAllocStatusOverride("CANCELADO", "DESCARREGADO")).toBe(false);
+  });
+
+  it("não mexe em override ausente, vazio ou já alinhado", () => {
+    expect(shouldReleaseAllocStatusOverride(null, "CARREGADO")).toBe(false);
+    // "" = "Disponível" (ação deliberada de reabrir), não é status congelado.
+    expect(shouldReleaseAllocStatusOverride("", "CARREGADO")).toBe(false);
+    expect(shouldReleaseAllocStatusOverride("   ", "CARREGADO")).toBe(false);
+    expect(shouldReleaseAllocStatusOverride("CARREGADO", "CARREGADO")).toBe(false);
+    expect(shouldReleaseAllocStatusOverride(" carregado ", "CARREGADO")).toBe(false);
+  });
+
+  it("não solta quando a planilha está sem status ou regrediria", () => {
+    expect(shouldReleaseAllocStatusOverride("CARREGADO", "")).toBe(false);
+    // Descarga no override não volta para carregamento (regra 4).
+    expect(shouldReleaseAllocStatusOverride("DESCARREGADO", "CARREGADO")).toBe(false);
+    // Pular direto de carregado para descarga não é permitido (regra 3).
+    expect(shouldReleaseAllocStatusOverride("CARREGADO", "DESCARREGADO")).toBe(false);
   });
 });
 

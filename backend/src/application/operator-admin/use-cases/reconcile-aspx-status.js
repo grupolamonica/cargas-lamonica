@@ -20,8 +20,15 @@
 //     datas também em AGUARDANDO CHEGAR NO CLIENTE.
 //  5. Sistema: grava os espelhos cargas.sheet_status/sheet_motorista/sheet_cavalo/
 //     sheet_carreta. Planilha (write-back): status (col L) + motorista/cavalo/carreta
-//     (E/F/G) + datas (col C/D) + origem/destino (col I/J). NÃO toca alloc_* — override
-//     manual do operador é preservado e continua vencendo na exibição.
+//     (E/F/G) + datas (col C/D) + origem/destino (col I/J).
+//  6. OVERRIDE: solta `cargas.alloc_status` (→ NULL) quando ele ficou para trás da
+//     planilha e as regras do DC-316 permitem que ceda — ver
+//     `shouldReleaseAllocStatusOverride`. Motivo: o modal do Monitor grava o status
+//     EXIBIDO como override sem o operador ter escolhido nada (race do prefill) e
+//     nada automático limpa esse valor, então ele congela para sempre. NÃO toca
+//     alloc_motorista/cavalo/carreta — a alocação do operador segue soberana, e
+//     overrides deliberados (CTE EM EMISSÃO/ENVIADO, NO SHOW, CANCELADO) são
+//     preservados pelas mesmas regras.
 //
 // Por que datas + origem/destino vão SÓ para a planilha (não para colunas do sistema):
 //  - datas: o sync RE-LÊ e normaliza a data da planilha (formatBrazilianDateTimeLabel)
@@ -42,6 +49,7 @@ import { writeAllocationsToSheet, isSheetWritebackEnabled } from "../../google-s
 import {
   shouldUpdateAspxStatus,
   shouldUpdateAspxData,
+  shouldReleaseAllocStatusOverride,
   parseAspTripRow,
 } from "../../../domain/operator-admin/aspx-status-rules.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
@@ -96,7 +104,7 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
       const { rows } = await client.query(
         `SELECT id, sheet_lh, sheet_source, sheet_status,
                 sheet_motorista, sheet_cavalo, sheet_carreta,
-                alloc_motorista, alloc_cavalo, alloc_carreta
+                alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status
            FROM public.cargas
           WHERE sheet_lh = ANY($1::text[])`,
         [lhs],
@@ -122,9 +130,14 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
           vals.push(value);
         };
 
-        // STATUS (regras DC-316 Bloco 1).
+        // STATUS (regras DC-316 Bloco 1). O âncora é o `sheet_status` — NUNCA o
+        // efetivo (`alloc_status ?? sheet_status`): a proteção de CTE EM EMISSÃO /
+        // CTE ENVIADO mora aqui, e um override velho faria o job apagar o CTE da
+        // coluna L da planilha.
         let statusChanged = false;
+        let novoSheetStatus = statusAtual;
         if (shouldUpdateAspxStatus(statusAtual, asp.status)) {
+          novoSheetStatus = trim(asp.status);
           setCol("sheet_status", asp.status);
           statusChanged = true;
         }
@@ -136,6 +149,21 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
           if (asp.carreta && asp.carreta !== trim(row.sheet_carreta)) setCol("sheet_carreta", asp.carreta);
         }
 
+        // Colunas espelhadas na PLANILHA que mudaram até aqui — o write-back só
+        // faz sentido se alguma delas mudou (soltar o override é só de banco).
+        const sheetColsChanged = sets.length;
+
+        // OVERRIDE do operador (`alloc_status`): decisão SEPARADA da acima e que
+        // não vai para a planilha. O modal do Monitor grava o status EXIBIDO como
+        // override sem o operador ter escolhido nada (race do prefill) e nada
+        // automático limpa esse valor — então o sync solta o override quando as
+        // MESMAS regras do DC-316 permitirem que ele ceda para a planilha.
+        // NULL (e não o status novo) porque é o valor que o resto do código trata
+        // como "sem decisão" → a carga volta a acompanhar a planilha sozinha.
+        if (shouldReleaseAllocStatusOverride(row.alloc_status, novoSheetStatus)) {
+          setCol("alloc_status", null);
+        }
+
         if (sets.length === 0) continue; // nada mudou nesta carga
 
         await client.query(
@@ -143,6 +171,10 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
           [...vals, row.id],
         );
         changedCount += 1;
+
+        // Só soltou o override → nada a espelhar na planilha (evita write-back
+        // desnecessário na leva de saneamento dos overrides congelados).
+        if (sheetColsChanged === 0) continue;
 
         // Write-back da planilha. Motorista/cavalo/carreta vão SEMPRE (valor EFETIVO)
         // porque o Apps Script reescreve E/F/G — mandar vazio limparia a célula. Sob o
