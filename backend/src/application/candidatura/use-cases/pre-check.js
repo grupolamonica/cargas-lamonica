@@ -1,75 +1,5 @@
 import { validatePublicLeadPreRegistration } from "../../load-claims/public-lead-validation.js";
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
-import { logStructuredEvent } from "../../../infrastructure/security-log.js";
-import { resolveExternalGate, EXTERNAL_GATE } from "../../../domain/candidatura/external-gate.js";
-import { lookupMotorista } from "../../../infrastructure/cadastro-bots/spx-bot-client.js";
-import { mapSpxLookupToVigency } from "../../operator-admin/use-cases/spx-vigency-cache.js";
-
-// Flag do novo gate: quando ligada, o pré-check decide "pedir dados vs passar
-// direto" pela consulta Angellira + SPX (resolveExternalGate) em vez de exigir
-// cadastro local completo (RF001 legado). OFF por padrão = comportamento atual.
-function isSpxGateEnabled() {
-  return String(process.env.PRECHECK_SPX_GATE_ENABLED || "").trim() === "1";
-}
-
-// Consulta a situação do motorista no SPX (read-only) e reduz a { status,
-// availability } que o resolveExternalGate consome. Inconclusivo / falha →
-// UNAVAILABLE (o gate NÃO auto-passa nesse caso).
-async function resolveSpxStatusForGate({ cpf, contactNumber, correlationId }) {
-  try {
-    const lookup = await lookupMotorista({
-      cpf: String(cpf || "").replace(/\D/g, ""),
-      contactNumber: contactNumber || "",
-      correlationId,
-    });
-    const vigency = mapSpxLookupToVigency(lookup);
-    if (!vigency) return { availability: "UNAVAILABLE", status: null };
-    return { availability: "OK", status: vigency.status };
-  } catch (err) {
-    logStructuredEvent("warn", "candidatura.pre-check.spx-lookup.failed", {
-      correlationId: correlationId || null,
-      message: err instanceof Error ? err.message : String(err),
-    });
-    return { availability: "UNAVAILABLE", status: null };
-  }
-}
-
-// Traduz o resultado do gate externo (Angellira + SPX) numa pendência de Step A.
-// PASS → sem pendência. UNAVAILABLE é tratado no caller (cai no RF001 legado).
-function buildDriverPendencyFromGate(gate) {
-  switch (gate.gate) {
-    case EXTERNAL_GATE.PASS:
-      return null;
-    case EXTERNAL_GATE.SEND_DATA_NO_SPX:
-      return {
-        step: "A",
-        reason: "SPX_REGISTRATION_REQUIRED",
-        label: "Complete seu cadastro no Portal",
-        description:
-          "Voce esta regular no Angellira, mas ainda nao tem cadastro ativo no SPX " +
-          "(nossa agencia). Preencha os dados e envie os documentos para concluir.",
-      };
-    case EXTERNAL_GATE.SEND_DATA_EXPIRED:
-      return {
-        step: "A",
-        reason: "EXTERNAL_REGISTRATION_EXPIRED",
-        label: "Atualize seu cadastro",
-        description:
-          "Seu cadastro esta vencido. Reenvie seus dados e os documentos obrigatorios " +
-          "para concluir seu cadastro no Portal.",
-      };
-    case EXTERNAL_GATE.SEND_DATA:
-    default:
-      return {
-        step: "A",
-        reason: "LOCAL_REGISTRATION_REQUIRED",
-        label: "Complete seu cadastro no Portal",
-        description:
-          "Para concluir seu cadastro no Portal e atender aos requisitos operacionais, " +
-          "preencha os dados e envie os documentos obrigatorios.",
-      };
-  }
-}
 
 // Iter #7 — janela de busca para duplicate detection no pre-check.
 // Cadastros enviados ha menos de 30 dias na mesma (CPF, horsePlate) sao
@@ -97,19 +27,20 @@ function resolveVehicleTypeFromTrailerCount(trailerCount) {
 }
 
 /**
- * Mapeia o resultado de driverLookup do summary do public-lead-validation
- * para uma pendencia de Step A, se aplicavel.
+ * Mapeia o resultado de driverLookup do summary do public-lead-validation para
+ * uma pendencia de Step A, se aplicavel.
  *
- * Iter #10: labels diferenciadas para Step A (motorista) vs Step B/D (veiculo)
- * com `description` mais especifica que orienta o motorista a abrir o wizard
- * na etapa correta. CPF nao encontrado nas bases ASPX/Angellira (sync parou
- * ou motorista realmente novo) e cadastrado via etapa "Dados do motorista".
+ * REGRA (retomada da versao anterior ao RF001): estar encontrado no Angellira OU
+ * no diretorio ASPX ja basta para o motorista NAO precisar refazer o cadastro —
+ * os dados sao reaproveitados. So pedimos "Dados do motorista" quando o CPF nao
+ * aparece em NENHUMA das duas bases. (RF001 e a selfie obrigatoria no pre-check
+ * foram removidos — ver reversao.)
  */
-function buildDriverPendency(driverSummary, { hasLocalCadastro, hasLocalSelfie = true } = {}) {
+function buildDriverPendency(driverSummary) {
   const angellira = driverSummary?.angelira || {};
   const aspx = driverSummary?.aspx || {};
 
-  // Se nenhuma fonte retornou cadastro do motorista, e pendencia de Step A.
+  // Nenhuma fonte externa retornou o motorista → pendencia de Step A.
   if (!angellira.found && !aspx.found) {
     return {
       step: "A",
@@ -120,39 +51,7 @@ function buildDriverPendency(driverSummary, { hasLocalCadastro, hasLocalSelfie =
     };
   }
 
-  // RF001 (PRD): existe no Angellira/ASPX MAS ainda NAO tem cadastro completo no
-  // NOSSO portal (nunca passou pelo nosso banco / nao temos os documentos). A
-  // existencia externa so REAPROVEITA dados — nao conclui. Forca a etapa do
-  // motorista para complementar campos + enviar os documentos obrigatorios.
-  if (!hasLocalCadastro) {
-    return {
-      step: "A",
-      reason: "LOCAL_REGISTRATION_REQUIRED",
-      label: "Complete seu cadastro no Portal",
-      description:
-        "Encontramos seu cadastro em nossa base. Para concluir seu cadastro no Portal e " +
-        "atender aos requisitos operacionais, e necessario complementar algumas informacoes " +
-        "e enviar os documentos obrigatorios.",
-    };
-  }
-
-  // Ja tem cadastro completo no nosso portal, MAS sem a selfie segurando a CNH
-  // (o Step A foi pulado em cadastros anteriores a selfie virar obrigatoria).
-  // Forca a etapa do motorista SO para coletar a selfie — o frontend
-  // pre-preenche o resto a partir do cadastro aprovado (persistedMotorista), de
-  // modo que o motorista so precisa anexar a selfie. NAO forca os veiculos
-  // (classifyPlate segue usando hasLocalCadastro, que continua true aqui).
-  if (!hasLocalSelfie) {
-    return {
-      step: "A",
-      reason: "SELFIE_REQUIRED",
-      label: "Falta a selfie segurando a CNH",
-      description:
-        "Seu cadastro esta quase completo — so falta a selfie segurando a CNH. " +
-        "Os demais dados ja vem preenchidos; e so conferir, anexar a selfie e enviar.",
-    };
-  }
-
+  // Encontrado no Angellira/ASPX → passa direto (reaproveita os dados).
   return null;
 }
 
@@ -215,18 +114,16 @@ function buildPlateExpiryLabel({ plate, daysUntilExpiry, validUntil }) {
 /**
  * Mapeia o resultado por placa para pendencia ou completo.
  *
- * - status NOT_FOUND -> pendencia NOT_FOUND
- * - status FOUND + classificacao mismatch (cavalo<->carreta) -> pendencia
- *   VEHICLE_TYPE_MISMATCH (bloqueia avanco, motorista precisa corrigir placa).
- * - status FOUND + daysUntilExpiry <= 20 -> pendencia EXPIRING
- * - status FOUND + daysUntilExpiry > 20 -> completo
- * - status UNAVAILABLE -> pula (nao bloqueia o motorista por indisponibilidade externa)
+ * - status NOT_FOUND -> pendencia NOT_FOUND (cadastre o veiculo)
+ * - status FOUND + classificacao mismatch (cavalo<->carreta) -> VEHICLE_TYPE_MISMATCH
+ * - status FOUND + daysUntilExpiry <= 20 -> pendencia EXPIRING/EXPIRED (renovacao)
+ * - status FOUND + daysUntilExpiry > 20 -> completo (placa vigente no Angellira = ok)
+ * - status UNAVAILABLE -> pula (nao bloqueia por indisponibilidade externa)
  */
-function classifyPlate({ plateResult, plate, step, candidateSubmittedAt, hasLocalCadastro = true }) {
+function classifyPlate({ plateResult, plate, step, candidateSubmittedAt }) {
   if (plateResult.status === "NOT_FOUND") {
     // Iter #10: Step B = cavalo, Step D = carreta. Descricao orienta o
-    // motorista para a etapa correta do wizard ("Cavalo" vs "Carreta") em
-    // vez de deixar ambiguo se e cadastro de motorista ou veiculo.
+    // motorista para a etapa correta do wizard ("Cavalo" vs "Carreta").
     const vehicleKind = step === "B" ? "cavalo" : "carreta";
     return {
       pendencia: {
@@ -241,9 +138,6 @@ function classifyPlate({ plateResult, plate, step, candidateSubmittedAt, hasLoca
 
   if (plateResult.status === "UNAVAILABLE") {
     // Sem dado disponivel — nao bloqueia nem certifica como completo.
-    // NOTA RF001: se o Angellira estiver fora p/ esta placa, NAO forcamos o
-    // anexo (mesmo sem cadastro local) — priorizamos nao travar o motorista por
-    // indisponibilidade externa. O CRLV ainda e cobrado nas outras placas/etapas.
     return {};
   }
 
@@ -301,24 +195,7 @@ function classifyPlate({ plateResult, plate, step, candidateSubmittedAt, hasLoca
     };
   }
 
-  // RF001: veiculo vigente no Angellira normalmente vira "completo" (pula o
-  // upload). Mas se o MOTORISTA nao tem cadastro completo no nosso portal, nao
-  // temos o CRLV digitalizado — entao exigimos o anexo mesmo estando vigente.
-  if (!hasLocalCadastro) {
-    const vehicleKind = step === "B" ? "cavalo" : "carreta";
-    return {
-      pendencia: {
-        step,
-        plate,
-        reason: "LOCAL_REGISTRATION_REQUIRED",
-        daysUntilExpiry,
-        validUntil: plateResult.validUntil || null,
-        label: `Anexe o documento (CRLV) do ${vehicleKind} — placa ${plate}`,
-        description: `Precisamos do CRLV do veiculo ${plate} para concluir seu cadastro no Portal.`,
-      },
-    };
-  }
-
+  // Placa vigente no Angellira (> 20 dias) → completo (reaproveita, sem exigir CRLV).
   return {
     completo: { plate, daysUntilExpiry },
   };
@@ -352,12 +229,13 @@ function calculateDaysUntilExpiry(validUntil, candidateSubmittedAt) {
  * Pre-check para o wizard de cadastro v2.
  *
  * Reusa `validatePublicLeadPreRegistration` (Angellira+ASPX+vigencia) para o CPF/placas
- * do motorista autenticado e retorna a divisao entre pendencias (steps A/B/D do wizard)
- * e cadastros completos.
+ * do motorista e retorna a divisao entre pendencias (steps A/B/D do wizard) e cadastros
+ * completos. Motorista/placas encontrados e vigentes no Angellira/ASPX passam direto
+ * (sem exigir cadastro local nem documentos).
  *
  * @param {Object} args
- * @param {string} args.driverCpf CPF do motorista autenticado (D-02 — sempre do perfil).
- * @param {string} [args.driverPhone] Telefone do motorista autenticado.
+ * @param {string} args.driverCpf CPF do motorista.
+ * @param {string} [args.driverPhone] Telefone do motorista.
  * @param {string} args.horsePlate Placa do cavalo.
  * @param {string[]} args.trailerPlates 0 a 2 placas de carreta.
  * @param {string} [args.correlationId]
@@ -393,55 +271,7 @@ export async function candidaturaPreCheck({
   const pendencias = [];
   const completos = [];
 
-  // RF001: a existencia no Angellira/ASPX NAO conclui o cadastro se o motorista
-  // nunca completou o cadastro no NOSSO portal (nao temos os documentos). Esse
-  // sinal decide se as etapas (motorista + veiculos) sao forcadas mesmo quando
-  // o dado externo esta "em dia".
-  const localCadastro = await getLocalCadastroStatus({ cpf: driverCpf, correlationId });
-  let hasLocalCadastro = localCadastro.hasCadastro;
-
-  // Novo gate (flag ON): decide por Angellira + SPX ao vivo. No PASS o motorista
-  // passa direto (sem pendencia) e as placas vigentes nao exigem CRLV
-  // (hasLocalCadastro tratado como true). UNAVAILABLE cai no RF001 legado.
-  let externalGate = null;
-  if (isSpxGateEnabled() && !cacheOnly) {
-    const spxStatus = await resolveSpxStatusForGate({
-      cpf: driverCpf,
-      contactNumber: driverPhone,
-      correlationId,
-    });
-    const ang = summary.driver?.angelira || {};
-    externalGate = resolveExternalGate({
-      angellira: {
-        availability: ang.status === "UNAVAILABLE" ? "UNAVAILABLE" : "OK",
-        found: ang.found,
-        statusText: ang.statusText,
-        validUntil: ang.validUntil,
-      },
-      spx: spxStatus,
-      today: candidateSubmittedAt.slice(0, 10),
-    });
-    logStructuredEvent("info", "candidatura.pre-check.external-gate", {
-      correlationId: correlationId || null,
-      gate: externalGate.gate,
-      angelliraConforme: externalGate.angelliraConforme,
-      angelliraVigente: externalGate.angelliraVigente,
-      spxStatus: externalGate.spxStatus,
-    });
-  }
-
-  let driverPendency;
-  if (externalGate && externalGate.gate !== EXTERNAL_GATE.UNAVAILABLE) {
-    driverPendency = buildDriverPendencyFromGate(externalGate);
-    if (externalGate.gate === EXTERNAL_GATE.PASS) {
-      hasLocalCadastro = true; // passa direto — placas vigentes nao exigem CRLV
-    }
-  } else {
-    driverPendency = buildDriverPendency(summary.driver, {
-      hasLocalCadastro,
-      hasLocalSelfie: localCadastro.hasSelfie,
-    });
-  }
+  const driverPendency = buildDriverPendency(summary.driver);
   if (driverPendency) {
     pendencias.push(driverPendency);
   }
@@ -467,7 +297,6 @@ export async function candidaturaPreCheck({
       plate,
       step,
       candidateSubmittedAt,
-      hasLocalCadastro,
     });
 
     if (pendencia) {
@@ -512,74 +341,7 @@ export async function candidaturaPreCheck({
     }
   }
 
-  // Snapshot do motorista aprovado p/ o frontend PRE-PREENCHER o Step A quando a
-  // pendencia e a selfie (SELFIE_REQUIRED) — o motorista so confere e anexa a
-  // selfie. So enviado nesse caso (evita vazar dados do motorista sem necessidade).
-  const needsSelfiePrefill = pendencias.some((p) => p.reason === "SELFIE_REQUIRED");
-  return {
-    pendencias,
-    completos,
-    ...(needsSelfiePrefill && localCadastro.motorista
-      ? { persistedMotorista: localCadastro.motorista }
-      : {}),
-  };
-}
-
-/**
- * RF001 + selfie — estado do cadastro COMPLETO do motorista no nosso portal.
- *
- * "Completo" = existe um `pending_driver_registrations` desse CPF com status
- * `aprovado` ou `concluido` — ou seja, ja passou pelo wizard e enviou os
- * documentos (a aprovacao exige os anexos). Um cadastro apenas `pendente`/
- * `rejeitado`/`draft` NAO conta, e a existencia no Angellira/ASPX tambem NAO
- * conta (base externa, sem nossos documentos).
- *
- * Retorna 3 sinais numa unica consulta:
- *  - `hasCadastro`: tem ao menos 1 cadastro aprovado/concluido (gate RF001 + veiculos).
- *  - `hasSelfie`:  ALGUM desses cadastros ja tem a selfie (motorista.selfie_cnh_url).
- *                  Se nenhum tem, o wizard forca a etapa do motorista so p/ a selfie.
- *  - `motorista`:  snapshot do motorista do cadastro mais recente (o frontend
- *                  usa p/ PRE-PREENCHER o Step A no caso SELFIE_REQUIRED).
- *
- * Fail-open: se o DB falhar, retorna hasCadastro/hasSelfie = true (degrada p/ o
- * comportamento atual — NAO forca o fluxo por erro transitorio) e emite evento
- * estruturado `...local-cadastro-check.db_error` p/ observabilidade.
- *
- * @returns {Promise<{ hasCadastro: boolean, hasSelfie: boolean, motorista: object|null }>}
- */
-async function getLocalCadastroStatus({ cpf, correlationId } = {}) {
-  const digits = String(cpf || "").replace(/\D/g, "");
-  // sem CPF valido → trata como novo (forca fluxo); nao ha snapshot p/ pre-preencher.
-  if (digits.length !== 11) return { hasCadastro: false, hasSelfie: false, motorista: null };
-  try {
-    return await withPgClient(async (client) => {
-      const { rows } = await client.query(
-        `
-          SELECT dados->'motorista' AS motorista,
-                 (COALESCE(dados->'motorista'->>'selfie_cnh_url', '') <> '') AS has_selfie
-          FROM public.pending_driver_registrations
-          WHERE regexp_replace(COALESCE(dados->'motorista'->>'cpf', ''), '\\D', '', 'g') = $1
-            AND status IN ('aprovado', 'concluido')
-          ORDER BY created_at DESC
-          LIMIT 20
-        `,
-        [digits],
-      );
-      if (rows.length === 0) return { hasCadastro: false, hasSelfie: false, motorista: null };
-      return {
-        hasCadastro: true,
-        hasSelfie: rows.some((r) => r.has_selfie === true),
-        motorista: rows[0].motorista ?? null, // mais recente (ORDER BY created_at DESC)
-      };
-    });
-  } catch (err) {
-    logStructuredEvent("warn", "candidatura.pre-check.local-cadastro-check.db_error", {
-      correlationId: correlationId || null,
-      message: err instanceof Error ? err.message : String(err),
-    });
-    // fail-open: NAO forca nada por erro de DB (nem RF001 nem selfie).
-    return { hasCadastro: true, hasSelfie: true, motorista: null };
-  }
+  return { pendencias, completos };
 }
 
 /**
