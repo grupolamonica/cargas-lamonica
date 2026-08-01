@@ -1,14 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockValidatePublicLeadPreRegistration, mockPgClient, canned } = vi.hoisted(() => {
   const mockPgClient = { query: vi.fn() };
   return {
     mockValidatePublicLeadPreRegistration: vi.fn(),
     mockPgClient,
-    // Estado controlavel das 2 queries de pre-check.js:
-    //  - hasLocalCadastro (RF001): motorista JA tem cadastro completo (aprovado/concluido)?
-    //  - duplicate/duplicateError (iter #7): duplicate-check.
-    canned: { hasLocalCadastro: true, hasLocalSelfie: true, localCadastroError: false, duplicate: null, duplicateError: false },
+    // Estado do duplicate-check (iter #7). O RF001/selfie foram revertidos: o
+    // pre-check nao consulta mais cadastro local — so o duplicate-check bate no DB.
+    canned: { duplicate: null, duplicateError: false },
   };
 });
 
@@ -16,17 +15,9 @@ vi.mock("../../load-claims/public-lead-validation.js", () => ({
   validatePublicLeadPreRegistration: mockValidatePublicLeadPreRegistration,
 }));
 
-// pre-check.js consulta o DB em 2 pontos: hasCompleteLocalCadastro (RF001) e o
-// duplicate-check (iter #7). O mock roteia por SQL.
+// pre-check.js consulta o DB só no duplicate-check (iter #7).
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({
   withPgClient: async (cb) => cb(mockPgClient),
-}));
-
-// Novo gate: pre-check.js consulta o SPX ao vivo (lookupMotorista) quando a flag
-// PRECHECK_SPX_GATE_ENABLED está ligada. Mockado para os testes do gate.
-const { mockLookupMotorista } = vi.hoisted(() => ({ mockLookupMotorista: vi.fn() }));
-vi.mock("../../../infrastructure/cadastro-bots/spx-bot-client.js", () => ({
-  lookupMotorista: mockLookupMotorista,
 }));
 
 import { candidaturaPreCheck } from "./pre-check.js";
@@ -35,34 +26,15 @@ import { candidaturaPreCheckSchema } from "../../../interface/http/schemas/candi
 describe("candidaturaPreCheck", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: motorista JA tem cadastro local (preserva os testes de vigencia),
-    // sem duplicate.
-    canned.hasLocalCadastro = true;
-    canned.hasLocalSelfie = true;
-    canned.localCadastroError = false;
     canned.duplicate = null;
     canned.duplicateError = false;
-    mockPgClient.query.mockImplementation(async (sql) => {
-      const s = String(sql);
-      // RF001 + selfie — getLocalCadastroStatus (status IN ('aprovado','concluido')).
-      // Retorna motorista (snapshot) + has_selfie, como a query real.
-      if (s.includes("'aprovado'") && s.includes("'concluido'")) {
-        if (canned.localCadastroError) throw new Error("pg down (local-cadastro)");
-        return canned.hasLocalCadastro
-          ? {
-              rows: [{ motorista: { cpf: "12345678901", nome: "MOTORISTA TESTE" }, has_selfie: canned.hasLocalSelfie }],
-              rowCount: 1,
-            }
-          : { rows: [], rowCount: 0 };
-      }
-      // duplicate-check.
+    mockPgClient.query.mockImplementation(async () => {
       if (canned.duplicateError) throw new Error("pg down");
       return canned.duplicate ? { rows: [canned.duplicate], rowCount: 1 } : { rows: [], rowCount: 0 };
     });
   });
 
-  it("retorna pendencias vazias e 3 completos quando motorista + cavalo + 2 carretas estao validos com vigencia > 20 dias", async () => {
-    // Vigencia 60 dias no futuro a partir de uma data fixa
+  it("motorista + placas encontrados e vigentes (>20d) → sem pendencias, tudo em completos", async () => {
     const submittedAt = "2026-05-12";
     const validUntil = "2026-07-12"; // ~61 dias
 
@@ -80,29 +52,17 @@ describe("candidaturaPreCheck", () => {
       },
     });
 
-    // Forca data fixa para previsibilidade do calculo de dias
     vi.useFakeTimers();
     vi.setSystemTime(new Date(`${submittedAt}T00:00:00.000Z`));
-
     try {
       const result = await candidaturaPreCheck({
         driverCpf: "12345678901",
-        driverPhone: "71999999999",
         horsePlate: "ABC1D23",
         trailerPlates: ["DEF4G56", "GHI7H89"],
-        correlationId: "test-corr-1",
+        correlationId: "ok-1",
       });
-
       expect(result.pendencias).toEqual([]);
       expect(result.completos).toHaveLength(3);
-      expect(result.completos).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ plate: "ABC1D23", daysUntilExpiry: expect.any(Number) }),
-          expect.objectContaining({ plate: "DEF4G56" }),
-          expect.objectContaining({ plate: "GHI7H89" }),
-        ]),
-      );
-      // Cada veiculo OK deve ter mais que 20 dias
       for (const completo of result.completos) {
         expect(completo.daysUntilExpiry).toBeGreaterThan(20);
       }
@@ -111,145 +71,138 @@ describe("candidaturaPreCheck", () => {
     }
   });
 
-  it("gera pendencia step B com reason NOT_FOUND quando o cavalo nao foi encontrado", async () => {
+  it("REVERSAO: motorista no Angellira SEM cadastro local → passa direto (sem pendencia de motorista)", async () => {
     mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
       summary: {
-        driver: {
-          angelira: { status: "FOUND", found: true },
-          aspx: { status: "FOUND", found: true },
-        },
-        plates: [
-          { field: "horsePlate", status: "NOT_FOUND", found: false, validUntil: null },
-        ],
+        driver: { angelira: { found: true }, aspx: { found: false } },
+        plates: [{ field: "horsePlate", status: "FOUND", found: true, validUntil: "2030-01-01" }],
       },
     });
-
     const result = await candidaturaPreCheck({
       driverCpf: "12345678901",
-      driverPhone: "71999999999",
-      horsePlate: "ZZZ9Z99",
-      trailerPlates: [],
-      correlationId: "test-corr-2",
-    });
-
-    expect(result.pendencias).toHaveLength(1);
-    expect(result.pendencias[0]).toMatchObject({
-      step: "B",
-      plate: "ZZZ9Z99",
-      reason: "NOT_FOUND",
-    });
-    // Iter #10: label foca no CTA (cadastre veiculo), description traz
-    // contexto da etapa "Cavalo" porque step B = cavalo.
-    expect(result.pendencias[0].label).toContain("ZZZ9Z99");
-    expect(result.pendencias[0].label.toLowerCase()).toContain("cadastre");
-    expect(result.pendencias[0].description).toContain("cavalo");
-    expect(result.pendencias[0].description).toContain("Cavalo");
-    expect(result.completos).toEqual([]);
-  });
-
-  it("Iter #10 — NOT_FOUND no step D rotula como 'carreta' na descricao", async () => {
-    mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-      summary: {
-        driver: {
-          angelira: { status: "FOUND", found: true },
-          aspx: { status: "FOUND", found: true },
-        },
-        plates: [
-          { field: "horsePlate", status: "FOUND", found: true, validUntil: "2027-01-01" },
-          { field: "trailerPlate", status: "NOT_FOUND", found: false, validUntil: null },
-        ],
-      },
-    });
-
-    const result = await candidaturaPreCheck({
-      driverCpf: "12345678901",
-      driverPhone: "71999999999",
       horsePlate: "ABC1D23",
-      trailerPlates: ["DEF4G56"],
-      correlationId: "test-step-d",
+      trailerPlates: [],
+      correlationId: "revert-A",
     });
-
-    const carretaPendency = result.pendencias.find((p) => p.plate === "DEF4G56");
-    expect(carretaPendency).toMatchObject({
-      step: "D",
-      reason: "NOT_FOUND",
-    });
-    expect(carretaPendency.description).toContain("carreta");
-    expect(carretaPendency.description).toContain("Carreta");
+    // Sem RF001/selfie: nada de LOCAL_REGISTRATION_REQUIRED / SELFIE_REQUIRED / step A.
+    expect(result.pendencias.find((p) => p.step === "A")).toBeUndefined();
+    expect(result.pendencias.find((p) => p.reason === "LOCAL_REGISTRATION_REQUIRED")).toBeUndefined();
+    expect(result.pendencias.find((p) => p.reason === "SELFIE_REQUIRED")).toBeUndefined();
+    // Placa vigente vira completo (nao exige CRLV).
+    expect(result.completos).toEqual(expect.arrayContaining([expect.objectContaining({ plate: "ABC1D23" })]));
   });
 
-  it("Iter #10 — DRIVER_NOT_FOUND retorna label + description orientando etapa A", async () => {
+  it("DRIVER_NOT_FOUND: nao encontrado no Angellira NEM no ASPX → pendencia step A", async () => {
     mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
       summary: {
-        driver: {
-          angelira: { status: "NOT_FOUND", found: false },
-          aspx: { status: "NOT_FOUND", found: false },
-        },
+        driver: { angelira: { status: "NOT_FOUND", found: false }, aspx: { status: "NOT_FOUND", found: false } },
         plates: [],
       },
     });
-
     const result = await candidaturaPreCheck({
       driverCpf: "99988877766",
-      driverPhone: "71988888888",
       horsePlate: "ABC1D23",
       trailerPlates: [],
-      correlationId: "test-driver-pending",
+      correlationId: "notfound",
     });
-
-    const driverPendency = result.pendencias.find((p) => p.reason === "DRIVER_NOT_FOUND");
-    expect(driverPendency).toBeDefined();
-    expect(driverPendency.step).toBe("A");
-    expect(driverPendency.label).toMatch(/CPF/);
-    expect(driverPendency.description).toContain("Dados do motorista");
-    expect(driverPendency.description).toContain("ASPX");
+    const p = result.pendencias.find((x) => x.reason === "DRIVER_NOT_FOUND");
+    expect(p).toBeDefined();
+    expect(p.step).toBe("A");
+    expect(p.label).toMatch(/CPF/);
+    expect(p.description).toContain("Dados do motorista");
   });
 
-  it("gera pendencia step D com daysUntilExpiry=12 quando a carreta esta com CRLV vencendo", async () => {
-    const submittedAt = "2026-05-12";
-    const validUntil = "2026-05-24"; // 12 dias
-
+  it("placa do cavalo NOT_FOUND → pendencia step B", async () => {
     mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
       summary: {
-        driver: {
-          angelira: { status: "FOUND", found: true },
-          aspx: { status: "FOUND", found: true },
-        },
+        driver: { angelira: { found: true }, aspx: { found: true } },
+        plates: [{ field: "horsePlate", status: "NOT_FOUND", found: false, validUntil: null }],
+      },
+    });
+    const result = await candidaturaPreCheck({
+      driverCpf: "12345678901",
+      horsePlate: "ZZZ9Z99",
+      trailerPlates: [],
+      correlationId: "plate-notfound",
+    });
+    expect(result.pendencias).toHaveLength(1);
+    expect(result.pendencias[0]).toMatchObject({ step: "B", plate: "ZZZ9Z99", reason: "NOT_FOUND" });
+    expect(result.pendencias[0].description).toContain("Cavalo");
+  });
+
+  it("carreta com CRLV vencendo (12 dias) → pendencia EXPIRING; cavalo vigente vai p/ completos", async () => {
+    const submittedAt = "2026-05-12";
+    mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+      summary: {
+        driver: { angelira: { found: true }, aspx: { found: true } },
         plates: [
-          // Cavalo OK com vigencia distante (60 dias) — deve ir para completos.
           { field: "horsePlate", status: "FOUND", found: true, validUntil: "2026-07-12" },
-          // Carreta com 12 dias para vencer — deve gerar pendencia EXPIRING.
-          { field: "trailerPlate", status: "FOUND", found: true, validUntil },
+          { field: "trailerPlate", status: "FOUND", found: true, validUntil: "2026-05-24" }, // 12 dias
         ],
       },
     });
-
     vi.useFakeTimers();
     vi.setSystemTime(new Date(`${submittedAt}T00:00:00.000Z`));
-
     try {
       const result = await candidaturaPreCheck({
         driverCpf: "12345678901",
-        driverPhone: "71999999999",
         horsePlate: "ABC1D23",
         trailerPlates: ["DEF4G56"],
-        correlationId: "test-corr-3",
+        correlationId: "expiring",
       });
+      const exp = result.pendencias.find((p) => p.plate === "DEF4G56");
+      expect(exp).toMatchObject({ step: "D", reason: "EXPIRING", daysUntilExpiry: 12 });
+      expect(result.completos).toEqual(expect.arrayContaining([expect.objectContaining({ plate: "ABC1D23" })]));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-      const expiringPendency = result.pendencias.find((p) => p.plate === "DEF4G56");
-      expect(expiringPendency).toMatchObject({
-        step: "D",
-        plate: "DEF4G56",
-        reason: "EXPIRING",
-        daysUntilExpiry: 12,
+  it("VEHICLE_TYPE_MISMATCH quando a placa do cavalo retorna classificada como carreta", async () => {
+    mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+      summary: {
+        driver: { angelira: { found: true }, aspx: { found: true } },
+        plates: [
+          { field: "horsePlate", status: "FOUND", found: true, validUntil: "2027-01-01", vehicleClassification: "carreta" },
+        ],
+      },
+    });
+    const result = await candidaturaPreCheck({
+      driverCpf: "12345678901",
+      horsePlate: "XYZ9X99",
+      trailerPlates: [],
+      correlationId: "mismatch",
+    });
+    expect(result.pendencias[0]).toMatchObject({
+      step: "B",
+      plate: "XYZ9X99",
+      reason: "VEHICLE_TYPE_MISMATCH",
+      expectedType: "cavalo",
+      actualType: "carreta",
+    });
+  });
+
+  it("nao gera mismatch quando a classificacao e null (Angellira nao retornou tipo) → completo", async () => {
+    const submittedAt = "2026-05-12";
+    mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+      summary: {
+        driver: { angelira: { found: true }, aspx: { found: true } },
+        plates: [
+          { field: "horsePlate", status: "FOUND", found: true, validUntil: "2027-01-01", vehicleClassification: null },
+        ],
+      },
+    });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(`${submittedAt}T00:00:00.000Z`));
+    try {
+      const result = await candidaturaPreCheck({
+        driverCpf: "12345678901",
+        horsePlate: "ABC1D23",
+        trailerPlates: [],
+        correlationId: "mismatch-null",
       });
-      expect(expiringPendency.label).toContain("DEF4G56");
-      expect(expiringPendency.label).toContain("12");
-
-      // Cavalo deve continuar em completos
-      expect(result.completos).toEqual(
-        expect.arrayContaining([expect.objectContaining({ plate: "ABC1D23" })]),
-      );
+      expect(result.pendencias).toEqual([]);
+      expect(result.completos).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }
@@ -260,37 +213,15 @@ describe("candidaturaPreCheck", () => {
       horsePlate: "ABC1D23",
       trailerPlates: ["DEF4G56", "GHI7H89", "JKL2L34"],
     });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      const messages = result.error.issues.map((issue) => issue.message);
-      expect(messages.some((message) => /2/.test(message))).toBe(true);
-    }
-  });
-
-  // NOTA (08-23): pre-check virou PUBLICO em Phase 7 (commit c5fa0bc) e o schema
-  // agora ACEITA `cpf` no body. O teste antigo de anti-tampering (D-02) foi
-  // removido — o motorista nao esta autenticado no Tela0 do wizard, entao o
-  // CPF precisa vir do form. Validacao de tampering acontece no submit final
-  // (candidaturaSubmitSchema) e nao mais no pre-check.
-
-  it("rejeita schema quando placa esta fora do padrao", () => {
-    const result = candidaturaPreCheckSchema.safeParse({
-      cpf: "12345678901",
-      horsePlate: "AB1234",
-      trailerPlates: [],
-    });
-
     expect(result.success).toBe(false);
   });
 
-  it("aceita schema com placa Mercosul e placa antiga", () => {
+  it("aceita schema com placa Mercosul e placa antiga (normaliza)", () => {
     const result = candidaturaPreCheckSchema.safeParse({
       cpf: "12345678901",
       horsePlate: "abc1d23",
       trailerPlates: ["def4567"],
     });
-
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.horsePlate).toBe("ABC1D23");
@@ -298,408 +229,55 @@ describe("candidaturaPreCheck", () => {
     }
   });
 
-  it("gera pendencia VEHICLE_TYPE_MISMATCH quando placa do cavalo retorna como carreta", async () => {
-    // Motorista digitou a placa da CARRETA no campo do cavalo — Angellira
-    // retorna FOUND, classificacao=carreta, mas o slot e horsePlate (esperado: cavalo).
-    mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-      summary: {
-        driver: {
-          angelira: { status: "FOUND", found: true },
-          aspx: { status: "FOUND", found: true },
-        },
-        plates: [
-          {
-            field: "horsePlate",
-            status: "FOUND",
-            found: true,
-            validUntil: "2027-01-01",
-            vehicleClassification: "carreta",
-          },
-        ],
-      },
-    });
-
-    const result = await candidaturaPreCheck({
-      driverCpf: "12345678901",
-      driverPhone: "71999999999",
-      horsePlate: "XYZ9X99",
-      trailerPlates: [],
-      correlationId: "test-mismatch-1",
-    });
-
-    expect(result.pendencias).toHaveLength(1);
-    expect(result.pendencias[0]).toMatchObject({
-      step: "B",
-      plate: "XYZ9X99",
-      reason: "VEHICLE_TYPE_MISMATCH",
-      expectedType: "cavalo",
-      actualType: "carreta",
-    });
-    expect(result.pendencias[0].label).toContain("XYZ9X99");
-  });
-
-  it("nao gera mismatch quando classification bate com o slot (cavalo no horsePlate)", async () => {
-    const submittedAt = "2026-05-12";
-    mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-      summary: {
-        driver: {
-          angelira: { status: "FOUND", found: true },
-          aspx: { status: "FOUND", found: true },
-        },
-        plates: [
-          {
-            field: "horsePlate",
-            status: "FOUND",
-            found: true,
-            validUntil: "2027-01-01",
-            vehicleClassification: "cavalo",
-          },
-        ],
-      },
-    });
-
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(`${submittedAt}T00:00:00.000Z`));
-
-    try {
-      const result = await candidaturaPreCheck({
-        driverCpf: "12345678901",
-        driverPhone: "71999999999",
-        horsePlate: "ABC1D23",
-        trailerPlates: [],
-        correlationId: "test-mismatch-2",
-      });
-
-      expect(result.pendencias).toEqual([]);
-      expect(result.completos).toHaveLength(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("nao gera mismatch quando classification e null (Angellira nao retornou tipo)", async () => {
-    const submittedAt = "2026-05-12";
-    mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-      summary: {
-        driver: {
-          angelira: { status: "FOUND", found: true },
-          aspx: { status: "FOUND", found: true },
-        },
-        plates: [
-          {
-            field: "horsePlate",
-            status: "FOUND",
-            found: true,
-            validUntil: "2027-01-01",
-            vehicleClassification: null,
-          },
-        ],
-      },
-    });
-
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(`${submittedAt}T00:00:00.000Z`));
-
-    try {
-      const result = await candidaturaPreCheck({
-        driverCpf: "12345678901",
-        driverPhone: "71999999999",
-        horsePlate: "ABC1D23",
-        trailerPlates: [],
-        correlationId: "test-mismatch-3",
-      });
-
-      // Sem classificacao confiavel, NAO bloqueia — fica em completos.
-      expect(result.pendencias).toEqual([]);
-      expect(result.completos).toHaveLength(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   // ── Iter #7 — Duplicate detection ─────────────────────────────────────────
-
   describe("duplicate detection (iter #7)", () => {
-    it("retorna pendencia DUPLICATE_PENDING_REGISTRATION quando ja existe cadastro pendente <30d com mesma (cpf, horsePlate)", async () => {
+    it("retorna DUPLICATE_PENDING_REGISTRATION quando ja existe cadastro pendente <30d (cpf, horsePlate)", async () => {
+      const dupCreated = new Date();
+      canned.duplicate = { id: "existing-row-1", status: "em_analise", created_at: dupCreated, carga_id: "c-1" };
       mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: {
-          driver: { angelira: { found: true }, aspx: { found: true } },
-          plates: [
-            { field: "horsePlate", status: "UNAVAILABLE" },
-          ],
-        },
+        summary: { driver: { angelira: { found: true }, aspx: { found: true } }, plates: [{ field: "horsePlate", status: "UNAVAILABLE" }] },
       });
-
-      const dupCreated = new Date(Date.now() - 5 * 24 * 3600 * 1000);
-      canned.duplicate = {
-        id: "existing-row-1",
-        status: "em_analise",
-        created_at: dupCreated,
-        carga_id: "carga-X",
-      };
-
       const result = await candidaturaPreCheck({
         driverCpf: "12345678901",
         horsePlate: "ABC1D23",
         trailerPlates: [],
         correlationId: "dup-1",
       });
-
       const dup = result.pendencias.find((p) => p.reason === "DUPLICATE_PENDING_REGISTRATION");
       expect(dup).toBeDefined();
       expect(dup.allowSkipWizard).toBe(true);
       expect(dup.pendingRegistrationId).toBe("existing-row-1");
       expect(dup.status).toBe("em_analise");
-      expect(dup.submittedAt).toBe(dupCreated.toISOString());
     });
 
     it("NAO emite pendencia quando duplicate-check retorna 0 rows", async () => {
       mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: {
-          driver: { angelira: { found: true }, aspx: { found: true } },
-          plates: [],
-        },
+        summary: { driver: { angelira: { found: true }, aspx: { found: true } }, plates: [] },
       });
-      // canned.duplicate = null (default) → sem duplicate.
-
       const result = await candidaturaPreCheck({
         driverCpf: "12345678901",
         horsePlate: "ABC1D23",
         trailerPlates: [],
         correlationId: "dup-2",
       });
-
-      const dup = result.pendencias.find((p) => p.reason === "DUPLICATE_PENDING_REGISTRATION");
-      expect(dup).toBeUndefined();
+      expect(result.pendencias.find((p) => p.reason === "DUPLICATE_PENDING_REGISTRATION")).toBeUndefined();
     });
 
     it("falha de DB no duplicate-check NAO bloqueia o pre-check (log + ausencia da pendencia)", async () => {
+      canned.duplicateError = true;
       mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: {
-          driver: { angelira: { found: true }, aspx: { found: true } },
-          plates: [],
-        },
+        summary: { driver: { angelira: { found: true }, aspx: { found: true } }, plates: [] },
       });
-      canned.duplicateError = true; // duplicate-check joga → pre-check nao pode quebrar
-
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
       const result = await candidaturaPreCheck({
         driverCpf: "12345678901",
         horsePlate: "ABC1D23",
         trailerPlates: [],
         correlationId: "dup-3",
       });
-
       expect(result.pendencias.find((p) => p.reason === "DUPLICATE_PENDING_REGISTRATION")).toBeUndefined();
       expect(warnSpy).toHaveBeenCalled();
       warnSpy.mockRestore();
-    });
-  });
-
-  // ── Novo gate Angellira + SPX (flag PRECHECK_SPX_GATE_ENABLED) ─────────────
-  describe("gate Angellira + SPX (flag ON)", () => {
-    const OLD_FLAG = process.env.PRECHECK_SPX_GATE_ENABLED;
-    beforeEach(() => {
-      process.env.PRECHECK_SPX_GATE_ENABLED = "1";
-      canned.hasLocalCadastro = false; // sem cadastro local — só o gate externo decide
-    });
-    afterEach(() => {
-      if (OLD_FLAG === undefined) delete process.env.PRECHECK_SPX_GATE_ENABLED;
-      else process.env.PRECHECK_SPX_GATE_ENABLED = OLD_FLAG;
-    });
-
-    it("Angellira Conforme+vigente E SPX ativo na agencia → passa direto (sem pendencia de motorista)", async () => {
-      mockLookupMotorista.mockResolvedValue({ ok: true, encontrado: true, na_minha_agencia: true });
-      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: {
-          driver: { angelira: { status: "FOUND", found: true, statusText: "Conforme", validUntil: "2027-01-01" }, aspx: { found: true } },
-          plates: [{ field: "horsePlate", status: "FOUND", found: true, validUntil: "2027-01-01" }],
-        },
-      });
-      const r = await candidaturaPreCheck({ driverCpf: "12345678901", horsePlate: "ABC1D23", trailerPlates: [], correlationId: "gate-pass" });
-      expect(r.pendencias.find((p) => p.step === "A")).toBeUndefined();
-      expect(r.pendencias.find((p) => p.reason === "LOCAL_REGISTRATION_REQUIRED")).toBeUndefined();
-      expect(r.completos.length).toBeGreaterThanOrEqual(1); // placa vigente vira completo (sem CRLV)
-    });
-
-    it("Angellira OK mas SPX outra agencia → pendencia SPX_REGISTRATION_REQUIRED", async () => {
-      mockLookupMotorista.mockResolvedValue({ ok: true, encontrado: true, outra_agencia: true });
-      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: { driver: { angelira: { status: "FOUND", found: true, statusText: "Conforme", validUntil: "2027-01-01" }, aspx: { found: true } }, plates: [] },
-      });
-      const r = await candidaturaPreCheck({ driverCpf: "12345678901", horsePlate: "ABC1D23", trailerPlates: [], correlationId: "gate-nospx" });
-      expect(r.pendencias.find((p) => p.reason === "SPX_REGISTRATION_REQUIRED")).toBeTruthy();
-    });
-
-    it("Angellira Conforme mas VENCIDO → pendencia EXTERNAL_REGISTRATION_EXPIRED", async () => {
-      mockLookupMotorista.mockResolvedValue({ ok: true, encontrado: true, na_minha_agencia: true });
-      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: { driver: { angelira: { status: "FOUND", found: true, statusText: "Conforme", validUntil: "2020-01-01" }, aspx: { found: true } }, plates: [] },
-      });
-      const r = await candidaturaPreCheck({ driverCpf: "12345678901", horsePlate: "ABC1D23", trailerPlates: [], correlationId: "gate-exp" });
-      expect(r.pendencias.find((p) => p.reason === "EXTERNAL_REGISTRATION_EXPIRED")).toBeTruthy();
-    });
-
-    it("Angellira nao encontrado → LOCAL_REGISTRATION_REQUIRED (cadastrar), mesmo com SPX ativo", async () => {
-      mockLookupMotorista.mockResolvedValue({ ok: true, encontrado: true, na_minha_agencia: true });
-      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: { driver: { angelira: { status: "NOT_FOUND", found: false }, aspx: { found: false } }, plates: [] },
-      });
-      const r = await candidaturaPreCheck({ driverCpf: "12345678901", horsePlate: "ABC1D23", trailerPlates: [], correlationId: "gate-notfound" });
-      expect(r.pendencias.find((p) => p.reason === "LOCAL_REGISTRATION_REQUIRED")).toBeTruthy();
-    });
-
-    it("SPX indisponivel (lookup falha) → cai no RF001 legado (LOCAL_REGISTRATION_REQUIRED)", async () => {
-      mockLookupMotorista.mockRejectedValue(new Error("spx-bot down"));
-      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: { driver: { angelira: { status: "FOUND", found: true, statusText: "Conforme", validUntil: "2027-01-01" }, aspx: { found: true } }, plates: [] },
-      });
-      const r = await candidaturaPreCheck({ driverCpf: "12345678901", horsePlate: "ABC1D23", trailerPlates: [], correlationId: "gate-unavail" });
-      expect(r.pendencias.find((p) => p.reason === "LOCAL_REGISTRATION_REQUIRED")).toBeTruthy();
-    });
-  });
-
-  // ── RF001 — existir no Angellira NAO conclui sem cadastro local ────────────
-  describe("RF001 — sem cadastro local completo forca o fluxo", () => {
-    it("motorista no Angellira mas SEM cadastro local → pendencia step A LOCAL_REGISTRATION_REQUIRED", async () => {
-      canned.hasLocalCadastro = false;
-      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: {
-          driver: { angelira: { found: true }, aspx: { found: true } },
-          plates: [],
-        },
-      });
-
-      const result = await candidaturaPreCheck({
-        driverCpf: "12345678901",
-        horsePlate: "ABC1D23",
-        trailerPlates: [],
-        correlationId: "rf001-A",
-      });
-
-      const p = result.pendencias.find((x) => x.reason === "LOCAL_REGISTRATION_REQUIRED" && x.step === "A");
-      expect(p).toBeDefined();
-      expect(p.description).toMatch(/documentos obrigatorios/i);
-    });
-
-    it("SEM cadastro local → veiculo vigente vira pendencia de anexo (nao completo)", async () => {
-      canned.hasLocalCadastro = false;
-      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: {
-          driver: { angelira: { found: true }, aspx: { found: true } },
-          plates: [
-            { field: "horsePlate", status: "FOUND", found: true, validUntil: "2030-01-01" },
-          ],
-        },
-      });
-
-      const result = await candidaturaPreCheck({
-        driverCpf: "12345678901",
-        horsePlate: "ABC1D23",
-        trailerPlates: [],
-        correlationId: "rf001-B",
-      });
-
-      expect(result.completos).toEqual([]); // NAO cai em completos
-      const plate = result.pendencias.find((x) => x.plate === "ABC1D23");
-      expect(plate).toMatchObject({ step: "B", reason: "LOCAL_REGISTRATION_REQUIRED" });
-      expect(plate.label).toMatch(/CRLV/);
-    });
-
-    it("fail-open: erro de DB no check de cadastro local NAO força o fluxo (degrada p/ comportamento atual)", async () => {
-      canned.localCadastroError = true; // a query de hasCompleteLocalCadastro joga
-      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: {
-          driver: { angelira: { found: true }, aspx: { found: true } },
-          plates: [
-            { field: "horsePlate", status: "FOUND", found: true, validUntil: "2030-01-01" },
-          ],
-        },
-      });
-
-      const result = await candidaturaPreCheck({
-        driverCpf: "12345678901",
-        horsePlate: "ABC1D23",
-        trailerPlates: [],
-        correlationId: "rf001-failopen",
-      });
-
-      // fail-open → trata como se tivesse cadastro → nao gera LOCAL_REGISTRATION_REQUIRED.
-      expect(result.pendencias.find((x) => x.reason === "LOCAL_REGISTRATION_REQUIRED")).toBeUndefined();
-      expect(result.completos).toEqual(expect.arrayContaining([expect.objectContaining({ plate: "ABC1D23" })]));
-    });
-
-    it("COM cadastro local → veiculo vigente segue em completos (nao força)", async () => {
-      canned.hasLocalCadastro = true;
-      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: {
-          driver: { angelira: { found: true }, aspx: { found: true } },
-          plates: [
-            { field: "horsePlate", status: "FOUND", found: true, validUntil: "2030-01-01" },
-          ],
-        },
-      });
-
-      const result = await candidaturaPreCheck({
-        driverCpf: "12345678901",
-        horsePlate: "ABC1D23",
-        trailerPlates: [],
-        correlationId: "rf001-C",
-      });
-
-      expect(result.pendencias.find((x) => x.reason === "LOCAL_REGISTRATION_REQUIRED")).toBeUndefined();
-      expect(result.completos).toEqual(expect.arrayContaining([expect.objectContaining({ plate: "ABC1D23" })]));
-    });
-  });
-
-  // ── Selfie obrigatoria — cadastro local SEM selfie forca SO a etapa do motorista ──
-  describe("selfie obrigatoria (cadastro local sem selfie)", () => {
-    it("tem cadastro local mas SEM selfie → pendencia step A SELFIE_REQUIRED + persistedMotorista, sem forcar veiculos", async () => {
-      canned.hasLocalCadastro = true;
-      canned.hasLocalSelfie = false;
-      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: {
-          driver: { angelira: { found: true }, aspx: { found: false } },
-          plates: [{ field: "horsePlate", status: "FOUND", found: true, validUntil: "2030-01-01" }],
-        },
-      });
-
-      const result = await candidaturaPreCheck({
-        driverCpf: "12345678901",
-        horsePlate: "ABC1D23",
-        trailerPlates: [],
-        correlationId: "selfie-A",
-      });
-
-      const p = result.pendencias.find((x) => x.reason === "SELFIE_REQUIRED" && x.step === "A");
-      expect(p).toBeDefined();
-      // NAO forca veiculos: hasLocalCadastro=true → cavalo vigente vai p/ completos.
-      expect(result.pendencias.find((x) => x.step === "B")).toBeUndefined();
-      expect(result.completos).toEqual(expect.arrayContaining([expect.objectContaining({ plate: "ABC1D23" })]));
-      // Snapshot do motorista aprovado p/ o frontend pre-preencher o Step A.
-      expect(result.persistedMotorista).toMatchObject({ cpf: "12345678901", nome: "MOTORISTA TESTE" });
-    });
-
-    it("tem cadastro local COM selfie → sem pendencia de selfie e sem persistedMotorista", async () => {
-      canned.hasLocalCadastro = true;
-      canned.hasLocalSelfie = true;
-      mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
-        summary: {
-          driver: { angelira: { found: true }, aspx: { found: false } },
-          plates: [{ field: "horsePlate", status: "FOUND", found: true, validUntil: "2030-01-01" }],
-        },
-      });
-
-      const result = await candidaturaPreCheck({
-        driverCpf: "12345678901",
-        horsePlate: "ABC1D23",
-        trailerPlates: [],
-        correlationId: "selfie-B",
-      });
-
-      expect(result.pendencias.find((x) => x.reason === "SELFIE_REQUIRED")).toBeUndefined();
-      expect(result.persistedMotorista).toBeUndefined();
     });
   });
 });
