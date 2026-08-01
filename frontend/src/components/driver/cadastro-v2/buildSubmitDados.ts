@@ -64,6 +64,10 @@ function buildMotorista(data: ConfirmationWizardData) {
       const cnhObj: Record<string, string> = {};
       if (a1.categoria) cnhObj.categoria = a1.categoria;
       if (a1.validade) cnhObj.validade = a1.validade;
+      // Nome cru da CNH (OCR, imutável) — snapshot server-side p/ o backstop
+      // anti-fraude (nome digitado × nome da CNH). motorista.cnh é .passthrough()
+      // no schema, então sobrevive sem alteração de contrato.
+      if (a1.nome_cnh) cnhObj.nome = a1.nome_cnh;
       if (a1.registro) cnhObj.registro = a1.registro;
       if (a1.cnh_codigo_seguranca) cnhObj.codigo_seguranca = a1.cnh_codigo_seguranca;
       if (a1.cnh_numero_espelho) cnhObj.numero_espelho = a1.cnh_numero_espelho;

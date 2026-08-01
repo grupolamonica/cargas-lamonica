@@ -21,6 +21,7 @@ import {
 import { insertSecurityAuditEvent } from "../../../../infrastructure/security-audit.js";
 import { logStructuredEvent } from "../../../../infrastructure/security-log.js";
 import { evaluateCandidaturaCnhCategoria } from "../../../../domain/candidatura/cnh-category.js";
+import { namesMatch } from "../../../../domain/identity/identity-match.js";
 
 import { stageAnexosForEntity } from "./anexos-stager.js";
 import { stripUuidIfInvalid } from "./_utils.js";
@@ -472,6 +473,22 @@ async function stageEntityAnexos(ctx, entity, idx = 0) {
 
 async function stepMotorista(ctx) {
   const payload = mapMotoristaPayload(ctx.dados);
+
+  // Backstop de identidade (última barreira antes de gravar no Angellira): o nome
+  // do cadastro tem de conferir com o nome da CNH (OCR, snapshot em
+  // motorista.cnh.nome). Lê dado FRESCO do banco → cobre edição de nome
+  // pós-submit. Fail-open quando não há snapshot (cadastro sem OCR do nome).
+  const nomeDigitado = ctx.dados?.motorista?.nome;
+  const nomeCnh = ctx.dados?.motorista?.cnh?.nome ?? ctx.dados?.cnh?.nome;
+  if (nomeCnh && !namesMatch(nomeDigitado, nomeCnh)) {
+    throw new AngelliraBotError({
+      code: "NOME_DIVERGENTE_CNH",
+      message: `Nome do cadastro ("${nomeDigitado}") diverge do nome da CNH ("${nomeCnh}").`,
+      etapa: "motorista",
+      acao: "Revise o nome do motorista no painel antes de reenviar ao Angellira.",
+    });
+  }
+
   const anexos = await stageEntityAnexos(ctx, "motorista");
   const result = await cadastrarMotorista({
     idCadastro: ctx.cadastroId,
