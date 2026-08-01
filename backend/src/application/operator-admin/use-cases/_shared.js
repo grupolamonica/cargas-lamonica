@@ -680,6 +680,38 @@ export async function findSheetClientId(client) {
 
 // Resolve o id de um cliente pelo nome exato (case-insensitive). Usado p/ lançar
 // cargas de fontes não-Shopee (ex.: Nestlé/Projeto Galileu).
+/** Nomes possíveis do cliente Nestlé, em ordem de preferência: o que o SYNC usa
+ *  (env, fonte da verdade) e depois os nomes historicamente usados na tela. */
+export function nestleClientNameCandidates() {
+  const doEnv = process.env.GOOGLE_SHEET_NESTLE_CLIENT_NAME?.trim();
+  return [doEnv, "Produtos Alimentícios", "Nestlé", "Nestle"].filter(Boolean);
+}
+
+/**
+ * Resolve o cliente Nestlé SEM depender de um nome cravado no código.
+ *
+ * O operador renomeia o cliente na tela (aconteceu em 30/07: "Nestlé" →
+ * "Produtos Alimentícios") e o lançamento passou a falhar em 100% das ofertas
+ * Nestlé porque procurava o literal "Nestle". Agora tenta, em ordem: o nome
+ * informado pelo chamador, o nome do env que o próprio sync usa
+ * (GOOGLE_SHEET_NESTLE_CLIENT_NAME) e os nomes históricos — comparando sem
+ * acento/caixa (normalizeClientName), que é como a tela grava.
+ */
+export async function findNestleClientId(client, preferredName = null) {
+  const candidatos = [preferredName, ...nestleClientNameCandidates()]
+    .map((n) => String(n ?? "").trim())
+    .filter(Boolean);
+  for (const nome of candidatos) {
+    const id = await findClientIdByName(client, nome);
+    if (id) return id;
+  }
+  // Último recurso: casa sem acento/caixa (o env pode divergir da grafia da tela).
+  const alvos = new Set(candidatos.map((n) => normalizeClientName(n)));
+  const { rows } = await client.query("SELECT id, nome FROM public.clientes");
+  const achado = rows.find((r) => alvos.has(normalizeClientName(String(r.nome ?? ""))));
+  return achado?.id ?? null;
+}
+
 export async function findClientIdByName(client, name) {
   const targetName = String(name ?? "").trim();
   if (!targetName) return null;

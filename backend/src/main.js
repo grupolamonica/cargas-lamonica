@@ -552,6 +552,13 @@ async function bootstrap() {
             `[spot-autolaunch] lançados=${r.launched} (rota=${r.routed}, candidatos=${r.candidates}, já=${r.already}, erros=${r.errors}, adiados=${r.deferred})`,
           );
         }
+        // A RAZÃO de cada falha era coletada (auto-launch-routed-spots grava `reason`
+        // em cada item) e descartada aqui: o lançamento Nestlé ficou 2 dias quebrado
+        // ("Cliente Nestle não encontrado", cliente renomeado na tela) com 288
+        // tentativas/dia e nenhuma linha de diagnóstico. Agora cada erro aparece.
+        for (const item of (r.results || []).filter((x) => x.state === "error")) {
+          console.error(`[spot-autolaunch] falhou LH ${item.lh}: ${item.reason}`);
+        }
       } catch (err) {
         console.error("[spot-autolaunch] erro:", err?.message);
       } finally {
