@@ -1093,6 +1093,102 @@ describe("google sheet loads sync", () => {
     expect(reconcileCall.sql).toContain("SELECT id FROM twins WHERE is_taken");
   });
 
+  it("PREVENÇÃO: aposenta a gêmea lançada na MESMA rodada em que a linha da planilha nasce", async () => {
+    // Janela fechada por este ramo: a linha da planilha (sheet_lh) nasce ~20h depois do
+    // lançamento (lh_manual) e, até a rodada seguinte, o motorista vê a MESMA viagem
+    // duas vezes. Aqui nenhuma das LHs do CSV existe ainda no banco → todas nascem
+    // nesta rodada → todas entram no alvo $4.
+    const supabaseClient = createSupabaseMock();
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+
+    await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    const reconcileCall = pgQueryCalls.find(
+      (c) => c.sql.includes("c.lh_manual = ANY($1::text[])") && c.sql.includes("public.load_public_leads"),
+    );
+    expect(reconcileCall).toBeTruthy();
+    // 4o parametro = LHs cuja linha da planilha NASCEU nesta rodada.
+    expect(Array.isArray(reconcileCall.params[3])).toBe(true);
+    expect(reconcileCall.params[3].length).toBeGreaterThan(0);
+    expect(reconcileCall.sql).toContain("c.lh_manual = ANY($4::text[])");
+    expect(reconcileCall.sql).toContain("twin_superseded_on_create");
+    // Guardas do ramo novo: nunca aposenta lancada com alocacao de Monitor...
+    expect(reconcileCall.sql).toContain("COALESCE(c.alloc_motorista, '') = ''");
+    expect(reconcileCall.sql).toContain("COALESCE(c.alloc_status, '') = ''");
+    // ... e exige a canonica VIVA (nao-terminal) — senao sobraria zero carga viva.
+    expect(reconcileCall.sql).toContain("s.status NOT IN ('EXPIRED', 'CANCELLED', 'COMPLETED', 'FAILED')");
+  });
+
+  it("grava o rastro da aposentadoria (retired_reason + superseded_by_cargo_id) e emite auditoria", async () => {
+    const supabaseClient = createSupabaseMock();
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+
+    await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    const reconcileCall = pgQueryCalls.find(
+      (c) => c.sql.includes("c.lh_manual = ANY($1::text[])") && c.sql.includes("public.load_public_leads"),
+    );
+    // Lapide deixa de ser indistinguivel de expiracao comum.
+    expect(reconcileCall.sql).toContain("retired_reason = t.motivo");
+    expect(reconcileCall.sql).toContain("superseded_by_cargo_id = t.canonica_id");
+    // Auditoria por gemea (antes so havia console.info).
+    expect(reconcileCall.sql).toContain("system.cargo.twin_retired");
+    expect(reconcileCall.sql).toContain("public.security_audit_logs");
+  });
+
+  it("kill-switch SHEET_TWIN_RETIRE_ON_CREATE=false zera o alvo da prevenção (demais ramos seguem)", async () => {
+    process.env.SHEET_TWIN_RETIRE_ON_CREATE = "false";
+    try {
+      const supabaseClient = createSupabaseMock();
+      const fetchImpl = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
+        text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+      });
+
+      await syncGoogleSheetLoads({
+        fetchImpl,
+        sheetUrl: "https://example.test/sheet.csv",
+        supabaseClient,
+        sheetClientId: SHEET_CLIENT_ID,
+      });
+
+      const reconcileCall = pgQueryCalls.find(
+        (c) => c.sql.includes("c.lh_manual = ANY($1::text[])") && c.sql.includes("public.load_public_leads"),
+      );
+      expect(reconcileCall.params[3]).toEqual([]);
+      // Os ramos (1) tomada e (2) OPEN duplicada continuam ativos.
+      expect(reconcileCall.params[0]).toContain("LT0Q4402267J1");
+      expect(reconcileCall.params[2].length).toBeGreaterThan(0);
+    } finally {
+      delete process.env.SHEET_TWIN_RETIRE_ON_CREATE;
+    }
+  });
+
   it("excludes RESERVED from the truly-gone batch but still expires OPEN when the row is removed", async () => {
     const reservedGoneId = createSheetLoadId("LT-GONE-RSVD");
     const openGoneId = createSheetLoadId("LT-GONE-OPEN");
