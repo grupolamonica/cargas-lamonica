@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchSponsorClicks, fetchOperatorOverviewDigest } from "@/services/readModels";
+import {
+  fetchSponsorClicks,
+  fetchOperatorOverviewDigest,
+  fetchOperatorOverviewSnapshot,
+} from "@/services/readModels";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -31,24 +35,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  buildOverviewSnapshot,
-  type OverviewClaimRow,
-  type OverviewCargoRow,
-  type OverviewLeadRow,
-} from "@/lib/overviewMetrics";
 import { supabase } from "@/integrations/supabase/client";
-
-// Somente as colunas que buildOverviewSnapshot realmente lê. `valor`, `bonus`,
-// `duracao_horas` e o embed `cliente:clientes(...)` vinham no payload e nenhuma
-// conta os usava (só existiam na tipagem de OverviewCargoRow) — eram ~30-40% da
-// resposta de cargas em TODO fetch, mais um join por linha dentro do PostgREST.
-const OVERVIEW_CARGO_SELECT =
-  "id, data, horario, origem, destino, distancia_km, perfil, status, is_template, created_at, updated_at, sheet_data_carregamento";
-const OVERVIEW_LEAD_SELECT =
-  "id, load_id, status, created_at, queued_at, approved_at, whatsapp_clicked_at, vehicle_type";
-const OVERVIEW_CLAIM_SELECT =
-  "id, load_id, status, created_at, claimed_at, promoted_at, confirmed_at, queue_position";
 
 function formatNumber(value: number) {
   return value.toLocaleString("pt-BR", {
@@ -208,21 +195,6 @@ const MISSING_FIELD_LABELS: Record<string, string> = {
   destino: "Destino",
 };
 
-function toOverviewCargoRows(data: unknown): OverviewCargoRow[] {
-  if (!Array.isArray(data)) return [];
-  return data.filter(Boolean) as OverviewCargoRow[];
-}
-
-function toOverviewLeadRows(data: unknown): OverviewLeadRow[] {
-  if (!Array.isArray(data)) return [];
-  return data.filter(Boolean) as OverviewLeadRow[];
-}
-
-function toOverviewClaimRows(data: unknown): OverviewClaimRow[] {
-  if (!Array.isArray(data)) return [];
-  return data.filter(Boolean) as OverviewClaimRow[];
-}
-
 const OVERVIEW_QUERY_KEY = ["operator", "overview-dashboard"] as const;
 
 const Overview = () => {
@@ -231,49 +203,36 @@ const Overview = () => {
   const [tab, setTab] = useState<PainelTab>("geral");
   const flow = useDriverFlowMetrics();
   const channelRef = useRef(`operator-overview-${Math.random().toString(36).slice(2, 8)}`);
-  // Frescor deste snapshot (3x select(500), o fetch mais caro da tela) é
-  // governado por dois gatilhos baratos: o digest (abaixo) e o realtime de
-  // leads/claims. Sem refetchInterval (um poll de 30s foi removido antes) e
-  // sem refetchOnWindowFocus — voltar para a aba passou a sondar o digest
-  // (~0,3 KB) em vez de rebaixar ~0,5 MB às cegas; o snapshot só refetcha se
-  // o digest mudou de verdade. Isso restaura o default do QueryClient
-  // (App.tsx: refetchOnWindowFocus false).
+  // PONTO 7 — a agregação saiu do navegador. Antes: 3x `select(500)` no
+  // PostgREST (cargas + load_public_leads + load_claims, ~1500 linhas / ~0,5 MB)
+  // e `buildOverviewSnapshot` rodando aqui. Agora: UMA chamada ao endpoint
+  // agregado, resposta de poucos KB, com a conta feita em SQL (e cache de 10s
+  // COMPARTILHADO entre todas as abas de operador, coisa que o cache do React
+  // Query — por aba — nunca conseguiu dar; a rajada de revalidação do realtime,
+  // que o debounce de 1,5s abaixo concentra num instante só, colapsa nele).
+  //
+  // A paridade número a número com o builder antigo é provada em
+  // `src/lib/overviewMetrics.serverParity.test.ts` (inclusive nos casos de fuso:
+  // o container roda em UTC e `cargas.data`/`horario` são horário de parede BRT).
+  //
+  // Frescor: mesmos dois gatilhos baratos de antes — o digest (abaixo) e o
+  // realtime de leads/claims. Sem refetchInterval e sem refetchOnWindowFocus.
   const overviewQuery = useQuery({
     queryKey: OVERVIEW_QUERY_KEY,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
     queryFn: async () => {
-      const [cargosResult, leadsResult, claimsResult] = await Promise.all([
-        supabase.from("cargas").select(OVERVIEW_CARGO_SELECT).order("created_at", { ascending: false }).limit(500),
-        supabase.from("load_public_leads").select(OVERVIEW_LEAD_SELECT).order("created_at", { ascending: false }).limit(500),
-        supabase.from("load_claims").select(OVERVIEW_CLAIM_SELECT).order("created_at", { ascending: false }).limit(500),
-      ]);
-
-      if (cargosResult.error) {
-        throw cargosResult.error;
-      }
-
-      if (leadsResult.error) {
-        throw leadsResult.error;
-      }
-
-      if (claimsResult.error) {
-        throw claimsResult.error;
-      }
-
-      return buildOverviewSnapshot(
-        toOverviewCargoRows(cargosResult.data),
-        toOverviewLeadRows(leadsResult.data),
-        toOverviewClaimRows(claimsResult.data),
-      );
+      const response = await fetchOperatorOverviewSnapshot();
+      return response.snapshot;
     },
   });
 
   const snapshot = overviewQuery.data;
 
   // Digest — backend devolve o hash de MAX(updated_at)+contagens de
-  // cargas/leads/claims. Barato (3 agregados escalares, ~0,3 KB de resposta).
-  // Quando o digest muda, invalida o snapshot caro. É o dono do frescor de
+  // cargas/leads/claims. Barato (3 agregados escalares, ~0,3 KB de resposta) e
+  // ainda mais barato que o snapshot agregado, por isso segue sendo o gatilho:
+  // quando o digest muda, invalida o snapshot. É o dono do frescor de
   // `cargas` desde que o listener realtime dessa tabela saiu — e cobre 100% das
   // mutações dela: UPDATE sempre bate `updated_at` (trigger
   // set_cargas_updated_at), INSERT nasce com `updated_at = now()` e DELETE muda

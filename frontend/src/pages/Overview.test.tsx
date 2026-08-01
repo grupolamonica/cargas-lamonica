@@ -76,9 +76,14 @@ vi.mock("@/integrations/supabase/client", () => ({
   },
 }));
 
+const { mockFetchOverviewSnapshot } = vi.hoisted(() => ({
+  mockFetchOverviewSnapshot: vi.fn(),
+}));
+
 vi.mock("@/services/readModels", () => ({
   fetchSponsorClicks: vi.fn(),
   fetchOperatorOverviewDigest: vi.fn(),
+  fetchOperatorOverviewSnapshot: mockFetchOverviewSnapshot,
 }));
 
 vi.mock("@/components/DashboardHeader", () => ({
@@ -122,6 +127,8 @@ type QueryOptions = {
   refetchOnWindowFocus?: unknown;
 };
 
+// Forma que o endpoint agregado devolve — sem `recentActivity` (o feed não é
+// renderizado por nenhum bloco do Painel e exigiria as 3 tabelas inteiras).
 const SNAPSHOT_FIXTURE = {
   hero: {
     activeLoads: 2,
@@ -137,7 +144,6 @@ const SNAPSHOT_FIXTURE = {
     pendingApprovals: 1,
   },
   attentionLoads: [],
-  recentActivity: [],
   lastUpdatedAt: "2026-07-30T12:00:00.000Z",
 };
 
@@ -164,6 +170,11 @@ describe("Overview (Painel)", () => {
     mockSupabaseChannel.mockClear();
     mockSupabaseRemoveChannel.mockClear();
     mockSupabaseFrom.mockClear();
+    mockFetchOverviewSnapshot.mockReset();
+    mockFetchOverviewSnapshot.mockResolvedValue({
+      snapshot: SNAPSHOT_FIXTURE,
+      meta: { correlationId: "corr-test" },
+    });
     supabaseSelectCalls.length = 0;
     for (const table of Object.keys(supabaseRowsByTable)) {
       delete supabaseRowsByTable[table];
@@ -262,36 +273,13 @@ describe("Overview (Painel)", () => {
     });
   });
 
-  it("pede ao PostgREST somente as colunas que o snapshot le, e o resultado nao muda", async () => {
+  it("PONTO 7: o snapshot vem de UMA chamada agregada — nenhuma linha crua sai do PostgREST", async () => {
+    // Se a tela voltar a ler tabela direto, estas linhas apareceriam no snapshot.
     supabaseRowsByTable.cargas = [
       {
         id: "c1", data: "2020-01-10", horario: "08:00:00", origem: "Salvador / BA", destino: "Campinas / SP",
         distancia_km: 1800, perfil: "CARRETA", status: "OPEN", is_template: false,
         created_at: "2020-01-01T10:00:00.000Z", updated_at: "2020-01-01T10:00:00.000Z",
-        sheet_data_carregamento: null,
-      },
-      {
-        id: "c2", data: "2020-01-11", horario: "09:00:00", origem: "Recife / PE", destino: "Natal / RN",
-        distancia_km: 300, perfil: "TRUCK", status: "OPEN", is_template: false,
-        created_at: "2020-01-02T10:00:00.000Z", updated_at: "2020-01-02T10:00:00.000Z",
-        sheet_data_carregamento: null,
-      },
-      {
-        id: "c3", data: "2020-01-12", horario: "07:00:00", origem: "Curitiba / PR", destino: "Joinville / SC",
-        distancia_km: 130, perfil: "TRUCK", status: "DRAFT", is_template: false,
-        created_at: "2020-01-03T10:00:00.000Z", updated_at: "2020-01-03T10:00:00.000Z",
-        sheet_data_carregamento: null,
-      },
-      {
-        id: "c4", data: "2020-01-13", horario: "07:00:00", origem: "Manaus / AM", destino: "Belem / PA",
-        distancia_km: 1500, perfil: "CARRETA", status: "BOOKED", is_template: false,
-        created_at: "2020-01-04T10:00:00.000Z", updated_at: "2020-01-04T10:00:00.000Z",
-        sheet_data_carregamento: null,
-      },
-      {
-        id: "c5", data: "2020-01-14", horario: "07:00:00", origem: "Ilheus / BA", destino: "Vitoria / ES",
-        distancia_km: 800, perfil: "CARRETA", status: "RESERVED", is_template: false,
-        created_at: "2020-01-05T10:00:00.000Z", updated_at: "2020-01-05T10:00:00.000Z",
         sheet_data_carregamento: null,
       },
     ];
@@ -301,11 +289,6 @@ describe("Overview (Painel)", () => {
         queued_at: "2020-01-06T10:00:00.000Z", approved_at: null, whatsapp_clicked_at: null,
         vehicle_type: "CARRETA",
       },
-      {
-        id: "l2", load_id: "c5", status: "APPROVED", created_at: "2020-01-07T10:00:00.000Z",
-        queued_at: "2020-01-07T10:00:00.000Z", approved_at: "2020-01-07T11:00:00.000Z",
-        whatsapp_clicked_at: null, vehicle_type: "CARRETA",
-      },
     ];
     supabaseRowsByTable.load_claims = [];
 
@@ -314,30 +297,17 @@ describe("Overview (Painel)", () => {
     const snapshotOptions = findQueryOptions("overview-dashboard");
     const snapshot = (await snapshotOptions?.queryFn?.()) as typeof SNAPSHOT_FIXTURE;
 
-    const cargoSelect = supabaseSelectCalls.find((call) => call.table === "cargas")?.columns ?? "";
-    const cargoColumns = cargoSelect.split(",").map((column) => column.trim());
+    // Contagem de requisições (proxy direto de egress): 1 chamada agregada,
+    // ZERO leituras de tabela. Antes eram 3 `select(500)` = ate 1500 linhas
+    // completas por abertura de aba.
+    expect(mockFetchOverviewSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockSupabaseFrom).not.toHaveBeenCalled();
+    expect(supabaseSelectCalls).toEqual([]);
 
-    // Payload morto removido: nenhuma conta de buildOverviewSnapshot le esses
-    // campos (so existiam na tipagem), e o embed custava um join por linha.
-    expect(cargoColumns).toEqual([
-      "id", "data", "horario", "origem", "destino", "distancia_km", "perfil", "status",
-      "is_template", "created_at", "updated_at", "sheet_data_carregamento",
-    ]);
-    expect(cargoSelect).not.toMatch(/valor|bonus|duracao_horas|clientes?\(/);
-
-    // ... e com as linhas enxutas os numeros da tela sao exatamente os mesmos.
-    expect(snapshot.hero).toMatchObject({
-      activeLoads: 2,
-      queuedLeads: 1,
-      pendingApprovals: 1,
-      activeClaims: 2,
-      noDriverLoads: 1,
-      draftCount: 1,
-      bookedCount: 1,
-      reservedCount: 1,
-      departuresNext24h: 0,
-    });
-    expect(snapshot.lastUpdatedAt).toBe("2020-01-07T11:00:00.000Z");
+    // O que a tela renderiza vem inteiro do payload agregado.
+    expect(snapshot).toEqual(SNAPSHOT_FIXTURE);
+    // `recentActivity` nao faz parte do contrato: nenhum bloco do Painel o le.
+    expect(snapshot).not.toHaveProperty("recentActivity");
   });
 
   it("renderiza os numeros-chave do snapshot", () => {

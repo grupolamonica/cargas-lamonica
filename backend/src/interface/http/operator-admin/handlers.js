@@ -75,6 +75,7 @@ import {
 } from "../../../application/operator-admin/read-models.js";
 import { fetchOperatorAuditLogsReadModel } from "../../../application/operator-admin/use-cases/audit-logs-read-model.js";
 import { fetchPendingDriverRegistrations } from "../../../application/operator-admin/use-cases/pending-driver-registrations-read-model.js";
+import { fetchOperatorOverviewSnapshot } from "../../../application/operator-admin/use-cases/overview-snapshot-read-model.js";
 import { checkConjuntoConformeNow } from "../../../application/operator-admin/use-cases/angellira/auto-approve-vigentes.js";
 import { reprocessCadastroDocuments } from "../../../application/operator-admin/use-cases/reprocess-cadastro-docs.js";
 import { attachCadastroDocument } from "../../../application/operator-admin/use-cases/attach-cadastro-doc.js";
@@ -2153,6 +2154,20 @@ export async function resolveOperatorOverviewDigestResponse(request) {
     }
     return { statusCode: 500, payload: { error: "INTERNAL_ERROR", meta: { correlationId } } };
   }
+}
+
+/**
+ * GET /api/operator/overview/snapshot
+ *
+ * Snapshot agregado do Painel. Substitui os 3x `select(500)` que a tela fazia
+ * direto no PostgREST (cargas + load_public_leads + load_claims, ~0,5 MB por
+ * aba): a agregação virou SQL e a resposta cabe em poucos KB. O digest acima
+ * continua sendo o gatilho de invalidação — este endpoint é o payload caro.
+ */
+export async function resolveOperatorOverviewSnapshotResponse(request) {
+  return withOperatorSession(request, "read-operator-overview-snapshot", async ({ correlationId }) => {
+    return fetchOperatorOverviewSnapshot({ correlationId });
+  });
 }
 
 // ─── Cadastros pendentes de motoristas ───────────────────────────────────────
