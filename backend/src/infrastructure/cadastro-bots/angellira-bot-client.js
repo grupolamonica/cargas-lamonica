@@ -392,7 +392,7 @@ export async function health() {
  * @param {string} args.idCadastro      — UUID do pending_driver_registrations
  * @param {object} args.payload         — { motorista, cnh, endereco }
  * @param {object} [args.anexos]        — { cnh_frente_path, cnh_verso_path, ... }
- * @param {number} [args.typeId=25]     — 25=Funcionario, 26=Agregado
+ * @param {number} [args.typeId=26]     — 26=Agregado (padrão do escritório), 25=Funcionario
  * @param {number} [args.prime=0]
  * @param {string} [args.correlationId]
  * @returns {Promise<{ok:true, driverId:string, queryId?:string, raw:any}>}
@@ -402,7 +402,7 @@ export async function cadastrarMotorista({
   idCadastro,
   payload,
   anexos = {},
-  typeId = 25,
+  typeId = 26,
   prime = 0,
   correlationId,
 }) {
