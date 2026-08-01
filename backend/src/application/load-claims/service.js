@@ -265,6 +265,7 @@ async function createClaimRow(client, { loadId, driverId, idempotencyKey, reques
     ],
   );
 
+  bustClaimStatusClaims(); // write-through: o poll do motorista lê o próprio write
   return rows[0];
 }
 
@@ -313,6 +314,7 @@ async function updateClaimRow(client, claimId, updates) {
     [claimId, ...values],
   );
 
+  bustClaimStatusClaims(); // write-through: transição de claim nunca fica escondida
   return rows[0] ?? null;
 }
 
@@ -336,6 +338,7 @@ async function updateLoadReservation(client, { loadId, driverId, claimId, nextSt
     [loadId, nextStatus, driverId, claimId, ttl],
   );
 
+  bustClaimStatusLoad(loadId); // write-through: RESERVED visível no próximo poll
   return rows[0] ?? null;
 }
 
@@ -356,6 +359,7 @@ async function clearLoadReservation(client, loadId, nextStatus = LOAD_STATUS.OPE
     [loadId, nextStatus],
   );
 
+  bustClaimStatusLoad(loadId); // write-through: reabertura visível no próximo poll
   return rows[0] ?? null;
 }
 
@@ -377,6 +381,7 @@ async function bookLoadForClaim(client, { loadId, driverId }) {
     [loadId, LOAD_STATUS.BOOKED, driverId],
   );
 
+  bustClaimStatusLoad(loadId); // write-through: BOOKED visível no próximo poll
   return rows[0] ?? null;
 }
 
@@ -425,6 +430,8 @@ async function resequenceWaitlist(client, loadId) {
         [claimIdsToUpdate[i], expectedPositions[i]],
       );
     }
+    // write-through: a nova posição na fila é o dado que o motorista observa.
+    bustClaimStatusClaims();
   }
 
   return waitlistClaims.length;
@@ -826,13 +833,20 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
   );
   const loadHeader = loadHeaderResult.rows[0] ?? null;
   if (loadHeader?.viagem_id) {
-    return createPacoteClaim({
-      pacoteId: loadHeader.viagem_id,
-      driverId,
-      idempotencyKey,
-      requestPayload,
-      correlationId,
-    });
+    try {
+      return await createPacoteClaim({
+        pacoteId: loadHeader.viagem_id,
+        driverId,
+        idempotencyKey,
+        requestPayload,
+        correlationId,
+      });
+    } finally {
+      // Alcance desconhecido: o claim de pacote reserva o pacote + TODAS as
+      // cargas-irmas e cria os claims em outro modulo, fora do alcance das
+      // invalidacoes write-through daqui. Limpa carga + claims por inteiro.
+      bustAllClaimStatusCaches();
+    }
   }
 
   const config = ensureClaimSystemEnabled();
@@ -844,7 +858,7 @@ export async function createLoadClaim({ loadId, driverId, idempotencyKey, correl
     requestPayload,
   });
 
-  return withPgTransaction(async (client) => {
+  return withClaimMutationTransaction(loadId, async (client) => {
     const idempotencyState = await prepareIdempotencyRecord(client, {
       scope: IDEMPOTENCY_SCOPE.CREATE_CLAIM,
       driverId,
@@ -1193,7 +1207,7 @@ export async function confirmLoadClaim({ loadId, claimId, driverId, idempotencyK
     action: "confirm",
   });
 
-  return withPgTransaction(async (client) => {
+  return withClaimMutationTransaction(loadId, async (client) => {
     const idempotencyState = await prepareIdempotencyRecord(client, {
       scope: IDEMPOTENCY_SCOPE.CONFIRM_CLAIM,
       driverId,
@@ -1366,7 +1380,7 @@ export async function cancelLoadClaim({ loadId, claimId, driverId, idempotencyKe
     action: "cancel",
   });
 
-  return withPgTransaction(async (client) => {
+  return withClaimMutationTransaction(loadId, async (client) => {
     const idempotencyState = await prepareIdempotencyRecord(client, {
       scope: IDEMPOTENCY_SCOPE.CANCEL_CLAIM,
       driverId,
@@ -1509,12 +1523,174 @@ export async function cancelLoadClaim({ loadId, claimId, driverId, idempotencyKe
   });
 }
 
-export async function getLoadClaimStatus({ loadId, driverId = null, publicLeadId = null, correlationId }) {
-  ensureClaimSystemEnabled();
-  const resolvedCorrelationId = correlationId || createCorrelationId();
-  const config = getLoadClaimConfig();
+// ── Cache curto + single-flight do claim-status (poll do motorista) ──────────
+// `GET /api/loads/:id/claim-status` é a leitura de maior FREQUÊNCIA do lado do
+// motorista: o portal faz poll de CADA lead rastreado a 30s (QUEUED) / 60s e o
+// DriverClaimPanel faz poll a 15s por painel aberto, sem nenhum dedupe entre
+// abas/painéis. Cada poll custava até 4 consultas frescas (carga+cliente, claim
+// do motorista, lead público, perfil do motorista) — × centenas de motoristas
+// concorrentes, o maior gerador de egress do portal. Existia cache do token de
+// auth (auth.js), mas nenhum do RESULTADO.
+//
+// SEGURANÇA (o ponto crítico aqui): a resposta é POR MOTORISTA / POR LEAD, e uma
+// chave grosseira mostraria o claim de um motorista para outro. Em vez de uma
+// chave composta "adivinhada", cada consulta tem seu PRÓPRIO cache sob uma
+// invariante mecânica e verificável: **a chave é exatamente a lista de
+// parâmetros ($1..$n) da consulta que ela memoriza**.
+//   • carga + cliente → params [loadId]           → chave `loadId`
+//   • claim do driver → params [loadId, driverId]  → chave `loadId|driverId`
+//   • lead público    → params [leadId, loadId]    → chave `leadId|loadId`
+//   • perfil          → params [driverId]          → chave `driverId`
+// A única consulta SEM predicado de identidade é a da carga (`WHERE cargas.id =
+// $1`), e é justamente ela que pode ser compartilhada entre motoristas — é o que
+// colapsa a rajada de N motoristas na MESMA carga. `valor`/`bonus` continuam
+// sendo gated pelo `driverId` DA CHAMADA na montagem do payload (nunca vêm do
+// cache), então um poll anônimo não herda os valores de um poll autenticado.
+//
+// ESCOPO: estes caches servem SOMENTE a leitura de exibição do claim-status.
+// Nenhum caminho de DECISÃO usa cache — elegibilidade, claim, confirmação e
+// expiração continuam lendo `lockLoadRow`/`getDriverProfile({lock:true})` com
+// `FOR UPDATE` dentro da transação.
+//
+// TTL curto de propósito (4s, menor que o poll mais rápido de 15s): o motorista
+// está ESPERANDO esse status, então a defasagem máxima de QUALQUER transição é o
+// TTL. Além disso toda mutação de `cargas`/`load_claims` deste módulo invalida
+// na hora (read-your-write do "Aceitar"/"Cancelar" do próprio motorista).
+// Ajustável por CLAIM_STATUS_CACHE_TTL_MS (0 = desliga) sem redeploy.
+const CLAIM_STATUS_CACHE_MAX_ENTRIES = 2_000;
 
-  return withPgClient(async (client) => {
+function getClaimStatusCacheTtlMs() {
+  const raw = Number.parseInt(process.env.CLAIM_STATUS_CACHE_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
+  return 4_000; // default produção
+}
+
+// Micro-cache genérico (TTL + single-flight) usado pelas 4 leituras listadas
+// acima, uma instância por consulta. O
+// `loader` devolve `{ value, cacheable }`: resultado não-cacheável (carga/lead/
+// perfil inexistente) NUNCA gruda, e um throw propaga sem gravar nada.
+function createClaimStatusMicroCache() {
+  let entries = new Map(); // chave -> { at, value }
+  let inFlight = new Map(); // chave -> Promise<value>
+  // Epoch das mutações: uma leitura que COMEÇOU antes de um write não pode
+  // repovoar o cache com o estado pré-mutação, senão a transição ficaria
+  // escondida por até 1 TTL.
+  let epoch = 0;
+
+  return {
+    async read(key, loader) {
+      const ttl = getClaimStatusCacheTtlMs();
+      if (ttl <= 0) return (await loader()).value;
+
+      const hit = entries.get(key);
+      if (hit && Date.now() - hit.at < ttl) return hit.value;
+
+      const running = inFlight.get(key);
+      if (running) return running;
+
+      const startedAtEpoch = epoch;
+      const promise = (async () => {
+        const { value, cacheable } = await loader();
+        if (cacheable && epoch === startedAtEpoch) {
+          // Estouro = flush total (bruto, mas correto): o teto só existe como
+          // trava de memória e, com TTL de 4s, a rotatividade natural já é alta.
+          if (entries.size >= CLAIM_STATUS_CACHE_MAX_ENTRIES) entries.clear();
+          entries.set(key, { at: Date.now(), value });
+        }
+        return value;
+      })();
+      inFlight.set(key, promise);
+
+      try {
+        return await promise;
+      } finally {
+        if (inFlight.get(key) === promise) inFlight.delete(key);
+      }
+    },
+    /** Invalida uma chave. Síncrono e nunca lança. */
+    bust(key) {
+      epoch += 1;
+      entries.delete(key);
+    },
+    /** Invalida tudo (mutação de alcance desconhecido). Nunca lança. */
+    bustAll() {
+      epoch += 1;
+      entries.clear();
+    },
+    reset() {
+      entries = new Map();
+      inFlight = new Map();
+      epoch = 0;
+    },
+  };
+}
+
+const _claimStatusLoadCache = createClaimStatusMicroCache();
+const _claimStatusClaimCache = createClaimStatusMicroCache();
+const _claimStatusLeadCache = createClaimStatusMicroCache();
+const _claimStatusProfileCache = createClaimStatusMicroCache();
+
+/** Hook de teste: zera o estado de módulo dos caches do claim-status. */
+export function __resetClaimStatusCache() {
+  _claimStatusLoadCache.reset();
+  _claimStatusClaimCache.reset();
+  _claimStatusLeadCache.reset();
+  _claimStatusProfileCache.reset();
+}
+
+// As invalidações abaixo são chamadas nos mutadores de baixo nível (write-
+// through) — assim nenhum caminho escapa, inclusive promoção de waitlist,
+// resequenciamento e a varredura de expiração. Invalidar no momento do UPDATE
+// (antes do COMMIT) é seguro: o pior caso de um rollback é ter descartado uma
+// entrada ainda válida, ou seja, um MISS — nunca dado velho servido. Os pontos
+// de entrada driver-facing invalidam DE NOVO depois do commit, fechando a
+// janela em que um poll concorrente leria o estado ainda não commitado.
+function bustClaimStatusLoad(loadId) {
+  if (loadId) _claimStatusLoadCache.bust(String(loadId));
+}
+
+// `updateClaimRow` recebe só o claimId, e promoção/resequenciamento mexem no
+// claim de OUTRO motorista — não há chave a direcionar, então limpa o cache de
+// claims inteiro. Mutação de claim é rara perto do volume de polls.
+function bustClaimStatusClaims() {
+  _claimStatusClaimCache.bustAll();
+}
+
+/**
+ * Invalida o claim-status de uma carga (linha da carga + claims). Usado como
+ * pós-commit nos pontos de entrada do motorista.
+ */
+function bustClaimStatusForLoad(loadId) {
+  bustClaimStatusLoad(loadId);
+  bustClaimStatusClaims();
+}
+
+/** Invalida tudo: mutação cujo alcance este módulo não conhece (claim de pacote). */
+function bustAllClaimStatusCaches() {
+  _claimStatusLoadCache.bustAll();
+  _claimStatusClaimCache.bustAll();
+}
+
+/**
+ * `withPgTransaction` para mutações de claim: igual, mas invalida o claim-status
+ * da carga DEPOIS do commit. Fecha a única janela que o write-through não cobre
+ * — um poll concorrente que comece DEPOIS do UPDATE e ANTES do COMMIT leria o
+ * estado antigo (ainda invisível) e o cachearia por até 1 TTL. O `finally` cobre
+ * também o caminho de erro: invalidar após rollback só custa um miss.
+ */
+async function withClaimMutationTransaction(loadId, callback) {
+  try {
+    return await withPgTransaction(callback);
+  } finally {
+    bustClaimStatusForLoad(loadId);
+  }
+}
+
+// Chave = [loadId] (mesma lista de parâmetros da consulta). Sem predicado de
+// identidade → compartilhável entre motoristas.
+function readClaimStatusLoadRow(client, loadId) {
+  return _claimStatusLoadCache.read(String(loadId), async () => {
     const loadResult = await client.query(
       `
         SELECT
@@ -1544,7 +1720,71 @@ export async function getLoadClaimStatus({ loadId, driverId = null, publicLeadId
       [loadId],
     );
 
-    const loadRow = loadResult.rows[0] ?? null;
+    const value = loadResult.rows[0] ?? null;
+    // Carga inexistente (404) não gruda: o cache serve o caminho quente, não o
+    // erro.
+    return { value, cacheable: value != null };
+  });
+}
+
+// Chave = [loadId, driverId] (mesma lista de parâmetros da consulta).
+function readClaimStatusDriverClaim(client, { loadId, driverId }) {
+  return _claimStatusClaimCache.read(`${loadId}|${driverId}`, async () => {
+    const { rows } = await client.query(
+      `
+        SELECT *
+        FROM public.load_claims
+        WHERE load_id = $1
+          AND driver_id = $2
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      `,
+      [loadId, driverId],
+    );
+
+    // `null` (motorista ainda sem claim nesta carga) É cacheável: é o estado
+    // inicial mais comum do poll e é invalidado no write (createClaimRow).
+    return { value: rows[0] ?? null, cacheable: true };
+  });
+}
+
+// Chave = [publicLeadId, loadId] (mesma lista de parâmetros da consulta).
+function readClaimStatusPublicLead(client, { publicLeadId, loadId }) {
+  return _claimStatusLeadCache.read(`${publicLeadId}|${loadId}`, async () => {
+    const { rows } = await client.query(
+      `
+        SELECT *
+        FROM public.load_public_leads
+        WHERE id = $1
+          AND load_id = $2
+        LIMIT 1
+      `,
+      [publicLeadId, loadId],
+    );
+
+    const value = rows[0] ?? null;
+    // Lead ausente/de outra carga não gruda (e as mutações de lead vivem em
+    // public-leads.js, fora do alcance de invalidação deste módulo).
+    return { value, cacheable: value != null };
+  });
+}
+
+// Chave = [driverId] (mesma lista de parâmetros da consulta). Colapsa o perfil
+// entre os N leads que o mesmo motorista acompanha em paralelo.
+function readClaimStatusDriverProfile(client, driverId) {
+  return _claimStatusProfileCache.read(String(driverId), async () => {
+    const value = await getDriverProfile(client, driverId);
+    return { value, cacheable: value != null };
+  });
+}
+
+export async function getLoadClaimStatus({ loadId, driverId = null, publicLeadId = null, correlationId }) {
+  ensureClaimSystemEnabled();
+  const resolvedCorrelationId = correlationId || createCorrelationId();
+  const config = getLoadClaimConfig();
+
+  return withPgClient(async (client) => {
+    const loadRow = await readClaimStatusLoadRow(client, loadId);
 
     if (!loadRow) {
       throw new NotFoundError("Load not found.");
@@ -1555,33 +1795,12 @@ export async function getLoadClaimStatus({ loadId, driverId = null, publicLeadId
     let publicLeadRow = null;
 
     if (driverId) {
-      driverProfile = await getDriverProfile(client, driverId);
-      const { rows } = await client.query(
-        `
-          SELECT *
-          FROM public.load_claims
-          WHERE load_id = $1
-            AND driver_id = $2
-          ORDER BY created_at DESC, id DESC
-          LIMIT 1
-        `,
-        [loadId, driverId],
-      );
-      claimRow = rows[0] ?? null;
+      driverProfile = await readClaimStatusDriverProfile(client, driverId);
+      claimRow = await readClaimStatusDriverClaim(client, { loadId, driverId });
     }
 
     if (publicLeadId) {
-      const { rows } = await client.query(
-        `
-          SELECT *
-          FROM public.load_public_leads
-          WHERE id = $1
-            AND load_id = $2
-          LIMIT 1
-        `,
-        [publicLeadId, loadId],
-      );
-      publicLeadRow = rows[0] ?? null;
+      publicLeadRow = await readClaimStatusPublicLead(client, { publicLeadId, loadId });
     }
 
     return {
