@@ -112,6 +112,39 @@ export async function runAngelliraPipeline({
     return { ok: false, blocked: true, results: [{ step: "motorista", status: "BLOCKED", error }] };
   }
 
+  // Backstop de identidade (última barreira antes do portal): o nome do cadastro
+  // tem de conferir com o nome da CNH (OCR, snapshot em motorista.cnh.nome). No
+  // TOPO — antes da idempotência/steps — pra barrar re-disparo mesmo com job
+  // motorista OK em cache. Lê dado FRESCO (cobre edição pós-aprovação). Fail-open
+  // sem snapshot. É defesa-em-profundidade do wizard; a checagem inforjável no
+  // fluxo público é o cruzamento com o displayName do Angellira (a seguir, #3).
+  const nomeDigitado = dados?.motorista?.nome;
+  const nomeCnh = dados?.motorista?.cnh?.nome ?? dados?.cnh?.nome;
+  if (nomeCnh && !namesMatch(nomeDigitado, nomeCnh)) {
+    logStructuredEvent("warn", "angellira.pipeline.identity_block", { cadastroId });
+    const error = {
+      code: "NOME_DIVERGENTE_CNH",
+      message: `Nome do cadastro ("${nomeDigitado}") diverge do nome da CNH ("${nomeCnh}").`,
+      blocked_by: "identity",
+    };
+    const jobId = await markJobInProgress({
+      client, cadastroId, step: "motorista", payload: { step: "motorista", cadastroId },
+    });
+    await markJobError({ client, jobId, error });
+    await insertSecurityAuditEvent(client, {
+      eventType: "operator.cadastro.angellira_pipeline_blocked",
+      actorUserId: operatorId,
+      actorRole: "operator",
+      resourceType: "pending_driver_registration",
+      resourceId: cadastroId,
+      action: "angellira_pipeline",
+      outcome: "blocked",
+      correlationId,
+      metadata: { blocked_by: "identity" },
+    });
+    return { ok: false, blocked: true, results: [{ step: "motorista", status: "BLOCKED", error }] };
+  }
+
   const steps = Array.isArray(onlySteps) && onlySteps.length
     ? onlySteps.filter((s) => ALL_STEPS.includes(s))
     : determineStepsFromDados(dados);
@@ -473,22 +506,6 @@ async function stageEntityAnexos(ctx, entity, idx = 0) {
 
 async function stepMotorista(ctx) {
   const payload = mapMotoristaPayload(ctx.dados);
-
-  // Backstop de identidade (última barreira antes de gravar no Angellira): o nome
-  // do cadastro tem de conferir com o nome da CNH (OCR, snapshot em
-  // motorista.cnh.nome). Lê dado FRESCO do banco → cobre edição de nome
-  // pós-submit. Fail-open quando não há snapshot (cadastro sem OCR do nome).
-  const nomeDigitado = ctx.dados?.motorista?.nome;
-  const nomeCnh = ctx.dados?.motorista?.cnh?.nome ?? ctx.dados?.cnh?.nome;
-  if (nomeCnh && !namesMatch(nomeDigitado, nomeCnh)) {
-    throw new AngelliraBotError({
-      code: "NOME_DIVERGENTE_CNH",
-      message: `Nome do cadastro ("${nomeDigitado}") diverge do nome da CNH ("${nomeCnh}").`,
-      etapa: "motorista",
-      acao: "Revise o nome do motorista no painel antes de reenviar ao Angellira.",
-    });
-  }
-
   const anexos = await stageEntityAnexos(ctx, "motorista");
   const result = await cadastrarMotorista({
     idCadastro: ctx.cadastroId,

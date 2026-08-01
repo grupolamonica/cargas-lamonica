@@ -55,7 +55,9 @@ function editDistance(a, b) {
 export function tokenSimilar(a, b) {
   if (a === b) return true;
   const max = Math.max(a.length, b.length);
-  if (max <= 3) return a === b; // tokens curtos exigem igualdade
+  // 1–2 chars: igualdade exata. 3 chars: tolera 1 erro de OCR (ANA↔AMA) — senão
+  // corrigir um nome curto lido errado ficava sem saída (incentivo invertido).
+  if (max <= 2) return a === b;
   // prefixo/inicial: "j" vs "jose" (abreviação comum na CNH/RG)
   if ((a.length === 1 || b.length === 1) && (a.startsWith(b) || b.startsWith(a))) return true;
   return editDistance(a, b) <= (max <= 6 ? 1 : 2);
@@ -136,7 +138,10 @@ export function checkTypedVsCnh({ dados, driverCpf }) {
     };
   }
 
-  // CPF da candidatura (início do cadastro) × CPF da CNH.
+  // CPF da candidatura × CPF da CNH. Efetivo no fluxo AUTENTICADO (driverCpf =
+  // profile.document_number ≠ motorista.cpf do OCR). No público driverCpf é
+  // derivado do próprio motorista.cpf → aqui vira no-op; lá a divergência
+  // OCR×pré-check é barrada no front (cpfMismatch em A1Cnh).
   if (driverCpf && !cpfMatches(driverCpf, cpfCnh)) {
     return {
       ok: false,

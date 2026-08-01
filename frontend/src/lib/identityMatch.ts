@@ -44,7 +44,8 @@ function editDistance(a: string, b: string): number {
 function tokenSimilar(a: string, b: string): boolean {
   if (a === b) return true;
   const max = Math.max(a.length, b.length);
-  if (max <= 3) return a === b;
+  // 1–2 chars: igualdade exata. 3 chars: tolera 1 erro de OCR (ANA↔AMA).
+  if (max <= 2) return a === b;
   if ((a.length === 1 || b.length === 1) && (a.startsWith(b) || b.startsWith(a))) return true;
   return editDistance(a, b) <= (max <= 6 ? 1 : 2);
 }

@@ -20,6 +20,7 @@ describe("namesMatch — deixa passar (não é fraude)", () => {
     ["nome do meio faltando", "JOSE EDUARDO SILVA", "JOSE SILVA"],
     ["partículas", "MARIA DE FATIMA SOUZA", "MARIA FATIMA SOUZA"],
     ["ruído de OCR (1 char)", "FHILIPE MATHEUS DUARTE", "FHILIPE MATEUS DUARTE"],
+    ["ruído de OCR em nome curto (ANA↔AMA)", "ANA SILVA", "AMA SILVA"],
     ["abreviação de inicial", "J EDUARDO SILVA", "JOSE EDUARDO SILVA"],
     ["um lado vazio (fail-open)", "", "JOSE SILVA"],
   ])("%s", (_label, a, b) => {

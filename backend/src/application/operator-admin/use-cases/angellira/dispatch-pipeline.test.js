@@ -262,7 +262,7 @@ describe("runAngelliraPipeline / trava de categoria da CNH (D pra cima)", () => 
 });
 
 describe("runAngelliraPipeline / backstop de identidade (nome × CNH)", () => {
-  it("bloqueia o step motorista quando o nome diverge do nome da CNH — não chama cadastrarMotorista", async () => {
+  it("bloqueia o disparo INTEIRO (no topo) quando o nome diverge da CNH — nenhum bot é chamado", async () => {
     cadastrarProprietario.mockResolvedValue({ ok: true, ownerId: 9001, raw: {} });
     cadastrarVeiculo.mockResolvedValue({ ok: true, vehicleId: 7001, raw: {} });
     cadastrarMotorista.mockResolvedValue({ ok: true, driverId: 5001, raw: {} });
@@ -274,18 +274,32 @@ describe("runAngelliraPipeline / backstop de identidade (nome × CNH)", () => {
         ...SAMPLE_CADASTRO,
         dados: {
           ...SAMPLE_DADOS,
-          motorista: { ...SAMPLE_DADOS.motorista, nome: "PESSOA TOTALMENTE DIFERENTE" },
-          cnh: { ...SAMPLE_DADOS.cnh, nome: "João da Silva" },
+          // Shape de PRODUÇÃO: nome da CNH em motorista.cnh.nome (leitura primária).
+          motorista: {
+            ...SAMPLE_DADOS.motorista,
+            nome: "PESSOA TOTALMENTE DIFERENTE",
+            cnh: { nome: "João da Silva" },
+          },
         },
       },
       driverUserId: "22222222-2222-2222-2222-222222222222",
       operatorId: "33333333-3333-3333-3333-333333333333",
     });
 
+    expect(result.ok).toBe(false);
+    expect(result.blocked).toBe(true);
+    expect(result.results).toEqual([
+      expect.objectContaining({
+        step: "motorista",
+        status: "BLOCKED",
+        error: expect.objectContaining({ code: "NOME_DIVERGENTE_CNH", blocked_by: "identity" }),
+      }),
+    ]);
+    // Bloqueio no TOPO (antes dos steps): nem proprietário nem motorista rodam.
     expect(cadastrarMotorista).not.toHaveBeenCalled();
-    const motoristaStep = result.results.find((r) => r.step === "motorista");
-    expect(motoristaStep.status).toBe("ERROR");
-    expect(motoristaStep.error.code).toBe("NOME_DIVERGENTE_CNH");
+    expect(cadastrarProprietario).not.toHaveBeenCalled();
+    expect(cadastrarVeiculo).not.toHaveBeenCalled();
+    expect(client._getJobs().some((j) => j.step === "motorista" && j.status === "ERROR")).toBe(true);
   });
 
   it("nome confere (só o nome do meio a menos) → passa e cadastra", async () => {
@@ -300,8 +314,7 @@ describe("runAngelliraPipeline / backstop de identidade (nome × CNH)", () => {
         ...SAMPLE_CADASTRO,
         dados: {
           ...SAMPLE_DADOS,
-          motorista: { ...SAMPLE_DADOS.motorista, nome: "JOAO SILVA" },
-          cnh: { ...SAMPLE_DADOS.cnh, nome: "João da Silva" },
+          motorista: { ...SAMPLE_DADOS.motorista, nome: "JOAO SILVA", cnh: { nome: "João da Silva" } },
         },
       },
       driverUserId: "22222222-2222-2222-2222-222222222222",
