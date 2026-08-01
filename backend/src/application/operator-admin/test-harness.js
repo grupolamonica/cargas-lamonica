@@ -113,6 +113,8 @@ const schemaSql = `
     recurrence_interval_days integer,
     recurrence_parent_id uuid,
     lh_manual text,
+    superseded_by_cargo_id uuid,
+    retired_reason text,
     aspx_missing_since timestamptz,
     aspx_missing_lh text,
     aspx_missing_notified_at timestamptz,

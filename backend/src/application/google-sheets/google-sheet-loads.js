@@ -1542,6 +1542,15 @@ export async function syncGoogleSheetLoads({
   }
 
   const currentSheetKeys = new Set(sheetLoadPayloads.map((load) => load.sheet_lh));
+  // LHs cuja linha CANÔNICA da planilha acabou de NASCER nesta rodada (não existia em
+  // existingLoadsBySheetLh). É a janela em que a carga lançada (lh_manual) e a linha da
+  // planilha (sheet_lh) coexistem OPEN e o motorista vê a mesma viagem duas vezes —
+  // medida em prod: 118 pares, a linha da planilha sempre nascendo depois (média 20,4h).
+  // O upsert acima já rodou, então a canônica existe VIVA por construção quando a
+  // aposentadoria abaixo executa.
+  const createdSheetLhs = sheetLoadPayloads
+    .map((load) => load.sheet_lh)
+    .filter((lh) => typeof lh === "string" && lh.trim() !== "" && !existingLoadsBySheetLh.has(lh));
 
   // Parse ALL rows (including non-available) to differentiate two kinds of stale loads:
   // - staleInSheet: operator assigned driver/status → row still exists in sheet, preserve sheet_lh
@@ -1769,14 +1778,30 @@ export async function syncGoogleSheetLoads({
   // LHs DISPONÍVEIS (OPEN) na planilha nesta rodada — as linhas que acabaram de ser
   // upsertadas como cargas OPEN. Gêmeas lançadas destes LHs são o caso (2) acima.
   const openSheetLhs = Array.from(currentSheetKeys);
-  if (takenSheetLhs.length > 0 || openSheetLhs.length > 0) {
+  // (3) PREVENÇÃO: gêmea de LH cuja linha da planilha nasceu AGORA. Sem isto a
+  // duplicata só era limpa quando a planilha marcava motorista (caso 1) ou numa rodada
+  // seguinte (caso 2) — a janela media ~20h. Kill-switch: SHEET_TWIN_RETIRE_ON_CREATE=false.
+  const createdTwinLhs = process.env.SHEET_TWIN_RETIRE_ON_CREATE === "false" ? [] : createdSheetLhs;
+  if (takenSheetLhs.length > 0 || openSheetLhs.length > 0 || createdTwinLhs.length > 0) {
     try {
       const reconcileResult = await withPgClient((pgClient) =>
         pgClient.query(
           `
             WITH twins AS (
               SELECT c.id,
-                     (c.lh_manual = ANY($1::text[])) AS is_taken
+                     c.lh_manual,
+                     (c.lh_manual = ANY($1::text[])) AS is_taken,
+                     CASE
+                       WHEN c.lh_manual = ANY($1::text[]) THEN 'twin_taken'
+                       WHEN c.lh_manual = ANY($4::text[]) THEN 'twin_superseded_on_create'
+                       ELSE 'twin_open_duplicate'
+                     END AS motivo,
+                     -- Canônica (linha da planilha) que passa a valer — rastro do porquê.
+                     (SELECT s.id FROM public.cargas s
+                       WHERE s.sheet_lh = c.lh_manual AND s.sheet_source IS NOT NULL
+                       ORDER BY (s.status NOT IN ('EXPIRED','CANCELLED','COMPLETED','FAILED')) DESC,
+                                s.updated_at DESC
+                       LIMIT 1) AS canonica_id
                 FROM public.cargas c
                WHERE c.sheet_lh IS NULL
                  AND COALESCE(c.is_template, false) = false
@@ -1809,6 +1834,30 @@ export async function syncGoogleSheetLoads({
                           AND s.valor IS NOT NULL
                      )
                    )
+                   -- (3) PREVENCAO: a linha da planilha desta LH NASCEU nesta rodada.
+                   -- Fecha a janela de duplicata (medida em prod: ~20h) sem esperar o
+                   -- motorista ser marcado na planilha. Mesmas guardas do caso (2) — so
+                   -- aposenta lancada OPEN, sem alocacao de Monitor, sem reserva e sem
+                   -- candidatura ativa — e exige a canonica VIVA (nao-terminal), senao
+                   -- sobraria ZERO carga viva para a viagem.
+                   OR (
+                     c.lh_manual = ANY($4::text[])
+                     AND c.status = 'OPEN'
+                     AND COALESCE(c.alloc_motorista, '') = ''
+                     AND COALESCE(c.alloc_status, '') = ''
+                     AND c.reserved_public_lead_id IS NULL
+                     AND NOT EXISTS (
+                       SELECT 1 FROM public.load_public_leads l
+                        WHERE l.load_id = c.id
+                          AND l.status IN ('PRE_REGISTERED', 'QUEUED', 'APPROVED')
+                     )
+                     AND EXISTS (
+                       SELECT 1 FROM public.cargas s
+                        WHERE s.sheet_lh = c.lh_manual
+                          AND s.sheet_source IS NOT NULL
+                          AND s.status NOT IN ('EXPIRED', 'CANCELLED', 'COMPLETED', 'FAILED')
+                     )
+                   )
                  )
             ),
             cancelled_leads AS (
@@ -1835,17 +1884,34 @@ export async function syncGoogleSheetLoads({
                      reserved_public_lead_id = NULL,
                      reserved_at = NULL,
                      reserved_until = NULL,
+                     -- Rastro: por que morreu e quem passou a valer. Antes a lapide era
+                     -- indistinguivel de uma expiracao comum — foi preciso reconstruir
+                     -- por updated_at em lote para entender o caso LT0Q8102CH2U1.
+                     retired_reason = t.motivo,
+                     superseded_by_cargo_id = t.canonica_id,
                      updated_at = now()
-               WHERE c.id IN (SELECT id FROM twins)
-              RETURNING c.id
+                FROM twins t
+               WHERE c.id = t.id
+              RETURNING c.id, t.lh_manual, t.motivo, t.canonica_id
+            ),
+            twin_audit AS (
+              INSERT INTO public.security_audit_logs
+                (event_type, severity, actor_role, resource_type, resource_id, action, outcome, metadata)
+              SELECT 'system.cargo.twin_retired', 'info', 'system', 'cargo', et.id::text,
+                     'update', 'success',
+                     jsonb_build_object('lh', et.lh_manual, 'motivo', et.motivo,
+                                        'supersededBy', et.canonica_id, 'source', $2::text)
+                FROM expired_twins et
+              RETURNING 1
             )
             SELECT
               (SELECT count(*) FROM expired_twins)::int  AS twins_expired,
               (SELECT count(*) FROM twins WHERE is_taken)::int AS twins_taken,
               (SELECT count(*) FROM twins WHERE NOT is_taken)::int AS twins_open,
+              (SELECT count(*) FROM expired_twins WHERE motivo = 'twin_superseded_on_create')::int AS twins_on_create,
               (SELECT count(*) FROM cancelled_leads)::int AS leads_cancelled
           `,
-          [takenSheetLhs, source, openSheetLhs],
+          [takenSheetLhs, source, openSheetLhs, createdTwinLhs],
         ),
       );
 
@@ -1853,11 +1919,12 @@ export async function syncGoogleSheetLoads({
       const twinsExpired = Number(stats.twins_expired ?? 0);
       const twinsTaken = Number(stats.twins_taken ?? 0);
       const twinsOpen = Number(stats.twins_open ?? 0);
+      const twinsOnCreate = Number(stats.twins_on_create ?? 0);
       const leadsCancelled = Number(stats.leads_cancelled ?? 0);
       if (twinsExpired > 0 || leadsCancelled > 0) {
         console.info(
-          `[google-sheet-loads] ${twinsExpired} carga(s) lançada(s) aposentada(s) como gêmea da planilha (${twinsTaken} tomada(s), ${twinsOpen} disponível(is) duplicada(s)) — ${leadsCancelled} candidatura(s) fantasma cancelada(s)`,
-          { twinsExpired, twinsTaken, twinsOpen, leadsCancelled, source },
+          `[google-sheet-loads] ${twinsExpired} carga(s) lançada(s) aposentada(s) como gêmea da planilha (${twinsTaken} tomada(s), ${twinsOpen} disponível(is) duplicada(s), ${twinsOnCreate} na criação da linha da planilha) — ${leadsCancelled} candidatura(s) fantasma cancelada(s)`,
+          { twinsExpired, twinsTaken, twinsOpen, twinsOnCreate, leadsCancelled, source },
         );
       }
     } catch (reconcileError) {
