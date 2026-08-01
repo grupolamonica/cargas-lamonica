@@ -11,6 +11,7 @@ import {
   buildDriverLoadPublicationState,
   mapDriverLoadReadModelItem,
   normalizeOptionalText,
+  isMissingAspxMissingColumnError,
   isMissingDriverVisibilityColumnError,
   isMissingPacoteColumnsError,
   isMissingBonusRequirementsColumnError,
@@ -364,6 +365,15 @@ async function fetchDriverLoadsReadModelUncached({ query, correlationId }) {
         whereSql = filterContext.whereSql;
         values = filterContext.values;
         itemRows = await runQuery();
+      } else if (isMissingAspxMissingColumnError(error)) {
+        // Banco sem a coluna aspx_missing_since: serve o portal SEM essa guarda em
+        // vez de devolver erro ao motorista (a carga fora do ASPX volta a aparecer,
+        // que é o comportamento anterior à feature — degradação, não outage).
+        filterContext = buildFilters({ includeAspxMissingFilter: false });
+        parsedQuery = filterContext.parsedQuery;
+        whereSql = filterContext.whereSql;
+        values = filterContext.values;
+        itemRows = await runQuery();
       } else {
         throw error;
       }
@@ -523,15 +533,29 @@ async function fetchDriverLoadFacetsUncached({ correlationId }) {
     const notExpiredSql =
       "(data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))";
 
-    const buildFacetWhereSql = (includeDriverVisibilityFilter) =>
-      includeDriverVisibilityFilter
-        ? `status = 'OPEN' AND COALESCE(is_template, false) = false AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC' AND ${sheetUnallocatedSql} AND ${notExpiredSql}`
-        : `status = 'OPEN' AND COALESCE(is_template, false) = false AND ${sheetUnallocatedSql} AND ${notExpiredSql}`;
+    // Carga com a viagem fora do ASPX sai da lista (buildDriverLoadFilters) — tem
+    // que sair do CONTADOR também, senão facet e lista divergem e o motorista vê
+    // "3 cargas em Salvador" e abre uma lista com 2.
+    const naoForaDoAspxSql = "aspx_missing_since IS NULL";
+    const buildFacetWhereSql = (includeDriverVisibilityFilter, { comGuardaAspx = true } = {}) => {
+      const guardaAspx = comGuardaAspx ? ` AND ${naoForaDoAspxSql}` : "";
+      return includeDriverVisibilityFilter
+        ? `status = 'OPEN' AND COALESCE(is_template, false) = false AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC' AND ${sheetUnallocatedSql} AND ${notExpiredSql}${guardaAspx}`
+        : `status = 'OPEN' AND COALESCE(is_template, false) = false AND ${sheetUnallocatedSql} AND ${notExpiredSql}${guardaAspx}`;
+    };
     const facetParams = [todayIso, todayIso, nowTimeIso];
 
     const queryFacetRows = async (includeDriverVisibilityFilter) => {
-      const whereSql = buildFacetWhereSql(includeDriverVisibilityFilter);
-      const rows = await queryDriverLoadCandidateRows(client, { whereSql, values: facetParams });
+      let whereSql = buildFacetWhereSql(includeDriverVisibilityFilter);
+      let rows;
+      try {
+        rows = await queryDriverLoadCandidateRows(client, { whereSql, values: facetParams });
+      } catch (facetError) {
+        if (!isMissingAspxMissingColumnError(facetError)) throw facetError;
+        // Mesma degradação da listagem: sem a coluna, conta sem a guarda.
+        whereSql = buildFacetWhereSql(includeDriverVisibilityFilter, { comGuardaAspx: false });
+        rows = await queryDriverLoadCandidateRows(client, { whereSql, values: facetParams });
+      }
       const routeCatalogMetricsByLoadId = await fetchRouteCatalogMetricsByLoadId(client, rows);
       const routeLabelByLoadId = buildRouteLabelMap(rows);
       return rows

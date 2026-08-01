@@ -212,6 +212,25 @@ function buildLoadUnavailableError(loadRow) {
   });
 }
 
+/**
+ * A VIAGEM desta carga saiu do portal da Shopee (ASPX) — detectado pelo job
+ * detect-aspx-missing-trips. A carga continua no sistema de propósito (quem cancela
+ * ou expira é o operador), mas ninguém pode se candidatar: seria frete que não existe
+ * mais do outro lado. A listagem do portal e os facets já a escondem; este gate cobre
+ * o LINK DIRETO, que não passa pela listagem.
+ *
+ * Vale para os caminhos do MOTORISTA (pré-cadastro, fila por WhatsApp, aprovação).
+ * A alocação direta pelo operador (createDirectLeadAllocation) NÃO usa este gate:
+ * lá o operador está ciente e pode ter combinado a viagem por fora.
+ */
+function assertLoadNotOutsideAspx(loadRow) {
+  if (!loadRow?.aspx_missing_since) return;
+  throw new ConflictError(
+    "Esta carga saiu do portal da Shopee (ASPX) e nao esta mais disponivel. Fale com a operacao.",
+    { code: "LOAD_OUTSIDE_ASPX", loadStatus: loadRow?.status || null },
+  );
+}
+
 function serializePublicLead(leadRow, queuePosition = null) {
   if (!leadRow) {
     return null;
@@ -456,7 +475,10 @@ async function getLoadById(client, loadId, { lock = false } = {}) {
         reserved_public_lead_id,
         version,
         viagem_id,
-        ordem_viagem
+        ordem_viagem,
+        -- Viagem fora do ASPX: os gates de candidatura recusam (link direto não
+        -- passa pela listagem, então a guarda de leitura não o cobre).
+        aspx_missing_since
       FROM public.cargas
       WHERE id = $1
       ${lockingClause}
@@ -1278,6 +1300,8 @@ export async function createPublicLoadLeadPreRegistration({ loadId, payload, cor
       throw buildLoadUnavailableError(loadRow);
     }
 
+    assertLoadNotOutsideAspx(loadRow);
+
     assertVehicleTypeMatchesLoad(loadRow, normalizedPayload.vehicleType);
 
     await assertPublicLeadAttemptAllowed(client, {
@@ -1581,6 +1605,8 @@ export async function queuePublicLoadLeadViaWhatsApp({ loadId, leadId, correlati
     if (loadRow.status !== LOAD_STATUS.OPEN) {
       throw buildLoadUnavailableError(loadRow);
     }
+
+    assertLoadNotOutsideAspx(loadRow);
 
     let leadRow = await getPublicLeadById(client, leadId, { lock: true });
 
@@ -2405,6 +2431,8 @@ export async function approvePublicLoadLead({ loadId, leadId, operatorId, correl
     if (loadRow.status !== LOAD_STATUS.OPEN) {
       throw buildLoadUnavailableError(loadRow);
     }
+
+    assertLoadNotOutsideAspx(loadRow);
 
     if (leadRow.status !== PUBLIC_LEAD_STATUS.QUEUED) {
       throw new ConflictError("Apenas leads que ja entraram na fila podem ser reservados.", {
