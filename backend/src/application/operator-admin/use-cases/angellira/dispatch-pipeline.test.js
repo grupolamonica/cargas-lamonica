@@ -261,6 +261,71 @@ describe("runAngelliraPipeline / trava de categoria da CNH (D pra cima)", () => 
   });
 });
 
+describe("runAngelliraPipeline / backstop de identidade (nome × CNH)", () => {
+  it("bloqueia o disparo INTEIRO (no topo) quando o nome diverge da CNH — nenhum bot é chamado", async () => {
+    cadastrarProprietario.mockResolvedValue({ ok: true, ownerId: 9001, raw: {} });
+    cadastrarVeiculo.mockResolvedValue({ ok: true, vehicleId: 7001, raw: {} });
+    cadastrarMotorista.mockResolvedValue({ ok: true, driverId: 5001, raw: {} });
+
+    const client = makeFakeClient();
+    const result = await runAngelliraPipeline({
+      client,
+      cadastro: {
+        ...SAMPLE_CADASTRO,
+        dados: {
+          ...SAMPLE_DADOS,
+          // Shape de PRODUÇÃO: nome da CNH em motorista.cnh.nome (leitura primária).
+          motorista: {
+            ...SAMPLE_DADOS.motorista,
+            nome: "PESSOA TOTALMENTE DIFERENTE",
+            cnh: { nome: "João da Silva" },
+          },
+        },
+      },
+      driverUserId: "22222222-2222-2222-2222-222222222222",
+      operatorId: "33333333-3333-3333-3333-333333333333",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.blocked).toBe(true);
+    expect(result.results).toEqual([
+      expect.objectContaining({
+        step: "motorista",
+        status: "BLOCKED",
+        error: expect.objectContaining({ code: "NOME_DIVERGENTE_CNH", blocked_by: "identity" }),
+      }),
+    ]);
+    // Bloqueio no TOPO (antes dos steps): nem proprietário nem motorista rodam.
+    expect(cadastrarMotorista).not.toHaveBeenCalled();
+    expect(cadastrarProprietario).not.toHaveBeenCalled();
+    expect(cadastrarVeiculo).not.toHaveBeenCalled();
+    expect(client._getJobs().some((j) => j.step === "motorista" && j.status === "ERROR")).toBe(true);
+  });
+
+  it("nome confere (só o nome do meio a menos) → passa e cadastra", async () => {
+    cadastrarProprietario.mockResolvedValue({ ok: true, ownerId: 9001, raw: {} });
+    cadastrarVeiculo.mockResolvedValue({ ok: true, vehicleId: 7001, raw: {} });
+    cadastrarMotorista.mockResolvedValue({ ok: true, driverId: 5001, raw: {} });
+
+    const client = makeFakeClient();
+    const result = await runAngelliraPipeline({
+      client,
+      cadastro: {
+        ...SAMPLE_CADASTRO,
+        dados: {
+          ...SAMPLE_DADOS,
+          motorista: { ...SAMPLE_DADOS.motorista, nome: "JOAO SILVA", cnh: { nome: "João da Silva" } },
+        },
+      },
+      driverUserId: "22222222-2222-2222-2222-222222222222",
+      operatorId: "33333333-3333-3333-3333-333333333333",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(cadastrarMotorista).toHaveBeenCalledOnce();
+  });
+});
+
 describe("runAngelliraPipeline / proprietário do cavalo lê dados.cavalo_owner (DC — caso LEANDRO)", () => {
   it("dono PF terceiro: usa nome/nascimento/rg de dados.cavalo_owner, não o embutido vazio", async () => {
     cadastrarProprietario.mockResolvedValue({ ok: true, ownerId: 9001, raw: {} });

@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 
 import { ForbiddenError, UnauthorizedError } from "../../../domain/load-claims/errors.js";
 import { evaluateCandidaturaCnhCategoria } from "../../../domain/candidatura/cnh-category.js";
+import { checkTypedVsCnh } from "../../../domain/identity/identity-match.js";
 import { requireDriverSession } from "../../../application/load-claims/auth.js";
 import { resolveCandidaturaActor } from "../../../application/load-claims/candidatura-actor.js";
 import { getDriverProfileByUserId } from "../../../application/load-claims/profile-service.js";
@@ -908,9 +909,9 @@ export async function resolveCandidaturaSubmitResponse(request) {
     };
   }
 
-  // Trava de categoria da CNH: só motorista com CNH categoria E (AE/BE/CE/DE/E)
-  // pode se cadastrar/puxar carga — cavalo mecânico exige E. Barra A/AB/AC/AD/B/C/D
-  // ANTES do submit (evita disparo Angellira/SPX que o portal rejeitaria). Vazia
+  // Trava de categoria da CNH: só motorista com CNH categoria D pra cima
+  // (D/E e combinações como AD/AE/CE/DE) pode se cadastrar/puxar carga. Barra
+  // A/B/C/AB/AC ANTES do submit (evita disparo que o portal rejeitaria). Vazia
   // não bloqueia (best-effort — re-submit legado sem categoria).
   const categoriaBlock = evaluateCandidaturaCnhCategoria(parsedInput.dados);
   if (categoriaBlock) {
@@ -953,6 +954,24 @@ export async function resolveCandidaturaSubmitResponse(request) {
         },
       };
     }
+  }
+
+  // Backstop anti-fraude: NOME/CPF digitado vs CNH (OCR, snapshot em
+  // motorista.cnh.nome). Barra o "documento de outra pessoa" — nome editado que
+  // diverge da CNH, ou CPF da candidatura diferente do CPF da CNH. Fail-open
+  // quando não há snapshot (draft antigo / OCR não leu o nome).
+  const identity = checkTypedVsCnh({ dados: parsedInput.dados, driverCpf });
+  if (!identity.ok) {
+    return {
+      statusCode: 422,
+      payload: {
+        error: "IDENTITY_MISMATCH",
+        code: identity.code,
+        message: identity.message,
+        issues: identity.issues,
+        meta: { correlationId },
+      },
+    };
   }
 
   try {
