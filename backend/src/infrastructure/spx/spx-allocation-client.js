@@ -9,6 +9,9 @@
 // - Se o sidecar estiver fora do ar, lança SpxSidecarUnavailable — preview e
 //   assign propagam o erro (HTTP 503, nada é enviado ao ASPX). Sem simulação.
 
+import { parseStation } from "../../domain/operator-admin/spx-station.js";
+import { routeKeyFromLabels } from "../../domain/operator-admin/aspx-trip-presence.js";
+
 const DEFAULT_SIDECAR_URL = "http://localhost:8766";
 
 export function sidecarUrl() {
@@ -121,6 +124,10 @@ export async function fetchTripIndex(
   );
 
   const byNumber = new Map();
+  // Viagens vivas AGRUPADAS POR ROTA (origem→destino), das MESMAS respostas — nenhuma
+  // chamada extra ao portal. Base da detecção de "rota retirada do ASPX": rota com zero
+  // viagem no índice é candidata; rota com >= 1 viagem nunca é.
+  const byRoute = new Map();
   let truncated = false;
   let okCount = 0;
   let lastErr = null;
@@ -142,11 +149,13 @@ export async function fetchTripIndex(
         statusName: t.trip_status_name ?? "",
         driver: (t.driver_name ?? "").trim(),
       });
+      const rota = routeKeyFromLabels(parseStation(t.origem).cityUf, parseStation(t.destino).cityUf);
+      if (rota) byRoute.set(rota, (byRoute.get(rota) ?? 0) + 1);
     }
   }
 
   if (okCount === 0 && lastErr) throw lastErr; // nenhuma aba respondeu → use-case marca index_unavailable
-  return { byNumber, truncated, partial: okCount < tabs.length };
+  return { byNumber, byRoute, truncated, partial: okCount < tabs.length };
 }
 
 /**

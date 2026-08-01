@@ -207,6 +207,8 @@ export interface OperatorCargoListItem {
   aspx_missing_since?: string | null;
   /** LH congelado no momento em que a viagem sumiu do portal. */
   aspx_missing_lh?: string | null;
+  /** 'route_removed' = a ROTA inteira saiu do portal; 'trip_missing'/null = só a viagem. */
+  aspx_missing_reason?: string | null;
   /** Preenchido só pelo sync da planilha Shopee; NULL em cargas importadas por CSV. */
   sheet_synced_at: string | null;
   sheet_data_carregamento: string | null;

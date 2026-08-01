@@ -34,11 +34,24 @@
 //     a resposta (index.truncated), o ciclo é abortado sem marcar nada;
 //   - cargas CANCELLED/EXPIRED ficam fora (não estão no Monitor nem em /cargas por
 //     padrão — avisar sobre elas é só ruído).
+//
+// PASSO B (rota retirada) — cobre a carga com carregamento JÁ PASSADO, que o passo A
+// deliberadamente ignora. A evidência sólida aí não é a viagem, é a ROTA: portal sem
+// nenhuma viagem do trecho + todas as cargas do trecho ausentes + volume mínimo +
+// ausência sustentada (o 1º ciclo observa, o seguinte marca) + índice saudável + teto
+// de rotas por ciclo. Marca com reason 'route_removed' e emite UM aviso por rota (não
+// um por carga). Carga com motorista/reserva NUNCA é marcada — entra na contagem do
+// aviso. Sai atrás de dry-run (ASPX_MISSING_ROUTE_DRYRUN, default LIGADO).
 
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 import { fetchTripIndex } from "../../../infrastructure/spx/spx-allocation-client.js";
-import { classifyAspxPresence, isSpxTripNumber } from "../../../domain/operator-admin/aspx-trip-presence.js";
+import {
+  classifyAspxPresence,
+  classifyRouteRemoval,
+  isSpxTripNumber,
+  routeKeyFromLabels,
+} from "../../../domain/operator-admin/aspx-trip-presence.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 
 // Janela do índice SPX. Espelha o que a Programação/preview usam (45/30) — o Concluído
@@ -69,6 +82,29 @@ function massMarkLimits() {
   return {
     abs: Number.isFinite(abs) && abs > 0 ? abs : 5,
     ratio: Number.isFinite(ratio) && ratio > 0 && ratio <= 1 ? ratio : 0.3,
+  };
+}
+
+// ─── Passo B: rota retirada do ASPX ────────────────────────────────────────────
+// Parâmetros do passo B (todos com default conservador). DRY-RUN é o default no
+// primeiro deploy: o passo só LOGA e avisa, sem marcar carga nenhuma, até o operador
+// conferir o log contra o portal e ligar (ASPX_MISSING_ROUTE_DRYRUN=false).
+function routeStepConfig() {
+  const num = (env, def, { min = 0 } = {}) => {
+    const n = Number(process.env[env]);
+    return Number.isFinite(n) && n >= min ? n : def;
+  };
+  return {
+    // desligado = passo B nem roda; dryRun = roda e loga/avisa, sem escrever marca
+    enabled: process.env.ASPX_MISSING_ROUTE_ENABLED !== "false",
+    dryRun: process.env.ASPX_MISSING_ROUTE_DRYRUN !== "false",
+    pastDays: num("ASPX_MISSING_PAST_DAYS", 14, { min: 1 }),
+    minLoads: num("ASPX_MISSING_ROUTE_MIN_LOADS", 3, { min: 1 }),
+    minAbsentHours: num("ASPX_MISSING_ROUTE_MIN_ABSENT_HOURS", 6, { min: 0 }),
+    // Piso de saúde do índice: portal com poucas viagens não é base p/ concluir nada.
+    minIndexTrips: num("ASPX_MISSING_MIN_INDEX_TRIPS", 100, { min: 1 }),
+    // Teto de rotas por ciclo: uma pane do portal não pode marcar o sistema inteiro.
+    maxRoutesPerRun: num("ASPX_MISSING_MAX_ROUTES_PER_RUN", 2, { min: 1 }),
   };
 }
 
@@ -107,14 +143,19 @@ function agendaLabel(dateIso, timeHm) {
  *   withPgClient?: Function, fetchTripIndex?: typeof fetchTripIndex, now?: () => Date,
  * } }} [args]
  * @returns {Promise<{ ok: boolean, reason?: string, checked: number, marked: number,
- *   cleared: number, renotified: number, notified: number, deferred: number }>}
+ *   cleared: number, renotified: number, notified: number, deferred: number,
+ *   routes: { observando: number, rotasRemovidas: number, cargasMarcadas: number,
+ *             cargasPreservadas: number, restauradas: number, dryRun: boolean, skipped?: string } }>}
  */
 export async function detectAspxMissingTrips({ correlationId = null, deps = {} } = {}) {
   const run = deps.withPgClient || withPgClient;
   const getIndex = deps.fetchTripIndex || fetchTripIndex;
   const now = deps.now ? deps.now() : new Date();
 
-  const empty = { checked: 0, marked: 0, cleared: 0, renotified: 0, notified: 0, deferred: 0, massMarkAborted: 0 };
+  const empty = {
+    checked: 0, marked: 0, cleared: 0, renotified: 0, notified: 0, deferred: 0, massMarkAborted: 0,
+    routes: { observando: 0, rotasRemovidas: 0, cargasMarcadas: 0, cargasPreservadas: 0, restauradas: 0, dryRun: true },
+  };
 
   // 1. Índice das viagens VIVAS no portal (3 abas). Qualquer degradação → no-op.
   let index;
@@ -319,6 +360,12 @@ export async function detectAspxMissingTrips({ correlationId = null, deps = {} }
         }
       }
 
+      // 6. PASSO B — rota retirada do ASPX (carga com carregamento JÁ PASSADO).
+      //    Roda depois do passo A, com estado próprio e tetos próprios; nunca marca
+      //    carga individual e nunca toca status/visibilidade.
+      const rotas = await runRouteStep({ client, index, hoje, agora, now, hours, correlationId, result });
+      result.routes = rotas;
+
       return result;
     });
   } catch (err) {
@@ -349,4 +396,272 @@ export async function detectAspxMissingTrips({ correlationId = null, deps = {} }
   }
 
   return { ok: true, ...outcome };
+}
+
+/**
+ * PASSO B — rota retirada do ASPX.
+ *
+ * Cobre o buraco do passo A: viagem que desaparece DEPOIS do horário de carregamento
+ * nunca era sinalizada (caso Itaitinga: 34 cargas fantasma ficaram no Monitor sem
+ * selo). Para carga já carregada a ausência de UMA viagem não é evidência; a ausência
+ * da ROTA INTEIRA é. Só marca quando: portal sem nenhuma viagem do trecho + todas as
+ * cargas avaliadas do trecho ausentes + volume mínimo + ausência SUSTENTADA (1º ciclo
+ * observa, o seguinte marca) + índice saudável + teto de rotas por ciclo.
+ *
+ * Nunca marca carga com motorista/reserva: essas estão comprometidas com alguém e a
+ * decisão é do operador — mas entram na contagem do aviso, para não ficar silencioso.
+ *
+ * @returns {Promise<{ skipped?: string, observando: number, rotasRemovidas: number,
+ *   cargasMarcadas: number, cargasPreservadas: number, restauradas: number, dryRun: boolean }>}
+ */
+async function runRouteStep({ client, index, hoje, agora, now, hours, correlationId, result }) {
+  const cfg = routeStepConfig();
+  const vazio = {
+    observando: 0,
+    rotasRemovidas: 0,
+    cargasMarcadas: 0,
+    cargasPreservadas: 0,
+    restauradas: 0,
+    dryRun: cfg.dryRun,
+  };
+  if (!cfg.enabled) return { ...vazio, skipped: "disabled" };
+  // Índice pequeno não sustenta conclusão sobre rota (a mesma prudência do disjuntor).
+  if (index.byNumber.size < cfg.minIndexTrips) return { ...vazio, skipped: "index_too_small" };
+  const byRoute = index.byRoute instanceof Map ? index.byRoute : new Map();
+  if (byRoute.size === 0) return { ...vazio, skipped: "no_route_index" };
+
+  // Cargas lançadas com carregamento JÁ PASSADO, dentro da janela para trás.
+  const { rows } = await client.query(
+    `SELECT id, lh_manual, data, horario, origem, destino, status,
+            aspx_missing_since,
+            COALESCE(alloc_motorista, '') AS motorista,
+            (reserved_driver_id IS NOT NULL OR reserved_public_lead_id IS NOT NULL
+             OR booked_driver_id IS NOT NULL) AS comprometida
+       FROM public.cargas
+      WHERE sheet_lh IS NULL
+        AND COALESCE(lh_manual, '') <> ''
+        AND upper(lh_manual) LIKE 'LT%'
+        AND COALESCE(is_template, false) = false
+        AND status NOT IN ('CANCELLED', 'EXPIRED')
+        AND data IS NOT NULL
+        AND data >= ($1::date - $3::int)
+        AND (data < $1::date OR (data = $1::date AND horario IS NOT NULL AND horario < $2::time))`,
+    [hoje, agora, cfg.pastDays],
+  );
+
+  // Agrupa por rota canônica e conta ausentes.
+  const rotas = new Map();
+  for (const row of rows) {
+    const lh = trim(row.lh_manual);
+    if (!isSpxTripNumber(lh)) continue;
+    const key = routeKeyFromLabels(row.origem, row.destino);
+    if (!key) continue;
+    if (!rotas.has(key)) {
+      rotas.set(key, { key, origem: trim(row.origem), destino: trim(row.destino), cargas: [], ausentes: 0 });
+    }
+    const r = rotas.get(key);
+    const ausente = !index.byNumber.has(lh);
+    r.cargas.push({ ...row, lh, ausente });
+    if (ausente) r.ausentes += 1;
+  }
+
+  const estado = await loadRouteAbsenceState(client, [...rotas.keys()]);
+  const saida = { ...vazio };
+  const removidas = [];
+
+  for (const rota of rotas.values()) {
+    const portalTrips = byRoute.get(rota.key) ?? 0;
+    const anterior = estado.get(rota.key) ?? null;
+    const { action } = classifyRouteRemoval({
+      portalTripsOnRoute: portalTrips,
+      launchedOnRoute: rota.cargas.length,
+      missingOnRoute: rota.ausentes,
+      minLoads: cfg.minLoads,
+      firstAbsentAt: anterior?.first_absent_at ?? null,
+      now,
+      minAbsentHours: cfg.minAbsentHours,
+    });
+
+    if (action === "none") {
+      // Rota viva (ou recorte pequeno): zera a observação, se existia.
+      if (anterior) await clearRouteAbsence(client, rota.key);
+      // Rota presente no portal → limpa marcas de route_removed das cargas dela.
+      // NÃO depende de haver linha de observação: se o estado da rota se perder
+      // (linha apagada, banco restaurado), a marca ficaria presa para sempre — o passo
+      // A não cobre carga de carregamento passado. A limpeza é idempotente e o filtro
+      // por reason garante que marca do passo A (trip_missing) não é tocada aqui.
+      if (portalTrips > 0) {
+        saida.restauradas += await restoreRouteMarks(client, rota, { dryRun: cfg.dryRun, correlationId });
+      }
+      continue;
+    }
+
+    if (action === "observing") {
+      await upsertRouteAbsence(client, rota, { loads: rota.cargas.length });
+      saida.observando += 1;
+      continue;
+    }
+
+    removidas.push({ rota, anterior });
+  }
+
+  // Teto de rotas por ciclo: as mais volumosas primeiro (o excedente é logado, não
+  // truncado em silêncio, e entra no próximo tick).
+  removidas.sort((a, b) => b.rota.cargas.length - a.rota.cargas.length);
+  const aplicar = removidas.slice(0, cfg.maxRoutesPerRun);
+  const adiadas = removidas.length - aplicar.length;
+  if (adiadas > 0) {
+    logStructuredEvent("warn", "detect-aspx-missing-trips.routes-deferred", {
+      correlationId,
+      deferred: adiadas,
+      rotas: removidas.slice(cfg.maxRoutesPerRun).map((x) => x.rota.key),
+    });
+  }
+
+  for (const { rota, anterior } of aplicar) {
+    saida.rotasRemovidas += 1;
+    const marcaveis = rota.cargas.filter((c) => !c.motorista.trim() && c.comprometida !== true && !c.aspx_missing_since);
+    const preservadas = rota.cargas.filter((c) => c.motorista.trim() || c.comprometida === true);
+    saida.cargasPreservadas += preservadas.length;
+
+    if (!cfg.dryRun) {
+      for (const c of marcaveis) {
+        await client.query(
+          `UPDATE public.cargas
+              SET aspx_missing_since = now(), aspx_missing_lh = $2,
+                  aspx_missing_reason = 'route_removed', aspx_missing_notified_at = now(),
+                  updated_at = now()
+            WHERE id = $1`,
+          [c.id, c.lh],
+        );
+        saida.cargasMarcadas += 1;
+      }
+    }
+
+    // UM aviso por rota (nunca um por carga) — respeitando a janela de re-aviso.
+    const jaAvisada = anterior?.notified_at
+      ? now.getTime() - Date.parse(String(anterior.notified_at)) < hours * 3600_000
+      : false;
+    if (!jaAvisada) {
+      const rotaLabel = `${rota.origem} → ${rota.destino}`;
+      const corpo = [
+        `${rota.cargas.length} carga(s) lançada(s) sem lastro no portal`,
+        preservadas.length ? `${preservadas.length} com motorista/reserva ficaram intactas (decisão sua)` : null,
+        cfg.dryRun ? "MODO OBSERVAÇÃO: nenhuma carga foi marcada ainda" : "as cargas saíram do Monitor e estão em Cargas com o selo",
+      ].filter(Boolean).join(" · ");
+      await client.query(
+        `INSERT INTO public.operator_notifications (kind, title, body, metadata)
+         VALUES ('aspx_route_missing', $1, $2, $3::jsonb)`,
+        [
+          `Rota fora do ASPX: ${rotaLabel}`,
+          corpo,
+          JSON.stringify({
+            route_key: rota.key,
+            origem: rota.origem,
+            destino: rota.destino,
+            cargas: rota.cargas.length,
+            marcadas: cfg.dryRun ? 0 : marcaveis.length,
+            preservadas: preservadas.length,
+            dry_run: cfg.dryRun,
+            correlation_id: correlationId || null,
+          }),
+        ],
+      );
+      result.notified += 1;
+      await upsertRouteAbsence(client, rota, { loads: rota.cargas.length, notified: true });
+    } else {
+      await upsertRouteAbsence(client, rota, { loads: rota.cargas.length });
+    }
+
+    logStructuredEvent("warn", "detect-aspx-missing-trips.route-removed", {
+      correlationId,
+      rota: rota.key,
+      cargas: rota.cargas.length,
+      marcadas: cfg.dryRun ? 0 : marcaveis.length,
+      preservadas: preservadas.length,
+      dryRun: cfg.dryRun,
+    });
+  }
+
+  return saida;
+}
+
+/** Estado de observação das rotas ausentes. Tolerante a tabela ausente (migration não
+ *  aplicada): sem estado, o passo B nunca sai da fase de observação — falha segura. */
+async function loadRouteAbsenceState(client, keys) {
+  if (keys.length === 0) return new Map();
+  try {
+    // Lista IN gerada (portável) em vez de = ANY($1::text[]) — o harness de teste não
+    // resolve o array parametrizado, e o conjunto de rotas por ciclo é pequeno.
+    const placeholders = keys.map((_, i) => `$${i + 1}`).join(", ");
+    const { rows } = await client.query(
+      `SELECT route_key, first_absent_at, notified_at, loads_count
+         FROM public.aspx_route_absence WHERE route_key IN (${placeholders})`,
+      keys,
+    );
+    return new Map(rows.map((r) => [r.route_key, r]));
+  } catch (err) {
+    if (err?.code === "42P01") return new Map();
+    throw err;
+  }
+}
+
+/** UPDATE-então-INSERT em vez de ON CONFLICT: mesma semântica, portável (o harness de
+ *  teste não suporta o DO UPDATE com referência qualificada à tabela alvo). */
+async function upsertRouteAbsence(client, rota, { loads, notified = false } = {}) {
+  try {
+    const { rowCount } = await client.query(
+      `UPDATE public.aspx_route_absence
+          SET loads_count = $2, origem = $3, destino = $4,
+              notified_at = CASE WHEN $5 THEN now() ELSE notified_at END,
+              updated_at = now()
+        WHERE route_key = $1`,
+      [rota.key, loads ?? 0, rota.origem, rota.destino, notified],
+    );
+    if (rowCount === 0) {
+      await client.query(
+        `INSERT INTO public.aspx_route_absence (route_key, origem, destino, loads_count, notified_at)
+         VALUES ($1, $2, $3, $4, CASE WHEN $5 THEN now() ELSE NULL END)`,
+        [rota.key, rota.origem, rota.destino, loads ?? 0, notified],
+      );
+    }
+  } catch (err) {
+    if (err?.code !== "42P01") throw err;
+  }
+}
+
+async function clearRouteAbsence(client, key) {
+  try {
+    await client.query("DELETE FROM public.aspx_route_absence WHERE route_key = $1", [key]);
+  } catch (err) {
+    if (err?.code !== "42P01") throw err;
+  }
+}
+
+/** Rota voltou ao portal: limpa as marcas que ESTE passo criou (reason route_removed) e
+ *  avisa. Marcas do passo A (trip_missing) seguem sob a regra por viagem. */
+async function restoreRouteMarks(client, rota, { dryRun, correlationId }) {
+  const ids = rota.cargas.filter((c) => c.aspx_missing_since).map((c) => c.id);
+  if (ids.length === 0) return 0;
+  // IN gerado (portável — ver loadRouteAbsenceState).
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
+  const { rowCount } = await client.query(
+    `UPDATE public.cargas
+        SET aspx_missing_since = NULL, aspx_missing_lh = NULL,
+            aspx_missing_notified_at = NULL, aspx_missing_reason = NULL, updated_at = now()
+      WHERE id IN (${placeholders}) AND aspx_missing_reason = 'route_removed'`,
+    ids,
+  );
+  if (rowCount > 0 && !dryRun) {
+    await client.query(
+      `INSERT INTO public.operator_notifications (kind, title, body, metadata)
+       VALUES ('aspx_route_restored', $1, $2, $3::jsonb)`,
+      [
+        `Rota voltou ao ASPX: ${rota.origem} → ${rota.destino}`,
+        `${rowCount} carga(s) voltaram ao Monitor`,
+        JSON.stringify({ route_key: rota.key, cargas: rowCount, correlation_id: correlationId || null }),
+      ],
+    );
+  }
+  return rowCount;
 }

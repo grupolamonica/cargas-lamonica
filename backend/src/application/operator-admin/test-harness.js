@@ -106,6 +106,7 @@ const schemaSql = `
     reserved_until timestamptz,
     reserved_driver_id uuid,
     reserved_claim_id uuid,
+    booked_driver_id uuid,
     sheet_synced_at timestamptz,
     viagem_id uuid,
     ordem_viagem integer,
@@ -116,6 +117,7 @@ const schemaSql = `
     aspx_missing_since timestamptz,
     aspx_missing_lh text,
     aspx_missing_notified_at timestamptz,
+    aspx_missing_reason text,
     codigo_viagem text,
     agenda_a_confirmar boolean NOT NULL DEFAULT false,
     version integer NOT NULL DEFAULT 0,
@@ -449,6 +451,17 @@ const schemaSql = `
     kind text NOT NULL DEFAULT 'media',
     file_sha256 text,
     created_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE public.aspx_route_absence (
+    route_key text PRIMARY KEY,
+    origem text,
+    destino text,
+    first_absent_at timestamptz NOT NULL DEFAULT now(),
+    last_present_at timestamptz,
+    loads_count integer NOT NULL DEFAULT 0,
+    notified_at timestamptz,
+    updated_at timestamptz NOT NULL DEFAULT now()
   );
 
   CREATE TABLE public.operator_notifications (

@@ -992,10 +992,14 @@ const ManageCargas = () => {
                           {cargo.aspx_missing_since ? (
                             <span
                               className="mt-1 flex w-fit items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-700"
-                              title={`A viagem ${cargo.aspx_missing_lh || cargo.lh_manual || ""} não está mais no portal Shopee (ASPX) desde ${formatFullDateTime(cargo.aspx_missing_since, "")}. A carga saiu do Monitor e continua aqui para você decidir: cancelar, expirar ou aguardar a viagem voltar.`}
+                              title={
+                                cargo.aspx_missing_reason === "route_removed"
+                                  ? `A ROTA ${cargo.origem} → ${cargo.destino} não tem mais nenhuma viagem no portal Shopee (ASPX) desde ${formatFullDateTime(cargo.aspx_missing_since, "")} — a Shopee retirou o trecho. A carga saiu do Monitor e continua aqui para você decidir.`
+                                  : `A viagem ${cargo.aspx_missing_lh || cargo.lh_manual || ""} não está mais no portal Shopee (ASPX) desde ${formatFullDateTime(cargo.aspx_missing_since, "")}. A carga saiu do Monitor e continua aqui para você decidir: cancelar, expirar ou aguardar a viagem voltar.`
+                              }
                             >
                               <AlertTriangle className="h-2.5 w-2.5" />
-                              Fora do ASPX
+                              {cargo.aspx_missing_reason === "route_removed" ? "Rota fora do ASPX" : "Fora do ASPX"}
                             </span>
                           ) : null}
                         </td>

@@ -44,6 +44,8 @@ const KIND_LABEL: Record<string, string> = {
   new_queue_driver: "Novo motorista na fila",
   aspx_trip_missing: "Carga saiu do ASPX",
   aspx_trip_restored: "Viagem voltou ao ASPX",
+  aspx_route_missing: "Rota saiu do ASPX",
+  aspx_route_restored: "Rota voltou ao ASPX",
 };
 
 const KIND_TINT: Record<string, string> = {
@@ -64,6 +66,8 @@ const KIND_TINT: Record<string, string> = {
   new_queue_driver: "bg-emerald-600",
   aspx_trip_missing: "bg-red-600",
   aspx_trip_restored: "bg-emerald-500",
+  aspx_route_missing: "bg-red-700",
+  aspx_route_restored: "bg-emerald-500",
 };
 
 function fmtRelative(iso: string) {
@@ -535,7 +539,7 @@ export default function NotificationsBell() {
                 // spot → Programação (?lh=); novo motorista → Fila (?carga=).
                 const isQueue = n.kind === "new_queue_driver";
                 // Avisos de ASPX levam à tela de Cargas (a carga marcada vive lá).
-                const isAspx = n.kind === "aspx_trip_missing" || n.kind === "aspx_trip_restored";
+                const isAspx = n.kind.startsWith("aspx_");
                 const clickable = n.kind === "new_spot" || isQueue || isAspx;
                 const openRow = () => {
                   if (isAspx) {
