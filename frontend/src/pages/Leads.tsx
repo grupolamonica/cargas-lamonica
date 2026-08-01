@@ -244,11 +244,16 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     // demanda e revalida por reconexão/refetch manual — não reenvia a lista 24/7.
     refetchInterval: historicoMode ? false : (query) => (query.state.data ? 60_000 : 30_000),
     refetchIntervalInBackground: false,
-    // refetchOnWindowFocus desligado: o polling (60s) + realtime debounced já
-    // mantêm a fila fresca. Com focus-refetch ligado, alternar abas dispara
+    // Fila: refetchOnWindowFocus desligado — o polling (60s) + realtime debounced
+    // já mantêm a fila fresca. Com focus-refetch ligado, alternar abas dispara
     // refetch da query pesada (238 leads × 6 JOINs) desnecessariamente — somava
     // ao egress do pooler (incidente 70GB).
-    refetchOnWindowFocus: false,
+    // Histórico: LIGADO. Como não faz auto-poll e o listener realtime de `cargas`
+    // saiu (ver o effect abaixo), uma aba do Histórico aberta há horas perderia
+    // as transições terminais que não tocam nenhuma linha de lead (sheet sync
+    // OPEN→BOOKED, expiração OPEN→EXPIRED). Foco de aba é o compensador
+    // event-driven: custo zero em idle, e ainda gated por staleTime de 5min.
+    refetchOnWindowFocus: historicoMode,
     refetchOnReconnect: true,
     staleTime: historicoMode ? 5 * 60_000 : 15_000,
     // Retry transient errors (5xx) with exponential backoff. 4xx errors
@@ -301,13 +306,25 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
   }, [sheetData]);
 
   useEffect(() => {
-    // Debounce da invalidação: o canal `cargas` é ruidoso — o sheet sync faz
-    // UPDATE em massa (centenas de linhas por ciclo), e cada linha emite um
-    // evento postgres_changes. Sem debounce, cada evento disparava um refetch
-    // imediato da query pesada (listOperatorPublicLoadLeads: 238 leads × 6
-    // JOINs), gerando centenas de mil chamadas ao pooler (incidente 70GB de
-    // egress). O debounce colapsa uma rajada de N eventos numa única
-    // invalidação ~3s depois do último evento.
+    // O listener de `cargas` foi REMOVIDO deste canal. Ele era `event: "*"` sem
+    // filter, e o sheet sync faz UPDATE em massa (centenas de linhas por ciclo,
+    // a cada 5min) — cada linha virava uma mensagem realtime entregue a CADA aba
+    // de operador aberta em /leads e /historico-fila. O debounce abaixo colapsava
+    // os refetches, mas nunca as mensagens: eram elas que queimavam o medidor de
+    // Realtime Message Count. Filtrar não ajudaria — postgres_changes aceita um
+    // único `coluna=op.valor`, os status escritos em massa (OPEN/RESERVED) são
+    // exatamente os que a Fila mostra, e o filtro é avaliado no registro NOVO, o
+    // que descartaria justamente as transições para status terminal (o que move
+    // um card da Fila para o Histórico).
+    // Compensação: a Fila cai no seu poll de 60s (antes ~3s) e o Histórico ganhou
+    // refetchOnWindowFocus (ver a query acima). Mutações do próprio operador
+    // continuam invalidando na hora.
+    //
+    // Debounce da invalidação (mantido para o canal de leads): sem ele cada
+    // evento disparava um refetch imediato da query pesada
+    // (listOperatorPublicLoadLeads: 238 leads × 6 JOINs), gerando centenas de mil
+    // chamadas ao pooler (incidente 70GB de egress). Colapsa uma rajada de N
+    // eventos numa única invalidação ~3s depois do último.
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const invalidateLeadQueueDebounced = () => {
       if (debounceTimer) clearTimeout(debounceTimer);
@@ -320,9 +337,6 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     const realtimeChannel = supabase
       .channel("operator-public-load-leads")
       .on("postgres_changes", { event: "*", schema: "public", table: "load_public_leads" }, () => {
-        invalidateLeadQueueDebounced();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "cargas" }, () => {
         invalidateLeadQueueDebounced();
       })
       .subscribe();

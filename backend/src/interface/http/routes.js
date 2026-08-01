@@ -135,6 +135,7 @@ import {
   resolveVehicleChecklistLevelsResponse,
   resolveDriverSponsorClicksResponse,
   resolveOperatorOverviewDigestResponse,
+  resolveOperatorOverviewSnapshotResponse,
   resolveOperatorCadastrosPendentesResponse,
   resolveOperatorListDraftRegistrationsResponse,
   resolveOperatorSubmitDraftResponse,
@@ -373,6 +374,7 @@ export function registerRoutes(app) {
   // Operator dashboard & audit
   router.get("/api/operator/dashboard", wrap(resolveOperatorDashboardReadModelResponse));
   router.get("/api/operator/overview/digest", wrap(resolveOperatorOverviewDigestResponse));
+  router.get("/api/operator/overview/snapshot", wrap(resolveOperatorOverviewSnapshotResponse));
   router.get("/api/operator/audit-logs", wrap(resolveOperatorAuditLogsResponse));
   router.get("/api/operator/driver-flow-metrics", wrap(resolveOperatorDriverFlowMetricsResponse));
   router.get("/api/operator/sponsor-clicks", wrap(resolveDriverSponsorClicksResponse));
