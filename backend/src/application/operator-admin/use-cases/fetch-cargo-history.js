@@ -4,17 +4,25 @@ import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
 
 // ── Helpers de apresentação (linguagem do operador, sem jargão técnico) ──────
 
-function angelliraDisplayName(validationSummaryJson) {
-  let summary = validationSummaryJson;
-  if (typeof summary === "string") {
-    try {
-      summary = JSON.parse(summary);
-    } catch {
-      summary = null;
-    }
-  }
-  const name = summary?.driver?.angelira?.displayName;
-  return typeof name === "string" && name.trim() ? name.trim() : "";
+/**
+ * Nome do Angellira do lead, JÁ EXTRAÍDO NO SERVIDOR pela projeção
+ * `validation_summary_json->'driver'->'angelira'->>'displayName'` (ver a query dos
+ * eventos abaixo). Recebe o texto, não o JSON.
+ *
+ * EGRESS: antes o SELECT trazia o `validation_summary_json` INTEIRO só p/ ler este
+ * único campo em JS. É a coluna mais larga do banco (~1,5 KB/linha) e o LEFT JOIN a
+ * repete em CADA evento do lead (o modal lê até 200 eventos) — o mesmo JSON descia
+ * 5-6x por lead. A projeção é a MESMA expressão já usada no read do Monitor (mapa de
+ * cargas RESERVADAS, interface/http/operator-admin/handlers.js).
+ *
+ * A checagem de tipo + trim ficam AQUI (não no SQL) p/ o resultado ser idêntico ao
+ * anterior: `->>` devolve NULL quando a chave não existe ou é JSON null (→ ""), e o
+ * `.trim()` do JS corta \t\n (o TRIM do SQL só corta espaço). Os produtores sempre
+ * gravam `displayName` como string ou null (angellira-client), então não há caso de
+ * escalar não-string em que `->>` divergiria do `typeof === "string"` antigo.
+ */
+function angelliraDisplayName(displayName) {
+  return typeof displayName === "string" && displayName.trim() ? displayName.trim() : "";
 }
 
 function driverLabel({ name, phone }) {
@@ -69,7 +77,8 @@ export async function fetchCargoHistoryByLh({ lh, correlationId }) {
       const events = await client.query(
         `
           SELECT e.event_type, e.event_payload_json, e.actor_type, e.actor_id, e.created_at,
-                 l.horse_plate, l.trailer_plate, l.phone, l.validation_summary_json
+                 l.horse_plate, l.trailer_plate, l.phone,
+                 l.validation_summary_json->'driver'->'angelira'->>'displayName' AS angellira_display_name
           FROM public.load_public_lead_events e
           JOIN public.cargas c ON c.id = e.load_id
           LEFT JOIN public.load_public_leads l ON l.id = e.lead_id
@@ -130,7 +139,7 @@ export async function fetchCargoHistoryByLh({ lh, correlationId }) {
 
     for (const row of eventRows) {
       const por = actorLabel({ actorType: row.actor_type, actorId: row.actor_id }, directory);
-      const nome = driverLabel({ name: angelliraDisplayName(row.validation_summary_json), phone: row.phone });
+      const nome = driverLabel({ name: angelliraDisplayName(row.angellira_display_name), phone: row.phone });
       const payload = row.event_payload_json ?? {};
 
       let titulo = null;

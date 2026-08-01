@@ -1,6 +1,6 @@
 import "../../../infrastructure/config/load-env.js";
 
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 
 import { syncGoogleSheetLoads } from "../../../application/google-sheets/google-sheet-loads.js";
 import { createSupabaseAdminClient } from "../../../infrastructure/supabase/admin-client.js";
@@ -21,6 +21,7 @@ import {
   fetchDriverLoadsReadModel,
   getHealthSnapshot,
 } from "../../../application/operator-admin/service.js";
+import { fetchDriverCargoDetail } from "../../../application/operator-admin/use-cases/dashboard-read-model.js";
 import { getPublicPacote } from "../../../application/cargas-casadas/service.js";
 import { pacoteIdParamsSchema } from "../../../domain/cargas-casadas/schemas.js";
 import { recordDriverPortalVisit } from "../../../domain/operator-admin/driver-flow-metrics.js";
@@ -188,6 +189,39 @@ export async function resolveDriverLoadsReadModelResponse(request) {
       correlationId,
     });
   } catch (error) {
+    return toErrorResponse(error, correlationId);
+  }
+}
+
+/**
+ * GET /api/driver/cargas/:cargoId — detalhe de UMA carga para o portal.
+ *
+ * Anônimo (sem driver auth), como /api/driver/loads. Substitui as leituras
+ * diretas que a tela DriverCargoDetails fazia no banco com a chave anônima
+ * (cargas + clientes + route_metrics_cache + fallback de distância): agora é
+ * uma resposta cacheada por carga, e o navegador não fala mais com o pooler.
+ *
+ * Visibilidade: só carga em OPEN/RESERVED/BOOKED — mesma policy anônima de
+ * public.cargas. Fora disso → 404 (indistinguível de carga inexistente).
+ * cargoId não-UUID → 400.
+ */
+const driverCargoIdParamsSchema = z.object({
+  cargoId: z.string().uuid("cargoId deve ser um UUID."),
+});
+
+export async function resolveDriverCargoDetailResponse(request) {
+  const correlationId = getCorrelationId(request);
+
+  try {
+    const { cargoId } = driverCargoIdParamsSchema.parse({
+      cargoId: getQueryParam(request, "cargoId"),
+    });
+
+    return await fetchDriverCargoDetail({ cargoId, correlationId });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return zodErrorToHttpResponse(error, correlationId);
+    }
     return toErrorResponse(error, correlationId);
   }
 }

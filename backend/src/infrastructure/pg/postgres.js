@@ -3,6 +3,29 @@ import { Pool } from "pg";
 import "../config/load-env.js";
 import { buildPostgresSslConfig } from "./postgres-ssl.js";
 
+// Pool pg do backend — SINGLETON de processo (memo em `pool`, encerrado só no
+// graceful shutdown de main.js).
+//
+// DIAGNÓSTICO de churn/introspecção de catálogo (perf, PONTO 10): o
+// pg_stat_statements de produção acusa volume alto de introspecção de catálogo
+// (`pg_catalog.pg_type` com `typarray`, CTE recursiva `base_types`,
+// `pks_uniques_cols`). NADA disso sai daqui:
+//   - o driver `pg` resolve tipos por tabela de OIDs compilada no pacote
+//     `pg-types` (as únicas menções a pg_type lá são comentários que documentam
+//     como a tabela foi gerada) e não emite UMA query no handshake — o
+//     `_connect` de pg/lib/client.js só faz startup packet + auth e já entra em
+//     readyForQuery;
+//   - o pool é construído uma única vez por processo; nenhum handler/job abre
+//     `new Pool`/`new Client` por request (só os scripts one-shot de
+//     src/scripts/, que encerram com pool.end());
+//   - `supabase-js` (infrastructure/supabase/admin-client.js) fala HTTP com o
+//     PostgREST; construí-lo por request — como vários handlers fazem — NÃO
+//     abre conexão Postgres nem consulta catálogo.
+// Aquelas queries são o PostgREST recarregando o schema cache: serviço
+// gerenciado pela Supabase, disparado por restart do PostgREST ou por NOTIFY dos
+// event triggers de DDL do projeto. Reduzi-las é trabalho de OPS + de eliminar
+// DDL em caminho quente (ex.: `CREATE TABLE IF NOT EXISTS` a cada leitura de
+// app_settings), não de tunar os números deste pool.
 let pool;
 
 function getConnectionString() {
@@ -35,6 +58,9 @@ export function getPostgresPool() {
     pool = new Pool({
       connectionString: getConnectionString(),
       max: poolMax,
+      // idleTimeout — conexão ociosa é fechada em 30s. Baixar isso NÃO economiza
+      // egress: só troca slot parado no pooler por mais handshake TLS + startup.
+      // Documentado em backend/.env.example (bloco "Pool Postgres").
       idleTimeoutMillis: parsePositiveInt(process.env.PG_IDLE_TIMEOUT_MS, 30_000),
       connectionTimeoutMillis: parsePositiveInt(process.env.PG_CONNECT_TIMEOUT_MS, 5_000),
       ssl: buildPostgresSslConfig(),
