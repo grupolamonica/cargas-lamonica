@@ -36,6 +36,7 @@ import {
 } from "@/services/readModels";
 import RouteColorsDialog, { PROGRAMACAO_ROUTE_COLORS_KEY } from "@/components/operator/RouteColorsDialog";
 import { buildRouteColorMap, colorForRow, contrastText } from "@/lib/programacaoColors";
+import { isHiddenLatePlanejado } from "@/lib/programacao";
 import { fetchAssignableRoutes, findAssignableRouteByLocations } from "@/lib/assignableRoutes";
 import { attachClienteRota, createOperatorRoute, type ImportCargasResponse } from "@/services/operatorAdmin";
 import { parseMoneyInput, parseOptionalNumber, trimTextOrNull } from "@/lib/routeCatalog";
@@ -639,7 +640,9 @@ export default function Programacao() {
       // Nunca desatualizado: no Planejado, esconde viagens já atrasadas (carregamento
       // no passado vs o relógio corrente). Compara epoch absoluto → sem ambiguidade de
       // fuso. Reavaliado a cada tick (nowMs). Aceito/Concluído são naturalmente passados.
-      if (r.tab === "planejado" && r.carregamentoTs && r.carregamentoTs * 1000 < nowMs) return false;
+      // Exceção: viagem com motorista atribuído FICA (não existe outra aba p/ ela) —
+      // regra pura em @/lib/programacao, espelhando o backend.
+      if (isHiddenLatePlanejado(r, nowMs)) return false;
       if (qTokens.length) {
         const hay = `${r.lh} ${r.nome}`.toUpperCase();
         if (!qTokens.some((t) => hay.includes(t))) return false;
@@ -1004,6 +1007,19 @@ export default function Programacao() {
                       >
                         {rowStatus(r) || "—"}
                       </span>
+                      {/* Viagem atrasada que FICA na tela porque já tem motorista (não
+                          existe outra aba p/ ela). A ordenação é por carregamento asc,
+                          então ela sobe para o topo do Planejado — sem este selo pareceria
+                          spot novo ou erro de ordenação. */}
+                      {r.tab === "planejado" && r.expirada ? (
+                        <span
+                          className="mt-1 flex w-fit items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-700"
+                          title="Carregamento venceu e o motorista já está atribuído no SPX — a viagem não migra para a aba Aceito, então continua aqui para você tratar."
+                        >
+                          <AlertTriangle className="h-2.5 w-2.5" />
+                          Atrasada
+                        </span>
+                      ) : null}
                     </td>
                     {tab !== "planejado" && (
                       <td className={cn("px-3 py-2.5", !rowColor && "text-muted-foreground")}>

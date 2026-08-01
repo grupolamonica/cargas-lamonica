@@ -431,7 +431,16 @@ export async function getProgramacao({ correlationId, force = false, tabs = null
   }
   // Planejado atrasado é backlog inútil (não dá p/ lançar/vender) → SAI do painel.
   // Aceito/Concluído são naturalmente de datas passadas — ficam.
-  rows = rows.filter((r) => !(r.tab === "planejado" && r.expirada));
+  //
+  // EXCEÇÃO (viagem com MOTORISTA atribuído): a aba Aceito do SPX só recebe viagem em
+  // EXECUÇÃO (medido no portal: Loading/Seal/Departed/Arrived/Unseal). Uma viagem
+  // "Assigned" — aceita, motorista atribuído, ainda não carregada — não migra para lá:
+  // esconder do Planejado por atraso a apaga das TRÊS abas, e é justamente a que exige
+  // ação do operador (caso real LT0Q8102CH2U1: motorista atribuído, carregamento 06:00
+  // vencido, sumiu da tela). O gate é `!r.motorista` (não `acceptanceStatus`): o
+  // argumento é "quem já tem motorista não tem outra aba"; viagem aceita SEM motorista
+  // continua saindo por atraso, como antes.
+  rows = rows.filter((r) => !(r.tab === "planejado" && r.expirada && !r.motorista));
 
   try {
     const launched = await listLaunched(rows.map((r) => r.lh));

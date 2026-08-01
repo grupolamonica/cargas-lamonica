@@ -107,6 +107,45 @@ describe("getProgramacao (consulta direta ao SPX via sidecar)", () => {
     expect(res.payload.rows.find((r) => r.lh === "LT-FUT").carregamentoTs).toBe(future);
   });
 
+  it("MANTÉM no Planejado a viagem atrasada que já tem MOTORISTA (não existe outra aba p/ ela)", async () => {
+    // Caso real LT0Q8102CH2U1: aceita, motorista atribuído ("Assigned"), carregamento
+    // vencido. A aba Aceito do SPX só recebe viagem em execução (Loading/Departed/…),
+    // então esconder do Planejado a apagava das três abas.
+    const nowMs = Date.UTC(2026, 6, 10, 12, 0);
+    const past = Math.floor(Date.UTC(2026, 6, 10, 9, 0) / 1000);
+    const fetchTripsByTab = makeTripsFn({
+      1: [
+        trip("LT-PAST-ASSIGNED", { carregamentoTs: past, status: "Assigned", acceptance: 1, driver: "UBIRAJARA DOS SANTOS" }),
+        trip("LT-PAST-SEM-MOTORISTA", { carregamentoTs: past }),
+      ],
+    });
+
+    const res = await getProgramacao({ deps: { ...baseDeps, nowMs, fetchTripsByTab } });
+    const lhs = res.payload.rows.map((r) => r.lh);
+
+    expect(lhs).toContain("LT-PAST-ASSIGNED");
+    // ... e continua removendo a atrasada SEM motorista (backlog morto do Planejado).
+    expect(lhs).not.toContain("LT-PAST-SEM-MOTORISTA");
+    expect(res.payload.byTab.planejado).toBe(1);
+    const row = res.payload.rows.find((r) => r.lh === "LT-PAST-ASSIGNED");
+    expect(row.expirada).toBe(true); // a flag continua exposta → o front mostra o selo "Atrasada"
+    expect(row.motorista).toBe("UBIRAJARA DOS SANTOS");
+    expect(row.podeAceitar).toBe(false); // já aceita: nada de botão Aceitar
+  });
+
+  it("viagem ACEITA mas SEM motorista atrasada continua escondida (gate é motorista, não aceite)", async () => {
+    const nowMs = Date.UTC(2026, 6, 10, 12, 0);
+    const past = Math.floor(Date.UTC(2026, 6, 10, 9, 0) / 1000);
+    const fetchTripsByTab = makeTripsFn({
+      1: [trip("LT-ACEITA-SEM-MOT", { carregamentoTs: past, acceptance: 1 })],
+    });
+
+    const res = await getProgramacao({ deps: { ...baseDeps, nowMs, fetchTripsByTab } });
+
+    expect(res.payload.rows.map((r) => r.lh)).not.toContain("LT-ACEITA-SEM-MOT");
+    expect(res.payload.byTab.planejado).toBe(0);
+  });
+
   it("marca jaLancada pelos LHs já existentes como carga", async () => {
     const fetchTripsByTab = makeTripsFn({ 1: [trip("LT1"), trip("LT2")] });
     const res = await getProgramacao({
