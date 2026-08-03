@@ -33,12 +33,17 @@ jobs:
           docker manifest inspect ghcr.io/grupolamonica/lamonica-backend:sha-${{ github.event.inputs.sha }} > /dev/null
           echo "SHA tag sha-${{ github.event.inputs.sha }} found in GHCR. Proceeding."
 
-      - name: Rollback via SSH
+      # Rollback + verificação na MESMA sessão SSH, como o deploy faz: uma segunda
+      # conexão sai por outro IP do runner e cai no fail2ban/filtro da porta 22 da
+      # VPS (DC-239). timeout/command_timeout também em paridade com o deploy.
+      - name: Rollback + Smoke Tests via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 15m
           script: |
             set -euo pipefail
             cd /opt/apps/lamonica
@@ -88,15 +93,42 @@ jobs:
             # em que ele mais importa. Consequência conhecida: o rollback regride só
             # frontend e backend; sidecars não são versionados por SHA.
             docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.domain.yml -f docker-compose.deploy.yml up -d --remove-orphans
-            echo "Rollback to sha-${ROLLBACK_SHA} complete."
 
-      - name: Verify rollback with smoke tests
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
-            set -euo pipefail
-            cd /opt/apps/lamonica
-            bash scripts/smoke-test.sh http://${{ secrets.VPS_HOST }}
+            # Confere que os containers subiram na tag pedida (o que um `docker ps` mostraria).
+            RUNNING_NOW="$(docker ps --format '{{.Image}}' \
+              | grep -oE 'lamonica-(frontend|backend):sha-[0-9a-f]{40}' | sort -u || true)"
+            echo "[rollback] imagens no ar após o up -d:"
+            echo "${RUNNING_NOW:-<nenhuma>}"
+            for svc in frontend backend; do
+              echo "$RUNNING_NOW" | grep -q "lamonica-${svc}:sha-${ROLLBACK_SHA}" || {
+                echo "::error::${svc} não voltou para a tag sha-${ROLLBACK_SHA}."
+                exit 1
+              }
+            done
+
+            # Smoke tests: o script NÃO aceita alvo — ele resolve o IP do container do
+            # backend e bate direto na porta interna, de propósito (bypassa o Traefik).
+            # O argumento `http://<host>` que ficava aqui era ignorado em silêncio e dava
+            # a falsa impressão de que o edge estava sendo testado.
+            bash scripts/smoke-test.sh
+
+            # Como o smoke test bypassa o Traefik, ele não veria os routers HTTPS
+            # faltando — exatamente a falha que este workflow causava. Este check cobre
+            # o edge. --resolve força o Traefik local (evita depender de hairpin NAT do
+            # IP público a partir da própria VPS) mantendo Host/SNI corretos.
+            echo "[rollback] verificando o edge HTTPS em https://${DOMAIN}/health"
+            EDGE_STATUS="000"
+            for attempt in 1 2 3 4 5 6; do
+              EDGE_STATUS="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+                --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/health" || echo "000")"
+              [ "$EDGE_STATUS" = "200" ] && break
+              echo "  tentativa ${attempt}: HTTP ${EDGE_STATUS} — aguardando o Traefik reconhecer os containers novos..."
+              sleep 5
+            done
+            if [ "$EDGE_STATUS" != "200" ]; then
+              echo "::error::Edge HTTPS respondeu ${EDGE_STATUS} (esperado 200) em https://${DOMAIN}/health. Containers voltaram para sha-${ROLLBACK_SHA}, mas o Traefik não está servindo o domínio — confira os routers websecure e o certificado."
+              exit 1
+            fi
+            echo "  edge HTTPS OK (200)."
+
+            echo "Rollback to sha-${ROLLBACK_SHA} complete."
