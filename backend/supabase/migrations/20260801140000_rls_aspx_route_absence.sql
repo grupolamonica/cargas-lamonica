@@ -1,0 +1,16 @@
+-- RLS habilitada SEM policy em aspx_route_absence: nega anon/authenticated
+-- (PostgREST), enquanto o backend conecta como `postgres` e bypassa a RLS —
+-- mesmo padrão de angellira_conformity_overrides e das demais tabelas
+-- operacionais do projeto.
+--
+-- A tabela nasceu (20260801120000) sem este passo: era a ÚNICA tabela pública do
+-- projeto com RLS desligada e com GRANT de SELECT para `anon`, ou seja, a rota
+-- operacional (origem/destino, volume de cargas, desde quando o trecho está fora
+-- do portal) ficava legível por quem tivesse a anon key. Não há PII aqui, mas é
+-- inteligência operacional e uma quebra da convenção do projeto.
+-- Corrige o lint 0013_rls_disabled_in_public.
+--
+-- Validado em staging antes de aplicar: com RLS ligada o job detect-aspx-missing-trips
+-- continua gravando/lendo/apagando a linha de observação (conexão pg como postgres),
+-- e o papel `anon` passa a ver 0 linhas.
+ALTER TABLE public.aspx_route_absence ENABLE ROW LEVEL SECURITY;
