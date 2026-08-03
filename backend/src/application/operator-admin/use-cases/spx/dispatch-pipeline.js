@@ -32,6 +32,7 @@ import {
 import { performSpxPrecheck } from "./precheck.js";
 import { checkCnhCategoryGate } from "./cnh-category-gate.js";
 import { checkCrlvGate } from "./crlv-gate.js";
+import { checkTelefoneGate } from "./telefone-gate.js";
 import { mapSpxMotoristaPayload } from "./payload-mapper.js";
 import { buildImportedDriverInfo } from "./import-driver-info.js";
 import { generateDossie } from "../unificada/generate-dossie.js";
@@ -95,6 +96,14 @@ export async function runSpxPipeline({
       return {
         ok: true, dry_run: true, precheck_status: precheck.status,
         results: [{ step: STEP, status: "BLOCKED", error: crlvBlockDry }],
+      };
+    }
+    // Gate de telefone (271605009): sem DDD + 9 dígitos o SPX falha com 502 opaco.
+    const telBlockDry = checkTelefoneGate(cadastro?.dados);
+    if (telBlockDry) {
+      return {
+        ok: true, dry_run: true, precheck_status: precheck.status,
+        results: [{ step: STEP, status: "BLOCKED", error: telBlockDry }],
       };
     }
     const { anexosMap, radExpireDate } = await prepareSpxDocs({ client, cadastro, operatorId, correlationId });
@@ -189,6 +198,16 @@ export async function runSpxPipeline({
         });
         await markJobError({ client, jobId, error: crlvBlock });
         return { ok: false, results: [{ step: STEP, status: "BLOCKED", error: crlvBlock }] };
+      }
+      // Gate de telefone (271605009): DDD + 9 dígitos obrigatório. Barra aqui com
+      // mensagem clara p/ o operador corrigir e re-disparar (troca o 502 opaco).
+      const telBlock = checkTelefoneGate(cadastro?.dados);
+      if (telBlock) {
+        logStructuredEvent("warn", "spx.pipeline.telefone_block", {
+          cadastroId, digitos: telBlock.telefone ? String(telBlock.telefone).length : 0,
+        });
+        await markJobError({ client, jobId, error: telBlock });
+        return { ok: false, results: [{ step: STEP, status: "BLOCKED", error: telBlock }] };
       }
     }
 
