@@ -130,6 +130,72 @@ describe("reconcileTakenCargosToSheet", () => {
     expect("status" in u).toBe(false);
   });
 
+  it("linha CRIADA nasce rotulada: leva status e tipo efetivos", async () => {
+    cannedRows.current = [
+      {
+        lh: "LT-NOVA",
+        create_row: true,
+        sheet_source: null,
+        alloc_motorista: "Ana Lima",
+        origem: "Simoes Filho/BA",
+        destino: "Jaboatao dos Guararapes/PE",
+        carreg: "2026-08-04T08:00",
+        descarga: "2026-08-05T08:00",
+        status_efetivo: "AGUARDANDO CHEGAR NO CLIENTE",
+        tipo_efetivo: "Spot",
+        validation_summary_json: null,
+      },
+    ];
+
+    await reconcileTakenCargosToSheet();
+
+    const u = JSON.parse(fetchMock.mock.calls[0][1].body).updates[0];
+    expect(u).toMatchObject({ lh: "LT-NOVA", createIfMissing: true, status: "AGUARDANDO CHEGAR NO CLIENTE", tipo: "Spot" });
+  });
+
+  it("linha EXISTENTE com status vazio na planilha: preenche o status", async () => {
+    cannedRows.current = [
+      {
+        lh: "LT-SEM-STATUS",
+        create_row: false,
+        alloc_motorista: "Bruno Dias",
+        status_efetivo: "CTE ENVIADO",
+        validation_summary_json: null,
+      },
+    ];
+
+    await reconcileTakenCargosToSheet();
+
+    const u = JSON.parse(fetchMock.mock.calls[0][1].body).updates[0];
+    expect(u.status).toBe("CTE ENVIADO");
+    expect("createIfMissing" in u).toBe(false);
+  });
+
+  it("linha EXISTENTE sem status vindo da query: NÃO manda status (não re-rotula o do operador)", async () => {
+    cannedRows.current = [
+      { lh: "LT-COM-STATUS-NA-PLANILHA", create_row: false, alloc_motorista: "Carla", status_efetivo: null, validation_summary_json: null },
+    ];
+
+    await reconcileTakenCargosToSheet();
+
+    const u = JSON.parse(fetchMock.mock.calls[0][1].body).updates[0];
+    expect("status" in u).toBe(false);
+  });
+
+  it("mesmo LH em dois ramos → um único update com os campos juntos", async () => {
+    cannedRows.current = [
+      { lh: "LT-DOIS", create_row: true, sheet_source: null, alloc_motorista: "Dora", origem: "A", destino: "B", validation_summary_json: null },
+      { lh: "LT-DOIS", create_row: false, alloc_motorista: "Dora", status_efetivo: "AGUARDANDO DESCARGA", validation_summary_json: null },
+    ];
+
+    const res = await reconcileTakenCargosToSheet();
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.updates).toHaveLength(1);
+    expect(body.updates[0]).toMatchObject({ lh: "LT-DOIS", createIfMissing: true, status: "AGUARDANDO DESCARGA" });
+    expect(res.reconciled).toBe(1);
+  });
+
   it("registra a tentativa de criação com a fonte, para o próximo ciclo conferir", async () => {
     cannedRows.current = [
       { lh: "LT-CRIA", create_row: true, sheet_source: null, alloc_motorista: "Ana", validation_summary_json: null },
@@ -202,9 +268,14 @@ describe("reconcileTakenCargosToSheet", () => {
       expect(sql).toContain("d.lh IS NULL");
       expect(sql).toContain("c.sheet_lh IS NULL");
       expect(sql).toMatch(/upper\(TRIM\(c\.lh_manual\)\) LIKE 'LT%'/);
-      // Cap por classe/ciclo.
-      expect(sql.match(/LIMIT 100/g) ?? []).toHaveLength(2);
-      // Linha sem LH nunca entra em nenhum dos dois conjuntos.
+      // Classe (3): só preenche STATUS quando TODAS as linhas daquele LH estão com a
+      // célula vazia — nunca escreve por cima do status do operador.
+      expect(sql).toContain("sheet_blank_status");
+      expect(sql).toContain("JOIN sheet_blank_status v ON v.lh = c.lh_manual");
+      expect(sql).toMatch(/HAVING bool_and\(status = ''\)/);
+      // Cap por classe/ciclo (uma por classe).
+      expect(sql.match(/LIMIT 100/g) ?? []).toHaveLength(3);
+      // Linha sem LH nunca entra em nenhum dos conjuntos.
       expect(sql).toMatch(/COALESCE\(TRIM\(e->>'lh'\), ''\) <> ''/);
     });
   });
