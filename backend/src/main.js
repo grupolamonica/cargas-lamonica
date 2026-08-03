@@ -684,6 +684,18 @@ async function bootstrap() {
             `[reconcile-aspx-status] ${r.updated} carga(s) sincronizada(s) com o ASPX (${r.sheetWrites} na planilha; ${r.checked} verificada(s))`,
           );
         }
+
+        // Mesma cadência, conjunto complementar: carga LANÇADA (lh_manual) — o sync
+        // acima casa só por sheet_lh. Gate próprio (ASPX_STATUS_LAUNCHED=off|dry|on).
+        const { reconcileAspxStatusForLaunched } = await import(
+          "./application/operator-admin/use-cases/reconcile-aspx-status-launched.js"
+        );
+        const rl = await reconcileAspxStatusForLaunched();
+        if (rl.updated) {
+          console.info(
+            `[aspx-status-launched] modo ${rl.mode}: ${rl.updated} carga(s) lançada(s) ${rl.mode === "dry" ? "MUDARIAM" : "sincronizada(s)"} (${rl.sheetWrites} na planilha; ${rl.checked} verificada(s))`,
+          );
+        }
       } catch (err) {
         console.error("[reconcile-aspx-status] erro:", err?.message);
       } finally {
