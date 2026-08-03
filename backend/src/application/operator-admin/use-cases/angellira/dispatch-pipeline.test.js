@@ -326,6 +326,43 @@ describe("runAngelliraPipeline / backstop de identidade (nome × CNH)", () => {
   });
 });
 
+describe("runAngelliraPipeline / preflight de prontidão do proprietário (birth) — caso WASHINGTON/GLPI #29", () => {
+  it("bloqueia quando o proprietário PF do cavalo está SEM data de nascimento — nenhum bot é chamado", async () => {
+    cadastrarProprietario.mockResolvedValue({ ok: true, ownerId: 9001, raw: {} });
+    cadastrarVeiculo.mockResolvedValue({ ok: true, vehicleId: 7001, raw: {} });
+    cadastrarMotorista.mockResolvedValue({ ok: true, driverId: 5001, raw: {} });
+
+    const client = makeFakeClient();
+    const result = await runAngelliraPipeline({
+      client,
+      cadastro: {
+        ...SAMPLE_CADASTRO,
+        dados: {
+          ...SAMPLE_DADOS,
+          cavalo: { ...SAMPLE_DADOS.cavalo, owner_doc: "77231457304", owner_doc_type: "cpf" },
+          // owner PF SEM data_nascimento (a lacuna que derrubava o disparo no Angellira)
+          cavalo_owner: { doc: "77231457304", nome: "WASHINGTON SILVA MUNIZ", tipo: "pf" },
+        },
+      },
+      driverUserId: "22222222-2222-2222-2222-222222222222",
+      operatorId: "33333333-3333-3333-3333-333333333333",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.blocked).toBe(true);
+    expect(result.results).toEqual([
+      expect.objectContaining({
+        step: "proprietario_cavalo",
+        status: "BLOCKED",
+        error: expect.objectContaining({ code: "OWNER_SEM_DATA_NASCIMENTO", blocked_by: "owner_birth" }),
+      }),
+    ]);
+    expect(cadastrarProprietario).not.toHaveBeenCalled();
+    expect(cadastrarMotorista).not.toHaveBeenCalled();
+    expect(cadastrarVeiculo).not.toHaveBeenCalled();
+  });
+});
+
 describe("runAngelliraPipeline / proprietário do cavalo lê dados.cavalo_owner (DC — caso LEANDRO)", () => {
   it("dono PF terceiro: usa nome/nascimento/rg de dados.cavalo_owner, não o embutido vazio", async () => {
     cadastrarProprietario.mockResolvedValue({ ok: true, ownerId: 9001, raw: {} });
