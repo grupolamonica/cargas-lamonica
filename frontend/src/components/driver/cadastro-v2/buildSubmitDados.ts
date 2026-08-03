@@ -366,6 +366,13 @@ function buildOwnerFromStepC(stepC: StepCData) {
     rntrc: stepC.antt?.rntrc || undefined,
     rntrc_via: stepC.antt?.rntrc ? ("antt" as const) : undefined,
     cpf_owner_manual: stepC.owner.ocr_fallback_manual || undefined,
+    // Angellira PF exige data de nascimento do proprietário. O uploader captura
+    // (OwnerDocumentUploader → dataNascimento), mas o payload NÃO a emitia → todo
+    // dono PF chegava sem data_nascimento e o disparo Angellira parava em
+    // OWNER_SEM_DATA_NASCIMENTO. Emite agora (PF only; PJ não tem nascimento).
+    ...(tipo === "pf" && stepC.owner.dataNascimento
+      ? { data_nascimento: stepC.owner.dataNascimento }
+      : {}),
     ...(anttTitular ? { antt_titular: anttTitular } : {}),
     // PF extras
     ...(extras?.nome_pai ? { nome_pai: extras.nome_pai } : {}),
@@ -374,6 +381,8 @@ function buildOwnerFromStepC(stepC: StepCData) {
     ...(extras?.rg ? { rg: extras.rg } : {}),
     ...(extras?.rg_orgao ? { rg_orgao: extras.rg_orgao } : {}),
     ...(extras?.rg_uf ? { rg_uf: extras.rg_uf } : {}),
+    ...(extras?.sexo ? { sexo: extras.sexo } : {}),
+    ...(extras?.nacionalidade ? { nacionalidade: extras.nacionalidade } : {}),
     ...(extras?.situacao_cnh ? { situacao_cnh: extras.situacao_cnh } : {}),
     ...(extras && typeof extras.tem_cnh === "boolean"
       ? { tem_cnh: extras.tem_cnh }
@@ -425,6 +434,11 @@ function buildOwnerFromCollected(
       telefone: tipo === "pf" ? stepE.pf?.telefone || undefined : undefined,
       rntrc: stepE.antt?.rntrc || undefined,
       rntrc_via: stepE.antt?.rntrc ? ("antt" as const) : undefined,
+      // Angellira PF exige data de nascimento do dono da carreta (mesmo motivo
+      // do cavalo — sem isso, OWNER_SEM_DATA_NASCIMENTO). Emite agora (PF only).
+      ...(tipo === "pf" && stepE.owner?.dataNascimento
+        ? { data_nascimento: stepE.owner.dataNascimento }
+        : {}),
       ...(anttTitular ? { antt_titular: anttTitular } : {}),
       // PF extras
       ...(extras?.nome_pai ? { nome_pai: extras.nome_pai } : {}),
@@ -433,6 +447,8 @@ function buildOwnerFromCollected(
       ...(extras?.rg ? { rg: extras.rg } : {}),
       ...(extras?.rg_orgao ? { rg_orgao: extras.rg_orgao } : {}),
       ...(extras?.rg_uf ? { rg_uf: extras.rg_uf } : {}),
+      ...(extras?.sexo ? { sexo: extras.sexo } : {}),
+      ...(extras?.nacionalidade ? { nacionalidade: extras.nacionalidade } : {}),
       ...(extras?.situacao_cnh ? { situacao_cnh: extras.situacao_cnh } : {}),
       ...(extras && typeof extras.tem_cnh === "boolean"
         ? { tem_cnh: extras.tem_cnh }

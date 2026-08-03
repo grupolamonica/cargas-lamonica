@@ -24,6 +24,8 @@ export interface OwnerExtras {
   rg?: string;
   rg_orgao?: string;
   rg_uf?: string;
+  sexo?: string;
+  nacionalidade?: string;
   tem_cnh?: boolean;
   situacao_cnh?: string;
   cnh?: {
@@ -34,6 +36,11 @@ export interface OwnerExtras {
     numero_espelho?: string;
     uf_emissor?: string;
     primeira_emissao?: string;
+    data_emissao?: string;
+    numero_prontuario?: string;
+    orgao_emissor?: string;
+    estado_emissor?: string;
+    observacoes?: string;
   };
 }
 
@@ -251,6 +258,8 @@ export function OwnerDocumentUploader({
           rg: extracted.pessoal.rg || undefined,
           rg_orgao: extracted.pessoal.rg_orgao || undefined,
           rg_uf: extracted.pessoal.rg_uf || undefined,
+          sexo: extracted.pessoal.sexo || undefined,
+          nacionalidade: extracted.pessoal.nacionalidade || undefined,
           tem_cnh: true,
           cnh: {
             registro: extractedCnhNum || undefined,
@@ -260,6 +269,11 @@ export function OwnerDocumentUploader({
             numero_espelho: extracted.cnh.numero_espelho || undefined,
             uf_emissor: extracted.cnh.uf_emissor || undefined,
             primeira_emissao: extracted.cnh.primeira_emissao || undefined,
+            data_emissao: extracted.cnh.data_emissao || undefined,
+            numero_prontuario: extracted.cnh.numero_prontuario || undefined,
+            orgao_emissor: extracted.cnh.orgao_emissor || undefined,
+            estado_emissor: extracted.cnh.estado_emissor || undefined,
+            observacoes: extracted.cnh.observacoes || undefined,
           },
         };
         setExtras(nextExtras);

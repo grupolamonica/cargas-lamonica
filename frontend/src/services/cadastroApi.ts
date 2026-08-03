@@ -385,6 +385,10 @@ export type CnhExtracted = {
     rg: string;
     rg_orgao: string;
     rg_uf: string;
+    // Sexo normalizado ("masculino"/"feminino"/"") — compatível com o enum do
+    // motoristaSchema e com o campo livre do ownerSchema.
+    sexo: string;
+    nacionalidade: string;
   };
   cnh: {
     registro: string;
@@ -394,6 +398,12 @@ export type CnhExtracted = {
     uf_emissor: string;
     validade: string;
     primeira_emissao: string;
+    // Data de emissão da CNH (campo "DATA EMISSÃO") — distinta da 1ª habilitação.
+    data_emissao: string;
+    numero_prontuario: string;
+    orgao_emissor: string;
+    // Local de emissão da CNH (cidade/UF por extenso, ex.: "SAO PAULO SP").
+    estado_emissor: string;
     // Observações do verso da CNH (ex.: "EAR" — exerce atividade remunerada).
     // O SPX exige isso em "CNH Remarks"; sem persistir, o disparo parava no
     // rascunho. Ver payload-mapper SPX (parseCnhRemarks).
@@ -658,6 +668,11 @@ export async function ocrCnh(
       "data_emissao", "primeira_emissao", "1a_habilitacao", "habilitacao_data");
   if (primeira && validade && primeira === validade) primeira = "";
 
+  // Sexo: normaliza "M"/"MASCULINO"/... → "masculino" (idem feminino). Assim o
+  // valor serve tanto ao enum do motoristaSchema quanto ao campo livre do owner.
+  const sexoRaw = v("sexo", "genero");
+  const sexo = /^m/i.test(sexoRaw) ? "masculino" : /^f/i.test(sexoRaw) ? "feminino" : "";
+
   return {
     pessoal: {
       nome: v("nome"),
@@ -671,6 +686,8 @@ export async function ocrCnh(
       rg: rgNumero,
       rg_orgao: rgOrgao,
       rg_uf: rgUf,
+      sexo,
+      nacionalidade: v("nacionalidade"),
     },
     cnh: {
       registro: v("registro", "numero_registro"),
@@ -680,6 +697,12 @@ export async function ocrCnh(
       uf_emissor: v("uf_emissor") || localCnh.uf || v("uf_expedicao", "uf_emissao", "estado_emissor"),
       validade,
       primeira_emissao: primeira,
+      // Emissão da CNH: chave dedicada (data_emissao_cnh) p/ NÃO colidir com a 1ª
+      // habilitação, que usa "data_emissao" como um dos aliases acima.
+      data_emissao: brDateToIso(v("data_emissao_cnh", "emissao_cnh")),
+      numero_prontuario: v("numero_prontuario", "prontuario", "renach"),
+      orgao_emissor: v("orgao_emissor", "orgao_expedidor"),
+      estado_emissor: v("estado_emissor", "local_emissao"),
       // Observações do verso (EAR etc.) — o SPX usa em "CNH Remarks".
       observacoes: v("observacoes", "observacao", "obs", "anotacoes", "remarks"),
     },
