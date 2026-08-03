@@ -2141,6 +2141,21 @@ export async function syncAllSheetSources({
   // cargas tomadas no sistema que ficaram em branco na planilha (só preenche
   // vazios). Isolado — nunca derruba o resultado do sync.
   try {
+    // ORDEM IMPORTA: primeiro CONFERE a tentativa da rodada anterior contra o
+    // snapshot que acabou de ser relido nesta rodada; só depois pede novas
+    // criações (que registram a próxima tentativa). Conferir depois de pedir
+    // compararia com um snapshot anterior à escrita — foi assim que uma
+    // verificação manual errou por 25 segundos.
+    const { checkWritebackHealth } = await import("./check-writeback-health.js");
+    const health = await checkWritebackHealth();
+    if (health?.faltando > 0) {
+      console.error(
+        `[google-sheet-loads] a planilha NÃO recebeu ${health.faltando} de ${health.pedidas} linha(s) que o sistema criou` +
+          (health.avisou ? " — operador avisado no sino" : " (aviso já emitido nesta janela)"),
+      );
+    }
+    results.push({ source: "__writeback_health__", ok: true, result: health });
+
     const { reconcileTakenCargosToSheet } = await import("./reconcile-sheet-allocations.js");
     const reconcile = await reconcileTakenCargosToSheet();
     results.push({ source: "__reconcile_writeback__", ok: true, result: reconcile });
