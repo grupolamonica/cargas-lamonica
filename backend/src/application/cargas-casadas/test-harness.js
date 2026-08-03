@@ -97,6 +97,7 @@ const schemaSql = `
     ordem_viagem integer,
     sheet_lh text,
     lh_manual text,
+    agenda_a_confirmar boolean NOT NULL DEFAULT false,
     aspx_missing_since timestamptz,
     aspx_missing_lh text,
     aspx_missing_reason text,

@@ -22,6 +22,7 @@ import {
   getHealthSnapshot,
 } from "../../../application/operator-admin/service.js";
 import { fetchDriverCargoDetail } from "../../../application/operator-admin/use-cases/dashboard-read-model.js";
+import { isMissingAgendaAConfirmarColumnError } from "../../../application/operator-admin/use-cases/_shared.js";
 import { getPublicPacote } from "../../../application/cargas-casadas/service.js";
 import { pacoteIdParamsSchema } from "../../../domain/cargas-casadas/schemas.js";
 import { recordDriverPortalVisit } from "../../../domain/operator-admin/driver-flow-metrics.js";
@@ -329,8 +330,10 @@ export async function resolveDriverLoadsDigestResponse(request) {
       // suporta CURRENT_DATE/CURRENT_TIME, entao parameterizamos.
       // "Agora" no fuso de Sao Paulo (container roda em UTC; data/horario sao BRT).
       const { dateIso: todayIso, timeIso: nowTimeIso } = getSaoPauloWallClock();
-      const { rows } = await client.query(
-        `
+      // Exceção "A confirmar": carga com agenda indefinida (placeholder hoje/00:00 +
+      // agenda_a_confirmar) aparece na lista — tem que entrar no digest também, senão
+      // o portal não invalida o cache quando uma dessas é lançada/alterada.
+      const digestSql = (comExcecaoAConfirmar = true) => `
         SELECT
           COALESCE(EXTRACT(EPOCH FROM MAX(updated_at))::bigint, 0) AS ts,
           COUNT(*)::bigint                                          AS cnt
@@ -339,10 +342,18 @@ export async function resolveDriverLoadsDigestResponse(request) {
           AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'
           AND COALESCE(is_template, false) = false
           AND COALESCE(alloc_motorista, sheet_motorista, '') = ''
-          AND (data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))
-      `,
-        [todayIso, todayIso, nowTimeIso],
-      );
+          AND (data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3))${
+            comExcecaoAConfirmar ? " OR COALESCE(agenda_a_confirmar, false) = true" : ""
+          })
+      `;
+      let rows;
+      try {
+        ({ rows } = await client.query(digestSql(), [todayIso, todayIso, nowTimeIso]));
+      } catch (digestError) {
+        // Banco sem a coluna da flag → digest sem a exceção (degrada, não derruba).
+        if (!isMissingAgendaAConfirmarColumnError(digestError)) throw digestError;
+        ({ rows } = await client.query(digestSql(false), [todayIso, todayIso, nowTimeIso]));
+      }
       const r = rows[0] || {};
       return `${r.ts}:${r.cnt}`;
     });

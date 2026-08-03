@@ -9,7 +9,7 @@ import type {
 import type { PreCheckResponse } from "@/api/candidaturaApi";
 import { formatCurrency, buildTotalPayment } from "@/lib/currency";
 import { buildOperationalDateLabel, buildRouteEstimatedDurationLabel } from "@/lib/estimatedTime";
-import { buildLoadingDateTime } from "@/lib/estimatedTime";
+import { buildLoadingDateTime, isHumanScheduleLabel } from "@/lib/estimatedTime";
 import { isToday, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { type Cargo, splitLocation, toTitleCase, toDisplayCityName, normalizeDisplayCity } from "@/hooks/useDriverLoads";
@@ -35,6 +35,9 @@ const buildDriverPaymentDetailsLabel = (valor: number | null, bonus: number | nu
 };
 
 const buildDateLabel = (cargo: Cargo) => {
+  // Agenda ainda não definida (rótulo humano "A confirmar"): data/horario da carga são
+  // placeholder do lançamento (hoje 00:00) — anunciar "Coleta hoje às 00:00" seria mentira.
+  if (isHumanScheduleLabel(cargo.carregamentoLabel)) return "Coleta a confirmar";
   const loadingDate = buildLoadingDateTime(cargo.carregamentoLabel, cargo.data, cargo.horario);
   if (!loadingDate) return "Coleta a confirmar";
   const baseDate = isToday(loadingDate) ? "hoje" : format(loadingDate, "dd/MM", { locale: ptBR });

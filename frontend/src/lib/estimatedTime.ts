@@ -68,6 +68,20 @@ export function buildLoadingDateTime(
   return parsedFallback;
 }
 
+/**
+ * `true` quando o rótulo de agenda é um TEXTO humano, não uma data — ex.: "A confirmar",
+ * gravado pelo backend em sheet_data_carregamento quando a carga foi lançada sem data de
+ * carregamento definida (agenda_a_confirmar). Nesse caso `data`/`horario` da carga são só
+ * placeholder (dia do lançamento às 00:00, colunas NOT NULL) e NÃO podem ser exibidos:
+ * mostrariam ao motorista uma coleta "hoje às 00:00" que não existe.
+ */
+export function isHumanScheduleLabel(value?: string | null) {
+  if (typeof value !== "string") return false;
+  const trimmedValue = value.trim();
+  if (!trimmedValue) return false;
+  return parseDateInput(trimmedValue) === null;
+}
+
 export function buildOperationalDateLabel(
   primaryLabel?: string | null,
   fallbackDate?: string | null,
@@ -76,6 +90,11 @@ export function buildOperationalDateLabel(
   const parsedPrimaryDate = parseDateInput(primaryLabel);
   if (parsedPrimaryDate) {
     return format(parsedPrimaryDate, "dd/MM/yyyy HH:mm");
+  }
+
+  // Rótulo humano ("A confirmar") tem precedência sobre o placeholder data/horario.
+  if (isHumanScheduleLabel(primaryLabel)) {
+    return primaryLabel!.trim();
   }
 
   const fallbackDateTime = buildLoadingDateTime(null, fallbackDate, fallbackTime);

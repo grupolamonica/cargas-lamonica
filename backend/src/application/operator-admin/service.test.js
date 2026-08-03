@@ -839,6 +839,58 @@ describe("operator-admin service", () => {
     expect(origins.some((o) => o.toUpperCase().includes("RECIFE"))).toBe(false); // planilha de hoje some
   });
 
+  it('carga "A confirmar" (agenda indefinida) APARECE no portal e na tela de cargas abertas ao motorista', async () => {
+    // Lançada sem data de carregamento: placeholder data=hoje/horario 00:00 (colunas NOT
+    // NULL) + agenda_a_confirmar=true. O placeholder está sempre no passado, então o corte
+    // de expiração a escondia do motorista no mesmo instante do lançamento, embora o
+    // operador a visse "Aberta/Pública". A flag tira a carga do corte (não há agenda para
+    // vencer) — mesma política do job expirePastCargas.
+    const { getSaoPauloWallClock } = await import("../../domain/sao-paulo-time.js");
+    const today = getSaoPauloWallClock().dateIso;
+    const cliente = await seedCliente({ nome: "Cliente A Confirmar" });
+
+    const aConfirmar = await seedCargo({
+      cliente_id: cliente.id, origem: "Cordeiropolis / SP", destino: "Paulista / PE",
+      status: "OPEN", driver_visibility: "PUBLIC", data: today, horario: "00:00:00", sheet_lh: null,
+      valor: 21200, distancia_km: 2780, duracao_horas: 75, perfil: "CARRETA",
+    });
+    await query(
+      `UPDATE public.cargas
+          SET lh_manual = $1, agenda_a_confirmar = true, sheet_data_carregamento = 'A confirmar'
+        WHERE id = $2`,
+      ["B101474063", aConfirmar.id],
+    );
+
+    // Contraprova (DC-271): lançada de hoje com hora passada e agenda DEFINIDA segue fora.
+    const lancadaPassada = await seedCargo({
+      cliente_id: cliente.id, origem: "Criciuma Verdinho / SC", destino: "Betim / MG",
+      status: "OPEN", driver_visibility: "PUBLIC", data: today, horario: "00:00:00", sheet_lh: null,
+      valor: 5000, distancia_km: 800, duracao_horas: 12, perfil: "CARRETA",
+    });
+    await query("UPDATE public.cargas SET lh_manual = $1 WHERE id = $2", ["LT-DEF", lancadaPassada.id]);
+
+    const portal = await service.fetchDriverLoadsReadModel({
+      query: { page: "1", pageSize: "50" },
+      correlationId: "corr-a-confirmar",
+    });
+    expect(portal.statusCode).toBe(200);
+    const portalIds = portal.payload.items.map((i) => i.id);
+    expect(portalIds).toContain(aConfirmar.id);
+    expect(portalIds).not.toContain(lancadaPassada.id);
+    // O rótulo denormalizado chega ao card como texto — o front não exibe o placeholder.
+    expect(portal.payload.items.find((i) => i.id === aConfirmar.id)?.carregamentoLabel).toBe("A confirmar");
+
+    // Espelho do operador ("aberta para o motorista") tem que concordar com o portal.
+    const abertas = await service.fetchOperatorDashboardReadModel({
+      query: { page: "1", pageSize: "50", onlyOpenToDrivers: "true" },
+      correlationId: "corr-a-confirmar-op",
+    });
+    expect(abertas.statusCode).toBe(200);
+    const abertasIds = abertas.payload.items.map((i) => i.id);
+    expect(abertasIds).toContain(aConfirmar.id);
+    expect(abertasIds).not.toContain(lancadaPassada.id);
+  });
+
   it("aplica filtros server-side no read model do motorista", async () => {
     const cliente = await seedCliente({ nome: "Cliente Portal" });
 

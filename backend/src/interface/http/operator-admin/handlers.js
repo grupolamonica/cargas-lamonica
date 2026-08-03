@@ -992,7 +992,9 @@ export async function resolveSheetMonitorResponse(request) {
       })(),
 
       // 2) LHs da planilha ABERTAS pro motorista — MESMA regra do /motorista
-      //    (buildDriverLoadFilters): OPEN, pública, futura, sem motorista efetivo.
+      //    (buildDriverLoadFilters): OPEN, pública, futura, sem motorista efetivo,
+      //    mais a exceção da agenda "A confirmar" (placeholder hoje/00:00 — hoje só
+      //    ocorre em carga do sistema, mas a cláusula mantém as duas regras idênticas).
       //    Só assim o Monitor marca "Disponível" quem aparece de fato pro motorista;
       //    as demais "vazias" viram "Expirada"/"Fechada". Falha → null (regra não
       //    aplicada, comportamento anterior).
@@ -1006,7 +1008,8 @@ export async function resolveSheetMonitorResponse(request) {
                AND COALESCE(is_template, false) = false
                AND sheet_lh IS NOT NULL
                AND COALESCE(alloc_motorista, sheet_motorista, '') = ''
-               AND (data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))
+               AND (data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3))
+                    OR COALESCE(agenda_a_confirmar, false) = true)
                AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC'`,
                 [monitorTodayIso, monitorTodayIso, monitorNowTimeIso],
               )

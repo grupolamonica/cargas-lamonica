@@ -5,6 +5,7 @@ import {
   buildRouteEstimatedDurationLabel,
   calculateEstimatedTimeInMinutes,
   formatEstimatedTime,
+  isHumanScheduleLabel,
 } from "@/lib/estimatedTime";
 
 describe("estimatedTime", () => {
@@ -34,6 +35,17 @@ describe("estimatedTime", () => {
   it("falls back to carga data and horario when the sheet loading label is missing", () => {
     expect(buildOperationalDateLabel(null, "2026-04-07", "11:00:00")).toBe("07/04/2026 11:00");
     expect(buildLoadingDateTime(null, "2026-04-07", "11:00:00")).toBeInstanceOf(Date);
+  });
+
+  it('mantém o rótulo humano "A confirmar" em vez do placeholder de data/horário', () => {
+    // Carga lançada sem agenda: sheet_data_carregamento = "A confirmar" e data/horario são
+    // placeholder (dia do lançamento às 00:00). O motorista não pode ver "hoje às 00:00".
+    expect(buildOperationalDateLabel("A confirmar", "2026-08-03", "00:00:00")).toBe("A confirmar");
+    expect(isHumanScheduleLabel("A confirmar")).toBe(true);
+    expect(isHumanScheduleLabel("07/04/2026 11:00")).toBe(false);
+    expect(isHumanScheduleLabel("2026-08-06T10:00")).toBe(false);
+    expect(isHumanScheduleLabel(null)).toBe(false);
+    expect(isHumanScheduleLabel("   ")).toBe(false);
   });
 
   it("uses the load date even when the api sends it as an ISO timestamp", () => {

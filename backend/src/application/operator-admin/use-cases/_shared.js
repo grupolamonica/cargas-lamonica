@@ -121,6 +121,14 @@ export function isMissingAspxMissingColumnError(error) {
   return msg.includes("aspx_missing_since") || msg.includes("aspx_missing_reason");
 }
 
+/** Banco sem a coluna `agenda_a_confirmar` (migration 20260717210000 não aplicada).
+ *  O portal degrada aplicando o corte de expiração a TODAS as cargas (comportamento
+ *  anterior à flag) em vez de responder erro ao motorista. */
+export function isMissingAgendaAConfirmarColumnError(error) {
+  const msg = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
+  return msg.includes("agenda_a_confirmar");
+}
+
 export function isMissingPacoteColumnsError(error) {
   const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
   return (
@@ -131,7 +139,13 @@ export function isMissingPacoteColumnsError(error) {
 }
 
 export function isMissingOptionalCargoReadModelColumnsError(error) {
-  return isMissingRouteColumnError(error) || isMissingSheetScheduleColumnsError(error);
+  return (
+    isMissingRouteColumnError(error) ||
+    isMissingSheetScheduleColumnsError(error) ||
+    // agenda_a_confirmar entra no mesmo grupo de colunas opcionais: banco legado sem
+    // ela cai no read model degradado em vez de estourar 500 na tela de cargas.
+    isMissingAgendaAConfirmarColumnError(error)
+  );
 }
 
 export async function fetchRouteCatalogMetricsByLoadId(client, loadRows) {
@@ -1078,6 +1092,8 @@ export function buildDriverLoadFilters(query, {
   // Desligado só no fallback de banco sem a coluna (ver isMissingAspxMissingColumnError):
   // é melhor servir o portal com a guarda a menos do que devolver erro ao motorista.
   includeAspxMissingFilter = true,
+  // Desligado só no fallback de banco sem a coluna (ver isMissingAgendaAConfirmarColumnError).
+  includeAgendaAConfirmarException = true,
 } = {}) {
   const parsedQuery = parseDriverLoadsQuery(query);
   const clauses = [
@@ -1129,9 +1145,24 @@ export function buildDriverLoadFilters(query, {
   // horário de carregamento já vencido continuavam no portal o dia todo (relato
   // dos motoristas). Trade-off: uma carga lançada cuja hora nominal já passou some
   // do portal — decisão do produto (reverte a exceção do DC-201).
+  //
+  // EXCEÇÃO "A CONFIRMAR" (agenda indefinida): carga lançada sem data de carregamento
+  // nasce com PLACEHOLDER (data = hoje, horario = 00:00 — as colunas são NOT NULL) e
+  // agenda_a_confirmar = true (ver launch-cargo-from-trip.js). Comparar esse placeholder
+  // com "agora" escondia a carga do motorista no MESMO instante do lançamento (00:00 já
+  // passou), embora ela esteja OPEN/pública e já com rota/valor — o operador a via
+  // "Aberta/Pública" em /cargas e o motorista nunca. Como não existe agenda para vencer,
+  // ela fica FORA do corte de expiração: mesma política do job expirePastCargas, que já
+  // a ignora (`COALESCE(agenda_a_confirmar,false) = false`) para não expirá-la sozinha.
+  // Isto NÃO reabre a exceção removida no DC-271: carga lançada COM hora definida
+  // continua expirando minuto-a-minuto. Quem confirma a agenda é o operador (ao
+  // confirmar, a flag volta a false e a carga passa a expirar normalmente).
   const { dateIso: todayIso, timeIso: nowTimeIso } = getSaoPauloWallClock();
+  const agendaAConfirmarSql = includeAgendaAConfirmarException
+    ? " OR COALESCE(cargas.agenda_a_confirmar, false) = true"
+    : "";
   clauses.push(
-    `(cargas.data IS NULL OR cargas.data > $${index} OR (cargas.data = $${index + 1} AND (cargas.horario IS NULL OR cargas.horario >= $${index + 2})))`,
+    `(cargas.data IS NULL OR cargas.data > $${index} OR (cargas.data = $${index + 1} AND (cargas.horario IS NULL OR cargas.horario >= $${index + 2}))${agendaAConfirmarSql})`,
   );
   values.push(todayIso, todayIso, nowTimeIso);
   index += 3;
