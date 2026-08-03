@@ -175,6 +175,17 @@ export async function writeAllocationsToSheet(updates, { fetchImpl = globalThis.
         continue;
       }
       sent = true;
+      // Diagnóstico: o Apps Script responde quantas linhas ele ATUALIZOU e quantas
+      // CRIOU. Sem isso, "createIfMissing" que não cria linha nenhuma é invisível
+      // daqui (a resposta é ok:true de qualquer forma) — foi o que escondeu a
+      // criação parada desde 31/07. Não altera comportamento.
+      emit("info", "ok", {
+        source,
+        count: list.length,
+        updated: body?.updated ?? null,
+        created: body?.created ?? null,
+        createIfMissing: list.filter((u) => u?.createIfMissing || u?.createOnly).length,
+      });
       totalUpdated += body.updated ?? list.length;
     } catch (err) {
       anyFail = true;
