@@ -1,3 +1,17 @@
+/**
+ * Snapshot do Painel (/painel).
+ *
+ * ⚠ ATENÇÃO — `buildOverviewSnapshot` NÃO é mais o caminho de produção. A tela
+ * consome `GET /api/operator/overview/snapshot`, onde a agregação acontece em
+ * SQL (antes eram 3x `select(500)` direto no PostgREST, ~0,5 MB por aba aberta).
+ *
+ * Este builder continua aqui de propósito: ele é a REFERÊNCIA da paridade. O
+ * teste `overviewMetrics.serverParity.test.ts` roda este código e a agregação
+ * server-side sobre a mesma fixture e exige resultado idêntico — é o que impede
+ * a porta para Node de introduzir o deslocamento de 3h (o container roda em UTC,
+ * `cargas.data`/`horario` são horário de parede BRT). Se alguma conta mudar de um
+ * lado, o teste de paridade quebra. Não apague sem apagar a prova.
+ */
 import { differenceInHours } from "date-fns";
 
 import { buildLoadingDateTime } from "@/lib/estimatedTime";
@@ -107,6 +121,14 @@ export interface OverviewDashboardSnapshot {
   recentActivity: OverviewActivityItem[];
   lastUpdatedAt: string | null;
 }
+
+/**
+ * Forma devolvida pelo endpoint agregado. `recentActivity` fica de fora: o feed
+ * exigiria as 3 tabelas inteiras de volta (é exatamente o payload que se
+ * eliminou) e nenhum componente do Painel o renderiza — `Overview.tsx` só lê
+ * `hero`, `attentionLoads` e `lastUpdatedAt`.
+ */
+export type OverviewServerSnapshot = Omit<OverviewDashboardSnapshot, "recentActivity">;
 
 function getLoadingDate(cargo: Pick<OverviewCargoRow, "sheet_data_carregamento" | "data" | "horario">) {
   return buildLoadingDateTime(cargo.sheet_data_carregamento, cargo.data, cargo.horario);

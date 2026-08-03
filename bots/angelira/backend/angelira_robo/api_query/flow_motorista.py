@@ -40,6 +40,7 @@ from . import drivers, geo, queries
 
 # Defaults
 TYPE_FUNCIONARIO = 25  # /types/drivers
+TYPE_AGREGADO = 26     # /types/drivers — vínculo PADRÃO do escritório
 PHONE_TYPE_CELULAR = 3
 
 
@@ -126,7 +127,7 @@ def _construir_payload_driver(
     endereco: dict,
     *,
     prime: int = queries.PRIME_NORMAL,
-    type_id: int = TYPE_FUNCIONARIO,
+    type_id: int = TYPE_AGREGADO,
 ) -> tuple[dict[str, Any], dict | None]:
     """Constroi o body JSON do POST/PATCH /drivers a partir do payload do Node.
 
@@ -374,7 +375,7 @@ def cadastrar_motorista(
     *,
     anexos: dict | None = None,
     prime: int = queries.PRIME_NORMAL,
-    type_id: int = TYPE_FUNCIONARIO,
+    type_id: int = TYPE_AGREGADO,
 ) -> dict:
     """Executa o cadastro completo de motorista via API.
 
@@ -799,7 +800,7 @@ def cadastrar_motoristas_em_lote(
     *,
     anexos_por_indice: list[dict | None] | None = None,
     prime: int = queries.PRIME_NORMAL,
-    type_id: int = TYPE_FUNCIONARIO,
+    type_id: int = TYPE_AGREGADO,
     max_workers: int | None = None,
 ) -> list[dict]:
     """Processa N motoristas em paralelo via ThreadPoolExecutor.
@@ -810,7 +811,7 @@ def cadastrar_motoristas_em_lote(
         anexos_por_indice: lista de anexos por motorista. Se None, ninguem tem
             anexos. Deve ter o mesmo tamanho de payloads quando fornecida.
         prime: PRIME_NORMAL / PRIME_PLUS / PRIME (queries.PRIME_*).
-        type_id: tipo do motorista (25=Funcionario default).
+        type_id: tipo do motorista (26=Agregado default; 25=Funcionario).
         max_workers: threads paralelas. Default vem de ANGELIRA_BATCH_WORKERS
             (4) e eh clamped em [1, 16].
 

@@ -3,6 +3,7 @@ import "../../../infrastructure/config/load-env.js";
 import { ZodError } from "zod";
 
 import { ForbiddenError, UnauthorizedError } from "../../../domain/load-claims/errors.js";
+import { evaluateCandidaturaCnhCategoria } from "../../../domain/candidatura/cnh-category.js";
 import { requireDriverSession } from "../../../application/load-claims/auth.js";
 import { resolveCandidaturaActor } from "../../../application/load-claims/candidatura-actor.js";
 import { getDriverProfileByUserId } from "../../../application/load-claims/profile-service.js";
@@ -907,6 +908,23 @@ export async function resolveCandidaturaSubmitResponse(request) {
     };
   }
 
+  // Trava de categoria da CNH: só motorista com CNH categoria D pra cima
+  // (D/E e combinações como AD/AE/CE/DE) pode se cadastrar/puxar carga. Barra
+  // A/B/C/AB/AC ANTES do submit (evita disparo que o portal rejeitaria). Vazia
+  // não bloqueia (best-effort — re-submit legado sem categoria).
+  const categoriaBlock = evaluateCandidaturaCnhCategoria(parsedInput.dados);
+  if (categoriaBlock) {
+    return {
+      statusCode: 422,
+      payload: {
+        error: categoriaBlock.error,
+        message: categoriaBlock.message,
+        categoria: categoriaBlock.categoria,
+        meta: { correlationId },
+      },
+    };
+  }
+
   // CPF: autenticado usa profile.document_number; publico usa dados.motorista.cpf.
   let driverCpf = "";
   if (session?.user?.id) {
@@ -936,6 +954,10 @@ export async function resolveCandidaturaSubmitResponse(request) {
       };
     }
   }
+
+  // Coerência de identidade (nome/CPF × CNH e × Angellira/ASPX) roda dentro de
+  // submitCandidaturaFinal — chokepoint compartilhado que também cobre o resgate
+  // de rascunho pelo operador (submitDraftAsOperator).
 
   try {
     return await submitCandidaturaFinal({

@@ -13,6 +13,8 @@ import {
   normalizeOptionalText,
   isMissingDriverVisibilityColumnError,
   isMissingPacoteColumnsError,
+  isMissingBonusRequirementsColumnError,
+  isMissingEixosColumnError,
 } from "./_shared.js";
 
 export async function fetchOperatorDashboardReadModel({ query, correlationId }) {
@@ -436,7 +438,74 @@ async function fetchDriverLoadsReadModelUncached({ query, correlationId }) {
   });
 }
 
+// ── Cache + single-flight das FACETS do portal do motorista ──────────────────
+// As facets (opções de origem/destino/perfil/cliente dos filtros) são GLOBAIS:
+// o endpoint `GET /api/driver/loads/facets` é anônimo e não recebe nenhum
+// parâmetro (nem query, nem usuário) — o resultado é idêntico para todos os
+// motoristas. Mesmo assim, cada abertura do portal disparava a varredura
+// COMPLETA das cargas OPEN (+ JOIN de clientes, sem LIMIT) só para destilar 4
+// listas de strings, e o cache do React Query é por aba → N motoristas = N
+// varreduras. Diferente do irmão `fetchDriverLoadsReadModel`, aqui não havia
+// cache nenhum.
+// Chave única (sem filtros) → hit rate praticamente 100%. TTL default 60s em
+// produção; 0 em teste (VITEST) p/ não vazar estado entre casos. O WHERE só
+// depende do relógio na granularidade de minuto (cargas expiradas), então 60s
+// de staleness é equivalente ao que o front já tolera (staleTime de 5 min).
+let _driverLoadFacetsInFlight = null;
+let _driverLoadFacetsCache = { at: 0, payload: null };
+
+function getDriverLoadFacetsCacheTtlMs() {
+  const raw = Number.parseInt(process.env.DRIVER_LOAD_FACETS_CACHE_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
+  return 60_000; // default produção
+}
+
+// Hook de teste: zera o estado de módulo (o cache fica desligado sob VITEST,
+// mas testes que forcem TTL > 0 via env precisam limpar entre casos).
+export function __resetDriverLoadFacetsCache() {
+  _driverLoadFacetsInFlight = null;
+  _driverLoadFacetsCache = { at: 0, payload: null };
+}
+
 export async function fetchDriverLoadFacets({ correlationId }) {
+  const ttl = getDriverLoadFacetsCacheTtlMs();
+  if (ttl <= 0) {
+    return fetchDriverLoadFacetsUncached({ correlationId });
+  }
+
+  const now = Date.now();
+  if (_driverLoadFacetsCache.payload && now - _driverLoadFacetsCache.at < ttl) {
+    return {
+      statusCode: 200,
+      payload: { ..._driverLoadFacetsCache.payload, meta: { correlationId, cached: true } },
+    };
+  }
+
+  if (_driverLoadFacetsInFlight) {
+    const shared = await _driverLoadFacetsInFlight;
+    return { statusCode: 200, payload: { ...shared, meta: { correlationId, cached: true } } };
+  }
+
+  const promise = (async () => {
+    const result = await fetchDriverLoadFacetsUncached({ correlationId });
+    // Só cacheia 200 (erros/fallback de schema não devem grudar).
+    if (result?.statusCode === 200 && result.payload) {
+      _driverLoadFacetsCache = { at: Date.now(), payload: result.payload };
+    }
+    return result.payload;
+  })();
+  _driverLoadFacetsInFlight = promise;
+
+  try {
+    const payload = await promise;
+    return { statusCode: 200, payload };
+  } finally {
+    _driverLoadFacetsInFlight = null;
+  }
+}
+
+async function fetchDriverLoadFacetsUncached({ correlationId }) {
   return withPgClient(async (client) => {
     // Defense-in-depth: tambem cruza com a planilha (sheet_motorista) para que
     // cargas ja alocadas no Google Sheets nao vazem nas facets do driver mesmo
@@ -509,6 +578,395 @@ export async function fetchDriverLoadFacets({ correlationId }) {
         clienteOptions: Array.from(clienteMap.entries())
           .map(([id, nome]) => ({ id, nome }))
           .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
+        meta: { correlationId },
+      },
+    };
+  });
+}
+
+// ── Detalhe de UMA carga para o portal do motorista ──────────────────────────
+// A tela /motorista/cargas/:id (DriverCargoDetails) lia o banco DIRETO do
+// navegador com a chave anônima: SELECT enriquecido em `cargas` (+ JOIN grande
+// de `clientes`), consulta ao catálogo `route_metrics_cache`, fallback de
+// distância em `cargas` e resolução de `clientes` — até 4 idas navegador→pooler
+// POR ABERTURA, × centenas de motoristas (o link da carga é o que circula no
+// WhatsApp, então esta tela é aberta muito mais que a lista). Além do egress,
+// expunha `cargas`/`clientes`/`route_metrics_cache` ao cliente anônimo.
+//
+// Este use case centraliza tudo em UMA resposta cacheada:
+//   - a query do detalhe (carga + cliente) roda no backend (papel `postgres`);
+//   - as métricas de rota reusam `fetchRouteCatalogMetricsByLoadId` — a MESMA
+//     resolução (variantes de chave + tarifa por perfil/eixos) que a lista do
+//     portal usa, em vez de uma segunda implementação no navegador;
+//   - os dois fallbacks da tela (distância histórica da rota e cliente que não
+//     resolveu no JOIN) continuam existindo, disparando nas mesmas condições,
+//     só que server-side.
+//
+// Gate de visibilidade: `status IN ('OPEN','RESERVED','BOOKED')` — exatamente a
+// policy RLS anônima de `public.cargas` ("Public can view driver visible
+// cargas"). Ou seja, o endpoint NÃO amplia o que o motorista já podia ler; só
+// deixa de fazê-lo pelo navegador. Carga fora desses status → 404, mesmo
+// resultado que o `maybeSingle()` sem linha produzia antes ("Carga não
+// encontrada" → ErrorState).
+//
+// O que este use case deliberadamente NÃO faz: aplicar os filtros extra da
+// LISTA (não-expirada, não alocada, driver_visibility, rota ativa). A tela de
+// detalhe nunca os aplicou — o link do WhatsApp abre a carga mesmo depois de
+// reservada — e ligá-los aqui mudaria o que o motorista vê. A prontidão de
+// publicação continua sendo decidida no frontend (`resolveCargoPublicationReadiness`),
+// que também monta o texto do aviso "Carga em preparação".
+const DRIVER_CARGO_DETAIL_VISIBLE_STATUSES = ["OPEN", "RESERVED", "BOOKED"];
+const DRIVER_CARGO_DETAIL_VISIBLE_STATUSES_SQL = DRIVER_CARGO_DETAIL_VISIBLE_STATUSES.map(
+  (status) => `'${status}'`,
+).join(", ");
+
+// Schema legado sem os badges customizados do cliente (jsonb) — degrada para
+// NULL, como o read model de clientes já faz.
+function isMissingClienteCustomBadgesColumnError(error) {
+  const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
+  return (
+    combinedMessage.includes("custom_reputacoes") || combinedMessage.includes("custom_exigencias")
+  );
+}
+
+// Os guards de coluna ausente (_shared.js) classificam por substring da
+// mensagem. O pg-mem ANEXA o SQL que falhou à mensagem, então qualquer coluna
+// citada no SELECT casaria com qualquer guard e o fallback desligaria o grupo
+// errado. Reduzir ao primeiro parágrafo mantém só a mensagem real do postgres
+// ("column X does not exist"), que é o que os guards querem inspecionar.
+function toColumnErrorProbe(error) {
+  return {
+    message: String(error?.message || "").split("\n", 1)[0],
+    detail: error?.detail,
+  };
+}
+
+// `cargas.data` é DATE: o driver do pg devolve Date, e o PostgREST devolvia
+// "YYYY-MM-DD" ao navegador. Normalizamos para o mesmo texto para que
+// buildLoadingDateTime/buildOperationalDateLabel rendam o rótulo idêntico.
+// Usa componentes UTC (contêiner roda em UTC) — nunca o fuso local do processo.
+function toDateOnlyText(value) {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 10);
+  }
+  const text = String(value).trim();
+  return text === "" ? null : text.slice(0, 10);
+}
+
+// `cargas.horario` é TIME (o pg devolve "HH:MM:SS"); só protege o caso de o
+// driver entregar Date. Sem to_char: pg-mem não implementa em TIME.
+function toTimeText(value) {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(11, 19);
+  }
+  const text = String(value).trim();
+  return text === "" ? null : text;
+}
+
+function buildDriverCargoDetailSql({
+  withBonusRequirements = true,
+  withEixos = true,
+  withPacoteColumns = true,
+  withClienteCustomBadges = true,
+} = {}) {
+  return `
+    SELECT
+      cargas.id,
+      cargas.data,
+      cargas.horario,
+      cargas.origem,
+      cargas.destino,
+      cargas.distancia_km,
+      cargas.duracao_horas,
+      cargas.perfil,
+      ${withEixos ? "cargas.eixos" : "NULL::smallint AS eixos"},
+      cargas.valor,
+      cargas.bonus,
+      ${withBonusRequirements ? "cargas.bonus_exigencias" : "NULL::text AS bonus_exigencias"},
+      cargas.status,
+      cargas.cliente_id,
+      cargas.sheet_data_carregamento,
+      cargas.sheet_data_descarga,
+      ${withPacoteColumns ? "cargas.viagem_id" : "NULL::uuid AS viagem_id"},
+      ${withPacoteColumns ? "cargas.ordem_viagem" : "NULL::integer AS ordem_viagem"},
+      clientes.id AS cliente_row_id,
+      clientes.nome AS cliente_nome,
+      clientes.descricao AS cliente_descricao,
+      clientes.forma_pagamento AS cliente_forma_pagamento,
+      clientes.prazo_pagamento AS cliente_prazo_pagamento,
+      clientes.observacoes AS cliente_observacoes,
+      clientes.exige_antt AS cliente_exige_antt,
+      clientes.exige_carga_monitorada AS cliente_exige_carga_monitorada,
+      clientes.exige_rastreamento AS cliente_exige_rastreamento,
+      clientes.exige_seguro AS cliente_exige_seguro,
+      clientes.reputacao_boa_comunicacao AS cliente_reputacao_boa_comunicacao,
+      clientes.reputacao_bom_pagador AS cliente_reputacao_bom_pagador,
+      clientes.reputacao_carga_organizada AS cliente_reputacao_carga_organizada,
+      clientes.reputacao_liberacao_rapida AS cliente_reputacao_liberacao_rapida,
+      clientes.reputacao_pagamento_rapido AS cliente_reputacao_pagamento_rapido,
+      ${withClienteCustomBadges ? "clientes.custom_reputacoes" : "NULL::jsonb AS custom_reputacoes"},
+      ${withClienteCustomBadges ? "clientes.custom_exigencias" : "NULL::jsonb AS custom_exigencias"}
+    FROM public.cargas
+    LEFT JOIN public.clientes ON clientes.id = cargas.cliente_id
+    WHERE cargas.id = $1::uuid
+      AND cargas.status IN (${DRIVER_CARGO_DETAIL_VISIBLE_STATUSES_SQL})
+  `;
+}
+
+// Roda o SELECT do detalhe desligando, uma a uma, as colunas opcionais que a DB
+// não tiver (mesma estratégia dos irmãos deste arquivo). Espelha o fallback que
+// existia no frontend (LEGACY_CARGO_DETAILS_SELECT, que abria mão de
+// bonus_exigencias/eixos/viagem_id/ordem_viagem juntos).
+async function queryDriverCargoDetailRow(client, cargoId) {
+  const support = {
+    withBonusRequirements: true,
+    withEixos: true,
+    withPacoteColumns: true,
+    withClienteCustomBadges: true,
+  };
+
+  // No pior caso desliga os 4 grupos (4 retries) — o loop tem teto.
+  for (let attempt = 0; attempt <= 4; attempt += 1) {
+    try {
+      const { rows } = await client.query(buildDriverCargoDetailSql(support), [cargoId]);
+      return rows[0] ?? null;
+    } catch (error) {
+      const probe = toColumnErrorProbe(error);
+      if (support.withPacoteColumns && isMissingPacoteColumnsError(probe)) {
+        support.withPacoteColumns = false;
+      } else if (support.withBonusRequirements && isMissingBonusRequirementsColumnError(probe)) {
+        support.withBonusRequirements = false;
+      } else if (
+        support.withClienteCustomBadges &&
+        isMissingClienteCustomBadgesColumnError(probe)
+      ) {
+        support.withClienteCustomBadges = false;
+      } else if (support.withEixos && isMissingEixosColumnError(probe)) {
+        support.withEixos = false;
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  return null;
+}
+
+function mapDriverCargoDetailCliente(row) {
+  if (!row.cliente_row_id && !row.cliente_nome) {
+    return null;
+  }
+
+  return {
+    id: row.cliente_row_id,
+    nome: row.cliente_nome,
+    descricao: row.cliente_descricao ?? null,
+    forma_pagamento: row.cliente_forma_pagamento ?? null,
+    prazo_pagamento: row.cliente_prazo_pagamento ?? null,
+    observacoes: row.cliente_observacoes ?? null,
+    exige_antt: row.cliente_exige_antt ?? false,
+    exige_carga_monitorada: row.cliente_exige_carga_monitorada ?? false,
+    exige_rastreamento: row.cliente_exige_rastreamento ?? false,
+    exige_seguro: row.cliente_exige_seguro ?? false,
+    reputacao_boa_comunicacao: row.cliente_reputacao_boa_comunicacao ?? false,
+    reputacao_bom_pagador: row.cliente_reputacao_bom_pagador ?? false,
+    reputacao_carga_organizada: row.cliente_reputacao_carga_organizada ?? false,
+    reputacao_liberacao_rapida: row.cliente_reputacao_liberacao_rapida ?? false,
+    reputacao_pagamento_rapido: row.cliente_reputacao_pagamento_rapido ?? false,
+    custom_reputacoes: row.custom_reputacoes ?? null,
+    custom_exigencias: row.custom_exigencias ?? null,
+  };
+}
+
+// Fallback 1 (era `resolveDriverCargoDistanceKm` no navegador): carga sem
+// distancia_km e sem distância no catálogo → herda a última distância conhecida
+// do mesmo trecho. Mantém o filtro de status da policy anônima para não passar a
+// enxergar distância de carga que o navegador não podia ler.
+async function resolveDriverCargoHistoryDistanceKm(client, { origem, destino }) {
+  const { rows } = await client.query(
+    `
+      SELECT distancia_km
+        FROM public.cargas
+       WHERE origem = $1
+         AND destino = $2
+         AND distancia_km IS NOT NULL
+         AND status IN (${DRIVER_CARGO_DETAIL_VISIBLE_STATUSES_SQL})
+       ORDER BY created_at DESC
+       LIMIT 1
+    `,
+    [origem, destino],
+  );
+
+  return parseNullableNumber(rows[0]?.distancia_km);
+}
+
+// Fallback 2 (era `fetchDriverClientsByIds` + `mergeDriverClientsIntoRows` no
+// navegador): cliente_id preenchido mas o JOIN não trouxe cliente. Resolve o
+// mesmo subconjunto de campos (id, nome, descricao) que o fallback do frontend
+// mesclava — os demais campos seguem ausentes, como antes.
+async function resolveDriverCargoClienteBrief(client, clienteId) {
+  const { rows } = await client.query(
+    "SELECT id, nome, descricao FROM public.clientes WHERE id = $1::uuid",
+    [clienteId],
+  );
+  const row = rows[0];
+  return row ? { id: row.id, nome: row.nome, descricao: row.descricao ?? null } : null;
+}
+
+// TTL + single-flight. O detalhe é PÚBLICO e idêntico para todos os motoristas
+// (nenhum campo depende de identidade — o endpoint é anônimo e não recebe
+// usuário), então a chave é só o cargoId. Rajadas de aberturas do mesmo link
+// (o caso real: link disparado em massa no WhatsApp) colapsam em 1 execução.
+// TTL default 8s em produção (igual à lista); 0 em teste, com override
+// explícito por env vencendo o guard do VITEST.
+let _driverCargoDetailInFlight = new Map();
+let _driverCargoDetailCache = new Map();
+
+function getDriverCargoDetailCacheTtlMs() {
+  const raw = Number.parseInt(process.env.DRIVER_CARGO_DETAIL_CACHE_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
+  return 8_000; // default produção
+}
+
+// Hook de teste: zera o estado de módulo (o cache fica desligado sob VITEST,
+// mas testes que forcem TTL > 0 via env precisam limpar entre casos).
+export function __resetDriverCargoDetailCache() {
+  _driverCargoDetailInFlight = new Map();
+  _driverCargoDetailCache = new Map();
+}
+
+export async function fetchDriverCargoDetail({ cargoId, correlationId }) {
+  const ttl = getDriverCargoDetailCacheTtlMs();
+  if (ttl <= 0) {
+    return fetchDriverCargoDetailUncached({ cargoId, correlationId });
+  }
+
+  const key = String(cargoId);
+  const now = Date.now();
+
+  const cached = _driverCargoDetailCache.get(key);
+  if (cached && now - cached.at < ttl) {
+    return {
+      statusCode: 200,
+      payload: { ...cached.payload, meta: { correlationId, cached: true } },
+    };
+  }
+
+  const inFlight = _driverCargoDetailInFlight.get(key);
+  if (inFlight) {
+    const shared = await inFlight;
+    if (shared.statusCode !== 200) {
+      return { statusCode: shared.statusCode, payload: { ...shared.payload, meta: { correlationId } } };
+    }
+    return { statusCode: 200, payload: { ...shared.payload, meta: { correlationId, cached: true } } };
+  }
+
+  const promise = (async () => {
+    const result = await fetchDriverCargoDetailUncached({ cargoId, correlationId });
+    // Só cacheia 200 (404 e falhas de schema não devem grudar).
+    if (result?.statusCode === 200 && result.payload) {
+      _driverCargoDetailCache.set(key, { at: Date.now(), payload: result.payload });
+      // Evita crescimento ilimitado de chaves (uma por carga aberta).
+      if (_driverCargoDetailCache.size > 500) {
+        const oldest = [..._driverCargoDetailCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
+        if (oldest) _driverCargoDetailCache.delete(oldest);
+      }
+    }
+    return result;
+  })();
+  _driverCargoDetailInFlight.set(key, promise);
+
+  try {
+    return await promise;
+  } finally {
+    _driverCargoDetailInFlight.delete(key);
+  }
+}
+
+async function fetchDriverCargoDetailUncached({ cargoId, correlationId }) {
+  return withPgClient(async (client) => {
+    const row = await queryDriverCargoDetailRow(client, cargoId);
+
+    if (!row) {
+      // Mesma resposta para "não existe" e "não visível ao motorista" — não
+      // revela a existência de carga fora dos status públicos.
+      return {
+        statusCode: 404,
+        payload: {
+          error: "NotFound",
+          code: "CARGO_NOT_FOUND",
+          message: "Carga não encontrada.",
+          meta: { correlationId },
+        },
+      };
+    }
+
+    let cliente = mapDriverCargoDetailCliente(row);
+    if (row.cliente_id && !cliente) {
+      cliente = await resolveDriverCargoClienteBrief(client, row.cliente_id);
+    }
+
+    const cargo = {
+      id: row.id,
+      data: toDateOnlyText(row.data),
+      horario: toTimeText(row.horario),
+      origem: row.origem,
+      destino: row.destino,
+      // NUMERIC volta como string no driver do pg; o frontend faz
+      // `typeof x === "number"`, então converter aqui é obrigatório.
+      distancia_km: parseNullableNumber(row.distancia_km),
+      duracao_horas: parseNullableNumber(row.duracao_horas),
+      perfil: row.perfil,
+      eixos: parseNullableNumber(row.eixos),
+      valor: parseNullableNumber(row.valor),
+      bonus: parseNullableNumber(row.bonus),
+      bonus_exigencias: row.bonus_exigencias ?? null,
+      status: row.status,
+      cliente_id: row.cliente_id ?? null,
+      sheet_data_carregamento: row.sheet_data_carregamento ?? null,
+      sheet_data_descarga: row.sheet_data_descarga ?? null,
+      viagem_id: row.viagem_id ?? null,
+      ordem_viagem: row.ordem_viagem ?? null,
+      cliente,
+    };
+
+    const routeMetrics =
+      (await fetchRouteCatalogMetricsByLoadId(client, [
+        { id: row.id, origem: row.origem, destino: row.destino, perfil: row.perfil, eixos: row.eixos },
+      ])).get(row.id) ?? null;
+
+    // Mesmos campos que o navegador lia de route_metrics_cache. `ativa` fica
+    // fora de propósito: a lista usa esse flag para não ofertar a carga, mas o
+    // detalhe nunca o aplicou e ligá-lo aqui esconderia carga que hoje abre.
+    const routeFallback = routeMetrics
+      ? {
+          distancia_km: routeMetrics.distancia_km ?? null,
+          duracao_horas: routeMetrics.duracao_horas ?? null,
+          tempo_estimado_horas: routeMetrics.tempo_estimado_horas ?? null,
+          perfil_padrao: routeMetrics.perfil_padrao ?? null,
+          eixos: routeMetrics.eixos ?? null,
+          valor_padrao: routeMetrics.valor_padrao ?? null,
+          bonus_padrao: routeMetrics.bonus_padrao ?? null,
+        }
+      : null;
+
+    const routeDistanceKm = parseNullableNumber(routeFallback?.distancia_km);
+    const needsHistoryDistance = cargo.distancia_km === null && routeDistanceKm === null;
+    const historyDistanciaKm = needsHistoryDistance
+      ? await resolveDriverCargoHistoryDistanceKm(client, { origem: row.origem, destino: row.destino })
+      : null;
+
+    return {
+      statusCode: 200,
+      payload: {
+        cargo,
+        routeFallback,
+        // Distância herdada do histórico do trecho — o frontend só a usa quando
+        // a carga e o catálogo não têm distância própria (mesma ordem de antes).
+        historyDistanciaKm,
         meta: { correlationId },
       },
     };

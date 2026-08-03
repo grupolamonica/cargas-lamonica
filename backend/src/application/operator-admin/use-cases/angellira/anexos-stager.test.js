@@ -4,9 +4,13 @@ vi.mock("../../../../infrastructure/security-log.js", () => ({
   logStructuredEvent: vi.fn(),
 }));
 
+import { __resetStorageDocCache } from "../../../../infrastructure/supabase/storage-doc-cache.js";
 import { resolveBotBaseUrl, stageAnexosForEntity } from "./anexos-stager.js";
 
 const CADASTRO_ID = "CAD-V2-abc123";
+// Credencial service_role fake — o micro-cache de bytes só cacheia clientes
+// service_role (ver infrastructure/supabase/storage-doc-cache.js).
+const SERVICE_ROLE_JWT = `hdr.${Buffer.from(JSON.stringify({ role: "service_role" })).toString("base64url")}.sig`;
 
 /**
  * Resposta fake do /api/anexo/salvar. Plain object (não `Response`) — o ctor
@@ -38,20 +42,36 @@ function makeStorageClient({ failPaths = new Set() } = {}) {
       error: null,
     };
   });
-  const fromObj = { download: downloadImpl };
-  const from = vi.fn(() => fromObj);
+  // Espelha o supabase-js real: o CLIENTE carrega supabaseUrl/supabaseKey (é dele
+  // que o micro-cache de bytes deriva privilégio + partição) e cada .from() devolve
+  // uma INSTÂNCIA NOVA de handle, com o bucketId real.
+  const from = vi.fn((bucketId) => ({
+    url: "https://proj.supabase.co/storage/v1",
+    headers: { "x-client-info": "supabase-js/2" },
+    bucketId,
+    download: downloadImpl,
+  }));
   // Cliente admin Supabase fake: o stager chama client.storage.from(bucket).
-  const client = { storage: { from } };
+  const client = {
+    supabaseUrl: "https://proj.supabase.co",
+    supabaseKey: SERVICE_ROLE_JWT,
+    storage: { from },
+  };
   return { storage: client, from, _downloaded: () => downloaded };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // O cache de bytes é módulo-level: zerar entre casos evita bleed (os testes
+  // reusam os MESMOS paths, ora com sucesso ora com falha de download).
+  __resetStorageDocCache();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  __resetStorageDocCache();
   delete process.env.ANGELLIRA_BOT_URL;
+  delete process.env.DRAFT_DOC_CACHE_TTL_MS;
 });
 
 describe("resolveBotBaseUrl", () => {
@@ -93,6 +113,67 @@ describe("stageAnexosForEntity / motorista", () => {
     expect(tipos).toEqual(["cnh_motorista", "rg_motorista"]);
     // prefixo cadastro-drafts/ removido antes do download
     expect(_downloaded()[0]).toBe("owner/carga/motorista_cnh_1.jpg");
+  });
+});
+
+describe("stageAnexosForEntity / micro-cache de bytes (egress)", () => {
+  const CNH_URL = "cadastro-drafts/owner/carga/motorista_cnh_1.jpg";
+  const CLEAN = "owner/carga/motorista_cnh_1.jpg";
+
+  it("SEM cache (default em teste): cnh+rg do MESMO cnh_url baixam 2x", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => okResponse({ ok: true, anexo_path: "/sandbox/x.jpg" })));
+    const { storage, _downloaded } = makeStorageClient();
+    await stageAnexosForEntity({
+      dados: { motorista: { cnh_url: CNH_URL } },
+      entity: "motorista", cadastroId: CADASTRO_ID, storageClient: storage,
+    });
+    expect(_downloaded()).toEqual([CLEAN, CLEAN]); // 2 round-trips dos MESMOS bytes
+  });
+
+  it("COM cache: cnh+rg baixam 1x e continuam sendo 2 POSTs com o mesmo base64", async () => {
+    process.env.DRAFT_DOC_CACHE_TTL_MS = "60000";
+    const fetchMock = vi.fn(async () => okResponse({ ok: true, anexo_path: "/sandbox/x.jpg" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { storage, _downloaded } = makeStorageClient();
+
+    const anexos = await stageAnexosForEntity({
+      dados: { motorista: { cnh_url: CNH_URL } },
+      entity: "motorista", cadastroId: CADASTRO_ID, storageClient: storage,
+    });
+
+    expect(_downloaded()).toEqual([CLEAN]); // 1 download (era 2)
+    // Comportamento preservado: 2 POSTs, tipos certos, bytes idênticos.
+    expect(anexos).toEqual({ cnh: "/sandbox/x.jpg", rg: "/sandbox/x.jpg" });
+    const bodies = fetchMock.mock.calls.map((c) => JSON.parse(c[1].body));
+    expect(bodies.map((b) => b.tipo)).toEqual(["cnh_motorista", "rg_motorista"]);
+    expect(bodies[1].imagem).toBe(bodies[0].imagem);
+    expect(bodies[0].imagem).toBe(Buffer.from("FAKEBYTES").toString("base64"));
+  });
+
+  it("COM cache: re-disparo do mesmo step (retry do operador) não baixa nada", async () => {
+    process.env.DRAFT_DOC_CACHE_TTL_MS = "60000";
+    vi.stubGlobal("fetch", vi.fn(async () => okResponse({ ok: true, anexo_path: "/sandbox/x.jpg" })));
+    const { storage, _downloaded } = makeStorageClient();
+    const dados = { motorista: { cnh_url: CNH_URL } };
+
+    await stageAnexosForEntity({ dados, entity: "motorista", cadastroId: CADASTRO_ID, storageClient: storage });
+    await stageAnexosForEntity({ dados, entity: "motorista", cadastroId: CADASTRO_ID, storageClient: storage });
+
+    expect(_downloaded()).toEqual([CLEAN]); // 4 round-trips no total antes; 1 agora
+  });
+
+  it("COM cache: download que falha NÃO gruda (2ª tentativa refaz o download)", async () => {
+    process.env.DRAFT_DOC_CACHE_TTL_MS = "60000";
+    vi.stubGlobal("fetch", vi.fn(async () => okResponse({ ok: true, anexo_path: "/sandbox/x.jpg" })));
+    const { storage, _downloaded } = makeStorageClient({ failPaths: new Set([CLEAN]) });
+    const dados = { motorista: { cnh_url: CNH_URL } };
+
+    const first = await stageAnexosForEntity({ dados, entity: "motorista", cadastroId: CADASTRO_ID, storageClient: storage });
+    const second = await stageAnexosForEntity({ dados, entity: "motorista", cadastroId: CADASTRO_ID, storageClient: storage });
+
+    expect(first).toEqual({});
+    expect(second).toEqual({});
+    expect(_downloaded()).toEqual([CLEAN, CLEAN, CLEAN, CLEAN]); // erro nunca é cacheado
   });
 });
 

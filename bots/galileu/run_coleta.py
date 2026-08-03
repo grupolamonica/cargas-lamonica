@@ -21,15 +21,18 @@ def main():
     print(f">> Coletor Nestlé (Galileu → Lamônica) iniciado — intervalo {INTERVAL}s")
     while True:
         # 1) Ofertas/programações → nestle_ofertas (o que aparece na Programação).
+        #    Devolve os codembarque já conhecidos (do espelho de nestle_ofertas) para a
+        #    etapa 2 não precisar varrer a tabela inteira de novo. None = varre.
+        ofertas_codembarques = None
         try:
-            coletar_ofertas()
+            ofertas_codembarques = coletar_ofertas()
         except Exception as e:  # nunca derruba o loop
             print(f"[ERROR] ciclo de ofertas falhou: {e}")
             traceback.print_exc()
         # 2) Embarques das aceitas → nestle_embarques (motorista/placa/status real;
         #    FINALIZADO → concluído). Enriquece a tela dinamicamente.
         try:
-            atualizar_embarques()
+            atualizar_embarques(ofertas_codembarques=ofertas_codembarques)
         except Exception as e:
             print(f"[ERROR] ciclo de embarques falhou: {e}")
             traceback.print_exc()

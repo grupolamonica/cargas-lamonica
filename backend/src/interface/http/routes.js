@@ -135,6 +135,7 @@ import {
   resolveVehicleChecklistLevelsResponse,
   resolveDriverSponsorClicksResponse,
   resolveOperatorOverviewDigestResponse,
+  resolveOperatorOverviewSnapshotResponse,
   resolveOperatorCadastrosPendentesResponse,
   resolveOperatorListDraftRegistrationsResponse,
   resolveOperatorSubmitDraftResponse,
@@ -174,6 +175,7 @@ import { resolveOperatorCadastrosIncompletosResponse } from "./operator-admin/ca
 import { resolveOperatorAnexarSelfieResponse } from "./operator-admin/anexar-selfie.handlers.js";
 
 import {
+  resolveDriverCargoDetailResponse,
   resolveDriverLoadFacetsResponse,
   resolveDriverLoadsDigestResponse,
   resolveDriverLoadsReadModelResponse,
@@ -337,6 +339,9 @@ export function registerRoutes(app) {
   router.get("/api/driver/loads", wrap(resolveDriverLoadsReadModelResponse));
   router.get("/api/driver/loads/facets", wrap(resolveDriverLoadFacetsResponse));
   router.get("/api/driver/loads/digest", wrap(resolveDriverLoadsDigestResponse));
+  // Detalhe de uma carga (tela /motorista/cargas/:id) — anônimo, espelha
+  // /api/driver/loads. Substitui as leituras diretas do navegador no banco.
+  router.get("/api/driver/cargas/:cargoId", wrap(resolveDriverCargoDetailResponse));
   router.post("/api/driver/portal-view", wrap(resolveDriverPortalVisitResponse));
   router.post("/api/driver/sponsor-click", wrap(resolveDriverSponsorClickResponse));
   // Phase 10 (cargas-casadas): driver-facing anonimo, espelha /api/driver/loads
@@ -369,6 +374,7 @@ export function registerRoutes(app) {
   // Operator dashboard & audit
   router.get("/api/operator/dashboard", wrap(resolveOperatorDashboardReadModelResponse));
   router.get("/api/operator/overview/digest", wrap(resolveOperatorOverviewDigestResponse));
+  router.get("/api/operator/overview/snapshot", wrap(resolveOperatorOverviewSnapshotResponse));
   router.get("/api/operator/audit-logs", wrap(resolveOperatorAuditLogsResponse));
   router.get("/api/operator/driver-flow-metrics", wrap(resolveOperatorDriverFlowMetricsResponse));
   router.get("/api/operator/sponsor-clicks", wrap(resolveDriverSponsorClicksResponse));

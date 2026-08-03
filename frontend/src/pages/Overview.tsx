@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchSponsorClicks, fetchOperatorOverviewDigest } from "@/services/readModels";
+import {
+  fetchSponsorClicks,
+  fetchOperatorOverviewDigest,
+  fetchOperatorOverviewSnapshot,
+} from "@/services/readModels";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -31,20 +35,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  buildOverviewSnapshot,
-  type OverviewClaimRow,
-  type OverviewCargoRow,
-  type OverviewLeadRow,
-} from "@/lib/overviewMetrics";
 import { supabase } from "@/integrations/supabase/client";
-
-const OVERVIEW_CARGO_SELECT =
-  "id, data, horario, origem, destino, distancia_km, duracao_horas, perfil, valor, bonus, status, is_template, created_at, updated_at, sheet_data_carregamento, cliente:clientes(id, nome, prazo_pagamento, forma_pagamento, reputacao_bom_pagador, reputacao_pagamento_rapido)";
-const OVERVIEW_LEAD_SELECT =
-  "id, load_id, status, created_at, queued_at, approved_at, whatsapp_clicked_at, vehicle_type";
-const OVERVIEW_CLAIM_SELECT =
-  "id, load_id, status, created_at, claimed_at, promoted_at, confirmed_at, queue_position";
 
 function formatNumber(value: number) {
   return value.toLocaleString("pt-BR", {
@@ -204,21 +195,6 @@ const MISSING_FIELD_LABELS: Record<string, string> = {
   destino: "Destino",
 };
 
-function toOverviewCargoRows(data: unknown): OverviewCargoRow[] {
-  if (!Array.isArray(data)) return [];
-  return data.filter(Boolean) as OverviewCargoRow[];
-}
-
-function toOverviewLeadRows(data: unknown): OverviewLeadRow[] {
-  if (!Array.isArray(data)) return [];
-  return data.filter(Boolean) as OverviewLeadRow[];
-}
-
-function toOverviewClaimRows(data: unknown): OverviewClaimRow[] {
-  if (!Array.isArray(data)) return [];
-  return data.filter(Boolean) as OverviewClaimRow[];
-}
-
 const OVERVIEW_QUERY_KEY = ["operator", "overview-dashboard"] as const;
 
 const Overview = () => {
@@ -227,52 +203,54 @@ const Overview = () => {
   const [tab, setTab] = useState<PainelTab>("geral");
   const flow = useDriverFlowMetrics();
   const channelRef = useRef(`operator-overview-${Math.random().toString(36).slice(2, 8)}`);
-  // Realtime is the primary trigger; digest poll (below) is a 5min safety
-  // net for missed events. No refetchInterval here — drops a 30s baseline
-  // poll that previously fired 3x select(500) every cycle.
+  // PONTO 7 — a agregação saiu do navegador. Antes: 3x `select(500)` no
+  // PostgREST (cargas + load_public_leads + load_claims, ~1500 linhas / ~0,5 MB)
+  // e `buildOverviewSnapshot` rodando aqui. Agora: UMA chamada ao endpoint
+  // agregado, resposta de poucos KB, com a conta feita em SQL (e cache de 10s
+  // COMPARTILHADO entre todas as abas de operador, coisa que o cache do React
+  // Query — por aba — nunca conseguiu dar; a rajada de revalidação do realtime,
+  // que o debounce de 1,5s abaixo concentra num instante só, colapsa nele).
+  //
+  // A paridade número a número com o builder antigo é provada em
+  // `src/lib/overviewMetrics.serverParity.test.ts` (inclusive nos casos de fuso:
+  // o container roda em UTC e `cargas.data`/`horario` são horário de parede BRT).
+  //
+  // Frescor: mesmos dois gatilhos baratos de antes — o digest (abaixo) e o
+  // realtime de leads/claims. Sem refetchInterval e sem refetchOnWindowFocus.
   const overviewQuery = useQuery({
     queryKey: OVERVIEW_QUERY_KEY,
     staleTime: 60_000,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
-      const [cargosResult, leadsResult, claimsResult] = await Promise.all([
-        supabase.from("cargas").select(OVERVIEW_CARGO_SELECT).order("created_at", { ascending: false }).limit(500),
-        supabase.from("load_public_leads").select(OVERVIEW_LEAD_SELECT).order("created_at", { ascending: false }).limit(500),
-        supabase.from("load_claims").select(OVERVIEW_CLAIM_SELECT).order("created_at", { ascending: false }).limit(500),
-      ]);
-
-      if (cargosResult.error) {
-        throw cargosResult.error;
-      }
-
-      if (leadsResult.error) {
-        throw leadsResult.error;
-      }
-
-      if (claimsResult.error) {
-        throw claimsResult.error;
-      }
-
-      return buildOverviewSnapshot(
-        toOverviewCargoRows(cargosResult.data),
-        toOverviewLeadRows(leadsResult.data),
-        toOverviewClaimRows(claimsResult.data),
-      );
+      const response = await fetchOperatorOverviewSnapshot();
+      return response.snapshot;
     },
   });
 
   const snapshot = overviewQuery.data;
 
-  // 5min digest poll — backend returns hash of MAX(updated_at)+counts across
-  // cargas/leads/claims. Cheap (3 aggregate scalar queries). When digest
-  // changes, invalidates the expensive snapshot query. Pauses when the tab
-  // is in background. Replaces the previous 30s polling baseline.
+  // Digest — backend devolve o hash de MAX(updated_at)+contagens de
+  // cargas/leads/claims. Barato (3 agregados escalares, ~0,3 KB de resposta) e
+  // ainda mais barato que o snapshot agregado, por isso segue sendo o gatilho:
+  // quando o digest muda, invalida o snapshot. É o dono do frescor de
+  // `cargas` desde que o listener realtime dessa tabela saiu — e cobre 100% das
+  // mutações dela: UPDATE sempre bate `updated_at` (trigger
+  // set_cargas_updated_at), INSERT nasce com `updated_at = now()` e DELETE muda
+  // a contagem.
+  //
+  // Cadência de 60s (pausa em background) + sonda a cada foco de aba. 60s e não
+  // 5min de propósito: como o digest é o único gatilho passivo de `cargas`, um
+  // poll de 5min deixaria o operador até 5min sem ver que uma carga foi fechada
+  // por outra pessoa/pela planilha. 60s alinha o Painel com a própria Fila (que
+  // já faz poll de 60s) e mantém o pior caso dentro da faixa de tela
+  // operacional, a um custo desprezível — o que é caro é o snapshot
+  // (3x select(500)), e ele só refetcha se este hash mudar de verdade.
   const lastDigestRef = useRef<string | null>(null);
   const overviewDigestQuery = useQuery({
     queryKey: ["operator", "overview-digest"] as const,
     queryFn: fetchOperatorOverviewDigest,
-    staleTime: 5 * 60_000,
-    refetchInterval: 5 * 60_000,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
   });
@@ -296,8 +274,22 @@ const Overview = () => {
 
   const invalidateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Realtime: qualquer mudança em cargas/leads/claims revalida o snapshot
-  // com debounce de 1.5s para evitar rajadas em sincronizações em lote.
+  // Realtime: mudança em leads/claims revalida o snapshot, com debounce de 1.5s
+  // para evitar rajadas.
+  //
+  // `cargas` NÃO tem listener aqui. O canal era `event: "*"` sem filter, então o
+  // sheet sync (UPDATE em massa a cada 5min, uma linha por vez no WAL) entregava
+  // uma mensagem realtime POR LINHA para CADA aba de operador aberta — o
+  // debounce colapsava os refetches, nunca as mensagens, e era isso que queimava
+  // o medidor de Realtime Message Count. Filtrar não resolveria: o
+  // postgres_changes aceita um único `coluna=op.valor`, a única coluna
+  // discriminante é `status`, e os valores escritos em massa (OPEN/RESERVED) são
+  // exatamente os que a tela precisa — além de o filtro ser avaliado no registro
+  // NOVO, o que descartaria toda transição para FORA do conjunto (OPEN→BOOKED,
+  // OPEN→EXPIRED). O frescor de `cargas` passou para o digest acima (que detecta
+  // qualquer mutação da tabela) + sonda no foco da aba. Custo: propagação em até
+  // 5min (ou instantânea ao focar) em vez de ~1,5s; ações do próprio operador
+  // seguem instantâneas porque as mutações invalidam explicitamente.
   useEffect(() => {
     const invalidate = () => {
       if (invalidateTimeoutRef.current) clearTimeout(invalidateTimeoutRef.current);
@@ -307,7 +299,6 @@ const Overview = () => {
     };
     const channel = supabase
       .channel(channelRef.current)
-      .on("postgres_changes", { event: "*", schema: "public", table: "cargas" }, invalidate)
       .on("postgres_changes", { event: "*", schema: "public", table: "load_public_leads" }, invalidate)
       .on("postgres_changes", { event: "*", schema: "public", table: "load_claims" }, invalidate)
       .subscribe();
