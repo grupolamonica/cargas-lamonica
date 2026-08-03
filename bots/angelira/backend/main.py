@@ -156,7 +156,7 @@ class MotoristaApiIniciarRequest(BaseModel):
     payload: dict = {}
     anexos: dict = {}
     prime: int = 0       # 0=NORMAL, 1=PRIME, 2=PRIME PLUS
-    type_id: int = 25    # /types/drivers: 25=Funcionario, 26=Agregado, ...
+    type_id: int = 26    # /types/drivers: 26=Agregado (padrão), 25=Funcionario, ...
 
 
 @app.post("/api/robo/motorista_api/iniciar")

@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ocrCnh, uploadDraftFile, base64ToFile } from "@/services/cadastroApi";
 import { isValidCpf, onlyDigits } from "@/lib/brazilianValidators";
+import { CNH_CATEGORIA_REQUER_E_MENSAGEM, isCnhCategoriaElegivel } from "@/lib/cnhCategoria";
+import { NOME_DIVERGENTE_CNH_MENSAGEM, namesMatch } from "@/lib/identityMatch";
 import { UFS } from "@/lib/ufs";
 
 import { useVerifyDocument } from "../useVerifyDocument";
@@ -41,6 +43,12 @@ export interface A1Data {
   rg_uf?: string;
   /** Número de registro da CNH (campo `registro` — o "número" da CNH). */
   registro?: string;
+  /**
+   * Nome lido da CNH pelo OCR — IMUTÁVEL (nunca editado por updateData). Base do
+   * gate anti-fraude: o `nome` (editável) tem de conferir com este. Vai ao
+   * payload em `motorista.cnh.nome` para o backstop server-side.
+   */
+  nome_cnh?: string;
   cnh_codigo_seguranca?: string;
   cnh_numero_espelho?: string;
   cnh_uf_emissor?: string;
@@ -71,7 +79,10 @@ export interface A1CnhProps {
   accessToken?: string | null;
 }
 
-const CATEGORIA_OPTIONS = ["A", "B", "C", "D", "E", "AB", "AC", "AD", "AE"] as const;
+// Inclui as combinações com E (BE/CE/DE) além das com A — todas elegíveis (D pra
+// cima) precisam ser selecionáveis, senão um motorista legítimo (ex.: CE) ficaria
+// sem a própria categoria no dropdown e cairia na trava.
+const CATEGORIA_OPTIONS = ["A", "B", "C", "D", "E", "AB", "AC", "AD", "AE", "BE", "CE", "DE"] as const;
 const EMPTY_DATA: A1Data = {
   nome: "",
   cpf: "",
@@ -195,11 +206,22 @@ export function A1Cnh({
       isValidCpf(data.cpf) &&
       data.categoria.trim().length > 0 &&
       data.validade.trim().length > 0;
+    // Trava de categoria: só CNH categoria D pra cima (D/E e combinações como
+    // AD/AE/CE/DE) habilita a puxar carga. Bloqueia o avanço quando a categoria
+    // informada não tem D nem E (backend reforça com 422 CNH_CATEGORIA_INCOMPATIVEL).
+    const categoriaElegivel = isCnhCategoriaElegivel(data.categoria);
+    // Trava anti-fraude: o nome digitado tem de conferir com o nome da CNH (OCR
+    // imutável). Vazio (draft antigo/manual/OCR não leu) → não barra. Backend
+    // reforça com 422 NOME_DIVERGENTE_CNH.
+    const nomeCnh = (data.nome_cnh ?? "").trim();
+    const nomeMatchesCnh = nomeCnh.length === 0 || namesMatch(data.nome, nomeCnh);
     // DC-305: o DOCUMENTO (arquivo) é obrigatório — o motorista pode digitar os
     // dados (manualMode), mas só avança com a CNH anexada (storage_path). Antes,
     // `manualMode` liberava sem arquivo. `documentUrl` cobre drafts legados.
     const fileProvided = Boolean(data.storage_path || data.documentUrl);
-    onValid(fileProvided && baseFilled && cpfMatches && !cpfMismatch);
+    onValid(
+      fileProvided && baseFilled && cpfMatches && !cpfMismatch && categoriaElegivel && nomeMatchesCnh,
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, tileState, manualMode, cpfMismatch]);
 
@@ -225,6 +247,8 @@ export function A1Cnh({
 
       const nextData: A1Data = {
         nome: extracted.pessoal.nome || "",
+        // Snapshot IMUTÁVEL do nome lido da CNH — nunca é reescrito por edição.
+        nome_cnh: extracted.pessoal.nome || undefined,
         cpf: extractedCpf,
         dataNascimento: extracted.pessoal.data_nascimento || "",
         categoria: extracted.cnh.categoria || "",
@@ -266,6 +290,9 @@ export function A1Cnh({
         cnh_frente_url: sameFile ? current.cnh_frente_url : undefined,
         cnh_verso_url: sameFile ? current.cnh_verso_url : undefined,
         cnh_observacoes: nextData.cnh_observacoes ?? (sameFile ? current.cnh_observacoes : undefined),
+        // Re-OCR Vision do MESMO arquivo às vezes não devolve nome → preserva o
+        // snapshot anterior; ao TROCAR de arquivo, não arrasta o nome antigo.
+        nome_cnh: nextData.nome_cnh ?? (sameFile ? current.nome_cnh : undefined),
       }));
       setManualMode(false);
       setTileState("success");
@@ -447,7 +474,23 @@ export function A1Cnh({
               onChange={(event) => updateData({ nome: event.target.value })}
               autoComplete="name"
               required
+              aria-invalid={Boolean(data.nome_cnh) && data.nome.trim().length > 0 && !namesMatch(data.nome, data.nome_cnh)}
+              aria-describedby={
+                data.nome_cnh && data.nome.trim() && !namesMatch(data.nome, data.nome_cnh)
+                  ? "a1-nome-erro"
+                  : undefined
+              }
             />
+            {data.nome_cnh && data.nome.trim() && !namesMatch(data.nome, data.nome_cnh) ? (
+              <p
+                id="a1-nome-erro"
+                role="alert"
+                className="flex items-start gap-1 text-xs font-medium text-destructive"
+              >
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                {NOME_DIVERGENTE_CNH_MENSAGEM}
+              </p>
+            ) : null}
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -460,6 +503,12 @@ export function A1Cnh({
                 onChange={(event) => updateData({ categoria: event.target.value })}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 required
+                aria-invalid={Boolean(data.categoria) && !isCnhCategoriaElegivel(data.categoria)}
+                aria-describedby={
+                  data.categoria && !isCnhCategoriaElegivel(data.categoria)
+                    ? "a1-categoria-erro"
+                    : undefined
+                }
               >
                 <option value="">Selecione</option>
                 {CATEGORIA_OPTIONS.map((cat) => (
@@ -468,6 +517,16 @@ export function A1Cnh({
                   </option>
                 ))}
               </select>
+              {data.categoria && !isCnhCategoriaElegivel(data.categoria) ? (
+                <p
+                  id="a1-categoria-erro"
+                  role="alert"
+                  className="flex items-center gap-1 text-xs font-medium text-destructive"
+                >
+                  <XCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                  {CNH_CATEGORIA_REQUER_E_MENSAGEM}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="a1-validade">
