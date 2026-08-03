@@ -13,15 +13,18 @@ import { checkWritebackHealth, recordCreateAttempt } from "./check-writeback-hea
 
 const deps = { withPgClient };
 
-async function setSnapshot({ lhs, syncedAt }) {
+async function setSnapshot({ lhs, syncedAt, source = "shopee", id = 1 }) {
   const rows = lhs.map((lh) => ({ lh, motoristas: "ALGUEM" }));
   await query(
     `INSERT INTO public.sheet_monitor_snapshot (id, rows_json, summary_json, synced_at, source)
-     VALUES (1, $1::jsonb, '{}'::jsonb, $2, 'shopee')
-     ON CONFLICT (id) DO UPDATE SET rows_json = EXCLUDED.rows_json, synced_at = EXCLUDED.synced_at`,
-    [JSON.stringify(rows), syncedAt],
+     VALUES ($3, $1::jsonb, '{}'::jsonb, $2, $4)
+     ON CONFLICT (id) DO UPDATE SET rows_json = EXCLUDED.rows_json, synced_at = EXCLUDED.synced_at,
+                                    source = EXCLUDED.source`,
+    [JSON.stringify(rows), syncedAt, id, source],
   );
 }
+
+const agoraMais = (ms) => new Date(Date.now() + ms).toISOString();
 
 const avisos = async () =>
   (await query("SELECT kind, title, body, metadata FROM public.operator_notifications ORDER BY created_at")).rows;
@@ -105,6 +108,58 @@ describe("verificação automática do write-back da planilha", () => {
     } finally {
       delete process.env.SHEET_WRITEBACK_HEALTH_ENABLED;
     }
+  });
+
+  // As fontes sincronizam em momentos diferentes (medido em prod: 5min de defasagem
+  // entre shopee e nestle). Olhar "o snapshot mais novo de qualquer fonte" daria
+  // aviso FALSO quando a leitura da fonte da tentativa é a que ficou atrasada.
+  it("snapshot da fonte da tentativa atrasado, outra fonte fresca → inconclusivo", async () => {
+    await recordCreateAttempt(["LT-A"], { sources: ["shopee"], deps });
+    await setSnapshot({ lhs: [], syncedAt: agoraMais(-60_000), source: "shopee", id: 1 });
+    await setSnapshot({ lhs: [], syncedAt: agoraMais(1000), source: "nestle", id: 2 });
+
+    const r = await checkWritebackHealth({ deps });
+
+    expect(r.skipped).toBe("snapshot-anterior-a-tentativa");
+    expect(r.fontesDesatualizadas).toEqual(["shopee"]);
+    expect(await avisos()).toHaveLength(0);
+  });
+
+  it("fonte NÃO envolvida atrasada não segura a conferência", async () => {
+    await recordCreateAttempt(["LT-A"], { sources: ["shopee"], deps });
+    await setSnapshot({ lhs: [], syncedAt: agoraMais(1000), source: "shopee", id: 1 });
+    await setSnapshot({ lhs: [], syncedAt: agoraMais(-600_000), source: "nestle", id: 2 });
+
+    const r = await checkWritebackHealth({ deps });
+
+    expect(r.faltando).toBe(1);
+    expect(r.avisou).toBe(true);
+  });
+
+  it("linha presente só na planilha da OUTRA fonte não conta como chegada", async () => {
+    await recordCreateAttempt(["LT-A"], { sources: ["shopee"], deps });
+    await setSnapshot({ lhs: [], syncedAt: agoraMais(1000), source: "shopee", id: 1 });
+    await setSnapshot({ lhs: ["LT-A"], syncedAt: agoraMais(1000), source: "nestle", id: 2 });
+
+    const r = await checkWritebackHealth({ deps });
+
+    expect(r.faltando).toBe(1);
+    const [aviso] = await avisos();
+    expect(aviso.metadata.fontes).toEqual(["shopee"]);
+  });
+
+  it("tentativa antiga sem o campo de fontes é tratada como shopee", async () => {
+    await query(
+      `INSERT INTO public.app_settings (key, value, updated_by)
+       VALUES ('sheet_writeback_pending_create', $1::jsonb, 'teste')`,
+      [JSON.stringify({ at: new Date().toISOString(), lhs: ["LT-A"] })],
+    );
+    await setSnapshot({ lhs: [], syncedAt: agoraMais(1000), source: "shopee", id: 1 });
+
+    const r = await checkWritebackHealth({ deps });
+
+    expect(r.faltando).toBe(1);
+    expect(r.avisou).toBe(true);
   });
 
   it("tentativa conferida é descartada (não reavalia a mesma leva)", async () => {
