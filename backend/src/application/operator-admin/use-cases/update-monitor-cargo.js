@@ -82,8 +82,19 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     // "Disponível" = AÇÃO DE REABRIR, não um status operacional armazenável:
     // normaliza p/ null (sem status). O badge "Disponivel" vem da derivação
     // (OPEN + futura + sem motorista), não de um literal em alloc_status.
-    const wantsAvailable = has("status") && /^dispon[ií]vel$/i.test((payload.status ?? "").toString().trim());
-    const allocStatus = has("status") ? (wantsAvailable ? null : normAlloc(payload.status)) : row.alloc_status;
+    //
+    // COM motorista efetivo não é reabertura (seria duplo-booking) e o front já
+    // barra: se chega assim — aba antiga, ou o valor pré-preenchido do select indo
+    // junto num save de outro campo —, APAGARIA o status operacional e o overlay ao
+    // vivo do SPX passaria a preencher a linha (viagem em CTE reaparecendo como
+    // CARREGADO). Nesse caso trata como campo AUSENTE: preserva o alloc_status.
+    const wantsAvailableRequested = has("status") && /^dispon[ií]vel$/i.test((payload.status ?? "").toString().trim());
+    // Motorista EFETIVO após esta edição (a carga do sistema não tem sheet_* por baixo).
+    const wantsAvailable = wantsAvailableRequested && String(allocMotorista ?? "").trim() === "";
+    const availableIgnorado = wantsAvailableRequested && !wantsAvailable;
+    const allocStatus = has("status") && !availableIgnorado
+      ? (wantsAvailable ? null : normAlloc(payload.status))
+      : row.alloc_status;
     const allocTipo = has("tipo") ? normAlloc(payload.tipo) : row.alloc_tipo;
     // Motivo da troca de motorista/veículo (modal "Confirmar troca"): ausente
     // preserva o último motivo.
@@ -290,7 +301,9 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
       sheetMirror: {
         lh: (lhManual ?? "").toString().trim(),
         touchesAlloc: has("motorista") || has("cavalo") || has("carreta") || has("status"),
-        statusInformado: has("status"),
+        // `availableIgnorado` = "Disponível" recusado (carga com motorista): o status
+        // não foi decidido, então também NÃO espelha a coluna STATUS na planilha.
+        statusInformado: has("status") && !availableIgnorado,
         effective: {
           motorista: allocMotorista ?? "",
           cavalo: allocCavalo ?? "",

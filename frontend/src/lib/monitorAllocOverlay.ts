@@ -17,6 +17,44 @@ export function effectiveAllocField(
   return allocValue ?? sheetValue ?? "";
 }
 
+// Ordem do pipeline operacional. ESPELHA `STATUS_PIPELINE` de
+// backend/src/domain/operator-admin/aspx-status-rules.js (fonte única da regra) —
+// mudou lá, muda aqui. Estados de EXCEÇÃO (CANCELADO/DEVOLVIDO/NO SHOW) ficam
+// FORA de propósito: não têm posição, então nunca são "ultrapassados".
+const STATUS_PIPELINE = [
+  "AGUARDANDO ACEITE",
+  "AGUARDANDO CHEGAR NO CLIENTE",
+  "AGUARDANDO CARREGAMENTO",
+  "CARREGANDO",
+  "CARREGADO",
+  "CTE EM EMISSÃO",
+  "CTE ENVIADO",
+  "AGUARDANDO DESCARGA",
+  "DESCARREGANDO",
+  "DESCARREGADO",
+];
+
+const norm = (v: string | null | undefined) => String(v ?? "").trim().toUpperCase();
+
+/**
+ * O status AO VIVO do SPX pode sobrepor o `exibido`? MESMA regra do backend
+ * (`shouldOverlayLiveSpxStatus`): só AVANÇA.
+ *  - exibido vazio → qualquer rótulo do SPX é melhor que nada;
+ *  - ambos no pipeline → só se o SPX estiver À FRENTE;
+ *  - fora do pipeline (qualquer lado) → preserva o exibido.
+ */
+function spxAdvancesOver(exibido: string | null | undefined, spx: string | null | undefined): boolean {
+  const cur = norm(exibido);
+  const nw = norm(spx);
+  if (!nw) return false;
+  if (!cur) return true;
+  if (cur === nw) return false;
+  const a = STATUS_PIPELINE.indexOf(nw);
+  const b = STATUS_PIPELINE.indexOf(cur);
+  if (a < 0 || b < 0) return false;
+  return a > b;
+}
+
 /**
  * Sobrepõe a alocação do operador (override `alloc_*`) sobre a linha da planilha no
  * Monitor. Semântica IGUAL à do backend (COALESCE):
@@ -31,10 +69,12 @@ export function effectiveAllocField(
  *    (esvaziada, alloc="") voltava a mostrar o motorista antigo da planilha
  *    ("sobrescrito, não altera o que foi arrastado"). Este helper trava o `??`.
  *
- *  - status → SPX autoritativo: se o backend anexou `row.spxStatus` (carga com motorista +
- *    LH SPX ao vivo), ele VENCE o alloc_status (que "congelava" no instante da atribuição).
- *    Sem spxStatus → `||`: alloc_status vence, senão o status vivo da linha. Terminal local
- *    (cancelado/no-show) do operador é preservado mesmo sobre o SPX.
+ *  - status → SPX ao vivo (`row.spxStatus`, anexado pelo backend) sobrepõe o alloc_status
+ *    SÓ QUANDO AVANÇA no pipeline (spxAdvancesOver) — assim ele ainda desfaz o override
+ *    "congelado" no instante da atribuição, mas não rebaixa um status deliberado que o
+ *    SPX não conhece (CTE EM EMISSÃO / CTE ENVIADO). Sem avanço → `||`: alloc_status
+ *    vence, senão o status da linha. Terminal local (cancelado/no-show) do operador é
+ *    preservado mesmo sobre o SPX.
  *  - tipo → `||`: NÃO entra no swap; vazio cai pro valor da linha ("SISTEMA" nas lançadas).
  *
  * Puro/testável. `alloc` ausente → devolve a linha inalterada.
@@ -56,7 +96,15 @@ export function mergeAllocIntoRow(
   // sidecar fora do ar) → o override alloc_status volta a valer (comportamento antigo).
   const allocStatus = (alloc.alloc_status || "").trim();
   const isLocalTerminal = /cancel|desist|no[\s-]*show/i.test(allocStatus);
-  const status = row.spxStatus && !isLocalTerminal ? row.spxStatus : (alloc.alloc_status || row.status);
+  // O override só cede quando o SPX AVANÇA (mesma regra do backend). Antes o
+  // `spxStatus` vencia SEMPRE, e como ele viaja na LINHA (não no overlay), o valor
+  // do fetch ANTERIOR sobrevivia ao save otimista: o operador salvava
+  // `CTE EM EMISSÃO` (que o SPX não conhece) e a linha voltava na hora pro rótulo
+  // do SPX — `CARREGADO` —, exatamente o "reverteu sozinho" relatado.
+  const exibido = allocStatus || row.status;
+  const status = !isLocalTerminal && spxAdvancesOver(exibido, row.spxStatus)
+    ? (row.spxStatus as string)
+    : (alloc.alloc_status || row.status);
   return {
     ...row,
     motoristas,

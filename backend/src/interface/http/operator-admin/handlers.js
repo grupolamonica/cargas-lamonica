@@ -99,6 +99,7 @@ import { listSystemCargasForMonitor } from "../../../application/operator-admin/
 import { reconcileMonitorDuplicates } from "../../../application/operator-admin/use-cases/dedupe-monitor-rows.js";
 import { readSheetSnapshotLhSet } from "../../../application/operator-admin/use-cases/read-sheet-snapshot-lhs.js";
 import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-admin/use-cases/planilha-availability.js";
+import { releaseStaleAllocStatusOverrides } from "../../../application/operator-admin/use-cases/monitor-stale-alloc-status.js";
 import { fetchSpxScheduleIndex, applySpxSchedule } from "../../../application/operator-admin/use-cases/spx-schedule-overlay.js";
 import { applySpxOperationalStatus, fetchSpxStatusIndexFromSnapshot, isSpxMonitorLiveStatusEnabled } from "../../../application/operator-admin/use-cases/spx-operational-status.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
@@ -835,7 +836,25 @@ function compareMonitorRows(a, b) {
 // Monta a visão UNIFICADA do Monitor: linhas da planilha ∪ cargas do sistema
 // (intercaladas por data), com reservas no fim. Cada linha ganha rowKey/source.
 // Summary recalculado sobre as linhas operacionais quando há cargas do sistema.
-function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh = {}, now = null, reservedByLh = {}, spxStatusByLh = null, spxScheduleByLh = null }) {
+function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh: rawAllocByLh = {}, now = null, reservedByLh = {}, spxStatusByLh = null, spxScheduleByLh = null, correlationId = null }) {
+  // Override de STATUS que ficou para trás da planilha é SOLTO antes de qualquer
+  // overlay: numa viagem LANÇADA o `alloc_status` nunca era reavaliado (o sync ASPX
+  // e o saneamento ancoram em `cargas.sheet_status`, sempre NULL nela) e continuava
+  // mascarando a linha da planilha do mesmo LH — inclusive o override VAZIO (""),
+  // que zerava o status efetivo e deixava o overlay AO VIVO do SPX rebaixar a
+  // viagem (planilha em `CTE ENVIADO` exibida como `CARREGADO`). Mesma regra do
+  // sync (`shouldReleaseAllocStatusOverride`): CTE/NO SHOW/CANCELADO e o ""
+  // deliberado de carga sem motorista continuam valendo. Ver
+  // monitor-stale-alloc-status.js.
+  const { allocByLh, released } = releaseStaleAllocStatusOverrides({ baseRows, allocByLh: rawAllocByLh });
+  if (released.length > 0) {
+    logStructuredEvent("info", "sheet-monitor.stale-alloc-status-released", {
+      correlationId,
+      count: released.length,
+      // Amostra (não a lista toda: pode passar de dezenas numa leitura).
+      sample: released.slice(0, 10),
+    });
+  }
   // A planilha inteira é de um cliente (ex.: Shopee) — anexa o nome a cada linha
   // da planilha. Cargas do sistema já trazem o próprio cliente (cliente_id→nome).
   const sheetClient = getSheetClientName();
@@ -870,7 +889,9 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, o
   const reservas = reservaRows.map((r) => (r.rowKey ? r : { ...r, rowKey: `reserva:${r.lh}`, source: "reserva" }));
   const items = reservas.length ? [...operational, ...reservas] : operational;
   const summary = systemRows.length ? buildSheetSummary(operational) : baseSummary;
-  return { items, summary };
+  // `allocByLh` devolvido é o SANEADO — é ele que vai na resposta, para o cliente
+  // (mergeAllocIntoRow) enxergar a mesma decisão que as linhas já refletem.
+  return { items, summary, allocByLh };
 }
 
 // Lê os mapas de enriquecimento (planilha por lh, sistema por cargo_id). Usado
@@ -1175,7 +1196,7 @@ export async function resolveSheetMonitorResponse(request) {
 
           // Return the freshly-parsed rows immediately — no extra DB read needed.
           // Inclui o enriquecimento JÁ salvo (senão o refresh "apaga" os selos).
-          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now, reservedByLh, spxStatusByLh, spxScheduleByLh });
+          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now, reservedByLh, spxStatusByLh, spxScheduleByLh, correlationId });
           // attachRouteCodes/Registration tocam campos DIFERENTES de cada item
           // (routeCodigo vs routeRegistered) e cada um faz um scan próprio → paraleliza.
           const [, , { enrichedByLh, enrichedByCargoId }] = await Promise.all([
@@ -1191,7 +1212,7 @@ export async function resolveSheetMonitorResponse(request) {
               summary: unified.summary,
               enrichedByLh,
               enrichedByCargoId,
-              allocByLh,
+              allocByLh: unified.allocByLh,
               meta: {
                 correlationId,
                 sheetConfigured: true,
@@ -1297,6 +1318,7 @@ export async function resolveSheetMonitorResponse(request) {
         reservedByLh,
         spxStatusByLh,
         spxScheduleByLh,
+        correlationId,
       });
       await Promise.all([
         attachRouteCodes(supabaseClient, unified.items, correlationId),
@@ -1310,7 +1332,7 @@ export async function resolveSheetMonitorResponse(request) {
           summary: unified.summary,
           enrichedByLh,
           enrichedByCargoId,
-          allocByLh,
+          allocByLh: unified.allocByLh,
           meta: {
             correlationId,
             sheetConfigured: true,
@@ -1323,7 +1345,7 @@ export async function resolveSheetMonitorResponse(request) {
     // No snapshot yet (first use or migration pending). Mesmo sem planilha, as
     // cargas do sistema (+ reservas) devem aparecer no Monitor.
     const { getSheetExportUrl: getUrl } = await import("../../../application/google-sheets/google-sheet-loads.js");
-    const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary, allocByLh, spxStatusByLh, spxScheduleByLh });
+    const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary, allocByLh, spxStatusByLh, spxScheduleByLh, correlationId });
     await Promise.all([
       attachRouteCodes(supabaseClient, unified.items, correlationId),
       attachRouteRegistration(supabaseClient, unified.items, correlationId),
@@ -1338,7 +1360,7 @@ export async function resolveSheetMonitorResponse(request) {
         summary: systemRows.length ? unified.summary : emptySummary,
         enrichedByLh,
         enrichedByCargoId,
-        allocByLh,
+        allocByLh: unified.allocByLh,
         meta: {
           correlationId,
           sheetConfigured: Boolean(getUrl()),

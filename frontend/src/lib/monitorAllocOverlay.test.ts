@@ -113,3 +113,52 @@ describe("mergeAllocIntoRow — SPX ao vivo é autoritativo sobre alloc_status (
     expect(r.status).toBe("AGUARDANDO CARREGAMENTO");
   });
 });
+
+describe("mergeAllocIntoRow — o SPX ao vivo só AVANÇA (não rebaixa o status salvo)", () => {
+  it("NÃO rebaixa CTE EM EMISSÃO recém-salvo para o CARREGADO do SPX", () => {
+    // Caso relatado em produção: o operador salva CTE EM EMISSÃO (status que o SPX não
+    // conhece); o `spxStatus` que veio no fetch ANTERIOR ainda está na linha em cache e
+    // vencia sempre → a linha "voltava sozinha" para CARREGADO.
+    const r = mergeAllocIntoRow(
+      row({ status: "CARREGADO", spxStatus: "CARREGADO", motoristas: "CLOVIS" }),
+      alloc({ alloc_motorista: "CLOVIS", alloc_status: "CTE EM EMISSÃO" }),
+    );
+    expect(r.status).toBe("CTE EM EMISSÃO");
+  });
+
+  it("NÃO rebaixa CTE ENVIADO para CARREGADO", () => {
+    expect(
+      mergeAllocIntoRow(
+        row({ status: "CARREGADO", spxStatus: "CARREGADO" }),
+        alloc({ alloc_status: "CTE ENVIADO" }),
+      ).status,
+    ).toBe("CTE ENVIADO");
+  });
+
+  it("AVANÇA sobre o CTE quando o SPX passa dele (chegou no destino)", () => {
+    expect(
+      mergeAllocIntoRow(
+        row({ status: "AGUARDANDO DESCARGA", spxStatus: "AGUARDANDO DESCARGA" }),
+        alloc({ alloc_status: "CTE EM EMISSÃO" }),
+      ).status,
+    ).toBe("AGUARDANDO DESCARGA");
+  });
+
+  it("status FORA do pipeline (rótulo legado) é preservado — não há como afirmar avanço", () => {
+    expect(
+      mergeAllocIntoRow(
+        row({ status: "CARREGADO", spxStatus: "CARREGADO" }),
+        alloc({ alloc_status: "EM TRÂNISTO" }),
+      ).status,
+    ).toBe("EM TRÂNISTO");
+  });
+
+  it("override vazio/ausente → o SPX preenche (linha sem status é pior que o SPX)", () => {
+    expect(
+      mergeAllocIntoRow(row({ status: "", spxStatus: "CARREGADO" }), alloc({ alloc_status: "" })).status,
+    ).toBe("CARREGADO");
+    expect(
+      mergeAllocIntoRow(row({ status: "", spxStatus: "CARREGADO" }), alloc({ alloc_status: null })).status,
+    ).toBe("CARREGADO");
+  });
+});

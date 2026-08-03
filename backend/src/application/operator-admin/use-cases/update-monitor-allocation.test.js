@@ -742,6 +742,31 @@ describe("updateMonitorAllocation", () => {
     expect(rows[0].status).toBe("BOOKED"); // com motorista, não reabre
   });
 
+  it('"Disponível" COM motorista NÃO apaga o status operacional (preserva o override)', async () => {
+    // Produção: um save de OUTRO campo (troca de carreta) levou "Disponível" junto —
+    // o backend gravava "" e o status efetivo ficava vazio, deixando o overlay ao vivo
+    // do SPX rebaixar a viagem (CTE reaparecendo como CARREGADO). Com motorista,
+    // "Disponível" não é reabertura: trata como campo AUSENTE.
+    const id = createSheetLoadId("LT-DISP-KEEP");
+    await seedCargo({ id, sheet_lh: "LT-DISP-KEEP", status: "BOOKED" });
+    const operator = await seedUser({ email: "op-disp-keep@teste.local" });
+    await query(
+      `UPDATE public.cargas SET alloc_motorista = $2, alloc_status = $3, alloc_updated_at = now() WHERE id = $1`,
+      [id, "JOÃO", "CTE EM EMISSÃO"],
+    );
+
+    await updateMonitorAllocation({
+      lh: "LT-DISP-KEEP",
+      operatorId: operator.id,
+      payload: { carreta: "ABC1D23", status: "Disponível" },
+      correlationId: "corr-disp-keep",
+    });
+
+    const { rows } = await query(`SELECT alloc_status, alloc_carreta FROM public.cargas WHERE id = $1`, [id]);
+    expect(rows[0].alloc_status).toBe("CTE EM EMISSÃO"); // preservado
+    expect(rows[0].alloc_carreta).toBe("ABC1D23"); // o resto do save vale
+  });
+
   it("outro status (não 'Disponível') sem motorista NÃO mexe em cargas.status", async () => {
     const id = createSheetLoadId("LT-DISP-3");
     await seedCargo({ id, sheet_lh: "LT-DISP-3", status: "BOOKED" });
