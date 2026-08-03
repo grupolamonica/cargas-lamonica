@@ -637,6 +637,12 @@ export function CadastroCamposEditorModal({
               {mfield("Nome do pai", "nome_pai")}
               {mfield("Nome da mãe", "nome_mae")}
             </div>
+            {onlyDigits(f.telefone).length !== 11 ? (
+              <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                O telefone precisa de <strong>DDD + 9 dígitos</strong> (11 números) — o SPX rejeita fora desse
+                formato (retcode 271605009).
+              </p>
+            ) : null}
             {/* Selfie segurando a CNH — anexo do motorista que faltou (Step A pulado).
                 Sem OCR (é só foto): grava motorista.selfie_cnh_url; o "Salvar" persiste. */}
             {attachControl("motorista", [{ docKind: "selfie-cnh", label: "Selfie com CNH" }])}
@@ -696,9 +702,24 @@ export function CadastroCamposEditorModal({
             </label>
           ) : null}
           {f.cavaloOwner ? ownerSection("Proprietário do cavalo", f.cavaloOwner, "cavalo") : null}
-          {mesmoDono
-            ? null
-            : f.carretaOwners.map((o, i) => ownerSection(f.carretaOwners.length > 1 ? `Proprietário da carreta ${i + 1}` : "Proprietário da carreta", o, i))}
+          {mesmoDono ? (
+            // Dono da carreta escondido pelo "mesmo proprietário". Botão explícito
+            // (mesmo padrão do "+ Adicionar carreta") p/ registrar um dono da carreta
+            // DIFERENTE do cavalo: desliga o mesmo-dono e revela as seções (por
+            // carreta) com preencher + anexar doc (CNH/Cartão CNPJ).
+            f.carretaOwners.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setMesmoDono(false)}
+                disabled={isSaving}
+                className="inline-flex w-fit items-center gap-1 rounded-md border border-dashed border-border px-3 py-1.5 text-[11px] font-medium text-foreground hover:bg-muted disabled:opacity-60"
+              >
+                + Adicionar proprietário da carreta (dono diferente do cavalo)
+              </button>
+            ) : null
+          ) : (
+            f.carretaOwners.map((o, i) => ownerSection(f.carretaOwners.length > 1 ? `Proprietário da carreta ${i + 1}` : "Proprietário da carreta", o, i))
+          )}
         </div>
 
         <div className="mt-4 flex justify-end gap-2 border-t border-border pt-4">
