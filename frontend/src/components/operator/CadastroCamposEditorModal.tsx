@@ -303,6 +303,36 @@ export function CadastroCamposEditorModal({
       return { ...cur, carretaOwners: cur.carretaOwners.map((o, i) => (i === which ? { ...o, [k]: v } : o)) };
     });
 
+  // ── Adicionar/remover carreta ────────────────────────────────────────────
+  // Cadastro que chegou SEM a carreta (ex.: o operador esqueceu de anexar a CRLV
+  // da carreta, ou o motorista não a incluiu): o painel só mostrava seções de
+  // carretas já existentes, então não havia como adicionar. Aqui o operador cria
+  // a seção (campos + botão "Anexar CRLV" já prontos), preenche/anexa e salva.
+  // Cap de 2 (bitrem). Mantém carretas[] e carretaOwners[] em paralelo (1 dono/carreta).
+  const MAX_CARRETAS = 2;
+  const addCarreta = () =>
+    setF((cur) =>
+      cur.carretas.length >= MAX_CARRETAS
+        ? cur
+        : {
+            ...cur,
+            carretas: [...cur.carretas, veiculoForm({})],
+            carretaOwners: [...cur.carretaOwners, ownerForm({})],
+          },
+    );
+  // Só remove carretas ADICIONADAS agora (índice >= as que já vinham no cadastro) —
+  // nunca apaga uma carreta que já existia.
+  const removeCarreta = (i: number) =>
+    setF((cur) =>
+      i < carretas0.length
+        ? cur
+        : {
+            ...cur,
+            carretas: cur.carretas.filter((_, idx) => idx !== i),
+            carretaOwners: cur.carretaOwners.filter((_, idx) => idx !== i),
+          },
+    );
+
   const handleSave = () => {
     const next: Dados = { ...base };
 
@@ -352,7 +382,17 @@ export function CadastroCamposEditorModal({
 
     // ── Cavalo + carretas ──
     if (base.cavalo && f.cavalo) next.cavalo = mergeVeiculo(cav0, f.cavalo);
-    if (carretas0.length) next.carretas = carretas0.map((c, i) => (f.carretas[i] ? mergeVeiculo(c, f.carretas[i]) : c));
+    // Persiste TODAS as carretas do formulário — inclui as ADICIONADAS agora pelo
+    // operador (além das que vieram em carretas0). Carreta nova só entra com placa
+    // (identidade mínima); sem placa é descartada (não grava carreta em branco).
+    if (f.carretas.length) {
+      const carretasNext = f.carretas
+        .map((cf, i) => mergeVeiculo(asObj(carretas0[i]), cf))
+        // mantém se tem placa OU CRLV anexada (não perde um upload feito sem placa);
+        // descarta só a carreta em branco (adicionada e não preenchida).
+        .filter((c) => str(c.placa).trim() || str(c.crlv_url).trim());
+      if (carretasNext.length) next.carretas = carretasNext;
+    }
 
     // ── Proprietários ── (owner pode ter sido CRIADO via anexo — workDados já o
     // tem; ou preenchido à mão. Merge não-destrutivo a partir do existente.)
@@ -364,7 +404,8 @@ export function CadastroCamposEditorModal({
       const mo = mergeOwner(cavOwner0 ?? {}, f.cavaloOwner);
       if (ownerGravavel(mo)) next.cavalo_owner = mo;
     }
-    if (mesmoDono && carretas0.length && ownerGravavel(asObj(next.cavalo_owner))) {
+    const nCarretasFinal = asArr(next.carretas).length;
+    if (mesmoDono && nCarretasFinal && ownerGravavel(asObj(next.cavalo_owner))) {
       // "Mesmo dono": o proprietário do cavalo vale p/ todos. Propaga o owner_doc
       // dele pros veículos (cavalo + carretas) — senão o disparo dá OWNER_NAO_
       // CADASTRADO (veículo aponta um doc; dono cadastrado é outro) — e espelha o
@@ -374,9 +415,9 @@ export function CadastroCamposEditorModal({
       const ownerType = ownerDoc.length === 14 ? "cnpj" : "cpf";
       const stampVeic = (veh: unknown): Dados => ({ ...asObj(veh), owner_doc: ownerDoc, owner_doc_type: ownerType });
       if (base.cavalo) next.cavalo = stampVeic(next.cavalo ?? cav0);
-      // next.carretas já foi setado acima (carretas0.length é verdadeiro aqui).
+      // Espelha nas carretas FINAIS (inclui as adicionadas agora).
       next.carretas = asArr(next.carretas).map(stampVeic);
-      next.carreta_owners = carretas0.map(() => ({ ...ownerObj }));
+      next.carreta_owners = asArr(next.carretas).map(() => ({ ...ownerObj }));
     } else if (carretaOwners0.length || f.carretaOwners.some((o) => Object.values(o).some((v) => String(v ?? "").trim()))) {
       // Donos independentes por carreta. f.carretaOwners tem 1 entrada POR CARRETA
       // (padding); carretas sem owner real são descartadas pelo filtro de doc.
@@ -444,8 +485,20 @@ export function CadastroCamposEditorModal({
   );
 
   const veiculoSection = (title: string, v: VeiculoForm, which: "cavalo" | number) => (
-    <section className="space-y-2" key={`veic-${title}`}>
-      <p className="text-xs font-semibold uppercase tracking-wide text-primary/60">{title}</p>
+    <section className="space-y-2" key={`veic-${which}`}>
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold uppercase tracking-wide text-primary/60">{title}</p>
+        {typeof which === "number" && which >= carretas0.length ? (
+          <button
+            type="button"
+            onClick={() => removeCarreta(which)}
+            disabled={isSaving || attachBusy !== null}
+            className="text-[11px] font-medium text-destructive hover:underline disabled:opacity-60"
+          >
+            Remover carreta
+          </button>
+        ) : null}
+      </div>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {field("Placa", v.placa, (val) => setVeic(which, "placa", val), { upper: true, mono: true })}
         {field("Marca", v.marca, (val) => setVeic(which, "marca", val))}
@@ -617,6 +670,16 @@ export function CadastroCamposEditorModal({
 
           {f.cavalo ? veiculoSection("Cavalo", f.cavalo, "cavalo") : null}
           {f.carretas.map((c, i) => veiculoSection(f.carretas.length > 1 ? `Carreta ${i + 1}` : "Carreta", c, i))}
+          {f.carretas.length < MAX_CARRETAS ? (
+            <button
+              type="button"
+              onClick={addCarreta}
+              disabled={isSaving || attachBusy !== null}
+              className="inline-flex w-fit items-center gap-1 rounded-md border border-dashed border-border px-3 py-1.5 text-[11px] font-medium text-foreground hover:bg-muted disabled:opacity-60"
+            >
+              + Adicionar carreta (anexar CRLV e preencher dados)
+            </button>
+          ) : null}
           {f.carretaOwners.length > 0 ? (
             <label className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-foreground">
               <input
