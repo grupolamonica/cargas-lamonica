@@ -92,6 +92,7 @@ const schemaSql = `
     aspx_missing_reason text,
     sheet_tipo text,
     sheet_synced_at timestamptz,
+    sheet_source text,
     sheet_data_carregamento text,
     sheet_data_descarga text,
     sheet_motorista text,

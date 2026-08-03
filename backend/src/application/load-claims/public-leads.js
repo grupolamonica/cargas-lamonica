@@ -26,7 +26,7 @@ import { addDaysIso, computeNextRecurrenceDate, toIsoDate } from "../../domain/r
 import { syncedCarregamentoLabel } from "../../domain/cargo-schedule.js";
 import { lookupAspxDriverByCpf } from "../../infrastructure/aspx/aspx-directory.js";
 import { loadDriverVinculoMap, normalizeDriverNameKey } from "../google-sheets/driver-vinculos.js";
-import { writeAllocationsToSheet, isSheetWritebackEnabled } from "../google-sheets/sheet-writeback.js";
+import { writeAllocationsToSheet, isSheetWritebackEnabled, formatSheetDateLabel } from "../google-sheets/sheet-writeback.js";
 import { enqueueReservationNotification } from "../driver-outreach/reservation-notify.js";
 const DEFAULT_PUBLIC_LEAD_PRE_REGISTRATION_MAX_ATTEMPTS = 6;
 const DEFAULT_PUBLIC_LEAD_PRE_REGISTRATION_WINDOW_SECONDS = 600;
@@ -649,6 +649,12 @@ async function reflectReservationOnSheet(client, { loadId, leadId, trigger, acto
     const { rows } = await client.query(
       `
         SELECT c.sheet_lh AS sheet_lh,
+               c.lh_manual AS lh_manual,
+               c.sheet_source AS sheet_source,
+               c.origem AS origem,
+               c.destino AS destino,
+               c.sheet_data_carregamento AS carregamento_label,
+               c.sheet_data_descarga AS descarga_label,
                l.horse_plate AS horse_plate,
                l.trailer_plate AS trailer_plate,
                l.validation_summary_json AS validation_summary_json
@@ -663,11 +669,22 @@ async function reflectReservationOnSheet(client, { loadId, leadId, trigger, acto
     info = null;
   }
 
+  // O LH vive em DUAS colunas: sheet_lh (carga vinda da planilha) e lh_manual
+  // (carga LANÇADA pela Programação, com sheet_lh NULL). Lendo só sheet_lh, a
+  // reserva de carga lançada saía com chave vazia e o write-back era pulado em
+  // silêncio pela guarda abaixo — o operador reservava, o sistema mostrava o
+  // motorista e a planilha nunca recebia nada (28% dos eventos de write-back
+  // gravados com sheet_lh:null em prod). Mesma resolução que o Monitor já usa.
   const sheetLh = info?.sheet_lh ? String(info.sheet_lh).trim() : "";
+  const lhManual = info?.lh_manual ? String(info.lh_manual).trim() : "";
+  const lhParaPlanilha = sheetLh || lhManual;
+  const ehCargaLancada = !sheetLh && Boolean(lhManual);
   const motorista = resolveLeadDriverName({ validation_summary_json: info?.validation_summary_json }) ?? "";
   const cavalo = info?.horse_plate ? String(info.horse_plate).trim() : "";
   const carreta = info?.trailer_plate ? String(info.trailer_plate).trim() : "";
-  const enabled = isSheetWritebackEnabled();
+  // Roteia pela fonte da carga (Nestlé tem planilha própria; sem URL configurada
+  // fica desligada, como já era). Sem fonte → shopee, comportamento histórico.
+  const enabled = isSheetWritebackEnabled(info?.sheet_source ?? null);
 
   // Persiste a alocação no SISTEMA (cargas.alloc_*) além do write-back na
   // planilha, para a carga refletir o motorista reservado na tela do Monitor
@@ -715,7 +732,8 @@ async function reflectReservationOnSheet(client, { loadId, leadId, trigger, acto
       eventType: PUBLIC_LEAD_EVENT_TYPE.SHEET_WRITEBACK,
       payload: {
         trigger: trigger ?? null,
-        sheet_lh: sheetLh || null,
+        sheet_lh: lhParaPlanilha || null,
+        lh_origem: ehCargaLancada ? "lh_manual" : "sheet_lh",
         motorista: motorista || null,
         cavalo: cavalo || null,
         carreta: carreta || null,
@@ -730,10 +748,28 @@ async function reflectReservationOnSheet(client, { loadId, leadId, trigger, acto
 
   // Write-back na planilha: fire-and-forget. Só quando há LH e a integração
   // está ligada. Nunca awaited — não bloqueia nem falha a reserva.
-  if (sheetLh && enabled) {
-    void writeAllocationsToSheet([
-      { lh: sheetLh, motorista, cavalo, carreta, status: "RESERVADO" },
-    ]).catch(() => {});
+  if (lhParaPlanilha && enabled) {
+    const update = {
+      lh: lhParaPlanilha,
+      source: info?.sheet_source ?? null,
+      motorista,
+      cavalo,
+      carreta,
+      status: "RESERVADO",
+    };
+    // Carga LANÇADA com motorista: a linha-casca só nasce no lançamento quando a
+    // viagem está ACEITA, então spot lançado-não-aceito e depois reservado nunca
+    // tinha linha. createIfMissing cria-ou-preenche com rota + agenda — mesmos
+    // gates do Monitor (motorista efetivo + LH "LT…", p/ não criar LH de outra
+    // fonte na planilha da Shopee).
+    if (ehCargaLancada && motorista && lhParaPlanilha.toUpperCase().startsWith("LT")) {
+      update.createIfMissing = true;
+      update.origem = info?.origem ?? "";
+      update.destino = info?.destino ?? "";
+      update.dataCarregamento = formatSheetDateLabel(info?.carregamento_label ?? "");
+      update.dataDescarga = formatSheetDateLabel(info?.descarga_label ?? "");
+    }
+    void writeAllocationsToSheet([update]).catch(() => {});
   }
 }
 

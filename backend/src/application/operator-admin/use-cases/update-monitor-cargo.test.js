@@ -10,7 +10,12 @@ import {
   withPgTransaction,
 } from "../test-harness.js";
 
+const writeSpy = vi.fn(async () => ({ ok: true, updated: 1 }));
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({ withPgTransaction }));
+vi.mock("../../google-sheets/sheet-writeback.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  writeAllocationsToSheet: writeSpy,
+}));
 
 const { updateMonitorCargo } = await import("./update-monitor-cargo.js");
 
@@ -390,6 +395,97 @@ describe("updateMonitorCargo", () => {
     expect(res.statusCode).toBe(200);
     const row = await getCargo(id);
     expect(row.lh_manual).toBe("LT-UNICA-123");
+  });
+
+  // PARIDADE com update-monitor-allocation: salvar a linha "sistema" no modal do
+  // Monitor gravava alloc_* e NÃO espelhava nada na planilha — a carga lançada com
+  // motorista alocado aqui nunca chegava à Shopee (32 cargas em prod).
+  it("alocar motorista em carga lançada ESPELHA na planilha, criando a linha se faltar", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "Simoes Filho/BA", destino: "Jaboatão dos Guararapes/PE", status: "OPEN" });
+    await query("UPDATE public.cargas SET lh_manual = 'LT1Q8302D4IK2' WHERE id = $1", [id]);
+    const op = await seedUser({ email: "op-mirror1@teste.local" });
+
+    const res = await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { motorista: "PAULO ERIVALDO ROSA COSTA", cavalo: "ABC1D23" },
+      correlationId: "c-mirror1",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const [[updates]] = writeSpy.mock.calls;
+    expect(updates[0].lh).toBe("LT1Q8302D4IK2");
+    expect(updates[0].motorista).toBe("PAULO ERIVALDO ROSA COSTA");
+    expect(updates[0].cavalo).toBe("ABC1D23");
+    // com motorista + LH "LT…" → cria-ou-preenche a linha, com rota e agenda
+    expect(updates[0].createIfMissing).toBe(true);
+    expect(updates[0].origem).toBe("Simoes Filho/BA");
+    expect(updates[0].destino).toBe("Jaboatão dos Guararapes/PE");
+    // status NÃO vai quando o payload não informou (não re-estampa a coluna STATUS)
+    expect(updates[0].status).toBeUndefined();
+  });
+
+  it("SEM motorista efetivo não cria linha (não polui a planilha com spot vazio)", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    await query("UPDATE public.cargas SET lh_manual = 'LT-SEM-MOT-1' WHERE id = $1", [id]);
+    const op = await seedUser({ email: "op-mirror2@teste.local" });
+
+    await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { status: "AGUARDANDO CARREGAMENTO" },
+      correlationId: "c-mirror2",
+    });
+
+    const [[updates]] = writeSpy.mock.calls;
+    expect(updates[0].createIfMissing).toBeUndefined();
+    expect(updates[0].status).toBe("AGUARDANDO CARREGAMENTO"); // informado → vai
+  });
+
+  it("LH que não é linehaul SPX não cria linha (evita gravar na planilha errada)", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    await query("UPDATE public.cargas SET lh_manual = 'NESTLE-B101472757' WHERE id = $1", [id]);
+    const op = await seedUser({ email: "op-mirror3@teste.local" });
+
+    await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { motorista: "FULANO" },
+      correlationId: "c-mirror3",
+    });
+
+    const [[updates]] = writeSpy.mock.calls;
+    expect(updates[0].createIfMissing).toBeUndefined();
+  });
+
+  it("edição que NÃO toca alocação (só rota/agenda) não dispara write-back", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    await query("UPDATE public.cargas SET lh_manual = 'LT-ROTA-1' WHERE id = $1", [id]);
+    const op = await seedUser({ email: "op-mirror4@teste.local" });
+
+    await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { origem: "Salvador/BA" },
+      correlationId: "c-mirror4",
+    });
+
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("carga SEM LH não dispara write-back (não há chave na planilha)", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    const op = await seedUser({ email: "op-mirror5@teste.local" });
+
+    await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { motorista: "FULANO" },
+      correlationId: "c-mirror5",
+    });
+
+    expect(writeSpy).not.toHaveBeenCalled();
   });
 
   it("lança NotFound quando o id não existe", async () => {
