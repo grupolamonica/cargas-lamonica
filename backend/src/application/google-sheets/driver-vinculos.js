@@ -6,6 +6,42 @@ const VINCULOS_TABLE = "driver_vinculos";
 const DEFAULT_VINCULO_TAB = process.env.GOOGLE_SHEET_VINCULO_TAB?.trim() || "Vinculo";
 const UPSERT_BATCH_SIZE = 200;
 
+// ── Cache do mapa nome→vínculo (egress) ──────────────────────────────────────
+// `loadDriverVinculoMap` lê a tabela INTEIRA e é chamada em TODO refresh do read
+// model da fila (/leads). Medido em produção: ~40.000 linhas/dia só nesta query.
+//
+// A tabela é um espelho da aba "Vinculo" da planilha e só muda quando
+// `syncDriverVinculos` roda (ciclo do sheet-sync, SHEET_SYNC_INTERVAL_MIN,
+// default 5min) — e, na prática, só quando alguém edita a aba. Dado global
+// (nome→vínculo), NÃO é dado por usuário: uma chave de cache única é correta e
+// não vaza nada entre operadores.
+//
+// LIÇÃO DA RODADA 4 (não repetir): um TTL menor que o intervalo do poll que
+// dispara as chamadas NUNCA acerta o cache. A tela /leads faz poll fixo de
+// **60s** (`Leads.tsx`: refetchInterval 60_000 depois do 1º load, 30_000 no
+// primeiro). Portanto o TTL default (300s) é DELIBERADAMENTE ~5x o poll — com
+// 60s ou menos o cache seria decorativo. Se alguém baixar
+// DRIVER_VINCULO_CACHE_TTL_MS para <= 60000, o cache volta a não servir para
+// nada (há teste cravando essa relação).
+const DEFAULT_VINCULO_CACHE_TTL_MS = 300_000;
+
+/** @type {{ map: Map<string, string>, expiresAt: number } | null} */
+let vinculoMapCache = null;
+
+function resolveVinculoCacheTtlMs() {
+  const raw = Number(process.env.DRIVER_VINCULO_CACHE_TTL_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_VINCULO_CACHE_TTL_MS;
+}
+
+/**
+ * Descarta o mapa em cache. Chamado depois de cada sync bem-sucedido (a tabela
+ * acabou de mudar) e nos testes. Single-replica em produção — num cenário
+ * multi-replica a réplica que não sincronizou fica no máximo 1 TTL defasada.
+ */
+export function invalidateDriverVinculoMapCache() {
+  vinculoMapCache = null;
+}
+
 /**
  * Chave de junção entre o nome do motorista resolvido pela fila e o nome da aba
  * "Vinculo" da planilha. A aba não tem CPF, então casamos por NOME — e nomes
@@ -145,30 +181,42 @@ export async function syncDriverVinculos({
   }
 
   const syncedAt = new Date().toISOString();
+  // Só é lido depois do bloco try (que ou atribui, ou propaga o erro).
+  let deleted;
 
-  for (const batch of chunk(records, UPSERT_BATCH_SIZE)) {
-    const { error } = await supabaseClient
-      .from(VINCULOS_TABLE)
-      .upsert(
-        batch.map((r) => ({ ...r, synced_at: syncedAt, updated_at: syncedAt })),
-        { onConflict: "nome_normalizado" },
-      );
+  // A partir daqui a tabela pode mudar → o mapa memoizado precisa ser descartado
+  // em QUALQUER saída (inclusive erro no meio do upsert, que deixa o banco em
+  // estado parcial). Sem isto o read model da fila mostraria o vínculo antigo
+  // até o TTL expirar.
+  try {
+    for (const batch of chunk(records, UPSERT_BATCH_SIZE)) {
+      const { error } = await supabaseClient
+        .from(VINCULOS_TABLE)
+        .upsert(
+          batch.map((r) => ({ ...r, synced_at: syncedAt, updated_at: syncedAt })),
+          { onConflict: "nome_normalizado" },
+        );
 
-    if (error) {
-      throw error;
+      if (error) {
+        throw error;
+      }
     }
-  }
 
-  // Remove vínculos que sumiram da planilha (motorista trocou de vínculo cuja
-  // chave de nome mudou, ou foi removido da aba).
-  const currentKeys = records.map((r) => r.nome_normalizado);
-  const { error: deleteError, count: deleted } = await supabaseClient
-    .from(VINCULOS_TABLE)
-    .delete({ count: "exact" })
-    .not("nome_normalizado", "in", `(${currentKeys.map((k) => `"${k.replace(/"/g, '""')}"`).join(",")})`);
+    // Remove vínculos que sumiram da planilha (motorista trocou de vínculo cuja
+    // chave de nome mudou, ou foi removido da aba).
+    const currentKeys = records.map((r) => r.nome_normalizado);
+    const { error: deleteError, count: deletedCount } = await supabaseClient
+      .from(VINCULOS_TABLE)
+      .delete({ count: "exact" })
+      .not("nome_normalizado", "in", `(${currentKeys.map((k) => `"${k.replace(/"/g, '""')}"`).join(",")})`);
 
-  if (deleteError) {
-    throw deleteError;
+    if (deleteError) {
+      throw deleteError;
+    }
+
+    deleted = deletedCount;
+  } finally {
+    invalidateDriverVinculoMapCache();
   }
 
   console.info(`[driver-vinculos] sync concluido: ${records.length} upserted, ${deleted ?? 0} removidos`);
@@ -182,8 +230,23 @@ export async function syncDriverVinculos({
  * chamador deve envolver em runWithTransactionSavepoint para que um eventual
  * 42P01 (tabela ainda não migrada) faça ROLLBACK do savepoint sem poluir a
  * transação principal — degradando para um Map vazio sem badge de vínculo.
+ *
+ * Memoizado em processo por {@link resolveVinculoCacheTtlMs} (ver comentário do
+ * cache no topo do arquivo). Erros NUNCA são cacheados — com a tabela ausente
+ * (42P01) o comportamento é idêntico ao anterior: lança a cada chamada e o
+ * chamador degrada para Map vazio.
+ *
+ * O Map devolvido é COMPARTILHADO entre chamadas (o único consumidor,
+ * `groupLeadsForOperator`, só faz `.get`). Não mutar.
+ *
+ * @param {{ query: Function }} client
+ * @param {{ now?: number }} [options] `now` injetável para teste determinístico.
  */
-export async function loadDriverVinculoMap(client) {
+export async function loadDriverVinculoMap(client, { now = Date.now() } = {}) {
+  if (vinculoMapCache && vinculoMapCache.expiresAt > now) {
+    return vinculoMapCache.map;
+  }
+
   const { rows } = await client.query(
     `SELECT nome_normalizado, vinculo FROM public.driver_vinculos`,
   );
@@ -192,6 +255,13 @@ export async function loadDriverVinculoMap(client) {
     if (row.nome_normalizado) {
       map.set(row.nome_normalizado, row.vinculo);
     }
+  }
+
+  const ttlMs = resolveVinculoCacheTtlMs();
+  if (ttlMs > 0) {
+    vinculoMapCache = { map, expiresAt: now + ttlMs };
+  } else {
+    vinculoMapCache = null;
   }
   return map;
 }

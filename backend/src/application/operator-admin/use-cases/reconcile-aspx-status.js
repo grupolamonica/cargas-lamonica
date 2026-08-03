@@ -51,6 +51,7 @@ import {
   shouldUpdateAspxData,
   shouldReleaseAllocStatusOverride,
   parseAspTripRow,
+  __TEST__ as ASPX_RULES,
 } from "../../../domain/operator-admin/aspx-status-rules.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 
@@ -58,6 +59,115 @@ const DEFAULT_DAYS_BACK = 45;
 const DEFAULT_DAYS_FWD = 30;
 
 const trim = (v) => String(v ?? "").trim();
+
+// Colunas lidas de cargas — as MESMAS em qualquer modo (só o WHERE muda).
+const CARGO_COLUMNS = `id, sheet_lh, sheet_source, sheet_status,
+                sheet_motorista, sheet_cavalo, sheet_carreta,
+                alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status`;
+
+// Separador da chave composta "<lh><SEP><valor>" do pré-filtro. Vai como
+// PARÂMETRO (não literal) porque o pg-mem dos testes não tem chr(); e é um
+// caractere de controle (SOH) que não existe em LH/nome/placa vindos da planilha
+// ou da Torre.
+const KEY_SEP = "\u0001";
+
+// Statuses que abrem o gate de DADOS (motorista/cavalo/carreta). Derivado da
+// FONTE ÚNICA das regras (`shouldUpdateAspxData`) para o pré-filtro SQL não
+// duplicar a decisão: se a regra mudar e um status deixar de abrir o gate, ele
+// cai fora desta lista automaticamente.
+const GATE_DADOS_STATUSES = ASPX_RULES.STATUS_GATE_DADOS.filter((s) => shouldUpdateAspxData(s).dados);
+
+/**
+ * Índice da aba ASP → arrays do pré-filtro SQL.
+ *
+ * Para cada campo comparado pelo use-case guardamos DOIS arrays:
+ *  - `<campo>Lhs`: os LHs cujo registro ASP tem aquele campo NÃO-vazio (espelha
+ *    os guards `if (!nw) return false` / `if (asp.motorista && ...)` do JS);
+ *  - `<campo>SameKeys`: "<lh><SEP><valor do ASP>" — bater a chave significa que
+ *    o espelho do sistema JÁ é igual ao ASP, logo nada mudaria naquele campo.
+ */
+function buildPrefilterKeys(index) {
+  const keys = {
+    statusLhs: [], statusSameKeys: [],
+    motoristaLhs: [], motoristaSameKeys: [],
+    cavaloLhs: [], cavaloSameKeys: [],
+    carretaLhs: [], carretaSameKeys: [],
+  };
+  const push = (field, lh, value) => {
+    keys[`${field}Lhs`].push(lh);
+    keys[`${field}SameKeys`].push(`${lh}${KEY_SEP}${value}`);
+  };
+  for (const [lh, asp] of index) {
+    // parseAspTripRow já devolve os campos trimados.
+    if (asp.status) push("status", lh, asp.status);
+    if (asp.motorista) push("motorista", lh, asp.motorista);
+    if (asp.cavalo) push("cavalo", lh, asp.cavalo);
+    if (asp.carreta) push("carreta", lh, asp.carreta);
+  }
+  return keys;
+}
+
+// Leitura ANTIGA (sem pré-filtro): TODAS as cargas casadas por LH. Mantida para o
+// kill-switch ASPX_STATUS_RECONCILE_PREFILTER=false — rollback sem deploy.
+const ALL_CARGOS_SQL = `SELECT ${CARGO_COLUMNS}
+           FROM public.cargas
+          WHERE sheet_lh = ANY($1::text[])`;
+
+// Leitura NOVA: só as cargas em que ESTE ciclo pode escrever algo.
+//
+// Medição em produção (delta de 1091s do pg_stat_statements): 845 linhas por
+// chamada, ~335.000 linhas/dia, a cada 3min — e na esmagadora maioria delas nada
+// mudava (o job converge e depois relê o mesmo estado). O predicado abaixo é um
+// SUPERCONJUNTO da condição `sets.length > 0` do laço, ou seja: toda carga que o
+// JS ATUAL atualizaria continua vindo. As excluídas satisfazem provadamente
+// ¬(A) ∧ ¬(B) e, portanto, cairiam no `continue`.
+//
+//  (A) NECESSÁRIA para shouldUpdateAspxStatus() == true: o ASP precisa ter status
+//      (`if (!nw) return false`) e o status atual precisa DIFERIR dele
+//      (`if (cur === nw) return false`). Não é suficiente — intocáveis (NO SHOW /
+//      CTE EM EMISSÃO), anti-regressão e a trava de descarga são reavaliadas no JS,
+//      que continua sendo a única fonte das regras. Superconjunto de propósito.
+//      A comparação aqui é byte-a-byte (case-SENSITIVE) sobre o valor trimado:
+//      desigualdade case-sensitive acontece MAIS vezes que a case-insensitive do
+//      normalizeAspxStatus(), então só pode incluir linhas a mais, nunca a menos.
+//
+//  (B) EXATA para o bloco de DADOS: o gate abre (upper(trim(status atual)) na lista
+//      derivada de shouldUpdateAspxData) E algum de motorista/cavalo/carreta do ASP
+//      é não-vazio e difere do espelho — as mesmas comparações do JS.
+//
+//  (C) `alloc_status IS NOT NULL` — o OVERRIDE do operador. Este disjunto NÃO é
+//      opcional: desde o #397 (auto-cura do DC-316) o laço pode gravar uma carga
+//      SÓ para soltar um override congelado (`setCol("alloc_status", null)`),
+//      mesmo com o sheet_status já igual ao ASP e motorista/cavalo/carreta
+//      idênticos — um caso que ¬(A) ∧ ¬(B) descartaria. Sem (C) o pré-filtro
+//      reintroduziria em silêncio justamente o bug que o #397 corrige (status
+//      operacional congelado para sempre). Provado por mutação: removendo este
+//      OR, falham o caso (C) do superset E um teste do próprio #397.
+//      É superconjunto porque `shouldReleaseAllocStatusOverride` começa com
+//      `if (allocStatus == null) return false` (aspx-status-rules.js:151): sem
+//      override não há o que soltar. O override VAZIO ("") é non-null e a regra
+//      o trata, então `IS NOT NULL` também o cobre.
+const FILTERED_CARGOS_SQL = `SELECT ${CARGO_COLUMNS}
+           FROM public.cargas
+          WHERE sheet_lh = ANY($1::text[])
+            AND (
+              (
+                sheet_lh = ANY($3::text[])
+                AND NOT ((sheet_lh || $2::text || btrim(coalesce(sheet_status, ''))) = ANY($4::text[]))
+              )
+              OR (
+                upper(btrim(coalesce(sheet_status, ''))) = ANY($11::text[])
+                AND (
+                     (sheet_lh = ANY($5::text[])
+                       AND NOT ((sheet_lh || $2::text || btrim(coalesce(sheet_motorista, ''))) = ANY($6::text[])))
+                  OR (sheet_lh = ANY($7::text[])
+                       AND NOT ((sheet_lh || $2::text || btrim(coalesce(sheet_cavalo, ''))) = ANY($8::text[])))
+                  OR (sheet_lh = ANY($9::text[])
+                       AND NOT ((sheet_lh || $2::text || btrim(coalesce(sheet_carreta, ''))) = ANY($10::text[])))
+                )
+              )
+              OR alloc_status IS NOT NULL
+            )`;
 
 /**
  * @param {{ correlationId?: string, deps?: {
@@ -96,19 +206,39 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
     return { ok: true, skipped: true, reason: "empty-index", checked: 0, updated: 0, sheetWrites: 0 };
   }
   const lhs = [...index.keys()];
+  // Pré-filtro de LINHAS (egress). Kill-switch: ASPX_STATUS_RECONCILE_PREFILTER=false
+  // volta a ler todas as cargas casadas, sem deploy.
+  const prefilterEnabled = process.env.ASPX_STATUS_RECONCILE_PREFILTER !== "false";
+  const prefilter = prefilterEnabled ? buildPrefilterKeys(index) : null;
 
   // 2..5. Lê as cargas casadas, aplica as regras e grava os espelhos — num só client.
   let outcome;
   try {
     outcome = await run(async (client) => {
-      const { rows } = await client.query(
-        `SELECT id, sheet_lh, sheet_source, sheet_status,
-                sheet_motorista, sheet_cavalo, sheet_carreta,
-                alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status
-           FROM public.cargas
-          WHERE sheet_lh = ANY($1::text[])`,
+      // `checked` (observabilidade: quantas cargas do sistema casaram com a aba
+      // ASP) segue EXATO — vem de um COUNT, não do tamanho do lote lido. Sem isso
+      // o pré-filtro abaixo faria o número despencar e o log mentiria.
+      const countResult = await client.query(
+        `SELECT count(*)::int AS total FROM public.cargas WHERE sheet_lh = ANY($1::text[])`,
         [lhs],
       );
+      const checked = Number(countResult.rows?.[0]?.total ?? 0);
+
+      const { rows } = prefilterEnabled
+        ? await client.query(FILTERED_CARGOS_SQL, [
+            lhs,
+            KEY_SEP,
+            prefilter.statusLhs,
+            prefilter.statusSameKeys,
+            prefilter.motoristaLhs,
+            prefilter.motoristaSameKeys,
+            prefilter.cavaloLhs,
+            prefilter.cavaloSameKeys,
+            prefilter.carretaLhs,
+            prefilter.carretaSameKeys,
+            GATE_DADOS_STATUSES,
+          ])
+        : await client.query(ALL_CARGOS_SQL, [lhs]);
 
       const sheetUpdates = [];
       let changedCount = 0;
@@ -217,7 +347,7 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
         sheetUpdates.push(item);
       }
 
-      return { checked: rows.length, updated: changedCount, sheetUpdates };
+      return { checked, updated: changedCount, sheetUpdates };
     });
   } catch (err) {
     logStructuredEvent("warn", "reconcile-aspx-status.query-failed", {

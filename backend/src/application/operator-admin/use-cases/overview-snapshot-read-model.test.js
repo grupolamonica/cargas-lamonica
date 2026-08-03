@@ -336,17 +336,33 @@ describe("Painel — snapshot agregado no SQL", () => {
   it("a janela de 500 linhas por tabela é preservada (os números do Painel não mudam de base)", async () => {
     // 501ª carga OPEN mais ANTIGA que as da fixture: fica FORA da janela, então
     // não pode entrar em activeLoads (era assim no front, com .limit(500)).
+    //
+    // Semeadas em LOTE (um único INSERT). O VOLUME não pode encolher — a prova é
+    // justamente passar de OVERVIEW_WINDOW_ROWS (500), então com 50 linhas não
+    // haveria janela para exercitar. O que encolhe é o CUSTO: uma query por linha
+    // fazia 500 round-trips no pg-mem e deixava este o teste mais caro da suíte,
+    // com duração muito sensível à contenção (medido sozinho: 1,5s; com só mais um
+    // arquivo em paralelo: 4,2s, contra o timeout default de 5s). As asserções
+    // abaixo são exatamente as mesmas.
     const extras = [];
+    const tuples = [];
+    const params = [];
     for (let i = 0; i < 500; i += 1) {
       const id = `30000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`;
       extras.push(id);
-      await query(
-        `INSERT INTO public.cargas (id, data, horario, origem, destino, distancia_km, perfil, status,
-           is_template, created_at, updated_at)
-         VALUES ($1, '2026-08-01', '08:00:00', 'A', 'B', 100, 'CARRETA', 'OPEN', false, $2, $2)`,
-        [id, new Date(Date.parse("2026-07-01T00:00:00.000Z") + i * 1000).toISOString()],
+      const base = i * 2;
+      tuples.push(
+        `($${base + 1}::uuid, '2026-08-01'::date, '08:00:00'::time, 'A', 'B', 100, 'CARRETA', 'OPEN',` +
+          ` false, $${base + 2}::timestamptz, $${base + 2}::timestamptz)`,
       );
+      params.push(id, new Date(Date.parse("2026-07-01T00:00:00.000Z") + i * 1000).toISOString());
     }
+    await query(
+      `INSERT INTO public.cargas (id, data, horario, origem, destino, distancia_km, perfil, status,
+         is_template, created_at, updated_at)
+       VALUES ${tuples.join(", ")}`,
+      params,
+    );
 
     const { cargoCounts, openLoadRows } = await readModel.fetchOverviewSnapshotAggregates({ now: NOW });
     // 21 da fixture + 500 extras = 521 linhas. Os extras são de 01/07 (mais
@@ -377,5 +393,11 @@ describe("Painel — snapshot agregado no SQL", () => {
     ];
     const fromOracle = aggregateOverviewRowsAsSql(allCargos, leads, claims, { now: NOW });
     expect(cargoCounts).toEqual(fromOracle.cargoCounts);
-  });
+    // Timeout EXPLÍCITO (mesmo padrão dos testes A/B de reconcile-aspx-status): o
+    // custo deste caso é irredutível — 521 linhas em 4 agregações no pg-mem, porque
+    // a prova exige passar da janela de 500. Sob o default de 5s ele estourava ao
+    // rodar a suíte inteira em paralelo, e o estouro é pior que a lentidão: o
+    // vitest segue para o teste seguinte enquanto a semeadura órfã continua e
+    // escreve no banco que o `beforeEach` seguinte já recriou, contaminando-o.
+  }, 30_000);
 });

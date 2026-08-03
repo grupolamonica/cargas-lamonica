@@ -5,6 +5,12 @@ const RECONCILE_BATCH_LIMIT = 100;
 
 // Nome do motorista a partir do validation_summary_json do lead (Angellira
 // displayName) — mesma fonte usada pelo write-back de reserva (reflectReservationOnSheet).
+//
+// EGRESS: a query NÃO trafega mais o `validation_summary_json` inteiro (JSON do
+// Angellira/ASPX, dezenas de KB por lead) só para ler UM campo — ela já devolve
+// `angelira_display_name` extraído no SQL, com o mesmo caminho usado no resto do
+// repo (`->'driver'->'angelira'->>'displayName'`, cf. operator-admin/handlers.js).
+// Esta função continua aceitando o JSON cru para os chamadores/testes legados.
 function angelliraDisplayName(validationSummaryJson) {
   let summary = validationSummaryJson;
   if (typeof summary === "string") {
@@ -16,6 +22,20 @@ function angelliraDisplayName(validationSummaryJson) {
   }
   const name = summary?.driver?.angelira?.displayName;
   return typeof name === "string" && name.trim() ? name.trim() : "";
+}
+
+/**
+ * Resolve o nome Angellira de uma linha da query. Prefere a coluna já extraída
+ * no SQL (`angelira_display_name`); só cai no JSON cru quando a coluna não veio
+ * (linha montada à mão em teste). Quando a coluna VEIO mas é NULL/vazia, o
+ * resultado é "" — o SQL é autoritativo, não há JSON para reprocessar.
+ */
+function resolveAngelliraDisplayName(row) {
+  if ("angelira_display_name" in row) {
+    const extracted = row.angelira_display_name;
+    return typeof extracted === "string" && extracted.trim() ? extracted.trim() : "";
+  }
+  return angelliraDisplayName(row.validation_summary_json);
 }
 
 /**
@@ -58,17 +78,19 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
     rows = await withPgClient(async (client) => {
       const result = await client.query(
         `
-          WITH blank_sheet AS (
-            SELECT DISTINCT (e->>'lh') AS lh
+          -- Uma ÚNICA expansão do snapshot alimenta os dois conjuntos (antes eram
+          -- dois jsonb_array_elements sobre a mesma tabela = dois scans do JSON).
+          WITH sheet_rows AS (
+            SELECT (e->>'lh') AS lh,
+                   COALESCE(TRIM(e->>'motoristas'), '') AS motorista
             FROM public.sheet_monitor_snapshot s, jsonb_array_elements(s.rows_json) e
-            WHERE COALESCE(TRIM(e->>'motoristas'), '') = ''
-              AND COALESCE(TRIM(e->>'lh'), '') <> ''
+            WHERE COALESCE(TRIM(e->>'lh'), '') <> ''
+          ),
+          blank_sheet AS (
+            SELECT DISTINCT lh FROM sheet_rows WHERE motorista = ''
           ),
           sheet_has_driver AS (
-            SELECT DISTINCT (e->>'lh') AS lh
-            FROM public.sheet_monitor_snapshot s, jsonb_array_elements(s.rows_json) e
-            WHERE COALESCE(TRIM(e->>'motoristas'), '') <> ''
-              AND COALESCE(TRIM(e->>'lh'), '') <> ''
+            SELECT DISTINCT lh FROM sheet_rows WHERE motorista <> ''
           )
           (
             -- (1) Carga da PLANILHA (sheet_lh) tomada, com a linha em branco → preenche.
@@ -76,7 +98,10 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
                    c.alloc_motorista, c.alloc_cavalo, c.alloc_carreta,
                    NULL::text AS origem, NULL::text AS destino,
                    NULL::text AS carreg, NULL::text AS descarga,
-                   l.horse_plate, l.trailer_plate, l.validation_summary_json
+                   l.horse_plate, l.trailer_plate,
+                   -- Só o campo usado, não o JSON inteiro (egress).
+                   l.validation_summary_json->'driver'->'angelira'->>'displayName'
+                     AS angelira_display_name
             FROM public.cargas c
             JOIN blank_sheet b ON b.lh = c.sheet_lh
             LEFT JOIN public.load_public_leads l ON l.id = c.reserved_public_lead_id
@@ -94,7 +119,7 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
                    c.origem, c.destino,
                    c.sheet_data_carregamento AS carreg, c.sheet_data_descarga AS descarga,
                    NULL::text AS horse_plate, NULL::text AS trailer_plate,
-                   NULL::jsonb AS validation_summary_json
+                   NULL::text AS angelira_display_name
             FROM public.cargas c
             LEFT JOIN sheet_has_driver d ON d.lh = c.lh_manual
             WHERE c.sheet_lh IS NULL
@@ -120,7 +145,7 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
   const updates = [];
   for (const row of rows) {
     const allocMotorista = (row.alloc_motorista ?? "").toString().trim();
-    const motorista = allocMotorista || angelliraDisplayName(row.validation_summary_json);
+    const motorista = allocMotorista || resolveAngelliraDisplayName(row);
     const cavalo = (row.alloc_cavalo ?? row.horse_plate ?? "").toString().trim();
     const carreta = (row.alloc_carreta ?? row.trailer_plate ?? "").toString().trim();
     // Nada resolvido para gravar → pula (não faz POST inútil).

@@ -65,15 +65,29 @@ function isMissingTableError(err) {
   return Boolean(err) && (err.code === "42P01" || /relation .* does not exist/i.test(err.message || ""));
 }
 
-/** Cargas passadas do motorista (nome) a partir do snapshot da planilha Shopee. */
-async function loadSheetLoads(client, nomeNorm, todayIso) {
-  if (!nomeNorm) return [];
+/**
+ * Snapshot BRUTO da planilha (`rows_json` inteiro). Leitura COMPARTILHADA: não
+ * depende do motorista, então passa pelo micro-cache — o filtro por nome fica em
+ * `pickSheetLoadsForDriver` (JS), preservando exatamente o mesmo `normalizeText`.
+ *
+ * O filtro por nome NÃO desce para o SQL de propósito: exigiria reproduzir o
+ * `normalizeText` (NFD + remoção de marcas combinantes) em SQL, e as funções
+ * necessárias (`jsonb_array_elements`, `left`, operador `~`) não existem no
+ * harness pg-mem — a mudança ficaria sem cobertura de teste e um fallback
+ * silencioso poderia esconder histórico do motorista.
+ */
+async function loadSheetSnapshotRows(client) {
   const { rows } = await client.query(
     `SELECT rows_json FROM public.sheet_monitor_snapshot WHERE id = 1`,
   );
-  const arr = Array.isArray(rows[0]?.rows_json) ? rows[0].rows_json : [];
+  return Array.isArray(rows[0]?.rows_json) ? rows[0].rows_json : [];
+}
+
+/** Cargas passadas do motorista (nome) a partir do snapshot da planilha Shopee. */
+function pickSheetLoadsForDriver(snapshotRows, nomeNorm, todayIso) {
+  if (!nomeNorm) return [];
   const loads = [];
-  for (const r of arr) {
+  for (const r of snapshotRows) {
     if (normalizeText(r?.motoristas) !== nomeNorm) continue;
     const d = String(r?.data || "").slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d > todayIso) continue;
@@ -196,15 +210,38 @@ function pickOpenLoadForDriver(loaded, applied, openLoads) {
   return `${best.origem} → ${best.destino}${best.dateIso ? ` (${best.dateIso})` : ""}`;
 }
 
+/** Dia anterior a `iso` (YYYY-MM-DD), em espaço UTC. null se `iso` inválido. */
+function isoDayBefore(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso ?? ""));
+  if (!m) return null;
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) - 1))
+    .toISOString()
+    .slice(0, 10);
+}
+
 /**
- * Cargas OPEN candidatas a retorno. Filtra em JS por data >= hoje (BRT) para
- * NÃO sugerir cargas passadas — o filtro no SQL exigiria comparar data BRT com
- * BRT-hoje, e as datas em `cargas.data` são armazenadas como DATE (dia local
- * do carregamento). Filtro por string ISO é seguro (YYYY-MM-DD comparável).
+ * Cargas OPEN candidatas a retorno. O corte EXATO (`data >= hoje` BRT) continua
+ * em JS — as datas em `cargas.data` são DATE (dia local do carregamento) e o
+ * driver do pg as devolve como Date à meia-noite do fuso do processo, então uma
+ * comparação em SQL contra `hoje` BRT poderia divergir em ±1 dia se o container
+ * não rodasse em UTC.
+ *
+ * O SQL agora aplica um limite INFERIOR deliberadamente FOLGADO (ontem): com a
+ * folga de 1 dia ele nunca descarta uma linha que o corte em JS manteria (mesmo
+ * sob defasagem de fuso de ±1 dia), e deixa de trazer todo o passivo de cargas
+ * OPEN vencidas — que o JS descartava só depois de já terem cruzado a rede.
+ * Cargas sem data seguem incluídas.
  */
 async function loadOpenLoads(client, todayIso) {
+  const lowerBound = isoDayBefore(todayIso);
   const { rows } = await client.query(
-    `SELECT id, origem, destino, perfil, data FROM public.cargas WHERE status = 'OPEN'`,
+    lowerBound
+      ? `SELECT id, origem, destino, perfil, data
+           FROM public.cargas
+          WHERE status = 'OPEN'
+            AND (data IS NULL OR data >= $1::date)`
+      : `SELECT id, origem, destino, perfil, data FROM public.cargas WHERE status = 'OPEN'`,
+    lowerBound ? [lowerBound] : [],
   );
   return rows
     .map((r) => ({
@@ -245,6 +282,66 @@ async function resolvePhone(client, cpfDigits, fallbacks) {
   return fallbacks.find((v) => v) ?? null;
 }
 
+// ── Micro-cache das leituras COMPARTILHADAS entre motoristas ──────────────────
+// `getDriverOpportunities` roda UMA VEZ POR MOTORISTA. A varredura automática
+// (scan-and-enqueue.js) a chama em RAJADA — até DRIVER_OUTREACH_SCAN_MAX_CANDIDATES
+// (60) vezes seguidas — e o painel do operador a chama a cada motorista aberto.
+// Duas das leituras NÃO dependem do motorista e eram refeitas em todas elas:
+//   • `sheet_monitor_snapshot.rows_json` — a planilha do Monitor INTEIRA (1 linha,
+//     mas o maior payload deste caminho), filtrada por nome só depois, em JS.
+//   • as cargas OPEN candidatas — lista idêntica para todos os motoristas.
+//
+// TTL: o que dirige as chamadas aqui NÃO é um poll de tela fixo, é o intervalo
+// ENTRE CANDIDATOS dentro de uma rajada (milissegundos a segundos). Por isso o
+// TTL precisa ser maior que esse intervalo — e não que o intervalo da varredura
+// (DRIVER_OUTREACH_SCAN_INTERVAL_MIN, 60 min). 60s cobre a rajada inteira e
+// ainda expira muito antes da varredura seguinte, então cada varredura (e cada
+// abertura de tela após 1 min) parte de dado fresco.
+//
+// Nada por-usuário entra na chave: CPF/telefone/lead/cadastro/opt-out continuam
+// sendo lidos por motorista, sem cache. Os valores cacheados são consumidos
+// somente para LEITURA (detectores criam objetos novos).
+const SHARED_READ_TTL_MS = 60_000;
+
+function getSharedReadCacheTtlMs() {
+  const raw = Number.parseInt(process.env.DRIVER_OUTREACH_SHARED_READ_CACHE_TTL_MS ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
+  return SHARED_READ_TTL_MS; // default produção
+}
+
+const _sharedCache = new Map(); // name -> { at, key, value }
+const _sharedInFlight = new Map(); // name -> { key, promise }
+
+/** Teste: zera o micro-cache das leituras compartilhadas. */
+export function __resetDriverOutreachSharedReadCache() {
+  _sharedCache.clear();
+  _sharedInFlight.clear();
+}
+
+async function readShared(name, key, loader) {
+  const ttl = getSharedReadCacheTtlMs();
+  if (ttl <= 0) return loader();
+
+  const hit = _sharedCache.get(name);
+  if (hit && hit.key === key && Date.now() - hit.at < ttl) return hit.value;
+
+  const pending = _sharedInFlight.get(name);
+  if (pending && pending.key === key) return pending.promise;
+
+  const promise = (async () => {
+    try {
+      const value = await loader();
+      _sharedCache.set(name, { at: Date.now(), key, value }); // erro não é cacheado
+      return value;
+    } finally {
+      _sharedInFlight.delete(name);
+    }
+  })();
+  _sharedInFlight.set(name, { key, promise });
+  return promise;
+}
+
 function buildMessageCtx(opp) {
   const d = opp.data || {};
   if (opp.trigger === OUTREACH_TRIGGERS.CHURN) return { daysSinceLastLoad: d.daysSinceLastLoad };
@@ -274,11 +371,18 @@ export async function getDriverOpportunities({
   return withPgClient(async (client) => {
     // Sequencial: um único client pg não executa queries concorrentes
     // (Promise.all dispara o warning "client is already executing a query").
-    const loads = await loadSheetLoads(client, nomeNorm, todayIso);
+    // Compartilhadas (micro-cache): snapshot da planilha + cargas OPEN.
+    const snapshotRows = nomeNorm
+      ? await readShared("sheetSnapshot", "1", () => loadSheetSnapshotRows(client))
+      : [];
+    const loads = pickSheetLoadsForDriver(snapshotRows, nomeNorm, todayIso);
+    // Por motorista (nunca cacheadas — dado pessoal).
     const appliedLoads = await loadAppliedLoads(client, cpfDigits);
     const registration = await loadRegistration(client, cpfDigits);
     const lead = await loadLead(client, cpfDigits);
-    const openLoads = await loadOpenLoads(client, todayIso);
+    const openLoads = await readShared("openLoads", todayIso, () =>
+      loadOpenLoads(client, todayIso),
+    );
     const optedOut = await isOptedOut(client, cpfDigits, nomeNorm);
 
     const lastLoadIso = loads.reduce((max, l) => (l.dateIso > max ? l.dateIso : max), "");

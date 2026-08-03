@@ -1147,26 +1147,42 @@ async function fetchOperatorRegisteredDriverSummaries(client) {
   }
 }
 
+// Mesmo tratamento dado ao HISTÓRICO: o que é constante em TODA linha (rótulo do
+// lead, 7 booleanos ausentes de perfil, source_type, user_id, confirmadas=0) sai da
+// rede e volta a ser preenchido aqui. Esta é a consulta-irmã do fingerprint
+// -3631866821335962179 (~263 linhas por chamada, ~62 mil linhas/dia).
+function mapPublicDriverSummaryRow(row) {
+  return {
+    source_type: "PUBLIC_LEAD",
+    user_id: null,
+    display_name: "Motorista sem cadastro no app",
+    raw_phone: row.raw_phone,
+    raw_document: row.raw_document,
+    vehicle_profile: row.vehicle_profile,
+    active: null,
+    documents_valid: null,
+    antt_valid: null,
+    tracking_enabled: null,
+    insurance_valid: null,
+    monitoring_capable: null,
+    operational_blocked: null,
+    total_applications: row.total_applications,
+    queued_applications: row.queued_applications,
+    reserved_applications: row.reserved_applications,
+    confirmed_applications: 0,
+    latest_application_at: row.latest_application_at,
+  };
+}
+
 async function fetchOperatorPublicDriverSummaries(client) {
   const buildQuery = (includeRedactionField = true) => `
     SELECT
-      'PUBLIC_LEAD'::text AS source_type,
-      NULL::text AS user_id,
-      'Motorista sem cadastro no app'::text AS display_name,
       leads.phone AS raw_phone,
       leads.cpf AS raw_document,
       MAX(leads.vehicle_type) AS vehicle_profile,
-      NULL::boolean AS active,
-      NULL::boolean AS documents_valid,
-      NULL::boolean AS antt_valid,
-      NULL::boolean AS tracking_enabled,
-      NULL::boolean AS insurance_valid,
-      NULL::boolean AS monitoring_capable,
-      NULL::boolean AS operational_blocked,
       COUNT(leads.id)::int AS total_applications,
       COUNT(*) FILTER (WHERE leads.status = 'QUEUED')::int AS queued_applications,
       COUNT(*) FILTER (WHERE leads.status = 'APPROVED')::int AS reserved_applications,
-      0::int AS confirmed_applications,
       MAX(COALESCE(leads.queued_at, leads.pre_registered_at, leads.created_at)) AS latest_application_at
     FROM public.load_public_leads AS leads
     WHERE leads.status = ANY(ARRAY['QUEUED', 'APPROVED']::text[])
@@ -1176,62 +1192,214 @@ async function fetchOperatorPublicDriverSummaries(client) {
 
   try {
     const { rows } = await client.query(buildQuery(true));
-    return rows;
+    return rows.map(mapPublicDriverSummaryRow);
   } catch (error) {
     if (!isMissingPublicLeadRedactionColumnError(error)) {
       throw error;
     }
 
     const { rows } = await client.query(buildQuery(false));
-    return rows;
+    return rows.map(mapPublicDriverSummaryRow);
   }
 }
 
-async function fetchOperatorHistoricoDriverSummaries(client) {
-  const { rows } = await client.query(`
-    SELECT
-      'HISTORICO'::text AS source_type,
-      NULL::text AS user_id,
-      mh.nome AS display_name,
-      mh.telefone AS raw_phone,
-      mh.cpf AS raw_document,
-      NULL::text AS vehicle_profile,
-      NULL::boolean AS active,
-      NULL::boolean AS documents_valid,
-      NULL::boolean AS antt_valid,
-      NULL::boolean AS tracking_enabled,
-      NULL::boolean AS insurance_valid,
-      NULL::boolean AS monitoring_capable,
-      NULL::boolean AS operational_blocked,
-      'FOUND'::text AS angellira_status,
-      mh.angellira_limit_date::date AS angellira_valid_until,
-      'Conforme'::text AS angellira_status_text,
-      mh.angellira_sent_date AS angellira_checked_at,
-      jsonb_build_object(
-        'name',           mh.nome,
-        'cpf',            mh.cpf,
-        'birthDate',      mh.nascimento::text,
-        'rg',             mh.rg,
-        'uf',             mh.estado,
-        'fatherName',     mh.raw_json->'history'->>'driverFather',
-        'motherName',     mh.raw_json->'history'->>'driverMother',
-        'cnhNumber',      mh.cnh,
-        'cnhCategory',    mh.cnh_categoria,
-        'cnhSecurityCode',mh.cnh_security,
-        'cnhValidity',    mh.cnh_validade::text,
-        'phone',          mh.telefone,
-        'city',           mh.cidade,
-        'naturalness',    mh.raw_json->'history'->>'driverNaturalness'
-      ) AS angellira_details,
-      0::int AS total_applications,
-      0::int AS queued_applications,
-      0::int AS reserved_applications,
-      0::int AS confirmed_applications,
-      NULL::timestamptz AS latest_application_at
-    FROM public.motoristas_historico AS mh
-  `);
+// Texto pesquisável de uma linha do HISTÓRICO que NÃO vem de coluna: o rótulo
+// fixo da vigência ('Conforme') e as frases derivadas do alertLevel (ver
+// vigencySearchTerms em fetchOperatorDriversListReadModel). Um termo de busca que
+// caia em qualquer um destes tokens não pode ser pré-filtrado no SQL.
+const HISTORICO_CONSTANT_SEARCH_TOKENS = [
+  "conforme",
+  "vigencia",
+  "vencendo",
+  "alerta",
+  "vencida",
+  "expirada",
+  "vigente",
+];
 
-  return rows;
+/**
+ * Pré-filtro SQL da varredura do HISTÓRICO.
+ *
+ * O filtro AUTORITATIVO continua em JS (searchableText.includes) — este pré-filtro
+ * só existe para não trazer a tabela inteira pela rede e, por isso, precisa ser um
+ * SUPERSET do que o JS manteria (nunca um falso negativo).
+ *
+ * Por que o 1º token basta: searchableText é o join por ESPAÇO dos campos, então
+ * um trecho sem espaço nunca atravessa a fronteira entre dois campos — o 1º token
+ * do termo (que não tem espaço) é obrigatoriamente substring de ALGUM campo.
+ * Curingas de LIKE (%, _) no termo só AMPLIAM o casamento, então não precisam de
+ * escape para a garantia de superset valer.
+ *
+ * @returns {null | { pattern: string, mayMatchVigencyDate: boolean }} null = sem
+ *   pré-filtro possível (varredura completa, como antes).
+ */
+function buildHistoricoSearchPrefilter(search) {
+  const normalizedSearch = String(search ?? "").trim().toLowerCase();
+
+  if (!normalizedSearch) {
+    return null;
+  }
+
+  const [firstToken] = normalizedSearch.split(/\s+/);
+
+  if (!firstToken) {
+    return null;
+  }
+
+  // Casaria o texto fixo da vigência, que não está em nenhuma coluna.
+  if (HISTORICO_CONSTANT_SEARCH_TOKENS.some((token) => token.includes(firstToken))) {
+    return null;
+  }
+
+  // A vigência também entra na busca como 'YYYY-MM-DD'. Um token só pode casar
+  // esse formato se for feito de dígitos/hífen com corridas de no máximo 4
+  // dígitos (o ano) — nesse caso o termo da data no SQL vira o superset mais
+  // frouxo possível ("tem data de vigência"), porque nem Postgres nem pg-mem
+  // permitem comparar a data como texto de forma portável.
+  const mayMatchVigencyDate = /^[0-9-]+$/.test(firstToken) && !/\d{5,}/.test(firstToken);
+
+  return { pattern: `%${firstToken}%`, mayMatchVigencyDate };
+}
+
+// Constantes e ausências que a varredura do HISTÓRICO não precisa trazer do banco:
+// eram 9 NULLs tipados + 3 literais repetidos por linha, ~1.862 linhas por chamada.
+function mapHistoricoSummaryRow(row) {
+  return {
+    source_type: "HISTORICO",
+    user_id: null,
+    display_name: row.display_name,
+    raw_phone: row.raw_phone,
+    raw_document: row.raw_document,
+    vehicle_profile: null,
+    active: null,
+    documents_valid: null,
+    antt_valid: null,
+    tracking_enabled: null,
+    insurance_valid: null,
+    monitoring_capable: null,
+    operational_blocked: null,
+    angellira_status: "FOUND",
+    angellira_valid_until: row.angellira_valid_until,
+    angellira_status_text: "Conforme",
+    angellira_checked_at: row.angellira_checked_at,
+    // A ficha completa (jsonb de 14 campos) só é lida para os itens da PÁGINA —
+    // ver attachHistoricoAngelliraDetails.
+    angellira_details: null,
+    total_applications: 0,
+    queued_applications: 0,
+    reserved_applications: 0,
+    confirmed_applications: 0,
+    latest_application_at: null,
+  };
+}
+
+/**
+ * Varredura do diretório HISTÓRICO (motoristas_historico).
+ *
+ * MAIOR produtor de egress medido em produção (queryid 5169514305073726344):
+ * lia a tabela INTEIRA — ~1.885 linhas × ~1.8 kB — a cada chamada, com um
+ * jsonb_build_object de 14 campos por linha que só é usado nos ≤50 itens da
+ * página pedida. Aqui ficam apenas as colunas que a listagem precisa ANTES de
+ * paginar: dedup por CPF, texto de busca (nome/telefone/cpf) e vigência.
+ */
+async function fetchOperatorHistoricoDriverSummaries(client, prefilter = null) {
+  // `normalizedCpf && !knownCpfSet.has(...)` no dedup em JS já descarta linha sem
+  // CPF; BTRIM <> '' é um superset disso (mantém "---", que o JS ainda descarta).
+  const conditions = ["mh.cpf IS NOT NULL", "BTRIM(mh.cpf) <> ''"];
+  const params = [];
+
+  if (prefilter) {
+    params.push(prefilter.pattern);
+    const searchTerms = [
+      "mh.nome ILIKE $1",
+      "COALESCE(mh.telefone, '') ILIKE $1",
+      "mh.cpf ILIKE $1",
+    ];
+
+    if (prefilter.mayMatchVigencyDate) {
+      searchTerms.push("mh.angellira_limit_date IS NOT NULL");
+    }
+
+    conditions.push(`(${searchTerms.join(" OR ")})`);
+  }
+
+  const { rows } = await client.query(
+    `
+      SELECT
+        mh.nome AS display_name,
+        mh.telefone AS raw_phone,
+        mh.cpf AS raw_document,
+        mh.angellira_limit_date::date AS angellira_valid_until,
+        mh.angellira_sent_date AS angellira_checked_at
+      FROM public.motoristas_historico AS mh
+      WHERE ${conditions.join("\n        AND ")}
+    `,
+    params,
+  );
+
+  return rows.map(mapHistoricoSummaryRow);
+}
+
+/**
+ * Ficha completa (Angellira) das linhas do HISTÓRICO que ficaram NA PÁGINA.
+ * Mesmo jsonb_build_object de antes — só deixou de rodar sobre a tabela inteira.
+ */
+async function fetchHistoricoAngelliraDetails(client, documents) {
+  const keys = Array.from(
+    new Set(documents.map((document) => String(document ?? "").trim()).filter(Boolean)),
+  );
+
+  if (keys.length === 0) {
+    return new Map();
+  }
+
+  // BTRIM nos dois lados: tolera CPF gravado com espaço e — em pg-mem — evita o
+  // lookup por índice de chave primária, que ignora parâmetro de array.
+  const { rows } = await client.query(
+    `
+      SELECT
+        BTRIM(mh.cpf) AS document_key,
+        jsonb_build_object(
+          'name',           mh.nome,
+          'cpf',            mh.cpf,
+          'birthDate',      mh.nascimento::text,
+          'rg',             mh.rg,
+          'uf',             mh.estado,
+          'fatherName',     mh.raw_json->'history'->>'driverFather',
+          'motherName',     mh.raw_json->'history'->>'driverMother',
+          'cnhNumber',      mh.cnh,
+          'cnhCategory',    mh.cnh_categoria,
+          'cnhSecurityCode',mh.cnh_security,
+          'cnhValidity',    mh.cnh_validade::text,
+          'phone',          mh.telefone,
+          'city',           mh.cidade,
+          'naturalness',    mh.raw_json->'history'->>'driverNaturalness'
+        ) AS angellira_details
+      FROM public.motoristas_historico AS mh
+      WHERE BTRIM(mh.cpf) = ANY($1::text[])
+    `,
+    [keys],
+  );
+
+  return new Map(rows.map((row) => [row.document_key, row.angellira_details ?? null]));
+}
+
+async function attachHistoricoAngelliraDetails(client, items) {
+  const historicoItems = items.filter((item) => item.sourceType === "HISTORICO");
+
+  if (historicoItems.length === 0) {
+    return;
+  }
+
+  const detailsByDocument = await fetchHistoricoAngelliraDetails(
+    client,
+    historicoItems.map((item) => item.contact.document),
+  );
+
+  historicoItems.forEach((item) => {
+    const documentKey = String(item.contact.document ?? "").trim();
+    item.angelliraDetails = normalizeAngelliraDriverDetails(detailsByDocument.get(documentKey) ?? null);
+  });
 }
 
 async function fetchOperatorRegisteredDriverApplications(client, userIds) {
@@ -1604,30 +1772,38 @@ function extractBrkFromApplications(applications) {
   return null;
 }
 
+// Normalização da ficha Angellira do motorista. Extraída para ser reusada pela
+// leitura tardia da ficha do HISTÓRICO (attachHistoricoAngelliraDetails), que
+// produz exatamente o mesmo objeto de antes a partir do mesmo jsonb.
+function normalizeAngelliraDriverDetails(rawDetails) {
+  if (!rawDetails) {
+    return null;
+  }
+
+  return {
+    name: rawDetails.name || null,
+    cpf: rawDetails.cpf || null,
+    birthDate: rawDetails.birthDate || null,
+    rg: rawDetails.rg || null,
+    uf: rawDetails.uf || null,
+    fatherName: rawDetails.fatherName || null,
+    motherName: rawDetails.motherName || null,
+    cnhNumber: rawDetails.cnhNumber || null,
+    cnhCategory: rawDetails.cnhCategory || null,
+    cnhSecurityCode: rawDetails.cnhSecurityCode || null,
+    cnhValidity: rawDetails.cnhValidity || null,
+    phone: rawDetails.phone || null,
+    city: rawDetails.city || null,
+    naturalness: rawDetails.naturalness || null,
+  };
+}
+
 function mapDriverSummaryRowToItem(row, applications) {
   const driverId = createDriverEntityId(row);
   const limitedApplications = applications.slice(0, 5);
   const externalValidation = buildDriverExternalValidation(limitedApplications);
 
-  const rawDetails = row.angellira_details || null;
-  let angelliraDetails = rawDetails
-    ? {
-        name: rawDetails.name || null,
-        cpf: rawDetails.cpf || null,
-        birthDate: rawDetails.birthDate || null,
-        rg: rawDetails.rg || null,
-        uf: rawDetails.uf || null,
-        fatherName: rawDetails.fatherName || null,
-        motherName: rawDetails.motherName || null,
-        cnhNumber: rawDetails.cnhNumber || null,
-        cnhCategory: rawDetails.cnhCategory || null,
-        cnhSecurityCode: rawDetails.cnhSecurityCode || null,
-        cnhValidity: rawDetails.cnhValidity || null,
-        phone: rawDetails.phone || null,
-        city: rawDetails.city || null,
-        naturalness: rawDetails.naturalness || null,
-      }
-    : null;
+  let angelliraDetails = normalizeAngelliraDriverDetails(row.angellira_details || null);
 
   let displayName = row.display_name;
   let angelliraVigency = buildAngelliraVigency(row);
@@ -1697,54 +1873,159 @@ function mapDriverSummaryRowToItem(row, applications) {
   };
 }
 
-// ── Micro-cache TTL + single-flight dos 3 sumários do diretório de motoristas ──
-// Os sumários (registered/public/historico) NÃO dependem de search/source/page — a
-// paginação/busca/dedup é toda em memória depois. O de motoristas_historico lê a
-// tabela INTEIRA a cada request (~1.851 linhas × ~1.831 B). Cachear colapsa a rajada
-// de paginação/busca/tecla e a concorrência de operadores num scan por janela.
-// Mesmo padrão do read model da fila (public-leads.js). Desligado sob teste.
-let _driverSummariesInFlight = null;
-let _driverSummariesCache = { at: 0, rows: null };
+// ── Micro-cache TTL + single-flight dos sumários do diretório de motoristas ────
+//
+// MEDIÇÃO (produção, delta de 1091 s do pg_stat_statements, queryid
+// 5169514305073726344): a varredura de motoristas_historico deste read model era
+// o MAIOR produtor de egress do sistema — 3 chamadas em 18 min, 1.885 linhas cada
+// (a tabela inteira), ~448 mil linhas/dia.
+//
+// POR QUE O CACHE DE 30 s DO ROUND ANTERIOR NÃO RESOLVEU: as chamadas reais chegam
+// ESPAÇADAS, não em rajada. A tela Motoristas não faz polling (staleTime 30 s,
+// refetchOnWindowFocus off) e o TanStack Query já dedup a MESMA combinação de
+// parâmetros no cliente — o que sobra para o servidor é justamente a chamada com
+// parâmetro novo (outra busca, outra página, outro filtro). As 3 chamadas medidas
+// estão a ~364 s uma da outra: um TTL de 30 s expira entre todas elas, portanto
+// rendeu ZERO acerto. Cache nenhum salva esse padrão; o que salva é cada chamada
+// ler menos — daí a ordem deste round:
+//   1. não ler o HISTÓRICO quando origem/status já o descartam;
+//   2. empurrar a busca para o SQL (superset) — busca traz punhado, não tabela;
+//   3. tirar da varredura o jsonb de 14 campos (só usado nos ≤50 itens da página);
+//   4. e só então cachear, com TTL POR FONTE: o HISTÓRICO é grande e quase
+//      estático (alimentado por importação/revalidação em lote) e ganha TTL longo,
+//      maior que o intervalo real entre chamadas; o roster (driver_profiles +
+//      leads) é pequeno e volátil e mantém os 30 s de antes, para não atrasar a
+//      aparição de um cadastro recém-aprovado.
+// Desligado sob teste, salvo override explícito de env.
+const DRIVER_ROSTER_CACHE_TTL_MS = 30_000;
+const DRIVER_HISTORICO_CACHE_TTL_MS = 600_000;
+// Cache do HISTÓRICO é por pré-filtro de busca: limita as chaves para que uma
+// sequência de teclas não vire cache infinito.
+const DRIVER_HISTORICO_CACHE_MAX_KEYS = 16;
 
-function getDriverSummariesCacheTtlMs() {
-  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0;
-  const raw = Number.parseInt(process.env.OPERATOR_DRIVERS_CACHE_TTL_MS ?? "", 10);
-  if (Number.isFinite(raw) && raw >= 0) return raw; // respeita override (incl. 0)
-  return 30_000; // default produção
+let _driverRosterInFlight = null;
+let _driverRosterCache = { at: 0, rows: null };
+const _driverHistoricoCache = new Map();
+const _driverHistoricoInFlight = new Map();
+
+export function __resetOperatorDriverSummaryCaches() {
+  _driverRosterInFlight = null;
+  _driverRosterCache = { at: 0, rows: null };
+  _driverHistoricoCache.clear();
+  _driverHistoricoInFlight.clear();
 }
 
-async function fetchDriverSummariesCached() {
-  const ttl = getDriverSummariesCacheTtlMs();
-  if (ttl > 0 && _driverSummariesCache.rows && Date.now() - _driverSummariesCache.at < ttl) {
-    return _driverSummariesCache.rows;
+function readCacheTtlMs(envName, productionDefaultMs) {
+  const raw = Number.parseInt(process.env[envName] ?? "", 10);
+  if (Number.isFinite(raw) && raw >= 0) return raw; // respeita override (incl. 0)
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
+  return productionDefaultMs;
+}
+
+function getDriverRosterCacheTtlMs() {
+  return readCacheTtlMs("OPERATOR_DRIVERS_CACHE_TTL_MS", DRIVER_ROSTER_CACHE_TTL_MS);
+}
+
+function getDriverHistoricoCacheTtlMs() {
+  return readCacheTtlMs("OPERATOR_DRIVERS_HISTORICO_CACHE_TTL_MS", DRIVER_HISTORICO_CACHE_TTL_MS);
+}
+
+// Kill-switch do que foi empurrado para o SQL na varredura do HISTÓRICO (atalho de
+// origem/status + pré-filtro de busca). `off` volta ao VOLUME DE LEITURA antigo —
+// tabela inteira em toda chamada — sem mexer em nenhum filtro autoritativo, que
+// segue em JS. Serve de rede de segurança em produção e de baseline "antes" nos
+// testes de egress. Lido a cada chamada (nunca capturado no load do módulo).
+function isHistoricoReadPushdownEnabled() {
+  const raw = String(process.env.OPERATOR_DRIVERS_HISTORICO_PUSHDOWN ?? "").trim().toLowerCase();
+  return raw !== "off" && raw !== "0" && raw !== "false";
+}
+
+async function fetchDriverRosterSummariesCached() {
+  const ttl = getDriverRosterCacheTtlMs();
+  if (ttl > 0 && _driverRosterCache.rows && Date.now() - _driverRosterCache.at < ttl) {
+    return _driverRosterCache.rows;
   }
-  if (_driverSummariesInFlight) {
-    return _driverSummariesInFlight;
+  if (_driverRosterInFlight) {
+    return _driverRosterInFlight;
   }
-  _driverSummariesInFlight = (async () => {
+  _driverRosterInFlight = (async () => {
     try {
-      const rows = await withPgClient((client) =>
-        Promise.all([
-          fetchOperatorRegisteredDriverSummaries(client),
-          fetchOperatorPublicDriverSummaries(client),
-          fetchOperatorHistoricoDriverSummaries(client),
-        ]),
-      );
+      const rows = await withPgClient(async (client) => [
+        await fetchOperatorRegisteredDriverSummaries(client),
+        await fetchOperatorPublicDriverSummaries(client),
+      ]);
       if (ttl > 0) {
-        _driverSummariesCache = { at: Date.now(), rows };
+        _driverRosterCache = { at: Date.now(), rows };
       }
       return rows;
     } finally {
-      _driverSummariesInFlight = null;
+      _driverRosterInFlight = null;
     }
   })();
-  return _driverSummariesInFlight;
+  return _driverRosterInFlight;
+}
+
+async function fetchHistoricoDriverSummariesCached(search) {
+  const prefilter = isHistoricoReadPushdownEnabled() ? buildHistoricoSearchPrefilter(search) : null;
+  const cacheKey = prefilter ? `${prefilter.mayMatchVigencyDate ? "d" : "-"}|${prefilter.pattern}` : "*";
+  const ttl = getDriverHistoricoCacheTtlMs();
+
+  const cached = _driverHistoricoCache.get(cacheKey);
+  if (ttl > 0 && cached && Date.now() - cached.at < ttl) {
+    return cached.rows;
+  }
+
+  const inFlight = _driverHistoricoInFlight.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const pending = (async () => {
+    try {
+      const rows = await withPgClient((client) => fetchOperatorHistoricoDriverSummaries(client, prefilter));
+      if (ttl > 0) {
+        if (!_driverHistoricoCache.has(cacheKey) && _driverHistoricoCache.size >= DRIVER_HISTORICO_CACHE_MAX_KEYS) {
+          let oldestKey = null;
+          let oldestAt = Number.POSITIVE_INFINITY;
+          for (const [key, entry] of _driverHistoricoCache) {
+            if (entry.at < oldestAt) {
+              oldestAt = entry.at;
+              oldestKey = key;
+            }
+          }
+          if (oldestKey !== null) {
+            _driverHistoricoCache.delete(oldestKey);
+          }
+        }
+        _driverHistoricoCache.set(cacheKey, { at: Date.now(), rows });
+      }
+      return rows;
+    } finally {
+      _driverHistoricoInFlight.delete(cacheKey);
+    }
+  })();
+
+  _driverHistoricoInFlight.set(cacheKey, pending);
+  return pending;
 }
 
 export async function fetchOperatorDriversListReadModel({ query, correlationId }) {
   const { page, pageSize, offset, maxPageSize, search, source, applicationStatus } = parseOperatorDriversListQuery(query);
 
-  const [registeredSummaryRows, publicSummaryRows, historicoSummaryRows] = await fetchDriverSummariesCached();
+  const requestedFilter = resolveDriverApplicationFilter(applicationStatus);
+  // Linha do HISTÓRICO nunca tem candidatura, então qualquer filtro de status a
+  // descarta em JS (`item.applications.some(...)` sobre lista vazia = false) — e o
+  // filtro de origem também. Nesses casos a tabela era lida inteira para nada.
+  const includeHistorico =
+    !isHistoricoReadPushdownEnabled() ||
+    ((source === "todos" || source === "historico") &&
+      !requestedFilter.applyClaimFilter &&
+      !requestedFilter.applyLeadFilter);
+
+  const [[registeredSummaryRows, publicSummaryRows], historicoSummaryRows] = await Promise.all([
+    fetchDriverRosterSummariesCached(),
+    includeHistorico ? fetchHistoricoDriverSummariesCached(search) : Promise.resolve([]),
+  ]);
 
   return withPgClient(async (client) => {
     // Cross-reference public leads against registered drivers by CPF or phone.
@@ -1829,7 +2110,9 @@ export async function fetchOperatorDriversListReadModel({ query, correlationId }
       ),
       // Fetch public applications for leads that overlap with registered drivers
       // in the same round-trip to avoid a sequential third DB call.
-      overlappingPublicLeads.length > 0
+      // Só serve para anexar candidaturas a item REGISTERED: se o filtro de origem
+      // não pediu nenhum, essas linhas eram lidas e descartadas.
+      overlappingPublicLeads.length > 0 && registeredDriverRows.length > 0
         ? fetchOperatorPublicDriverApplications(
             client,
             overlappingPublicLeads.map((row) => ({
@@ -1873,7 +2156,6 @@ export async function fetchOperatorDriversListReadModel({ query, correlationId }
     });
 
     const normalizedSearch = search.trim().toLowerCase();
-    const requestedFilter = resolveDriverApplicationFilter(applicationStatus);
     const candidateItems = requestedSummaryRows.map((row) => {
       const applications = applicationsByDriverId.get(createDriverEntityId(row)) || [];
       const item = mapDriverSummaryRowToItem(row, applications);
@@ -1955,6 +2237,11 @@ export async function fetchOperatorDriversListReadModel({ query, correlationId }
       });
 
     const paginatedItems = filteredItems.slice(offset, offset + pageSize);
+
+    // A ficha completa do HISTÓRICO (jsonb de 14 campos) é lida só agora, para os
+    // itens que ficaram NA PÁGINA — antes vinha junto da varredura da tabela toda.
+    await attachHistoricoAngelliraDetails(client, paginatedItems);
+
     const filteredSummary = filteredItems.reduce(
       (accumulator, item) => {
         accumulator.totalApplications += item.stats.totalApplications;

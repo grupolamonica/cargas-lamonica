@@ -235,27 +235,58 @@ function normalizeNestleRow(o) {
 // ── Micro-cache TTL + single-flight das ofertas Nestlé ──
 // A query varre a nestle_ofertas inteira (~2.897 linhas após DISTINCT ON) e roda 2× por
 // ciclo de poll da Programação (main planejado+aceito e concluido) + no scanner de 5 min,
-// ×N operadores. Os dados só mudam quando o coletor Galileu faz upsert (periódico), então
-// um cache curto colapsa todos esses scans concorrentes/duplicados num só por janela.
-// Desligado sob teste (os testes injetam deps.fetchNestleOfertas e nunca batem aqui).
+// ×N operadores. Os dados só mudam quando o coletor Galileu faz upsert, então o cache
+// colapsa esses scans concorrentes/duplicados num só por janela.
+//
+// ⚠ TTL 120s > poll de 90s da tela. NÃO REDUZIR PARA 90s (era o valor antigo).
+// TTL IGUAL ao poll não serve nada: no instante do poll seguinte a idade da entrada é
+// exatamente 90s, o `< ttl` é falso e a leitura vai ao banco toda vez — foi assim que o
+// cache do sino ficou com ZERO hit em produção (35 execuções em 1091s = uma por poll).
+// O teto natural aqui é o próprio coletor: `bots/galileu` roda a cada
+// NESTLE_COLETA_INTERVAL_SEC (120s no docker-compose), logo um TTL de 120s nunca devolve
+// dado mais velho do que UM ciclo de coleta — não há informação a ganhar abaixo disso.
+// Com poll de 90s a tela alterna hit/miss → uma execução a cada 180s (metade), e os
+// chamadores em background (auto-lançamento de 5 min, alerta de spot de 3 min) passam a
+// cair no cache em vez de repetir a varredura.
+// O botão "Atualizar" (force=true) ignora o cache — a atualização explícita do operador
+// continua ao vivo, independente do TTL.
+// Default 0 sob teste (os testes de comportamento injetam deps.fetchNestleOfertas e nunca
+// batem aqui); o knob explícito vence, para o teste de cache poder ligar o cache.
+const NESTLE_OFERTAS_POLL_MS = 90_000; // frontend/src/pages/Programacao.tsx (refetchInterval)
+const NESTLE_OFERTAS_TTL_MS = 120_000; // = NESTLE_COLETA_INTERVAL_SEC do coletor Galileu
+/** Exportado só para o teste amarrar TTL > poll. */
+export const __nestleOfertasCacheTiming = Object.freeze({
+  pollMs: NESTLE_OFERTAS_POLL_MS,
+  ttlMs: NESTLE_OFERTAS_TTL_MS,
+  coletorMs: 120_000,
+});
+
 let _nestleOfertasInFlight = null;
 let _nestleOfertasCache = { at: 0, rows: null };
 
 function getNestleOfertasCacheTtlMs() {
-  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0;
   const raw = Number.parseInt(process.env.PROGRAMACAO_NESTLE_CACHE_TTL_MS ?? "", 10);
-  if (Number.isFinite(raw) && raw >= 0) return raw; // respeita override (incl. 0)
-  return 90_000; // default produção (= intervalo de poll da tela)
+  if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
+  return NESTLE_OFERTAS_TTL_MS; // default produção (> poll de 90s)
+}
+
+/** Hook de teste: zera o estado de módulo do cache das ofertas Nestlé. */
+export function __resetNestleOfertasCache() {
+  _nestleOfertasInFlight = null;
+  _nestleOfertasCache = { at: 0, rows: null };
 }
 
 // Lê as ofertas Nestlé do próprio banco (populadas pelo coletor bots/galileu).
 // Tolerante a tabela ausente (prod sem migration) → []. Sem PostgREST aqui (pg direto),
 // então não há o teto de 1000 linhas.
-async function defaultFetchNestleOfertas() {
+async function defaultFetchNestleOfertas({ force = false } = {}) {
   const ttl = getNestleOfertasCacheTtlMs();
-  if (ttl > 0 && _nestleOfertasCache.rows && Date.now() - _nestleOfertasCache.at < ttl) {
+  if (!force && ttl > 0 && _nestleOfertasCache.rows && Date.now() - _nestleOfertasCache.at < ttl) {
     return _nestleOfertasCache.rows;
   }
+  // Um "Atualizar" concorrente com o poll ainda aproveita o voo em curso — o que ele não
+  // pode é ser servido de uma entrada VELHA (o gate de force está acima).
   if (_nestleOfertasInFlight) {
     return _nestleOfertasInFlight;
   }
@@ -306,19 +337,43 @@ async function fetchNestleOfertasUncached() {
 }
 
 // Quais LHs já viraram carga no sistema (sheet_lh OU lh_manual) — UI mostra "Lançada".
+//
+// O chamador só faz `launched.has(r.lh)`: é um teste de PERTINÊNCIA, não uma leitura de
+// cargas. A forma antiga —
+//   SELECT sheet_lh, lh_manual FROM cargas WHERE sheet_lh = ANY($1) OR lh_manual = ANY($1)
+// — trazia DUAS colunas de CADA carga que casasse, e o Node fazia a diferença de conjuntos
+// em memória. Medido em produção (delta de 1091s do pg_stat_statements, queryid
+// 2750483060730118830): 208 linhas por chamada, ~231 mil linhas/dia — 5º maior produtor de
+// linhas do banco. Dois desperdícios claros:
+//   1. a coluna irmã vinha junto sem nunca ser perguntada (o `set.add` até inseria LH que
+//      não estava no array de entrada — inerte, porque o chamador só consulta os LHs que
+//      pediu). Metade dos bytes por linha era lixo;
+//   2. o MESMO LH voltava em várias linhas. Este banco tem ~118 pares de carga gêmea
+//      (mesma LH em `lh_manual` de uma carga e em `sheet_lh` de outra), e cada par gastava
+//      duas linhas para responder um único booleano.
+// Agora a diferença de conjuntos é feita NO SERVIDOR: uma coluna, e o UNION (não UNION ALL)
+// deduplica — no máximo uma linha por LH PEDIDO que já virou carga. Resposta idêntica para
+// o chamador (mesma pertinência para todo LH da entrada), com um teto de linhas que passa a
+// ser o tamanho da entrada em vez do número de cargas casadas.
+// SEM CACHE, de propósito: `jaLancada` governa o botão "Lançar" da Programação. Um TTL aqui
+// mostraria "Lançar" numa carga JÁ lançada (pelo operador ou pelo auto-lançamento) por toda
+// a janela do TTL — convite ao duplo lançamento, que é justamente a origem das cargas
+// gêmeas. Não há gancho de invalidação nos caminhos de lançamento (fora deste módulo), então
+// a redução aqui é por linha/coluna, sem envelhecer nada.
 async function defaultListLaunchedLhs(lhs) {
   const unique = [...new Set((lhs || []).filter(Boolean))];
   if (unique.length === 0) return new Set();
   return withPgClient(async (client) => {
+    // Cada braço filtra por UMA coluna (índice próprio, sem o OR que degrada plano) e o
+    // UNION junta/deduplica. Nenhum NULL sai daqui: `= ANY(...)` já os exclui.
     const { rows } = await client.query(
-      "SELECT sheet_lh, lh_manual FROM public.cargas WHERE sheet_lh = ANY($1::text[]) OR lh_manual = ANY($1::text[])",
+      `SELECT sheet_lh AS lh FROM public.cargas WHERE sheet_lh = ANY($1::text[])
+       UNION
+       SELECT lh_manual AS lh FROM public.cargas WHERE lh_manual = ANY($1::text[])`,
       [unique],
     );
     const set = new Set();
-    for (const r of rows) {
-      if (r.sheet_lh) set.add(r.sheet_lh);
-      if (r.lh_manual) set.add(r.lh_manual);
-    }
+    for (const r of rows) if (r.lh) set.add(r.lh);
     return set;
   });
 }
@@ -350,7 +405,9 @@ export async function getProgramacao({ correlationId, force = false, tabs = null
   // que já é lento). Best-effort: erro vira warning, não derruba a resposta.
   const nestlePromise = nestleEnabled
     ? Promise.resolve()
-        .then(() => getNestle())
+        // `force` (botão "Atualizar") também ignora o cache das ofertas Nestlé — senão o
+        // refresh explícito do operador devolveria dado de até um TTL atrás.
+        .then(() => getNestle({ force }))
         .then((rows) => ({ ok: true, rows }))
         .catch(() => ({ ok: false, rows: [] }))
     : Promise.resolve({ ok: true, rows: [] });

@@ -8,7 +8,14 @@
  *    mesmos contadores, mesma resolução de nome), correlationId por REQUEST,
  *    read-your-write em todas as mutações da tela que vivem neste módulo e
  *    nenhum cache de erro.
+ *
+ * ⚠ A contagem é feita na CADÊNCIA REAL DO POLL (relógio falso avançado entre as
+ * chamadas), não com chamadas colada-a-colada — duas chamadas seguidas cabem em
+ * qualquer TTL > 0 e passariam até com o TTL quebrado (10s contra um poll de 15s,
+ * que é o que estava em produção medindo zero cache hit).
  */
+import { readFileSync } from "node:fs";
+
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -82,7 +89,19 @@ vi.mock("./angellira-check.js", () => ({
   checkAngelliraVigencia: vi.fn(async () => ({ checked: true, vigente: true, validUntil: "2027-01-01" })),
 }));
 
+// ── Relógio controlável ──────────────────────────────────────────────────────
+// O cache só olha Date.now(); avançar um offset simula o tempo REAL entre polls
+// (30s) sem sleep. Avanços são pequenos (≤ minutos), então não movem os seeds de
+// log (1h/30h atrás) para o outro lado da janela de 24h.
+let clockSkewMs = 0;
+const realDateNow = Date.now.bind(Date);
+vi.spyOn(Date, "now").mockImplementation(() => realDateNow() + clockSkewMs);
+const advanceClock = (ms) => {
+  clockSkewMs += ms;
+};
+
 const {
+  __outreachOverviewCacheTiming,
   __resetOutreachOverviewCache,
   addOutreachOptout,
   cancelQueuedOutreach,
@@ -102,7 +121,24 @@ const OV_QUEUE = /FROM public\.pending_driver_outreach ORDER BY created_at DESC/
 const OV_STATS = /GROUP BY status/;
 const OV_LOG = /FROM public\.driver_outreach_log ORDER BY created_at DESC/;
 const OV_OPTOUTS = /FROM public\.driver_outreach_optout ORDER BY created_at DESC/;
-const TTL = "5000";
+// TTL de PRODUÇÃO (não um número inventado de teste): é este valor que precisa ser
+// maior que o poll real da tela.
+const TTL = String(__outreachOverviewCacheTiming.ttlMs);
+
+/**
+ * Lê o `refetchInterval` da tela. Guarda anti-deriva: o TTL do servidor só é útil
+ * enquanto for maior que o poll. Pulado quando o front não está no checkout
+ * (imagem Docker só com backend/).
+ */
+function readOutreachRefetchInterval() {
+  try {
+    const src = readFileSync(new URL("../../../../frontend/src/pages/Outreach.tsx", import.meta.url), "utf8");
+    const m = src.match(/queryFn: fetchOutreachOverview,[\s\S]{0,600}?refetchInterval:\s*([\d_]+)/);
+    return m ? Number(m[1].replace(/_/g, "")) : null;
+  } catch {
+    return undefined;
+  }
+}
 
 // Baseline: uma execução completa do overview = 8 queries com este seed
 // (settings ×2, GROUP BY, count 24h, fila, nomes, log, opt-outs).
@@ -144,6 +180,7 @@ describe("driver-outreach admin — cache do overview da tela de Mensagens (inte
     await resetTestDatabase();
     sqlLog.length = 0;
     releaseGate = null;
+    clockSkewMs = 0;
     delete process.env.OPERATOR_OUTREACH_OVERVIEW_CACHE_TTL_MS;
     delete process.env.EVOLUTION_API_TOKEN;
     __resetOutreachOverviewCache();
@@ -220,12 +257,25 @@ describe("driver-outreach admin — cache do overview da tela de Mensagens (inte
   });
 
   // ── Redução de queries ─────────────────────────────────────────────────────
-  it("TTL colapsa o poll de 15s: 2 chamadas = 1 execução (8 queries no lugar de 16)", async () => {
+  it("TTL de produção > poll da tela (relação obrigatória + guarda anti-deriva)", () => {
+    const { ttlMs, pollMs } = __outreachOverviewCacheTiming;
+    // TTL ≤ poll = cache decorativo: no instante do poll seguinte a entrada já
+    // expirou e TODA chamada vai ao banco (o defeito medido em produção).
+    expect(ttlMs).toBeGreaterThan(pollMs);
+    const front = readOutreachRefetchInterval();
+    if (front === undefined) return; // front fora do checkout
+    expect(front).toBe(pollMs);
+    expect(ttlMs).toBeGreaterThan(front);
+  });
+
+  it("TTL colapsa o poll REAL da tela: 2º poll (30s depois) = 1 execução (8 queries no lugar de 16)", async () => {
+    const { pollMs } = __outreachOverviewCacheTiming;
     process.env.OPERATOR_OUTREACH_OVERVIEW_CACHE_TTL_MS = TTL;
     await seedOverview();
     sqlLog.length = 0;
 
     const first = await getOutreachOverview({ correlationId: "a" });
+    advanceClock(pollMs); // 30s depois — é o que a tela faz, não duas chamadas coladas
     const second = await getOutreachOverview({ correlationId: "b" });
 
     expect(sqlLog).toHaveLength(BASELINE_QUERIES); // 8, não 16
@@ -238,6 +288,45 @@ describe("driver-outreach admin — cache do overview da tela de Mensagens (inte
     expect(second.meta.correlationId).toBe("b");
     expect(second.meta.generatedAt).toBe(first.meta.generatedAt);
     expect(second.meta.cached).toBe(true);
+
+    // Passado o TTL (t = 60s > 45s), o poll seguinte relê — o dado não gruda.
+    advanceClock(pollMs);
+    await getOutreachOverview({ correlationId: "c" });
+    expect(countSql(OV_QUEUE)).toBe(2);
+  });
+
+  it("6 polls de 30s (3 min de tela aberta) = 3 execuções, não 6 (24 queries no lugar de 48)", async () => {
+    const { pollMs } = __outreachOverviewCacheTiming;
+    process.env.OPERATOR_OUTREACH_OVERVIEW_CACHE_TTL_MS = TTL;
+    await seedOverview();
+    sqlLog.length = 0;
+
+    const seen = [];
+    for (let i = 0; i < 6; i += 1) {
+      if (i > 0) advanceClock(pollMs);
+      seen.push(await getOutreachOverview({ correlationId: `p${i}` }));
+    }
+
+    // TTL 45s × poll 30s → miss/hit alternados: uma execução a cada 60s.
+    expect(countSql(OV_QUEUE)).toBe(3);
+    expect(sqlLog).toHaveLength(BASELINE_QUERIES * 3); // 24, não 48
+    for (const ov of seen) expect(body(ov)).toEqual(body(seen[0]));
+  });
+
+  it("TTL ABAIXO do poll (10s × poll de 15s, o par antigo) dá ZERO hit", async () => {
+    // Guarda de regressão do defeito real: com TTL menor que o poll, os 6 ciclos
+    // custam 6 execuções completas — o cache não serve NADA.
+    process.env.OPERATOR_OUTREACH_OVERVIEW_CACHE_TTL_MS = "10000";
+    await seedOverview();
+    sqlLog.length = 0;
+
+    for (let i = 0; i < 6; i += 1) {
+      if (i > 0) advanceClock(15_000); // poll antigo
+      await getOutreachOverview({});
+    }
+
+    expect(countSql(OV_QUEUE)).toBe(6);
+    expect(sqlLog).toHaveLength(BASELINE_QUERIES * 6);
   });
 
   it("single-flight colapsa polls concorrentes (3 chamadas = 8 queries no lugar de 24)", async () => {
