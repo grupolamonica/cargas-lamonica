@@ -80,3 +80,65 @@ describe("buildSubmitDados / endereço+comprovante do proprietário", () => {
     expect(dados.cavalo_owner?.endereco).toBeUndefined();
   });
 });
+
+// REGRESSÃO Angellira: o dono PF chegava SEM data_nascimento (o uploader captura
+// em stepC.owner.dataNascimento, mas buildSubmitDados não emitia) → disparo parava
+// em OWNER_SEM_DATA_NASCIMENTO. Também garante que sexo/nacionalidade e os campos
+// ricos da CNH (data_emissao, prontuário) fluem do owner_extras p/ o payload.
+describe("buildSubmitDados / identidade completa do proprietário PF (data_nascimento)", () => {
+  const withPfOwnerFull = (): ConfirmationWizardData =>
+    ({
+      stepA: null,
+      stepB: { ownerIsDriver: false },
+      stepC: {
+        owner: {
+          documento: "77594100697",
+          nome: "NILTON DIAS DE SOUZA",
+          docType: "cpf",
+          dataNascimento: "1985-03-20",
+        },
+        owner_extras: {
+          sexo: "masculino",
+          nacionalidade: "BRASILEIRA",
+          tem_cnh: true,
+          cnh: {
+            registro: "02569534603",
+            data_emissao: "2018-05-10",
+            numero_prontuario: "2156280116",
+            estado_emissor: "SALVADOR BA",
+          },
+        },
+      },
+      stepD: null,
+      stepE: {},
+      collectedCarretaOwners: [],
+      horsePlate: "DYC7B43",
+      cpf: "06658670692",
+    }) as unknown as ConfirmationWizardData;
+
+  it("emite cavalo_owner.data_nascimento + sexo/nacionalidade + cnh rica (PF)", () => {
+    const dados = buildSubmitDados(withPfOwnerFull()) as {
+      cavalo_owner?: {
+        tipo?: string;
+        data_nascimento?: string;
+        sexo?: string;
+        nacionalidade?: string;
+        cnh?: { data_emissao?: string; numero_prontuario?: string; estado_emissor?: string };
+      };
+    };
+    expect(dados.cavalo_owner?.tipo).toBe("pf");
+    expect(dados.cavalo_owner?.data_nascimento).toBe("1985-03-20");
+    expect(dados.cavalo_owner?.sexo).toBe("masculino");
+    expect(dados.cavalo_owner?.nacionalidade).toBe("BRASILEIRA");
+    expect(dados.cavalo_owner?.cnh?.data_emissao).toBe("2018-05-10");
+    expect(dados.cavalo_owner?.cnh?.numero_prontuario).toBe("2156280116");
+    expect(dados.cavalo_owner?.cnh?.estado_emissor).toBe("SALVADOR BA");
+  });
+
+  it("não emite data_nascimento para proprietário PJ (não se aplica)", () => {
+    const data = withPfOwnerFull();
+    (data.stepC as unknown as { owner: { docType: string } }).owner.docType = "cnpj";
+    const dados = buildSubmitDados(data) as { cavalo_owner?: { data_nascimento?: string } };
+    expect(dados.cavalo_owner?.data_nascimento).toBeUndefined();
+  });
+});

@@ -68,6 +68,13 @@ _CNH = OcrPrompt(
         "- naturalidade: cidade/UF de nascimento (naturalidade) ou null\n"
         "- nome_pai: nome do pai (filiação paterna)\n"
         "- nome_mae: nome da mãe (filiação materna)\n"
+        "- sexo: 'M' ou 'F' conforme impresso na CNH ou null\n"
+        "- numero_prontuario: número do prontuário/RENACH (digits only) "
+        "ou null\n"
+        "- data_emissao_cnh: data de emissão da CNH (campo 'DATA EMISSÃO', "
+        "distinta da 1ª habilitação), formato DD/MM/AAAA ou null\n"
+        "- local_emissao: cidade e UF onde a CNH foi emitida "
+        "(ex. 'SAO PAULO SP') ou null\n"
         "- observacoes: anotações do verso (EAR, exerce ativ. remunerada, "
         "lentes, etc.) ou null se não houver"
     ),
