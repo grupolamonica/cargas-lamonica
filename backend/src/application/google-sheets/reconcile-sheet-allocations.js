@@ -52,6 +52,12 @@ function resolveAngelliraDisplayName(row) {
  *      a viagem está ACEITA, então spots lançados-não-aceitos (auto-lançamento
  *      DC-201) e depois alocados nunca apareciam na planilha. Aqui a linha é
  *      CRIADA-ou-preenchida (createIfMissing) com rota + agenda + motorista.
+ *   3) Carga do SISTEMA cuja linha JÁ existe na planilha com STATUS em branco,
+ *      enquanto o sistema tem o status → preenche só a célula vazia. A linha-casca
+ *      nascia sem status/tipo e, para carga lançada (lh_manual), nada preenchia
+ *      depois: o sync do ASPX (DC-316) só opera em carga da planilha (sheet_lh).
+ *      Era o motivo de 37 das 41 linhas criadas em 03/08/2026 ficarem com STATUS
+ *      vazio (e todas com TIPO vazio).
  *
  * Segurança:
  * - **Só preenche vazios**: o candidato precisa estar em branco na planilha
@@ -59,8 +65,11 @@ function resolveAngelliraDisplayName(row) {
  *   fonte/Shopee). Para a carga do sistema, `sheet_has_driver` exclui os LHs que já
  *   foram escritos (o re-sync os traz de volta ao snapshot com motorista) — assim a
  *   linha não é re-gravada a cada ciclo.
- * - Escreve só motorista/cavalo/carreta (NÃO manda `status`, para não re-rotular
- *   a coluna de status da planilha).
+ * - Na CRIAÇÃO, manda status/tipo EFETIVOS (alloc_* ?? sheet_*) — a linha nasce
+ *   rotulada com o que o sistema já sabe.
+ * - Em linha EXISTENTE, `status` só vai quando a célula da planilha está VAZIA.
+ *   NUNCA re-rotula o que o operador digitou — o status da planilha é dele (e, para
+ *   carga da planilha, do DC-316).
  * - Cap de {@link RECONCILE_BATCH_LIMIT} por classe/ciclo.
  * - Best-effort: nunca lança. Roda ao fim de cada sync, com o snapshot já fresco.
  *
@@ -78,11 +87,12 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
     rows = await withPgClient(async (client) => {
       const result = await client.query(
         `
-          -- Uma ÚNICA expansão do snapshot alimenta os dois conjuntos (antes eram
+          -- Uma ÚNICA expansão do snapshot alimenta os três conjuntos (antes eram
           -- dois jsonb_array_elements sobre a mesma tabela = dois scans do JSON).
           WITH sheet_rows AS (
             SELECT (e->>'lh') AS lh,
-                   COALESCE(TRIM(e->>'motoristas'), '') AS motorista
+                   COALESCE(TRIM(e->>'motoristas'), '') AS motorista,
+                   COALESCE(TRIM(e->>'status'), '') AS status
             FROM public.sheet_monitor_snapshot s, jsonb_array_elements(s.rows_json) e
             WHERE COALESCE(TRIM(e->>'lh'), '') <> ''
           ),
@@ -91,6 +101,12 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
           ),
           sheet_has_driver AS (
             SELECT DISTINCT lh FROM sheet_rows WHERE motorista <> ''
+          ),
+          -- LHs cujo STATUS está em branco na planilha. Uma linha por LH: com linha
+          -- gêmea, só conta como vazio quando TODAS estão vazias — assim nunca
+          -- escrevemos por cima de um valor que já existe em alguma delas.
+          sheet_blank_status AS (
+            SELECT lh FROM sheet_rows GROUP BY lh HAVING bool_and(status = '')
           )
           (
             -- (1) Carga da PLANILHA (sheet_lh) tomada, com a linha em branco → preenche.
@@ -101,7 +117,8 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
                    l.horse_plate, l.trailer_plate,
                    -- Só o campo usado, não o JSON inteiro (egress).
                    l.validation_summary_json->'driver'->'angelira'->>'displayName'
-                     AS angelira_display_name
+                     AS angelira_display_name,
+                   NULL::text AS status_efetivo, NULL::text AS tipo_efetivo
             FROM public.cargas c
             JOIN blank_sheet b ON b.lh = c.sheet_lh
             LEFT JOIN public.load_public_leads l ON l.id = c.reserved_public_lead_id
@@ -119,7 +136,9 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
                    c.origem, c.destino,
                    c.sheet_data_carregamento AS carreg, c.sheet_data_descarga AS descarga,
                    NULL::text AS horse_plate, NULL::text AS trailer_plate,
-                   NULL::text AS angelira_display_name
+                   NULL::text AS angelira_display_name,
+                   COALESCE(NULLIF(TRIM(c.alloc_status), ''), NULLIF(TRIM(c.sheet_status), '')) AS status_efetivo,
+                   COALESCE(NULLIF(TRIM(c.alloc_tipo), ''), NULLIF(TRIM(c.sheet_tipo), '')) AS tipo_efetivo
             FROM public.cargas c
             LEFT JOIN sheet_has_driver d ON d.lh = c.lh_manual
             WHERE c.sheet_lh IS NULL
@@ -133,6 +152,28 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
               AND upper(TRIM(c.lh_manual)) LIKE 'LT%'
             LIMIT ${RECONCILE_BATCH_LIMIT}
           )
+          UNION ALL
+          (
+            -- (3) Carga do SISTEMA cuja linha JÁ existe na planilha com STATUS em
+            -- branco, enquanto o sistema tem o status → preenche a célula vazia.
+            -- Converge: gravada a célula, o LH sai deste ramo no ciclo seguinte.
+            SELECT c.lh_manual AS lh, c.sheet_source, false AS create_row,
+                   c.alloc_motorista, c.alloc_cavalo, c.alloc_carreta,
+                   NULL::text AS origem, NULL::text AS destino,
+                   NULL::text AS carreg, NULL::text AS descarga,
+                   NULL::text AS horse_plate, NULL::text AS trailer_plate,
+                   NULL::text AS angelira_display_name,
+                   COALESCE(NULLIF(TRIM(c.alloc_status), ''), NULLIF(TRIM(c.sheet_status), '')) AS status_efetivo,
+                   NULL::text AS tipo_efetivo
+            FROM public.cargas c
+            JOIN sheet_blank_status v ON v.lh = c.lh_manual
+            WHERE c.sheet_lh IS NULL
+              AND COALESCE(TRIM(c.lh_manual), '') <> ''
+              AND COALESCE(TRIM(c.alloc_motorista), '') <> ''
+              AND upper(TRIM(c.lh_manual)) LIKE 'LT%'
+              AND COALESCE(NULLIF(TRIM(c.alloc_status), ''), NULLIF(TRIM(c.sheet_status), '')) IS NOT NULL
+            LIMIT ${RECONCILE_BATCH_LIMIT}
+          )
         `,
       );
       return result.rows;
@@ -142,7 +183,9 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
     return { ok: false, reconciled: 0 };
   }
 
-  const updates = [];
+  // Um LH pode vir de mais de um ramo (ex.: linha em branco na planilha E status
+  // vazio) — o mapa junta os campos num único update por LH.
+  const porLh = new Map();
   for (const row of rows) {
     const allocMotorista = (row.alloc_motorista ?? "").toString().trim();
     const motorista = allocMotorista || resolveAngelliraDisplayName(row);
@@ -151,6 +194,8 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
     // Nada resolvido para gravar → pula (não faz POST inútil).
     if (!motorista && !cavalo && !carreta) continue;
     const update = { lh: String(row.lh).trim(), source: row.sheet_source ?? null, motorista, cavalo, carreta };
+    const statusEfetivo = (row.status_efetivo ?? "").toString().trim();
+    const tipoEfetivo = (row.tipo_efetivo ?? "").toString().trim();
     // Carga do sistema sem linha na planilha → cria-ou-preenche (createIfMissing)
     // com rota + agenda; as datas viram o formato da planilha (DD/MM/YYYY HH:MM).
     if (row.create_row) {
@@ -159,10 +204,21 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
       update.destino = (row.destino ?? "").toString();
       update.dataCarregamento = formatSheetDateLabel(row.carreg);
       update.dataDescarga = formatSheetDateLabel(row.descarga);
+      // A linha nasce ROTULADA com o que o sistema já sabe. Sem isso ela nascia com
+      // STATUS e TIPO vazios e, para carga lançada (lh_manual), nada preenchia depois
+      // — o sync do ASPX (DC-316) só opera em carga da planilha (sheet_lh).
+      if (statusEfetivo) update.status = statusEfetivo;
+      if (tipoEfetivo) update.tipo = tipoEfetivo;
+    } else if (statusEfetivo) {
+      // Linha existente: a query só devolve status quando a célula da planilha está
+      // VAZIA — preenche o vazio, nunca re-rotula o que o operador digitou.
+      update.status = statusEfetivo;
     }
-    updates.push(update);
+    const anterior = porLh.get(update.lh);
+    porLh.set(update.lh, anterior ? { ...anterior, ...update } : update);
   }
 
+  const updates = [...porLh.values()];
   if (updates.length === 0) return { ok: true, reconciled: 0 };
 
   const res = await writeAllocationsToSheet(updates, { log }).catch((err) => ({
