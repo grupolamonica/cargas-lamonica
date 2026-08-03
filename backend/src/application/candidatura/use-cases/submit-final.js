@@ -26,7 +26,7 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
-import { checkTypedVsCnh, namesMatch } from "../../../domain/identity/identity-match.js";
+import { checkTypedVsCnh, isValidCpf, namesMatch, onlyDigits } from "../../../domain/identity/identity-match.js";
 import { resolveAnttCascade } from "./antt-cascade.js";
 import { resolveExpectedDriverName } from "./resolve-expected-driver-name.js";
 
@@ -278,6 +278,24 @@ export async function submitCandidaturaFinal({
   // Roda FORA da transação (a checagem externa é async/cacheada) e cobre TODOS
   // os callers deste use-case: o submit do próprio motorista E o resgate de
   // rascunho pelo operador (submitDraftAsOperator) — que antes burlava a checagem.
+  // Validade do CPF (dígito verificador) — o backend não checava o DV, então um
+  // CPF forjado (000.000.000-00, dígitos aleatórios) passava direto. Só barra
+  // quando há CPF presente e é claramente inválido (absent → deixa as demais
+  // regras/obrigatoriedade cuidarem).
+  const motoristaCpf = onlyDigits(dados?.motorista?.cpf);
+  if (motoristaCpf && !isValidCpf(motoristaCpf)) {
+    return {
+      statusCode: 422,
+      payload: {
+        error: "ValidationError",
+        code: "CPF_INVALIDO",
+        message: "O CPF informado é inválido (dígito verificador não confere).",
+        issues: [{ path: "motorista.cpf", message: "CPF inválido." }],
+        meta: { correlationId },
+      },
+    };
+  }
+
   // (#4) nome/CPF digitado × CNH (OCR, snapshot em motorista.cnh.nome):
   const typed = checkTypedVsCnh({ dados, driverCpf });
   if (!typed.ok) {

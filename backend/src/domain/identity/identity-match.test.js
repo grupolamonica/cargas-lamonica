@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkTypedVsCnh,
   cpfMatches,
+  isValidCpf,
   namesMatch,
   normalizeName,
 } from "./identity-match.js";
@@ -36,6 +37,18 @@ describe("namesMatch — BARRA (divergência clara / troca de pessoa)", () => {
   ])("%s", (_label, a, b) => {
     expect(namesMatch(a, b)).toBe(false);
   });
+});
+
+describe("isValidCpf", () => {
+  it.each(["03070300596", "030.703.005-96"])("aceita CPF com dígito verificador correto: %s", (c) => {
+    expect(isValidCpf(c)).toBe(true);
+  });
+  it.each(["11111111111", "00000000000", "12345678901", "0307030059", "123", ""])(
+    "rejeita CPF inválido (DV errado / repetido / tamanho): %s",
+    (c) => {
+      expect(isValidCpf(c)).toBe(false);
+    },
+  );
 });
 
 describe("cpfMatches", () => {
