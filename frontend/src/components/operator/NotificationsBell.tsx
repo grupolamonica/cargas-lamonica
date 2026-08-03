@@ -113,6 +113,10 @@ export default function NotificationsBell() {
   const { data } = useQuery({
     queryKey: NOTIFICATIONS_KEY,
     queryFn: fetchOperatorNotifications,
+    // O cache do servidor tem TTL de 45s, dimensionado PARA este poll de 30s
+    // (__notificationsCacheTiming em backend/src/application/driver-outreach/admin.js).
+    // Se este número subir acima de 45s, o cache volta a dar zero hit — mexer nos dois
+    // lados junto.
     refetchInterval: 30_000,
     staleTime: 15_000,
   });

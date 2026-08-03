@@ -1049,7 +1049,13 @@ export default function Outreach() {
   const { data, isLoading, isError } = useQuery({
     queryKey: OVERVIEW_KEY,
     queryFn: fetchOutreachOverview,
-    refetchInterval: 15_000,
+    // Poll de 30s (era 15s). Cada ciclo custa 8-9 queries no banco (fila + log + opt-outs
+    // + estatísticas) e este é um painel de FILA: o worker envia em drip, com minutos
+    // entre mensagens, então 15s nunca mostrou nada que 30s não mostre. O cache do
+    // servidor tem TTL de 45s (> 30s) — ver __outreachOverviewCacheTiming em
+    // backend/src/application/driver-outreach/admin.js. Mexer neste número exige
+    // conferir esse TTL: poll ≥ TTL = cache inútil.
+    refetchInterval: 30_000,
   });
 
   const [form, setForm] = useState<OutreachSettings | null>(null);

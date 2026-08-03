@@ -93,11 +93,19 @@ function isEvolutionConfigured() {
 // Custo por chamada: 7 a 9 queries — settings ×2 (getOutreachConfig +
 // loadOutreachSettings), GROUP BY de status, count do log de 24h, fila
 // (LIMIT 200), até 2 de resolução de nome, log (LIMIT 25) e opt-outs
-// (LIMIT 100). A tela faz poll de 15s enquanto aberta (refetchInterval em
-// frontend/src/pages/Outreach.tsx), por operador e por aba, sem dedupe nenhum →
-// N abas = N × 9 queries a cada 15s. TTL default 10s (< poll de 15s, então cada
-// ciclo da tela continua trazendo dados novos) + single-flight: a rajada de
-// polls concorrentes vira UMA execução por janela. 0 em teste.
+// (LIMIT 100). A tela faz poll (refetchInterval em frontend/src/pages/Outreach.tsx),
+// por operador e por aba, sem dedupe nenhum → N abas = N × 9 queries por ciclo.
+//
+// ⚠ TTL 45s > poll de 30s (margem de 1,5×). NÃO REDUZIR ABAIXO DO POLL.
+// O par antigo era TTL 10s × poll 15s: o TTL expirava ANTES do poll seguinte, ou
+// seja o cache não servia nada (mesmo defeito medido no sino em produção — 35
+// execuções em 1091s, uma por poll, zero hit). Aqui foram mexidos os DOIS lados:
+// o poll da tela caiu de 15s para 30s (é um painel administrativo de fila; o
+// worker de envio trabalha em drip com MINUTOS entre mensagens, então 15s nunca
+// mostrou nada que 30s não mostre) e o TTL subiu para 45s. Resultado: uma
+// execução de 8-9 queries a cada 60s no lugar de uma a cada 15s.
+// Toda mutação da tela busta a entrada (read-your-write), então a ação do
+// operador continua aparecendo na hora, independente do TTL. 0 em teste.
 // A chave inclui os TRÊS LIMITs efetivos. Hoje são constantes (o handler não
 // aceita limite na query string — o único parâmetro é o correlationId), mas
 // entregar 200 itens a quem pediu 25 é exatamente o bug que a chave previne se
@@ -108,6 +116,14 @@ function isEvolutionConfigured() {
 // `meta.generatedAt` continua sendo o instante em que os dados foram lidos, e
 // não o do request: é o que informa a idade real do payload.
 const OUTREACH_OVERVIEW_LIMITS = { queue: 200, log: 25, optouts: 100 };
+
+const OUTREACH_OVERVIEW_POLL_MS = 30_000; // frontend/src/pages/Outreach.tsx
+const OUTREACH_OVERVIEW_TTL_MS = 45_000;
+/** Exportado só para o teste amarrar TTL > poll. */
+export const __outreachOverviewCacheTiming = Object.freeze({
+  pollMs: OUTREACH_OVERVIEW_POLL_MS,
+  ttlMs: OUTREACH_OVERVIEW_TTL_MS,
+});
 
 let _overviewInFlight = null;
 let _overviewCache = { at: 0, key: "", body: null };
@@ -120,7 +136,7 @@ function getOutreachOverviewCacheTtlMs() {
   const raw = Number.parseInt(process.env.OPERATOR_OUTREACH_OVERVIEW_CACHE_TTL_MS ?? "", 10);
   if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
   if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
-  return 10_000; // default produção
+  return OUTREACH_OVERVIEW_TTL_MS; // default produção (> poll de 30s)
 }
 
 function outreachOverviewCacheKey(limits) {
@@ -905,8 +921,25 @@ export async function sendWhatsappTestMessage({ phone, text } = {}) {
 // poll de 30s e remonta a cada navegação → N operadores × N abas executavam
 // DUAS queries sem cache nenhum, uma delas ordenando a tabela inteira. Com o
 // cache, N polls concorrentes viram UMA execução (duas queries) por janela.
-// TTL default 15s (metade do poll do front): a latência extra do alarme de spot
-// é ≤ TTL, irrelevante ao lado do scanner de 3 min. 0 em teste.
+//
+// ⚠ TTL 45s > poll de 30s (margem de 1,5×). NÃO REDUZIR ABAIXO DO POLL.
+// Medição em produção (pg_stat_statements, delta de 1091s) com o TTL antigo de
+// 15s: a query do sino rodou 35 vezes = uma a cada 31s, exatamente o poll →
+// ZERO cache hit. TTL menor que o intervalo que DIRIGE as chamadas não serve
+// nada: quando o próximo poll chega, a entrada já expirou. Com 45s, um poll de
+// 30s alterna hit/miss → uma execução a cada 60s (metade das leituras), e a
+// margem absorve o jitter medido (31s) e as rajadas de remonte por navegação.
+// Custo: o alarme de spot pode aparecer até 45s mais tarde — irrelevante ao lado
+// do scanner que CRIA a notificação a cada 3 min. 0 em teste (default), a menos
+// que o teste force o knob.
+const OPERATOR_NOTIFICATIONS_POLL_MS = 30_000; // frontend/src/components/operator/NotificationsBell.tsx
+const OPERATOR_NOTIFICATIONS_TTL_MS = 45_000;
+// Exportados só para o teste amarrar TTL > poll (o teste que provava dedupe em
+// chamadas colada-a-colada passava mesmo com o TTL quebrado de 15s).
+export const __notificationsCacheTiming = Object.freeze({
+  pollMs: OPERATOR_NOTIFICATIONS_POLL_MS,
+  ttlMs: OPERATOR_NOTIFICATIONS_TTL_MS,
+});
 // A chave inclui o LIMIT efetivo (já clampado): ele chega da query string
 // (handlers.js) e define o tamanho do payload — ignorá-lo entregaria 40 itens a
 // quem pediu 200.
@@ -921,7 +954,7 @@ function getOperatorNotificationsCacheTtlMs() {
   const raw = Number.parseInt(process.env.OPERATOR_NOTIFICATIONS_CACHE_TTL_MS ?? "", 10);
   if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
   if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
-  return 15_000; // default produção
+  return OPERATOR_NOTIFICATIONS_TTL_MS; // default produção (> poll de 30s)
 }
 
 /** Invalida o sino (as mutações abaixo leem o próprio write). Nunca lança. */
@@ -1097,8 +1130,23 @@ export async function markAllNotificationsSeen() {
 // serve todos (nada a chavear por usuário).
 // Cada execução varre whatsapp_messages DUAS vezes (DISTINCT ON (phone) +
 // agregado de não lidas) e o ChatPanel faz poll de 20s enquanto a aba Chat está
-// aberta, sem nenhum dedupe entre operadores. TTL default 10s (metade do poll) +
-// single-flight colapsam a rajada em uma execução; 0 em teste.
+// aberta, sem nenhum dedupe entre operadores.
+//
+// ⚠ TTL 45s > poll de 20s (margem de 2,25×). NÃO REDUZIR ABAIXO DO POLL.
+// O TTL antigo de 10s era menor que o poll de 20s → toda janela já havia
+// expirado quando o poll seguinte chegava (mesmo defeito medido no sino: 35
+// execuções em 1091s, uma por poll, zero hit). Com 45s, um poll de 20s dá
+// hit-hit-miss → uma execução a cada 60s. Custo: uma conversa NOVA (ou o badge
+// de não lidas de outra conversa) pode demorar até 45s para aparecer na lista.
+// A conversa ABERTA não é afetada: listWhatsappMessages faz poll de 8s e NÃO
+// passa por cache, e qualquer envio/marcação de lida busta esta entrada na hora.
+const OPERATOR_CHAT_CONVERSATIONS_POLL_MS = 20_000; // frontend/src/components/operator/ChatPanel.tsx
+const OPERATOR_CHAT_CONVERSATIONS_TTL_MS = 45_000;
+/** Exportado só para o teste amarrar TTL > poll. */
+export const __chatConversationsCacheTiming = Object.freeze({
+  pollMs: OPERATOR_CHAT_CONVERSATIONS_POLL_MS,
+  ttlMs: OPERATOR_CHAT_CONVERSATIONS_TTL_MS,
+});
 // Só o caminho SEM BUSCA é cacheado (busca é digitada, nunca faz poll → evita
 // Map ilimitado por termo) e a chave inclui o LIMIT efetivo, que chega da query
 // string (handlers.js) e define tanto o `LIMIT` do SQL quanto o
@@ -1113,7 +1161,7 @@ function getChatConversationsCacheTtlMs() {
   const raw = Number.parseInt(process.env.OPERATOR_CHAT_CONVERSATIONS_CACHE_TTL_MS ?? "", 10);
   if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
   if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
-  return 10_000; // default produção
+  return OPERATOR_CHAT_CONVERSATIONS_TTL_MS; // default produção (> poll de 20s)
 }
 
 /**

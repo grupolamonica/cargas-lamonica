@@ -54,6 +54,9 @@ export default function ChatPanel() {
   const { data: convData, isLoading: loadingConvs } = useQuery({
     queryKey: [...CONV_KEY, search],
     queryFn: () => fetchChatConversations({ search: search || undefined }),
+    // O cache do servidor tem TTL de 45s, dimensionado PARA este poll de 20s
+    // (__chatConversationsCacheTiming em backend/src/application/driver-outreach/admin.js).
+    // Subir este número acima de 45s zera os cache hits — mexer nos dois lados junto.
     refetchInterval: 20_000,
   });
   const conversations = useMemo<ChatConversation[]>(() => convData?.items ?? [], [convData?.items]);

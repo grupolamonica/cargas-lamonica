@@ -6,7 +6,16 @@
  *    contamos o SQL realmente executado envolvendo o client do pg-mem;
  *  - preservação de comportamento: mesmo payload, mesma ordem, mesmos contadores,
  *    read-your-write nas mutações e nenhum campo novo no payload.
+ *
+ * ⚠ A contagem tem que ser feita na CADÊNCIA REAL DO POLL, não em chamadas
+ * colada-a-colada. Duas chamadas seguidas caem dentro de qualquer TTL > 0 e
+ * passam mesmo com o TTL quebrado: foi assim que o sino foi para produção com
+ * TTL de 15s contra um poll de 30s e mediu ZERO cache hit (35 execuções em
+ * 1091s de pg_stat_statements = uma por poll). Por isso os testes abaixo avançam
+ * um relógio falso pelo intervalo do poll entre as chamadas.
  */
+import { readFileSync } from "node:fs";
+
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -70,7 +79,20 @@ vi.mock("../../infrastructure/whatsapp/evolution-client.js", () => ({
   logoutWhatsappInstance: vi.fn(async () => ({})),
 }));
 
+// ── Relógio controlável ──────────────────────────────────────────────────────
+// Os caches só olham Date.now(), então avançar um offset simula o tempo REAL
+// entre polls (30s no sino, 20s no chat) sem sleep. O tempo real decorrido nos
+// testes é de milissegundos, então o offset domina.
+let clockSkewMs = 0;
+const realDateNow = Date.now.bind(Date);
+vi.spyOn(Date, "now").mockImplementation(() => realDateNow() + clockSkewMs);
+const advanceClock = (ms) => {
+  clockSkewMs += ms;
+};
+
 const {
+  __chatConversationsCacheTiming,
+  __notificationsCacheTiming,
   __resetOperatorNotificationsCache,
   __resetWhatsappConversationsCache,
   createTestSpotNotifications,
@@ -87,6 +109,28 @@ const countSql = (re) => sqlLog.filter((sql) => re.test(sql)).length;
 const NOTIF_SELECT = /FROM public\.operator_notifications\s+ORDER BY created_at DESC/;
 const CONV_SELECT = /WITH last_msgs AS/;
 const MSG_UPDATE = /UPDATE public\.whatsapp_messages/;
+
+// TTLs de PRODUÇÃO (não números inventados de teste): é o valor real que precisa
+// ser maior que o poll real.
+const NOTIF_TTL = String(__notificationsCacheTiming.ttlMs);
+const CONV_TTL = String(__chatConversationsCacheTiming.ttlMs);
+
+/**
+ * Lê o `refetchInterval` de um componente do front. Guarda anti-deriva: o TTL do
+ * servidor só é útil enquanto for maior que o poll — se alguém mexer no poll sem
+ * olhar o TTL, o cache volta a dar zero hit (o bug medido em produção).
+ * O backend também roda isolado (imagem Docker só com backend/), então quando o
+ * arquivo não existe o teste é pulado em vez de falhar.
+ */
+function readRefetchInterval(relPath) {
+  try {
+    const src = readFileSync(new URL(`../../../../${relPath}`, import.meta.url), "utf8");
+    const m = src.match(/refetchInterval:\s*([\d_]+)/);
+    return m ? Number(m[1].replace(/_/g, "")) : null;
+  } catch {
+    return undefined; // arquivo indisponível (checkout só do backend)
+  }
+}
 
 async function seedNotification({ title, seen = false, createdAt }) {
   await query(
@@ -109,6 +153,7 @@ describe("driver-outreach admin — cache do sino e do chat (integração pg-mem
     await resetTestDatabase();
     sqlLog.length = 0;
     releaseGate = null;
+    clockSkewMs = 0;
     delete process.env.OPERATOR_NOTIFICATIONS_CACHE_TTL_MS;
     delete process.env.OPERATOR_CHAT_CONVERSATIONS_CACHE_TTL_MS;
     __resetOperatorNotificationsCache();
@@ -156,27 +201,84 @@ describe("driver-outreach admin — cache do sino e do chat (integração pg-mem
     expect(res).toEqual({ unseenCount: 0, items: [] });
   });
 
-  it("sino: TTL colapsa polls repetidos e a chave inclui o LIMIT efetivo", async () => {
-    process.env.OPERATOR_NOTIFICATIONS_CACHE_TTL_MS = "5000";
+  it("sino: TTL de produção > poll do front (a relação que o cache exige para existir)", () => {
+    const { ttlMs, pollMs } = __notificationsCacheTiming;
+    // Sem isso o cache é decoração: no instante do poll seguinte a entrada já
+    // expirou e TODA chamada vai ao banco (35/1091s medidos em produção).
+    expect(ttlMs).toBeGreaterThan(pollMs);
+    expect(ttlMs).toBeGreaterThanOrEqual(pollMs * 1.5); // margem p/ jitter (medido: 31s)
+  });
+
+  it("sino: o poll do front (30s) continua vindo do cache — dedupe na cadência REAL", async () => {
+    const { pollMs } = __notificationsCacheTiming;
+    process.env.OPERATOR_NOTIFICATIONS_CACHE_TTL_MS = NOTIF_TTL; // TTL de produção
     await seedNotification({ title: "a", seen: false, createdAt: "2026-07-30T10:00:00.000Z" });
     await seedNotification({ title: "b", seen: false, createdAt: "2026-07-30T11:00:00.000Z" });
     sqlLog.length = 0;
 
     const first = await listOperatorNotifications({});
+    advanceClock(pollMs); // 30s depois: é ISTO que a tela faz, não duas chamadas coladas
     const second = await listOperatorNotifications({});
-    expect(countSql(NOTIF_SELECT)).toBe(1); // 2º poll não foi ao banco
+
+    expect(countSql(NOTIF_SELECT)).toBe(1); // o 2º poll NÃO foi ao banco
     expect(countSql(/public\.operator_notifications/)).toBe(2); // 2 queries no lugar de 4
     expect(second).toEqual(first);
+
+    // E o dado não gruda para sempre: passado o TTL, o poll seguinte relê.
+    advanceClock(pollMs); // t = 60s > TTL de 45s
+    await listOperatorNotifications({});
+    expect(countSql(NOTIF_SELECT)).toBe(2);
 
     // Limite diferente NÃO pode ser servido do cache (senão devolveria 2 itens
     // para quem pediu 1).
     const capped = await listOperatorNotifications({ limit: 1 });
-    expect(countSql(NOTIF_SELECT)).toBe(2);
+    expect(countSql(NOTIF_SELECT)).toBe(3);
     expect(capped.items).toHaveLength(1);
   });
 
+  it("sino: 6 polls de 30s (2,5 min de tela aberta) = 3 execuções, não 6", async () => {
+    const { pollMs } = __notificationsCacheTiming;
+    process.env.OPERATOR_NOTIFICATIONS_CACHE_TTL_MS = NOTIF_TTL;
+    await seedNotification({ title: "a", seen: false, createdAt: "2026-07-30T10:00:00.000Z" });
+    sqlLog.length = 0;
+
+    const seen = [];
+    for (let i = 0; i < 6; i += 1) {
+      if (i > 0) advanceClock(pollMs);
+      seen.push(await listOperatorNotifications({}));
+    }
+
+    // TTL 45s × poll 30s → miss/hit alternados: uma leitura a cada 60s.
+    expect(countSql(NOTIF_SELECT)).toBe(3);
+    expect(countSql(/public\.operator_notifications/)).toBe(6); // 6 queries no lugar de 12
+    for (const payload of seen) expect(payload).toEqual(seen[0]);
+  });
+
+  it("sino: TTL ABAIXO do poll (o bug medido em produção: 15s × 30s) dá ZERO hit", async () => {
+    // Guarda de regressão do defeito real: com o TTL antigo, os mesmos 6 polls
+    // custam 6 execuções — o cache não serve NADA. É por isso que o TTL não pode
+    // voltar a ser "metade do poll".
+    process.env.OPERATOR_NOTIFICATIONS_CACHE_TTL_MS = "15000";
+    await seedNotification({ title: "a", seen: false, createdAt: "2026-07-30T10:00:00.000Z" });
+    sqlLog.length = 0;
+
+    for (let i = 0; i < 6; i += 1) {
+      if (i > 0) advanceClock(__notificationsCacheTiming.pollMs);
+      await listOperatorNotifications({});
+    }
+
+    expect(countSql(NOTIF_SELECT)).toBe(6);
+  });
+
+  it("sino: o poll do front é o que o TTL do servidor assume (guarda anti-deriva)", () => {
+    const front = readRefetchInterval("frontend/src/components/operator/NotificationsBell.tsx");
+    if (front === undefined) return; // front fora do checkout
+    expect(front).toBe(__notificationsCacheTiming.pollMs);
+    expect(__notificationsCacheTiming.ttlMs).toBeGreaterThan(front);
+  });
+
   it("sino: single-flight colapsa polls concorrentes em uma query", async () => {
-    process.env.OPERATOR_NOTIFICATIONS_CACHE_TTL_MS = "5000";
+    process.env.OPERATOR_NOTIFICATIONS_CACHE_TTL_MS = NOTIF_TTL;
     await seedNotification({ title: "a", seen: false, createdAt: "2026-07-30T10:00:00.000Z" });
     sqlLog.length = 0;
 
@@ -193,7 +295,7 @@ describe("driver-outreach admin — cache do sino e do chat (integração pg-mem
   });
 
   it("sino: marcar visto / limpar / criar invalidam o cache na hora", async () => {
-    process.env.OPERATOR_NOTIFICATIONS_CACHE_TTL_MS = "5000";
+    process.env.OPERATOR_NOTIFICATIONS_CACHE_TTL_MS = NOTIF_TTL;
     await seedNotification({ title: "a", seen: false, createdAt: "2026-07-30T10:00:00.000Z" });
     await seedNotification({ title: "b", seen: false, createdAt: "2026-07-30T11:00:00.000Z" });
 
@@ -216,7 +318,7 @@ describe("driver-outreach admin — cache do sino e do chat (integração pg-mem
   });
 
   it("sino: leitura iniciada antes da mutação não repovoa o cache (epoch)", async () => {
-    process.env.OPERATOR_NOTIFICATIONS_CACHE_TTL_MS = "5000";
+    process.env.OPERATOR_NOTIFICATIONS_CACHE_TTL_MS = NOTIF_TTL;
     await seedNotification({ title: "a", seen: false, createdAt: "2026-07-30T10:00:00.000Z" });
 
     let release;
@@ -250,20 +352,32 @@ describe("driver-outreach admin — cache do sino e do chat (integração pg-mem
     expect(countSql(CONV_SELECT)).toBe(1);
   });
 
-  it("chat: TTL + single-flight colapsam o poll de 20s; LIMIT entra na chave e busca não é cacheada", async () => {
-    process.env.OPERATOR_CHAT_CONVERSATIONS_CACHE_TTL_MS = "5000";
+  it("chat: TTL de produção > poll do ChatPanel (relação obrigatória + guarda anti-deriva)", () => {
+    const { ttlMs, pollMs } = __chatConversationsCacheTiming;
+    expect(ttlMs).toBeGreaterThan(pollMs);
+    const front = readRefetchInterval("frontend/src/components/operator/ChatPanel.tsx");
+    if (front === undefined) return; // front fora do checkout
+    expect(front).toBe(pollMs); // primeiro refetchInterval do arquivo = lista de conversas
+    expect(ttlMs).toBeGreaterThan(front);
+  });
+
+  it("chat: o poll de 20s vem do cache; LIMIT entra na chave e busca não é cacheada", async () => {
+    const { pollMs } = __chatConversationsCacheTiming;
+    process.env.OPERATOR_CHAT_CONVERSATIONS_CACHE_TTL_MS = CONV_TTL; // TTL de produção
     await seedMessage({ phone: "5511111111111", ts: "2026-07-30T10:00:00.000Z" });
     await seedMessage({ phone: "5522222222222", ts: "2026-07-30T11:00:00.000Z" });
     sqlLog.length = 0;
 
     const first = await listWhatsappConversations({});
+    advanceClock(pollMs); // 20s — cadência real do painel
     const second = await listWhatsappConversations({});
     expect(countSql(CONV_SELECT)).toBe(1);
     expect(second).toEqual(first);
     expect(first.items).toHaveLength(2);
 
+    advanceClock(pollMs); // t = 40s, ainda dentro do TTL de 45s
     const [a, b] = await Promise.all([listWhatsappConversations({}), listWhatsappConversations({})]);
-    expect(countSql(CONV_SELECT)).toBe(1); // ainda no TTL
+    expect(countSql(CONV_SELECT)).toBe(1);
     expect(a).toEqual(b);
 
     // Limite diferente vai ao banco (senão entregaria 2 itens a quem pediu 1).
@@ -277,8 +391,38 @@ describe("driver-outreach admin — cache do sino e do chat (integração pg-mem
     expect(countSql(CONV_SELECT)).toBe(4);
   });
 
+  it("chat: 6 polls de 20s (2 min com a aba aberta) = 2 execuções, não 6", async () => {
+    const { pollMs } = __chatConversationsCacheTiming;
+    process.env.OPERATOR_CHAT_CONVERSATIONS_CACHE_TTL_MS = CONV_TTL;
+    await seedMessage({ phone: "5511111111111", ts: "2026-07-30T10:00:00.000Z" });
+    sqlLog.length = 0;
+
+    const seen = [];
+    for (let i = 0; i < 6; i += 1) {
+      if (i > 0) advanceClock(pollMs);
+      seen.push(await listWhatsappConversations({}));
+    }
+
+    // TTL 45s × poll 20s → hit,hit,miss: uma leitura a cada 60s (t=0 e t=60).
+    expect(countSql(CONV_SELECT)).toBe(2);
+    for (const payload of seen) expect(payload).toEqual(seen[0]);
+  });
+
+  it("chat: TTL ABAIXO do poll (10s × 20s, o valor antigo) dá ZERO hit", async () => {
+    process.env.OPERATOR_CHAT_CONVERSATIONS_CACHE_TTL_MS = "10000";
+    await seedMessage({ phone: "5511111111111", ts: "2026-07-30T10:00:00.000Z" });
+    sqlLog.length = 0;
+
+    for (let i = 0; i < 6; i += 1) {
+      if (i > 0) advanceClock(__chatConversationsCacheTiming.pollMs);
+      await listWhatsappConversations({});
+    }
+
+    expect(countSql(CONV_SELECT)).toBe(6);
+  });
+
   it("chat: single-flight colapsa duas listagens concorrentes em uma query", async () => {
-    process.env.OPERATOR_CHAT_CONVERSATIONS_CACHE_TTL_MS = "5000";
+    process.env.OPERATOR_CHAT_CONVERSATIONS_CACHE_TTL_MS = CONV_TTL;
     await seedMessage({ phone: "5511111111111", ts: "2026-07-30T10:00:00.000Z" });
     sqlLog.length = 0;
 
@@ -334,7 +478,7 @@ describe("driver-outreach admin — cache do sino e do chat (integração pg-mem
   });
 
   it("chat: marcar como lida invalida a lista de conversas (badge zera na hora)", async () => {
-    process.env.OPERATOR_CHAT_CONVERSATIONS_CACHE_TTL_MS = "5000";
+    process.env.OPERATOR_CHAT_CONVERSATIONS_CACHE_TTL_MS = CONV_TTL;
     const phone = "5511111111111";
     await seedMessage({ phone, direction: "in", text: "oi", ts: "2026-07-30T10:00:00.000Z" });
     sqlLog.length = 0;
@@ -350,7 +494,7 @@ describe("driver-outreach admin — cache do sino e do chat (integração pg-mem
   });
 
   it("chat: envio manual invalida a lista de conversas", async () => {
-    process.env.OPERATOR_CHAT_CONVERSATIONS_CACHE_TTL_MS = "5000";
+    process.env.OPERATOR_CHAT_CONVERSATIONS_CACHE_TTL_MS = CONV_TTL;
     process.env.EVOLUTION_API_TOKEN = "token-de-teste";
     try {
       const phone = "5511111111111";
