@@ -12,17 +12,19 @@ import {
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({ withPgClient, withPgTransaction }));
 
 // OCR sidecar — mock dos 4 extractors (nunca lançam; { ok, fields } | { ok:false }).
-const { cnhMock, comprovanteMock, crlvMock, cartaoMock } = vi.hoisted(() => ({
+const { cnhMock, comprovanteMock, crlvMock, cartaoMock, consultaCnpjMock } = vi.hoisted(() => ({
   cnhMock: vi.fn(),
   comprovanteMock: vi.fn(),
   crlvMock: vi.fn(),
   cartaoMock: vi.fn(),
+  consultaCnpjMock: vi.fn(),
 }));
 vi.mock("../../repom/ocr-sidecar-client.js", () => ({
   extractCnhFromMedia: cnhMock,
   extractComprovanteFromMedia: comprovanteMock,
   extractCrlvFromMedia: crlvMock,
   extractCartaoCnpjFromMedia: cartaoMock,
+  consultarCnpjSidecar: consultaCnpjMock,
 }));
 
 // Storage admin client — mock do download (retorna Buffer).
@@ -85,6 +87,8 @@ describe("reprocessCadastroDocuments (integração pg-mem)", () => {
     comprovanteMock.mockResolvedValue({ ok: false, requiresUpload: true });
     crlvMock.mockResolvedValue({ ok: false, requiresUpload: true });
     cartaoMock.mockResolvedValue({ ok: false, requiresUpload: true });
+    // Default: consulta à Receita indisponível (casos que não exercitam o CNPJ).
+    consultaCnpjMock.mockResolvedValue({ ok: false, error: "sem mock" });
   });
 
   afterAll(async () => {
@@ -193,6 +197,54 @@ describe("reprocessCadastroDocuments (integração pg-mem)", () => {
 
     // Relatório: 4 docs OK.
     expect(r.report.filter((d) => d.ok)).toHaveLength(4);
+  });
+
+  it("cartão CNPJ: consulta a Receita e preenche os metadados PJ (não só o Vision)", async () => {
+    const { id } = await seedPendingRegistration({
+      status: "pendente",
+      dados: {
+        motorista: { cpf: "11111111111", nome: "MOT" },
+        cavalo: { placa: "ABC1D23", owner_doc: "30071556000130", owner_doc_type: "cnpj" },
+        cavalo_owner: {
+          tipo: "pj",
+          doc: "30071556000130",
+          nome: "RAZAO ANTIGA",
+          owner_doc_url: "owner/carga/cartao_cnpj_1.jpg",
+        },
+      },
+    });
+    // Vision lê SÓ o número do CNPJ (é o que ele faz de fato no cartão).
+    cartaoMock.mockResolvedValue({ ok: true, provider: "vision", fields: { cnpj: "30071556000130" } });
+    // A Receita (Infosimples) é a fonte AUTORITATIVA dos metadados PJ.
+    consultaCnpjMock.mockResolvedValue({
+      ok: true,
+      data: [{
+        razao_social: "BRITTAX COMERCIO LTDA",
+        natureza_juridica: "206-2 - Sociedade Empresária Limitada",
+        situacao_cadastral: "ATIVA",
+        atividade_economica: "4930-2/02 Transporte rodoviário de carga",
+        porte: "ME",
+        endereco_cep: "06407-000", endereco_uf: "SP", endereco_municipio: "Barueri",
+        endereco_logradouro: "Estrada X", endereco_numero: "1498",
+      }],
+    });
+
+    const r = await reprocessCadastroDocuments({ id });
+    expect(r.changed).toBe(true);
+    // A consulta foi disparada com o CNPJ de 14 dígitos.
+    expect(consultaCnpjMock).toHaveBeenCalledWith(expect.objectContaining({ cnpj: "30071556000130" }));
+
+    const dados = await getDados(id);
+    // Metadados PJ da Receita agora PREENCHIDOS (antes o "Reprocessar" só usava o Vision → vinham vazios).
+    expect(dados.cavalo_owner.nome).toBe("BRITTAX COMERCIO LTDA");
+    expect(dados.cavalo_owner.natureza_juridica).toBe("206-2 - Sociedade Empresária Limitada");
+    expect(dados.cavalo_owner.situacao_cadastral).toBe("ATIVA");
+    expect(dados.cavalo_owner.porte).toBe("ME");
+    expect(dados.cavalo_owner.atividade_principal).toContain("Transporte");
+    expect(dados.cavalo_owner.endereco.uf).toBe("SP");
+    // Identidade preservada (doc/tipo/url NUNCA são tocados).
+    expect(dados.cavalo_owner.doc).toBe("30071556000130");
+    expect(dados.cavalo_owner.owner_doc_url).toBe("owner/carga/cartao_cnpj_1.jpg");
   });
 
   it("preenche CPF do motorista quando estava vazio (extraído da CNH)", async () => {

@@ -36,6 +36,7 @@ import {
   extractComprovanteFromMedia,
   extractCrlvFromMedia,
   extractCartaoCnpjFromMedia,
+  consultarCnpjSidecar,
 } from "../../repom/ocr-sidecar-client.js";
 import {
   buildMotoristaFromCnhFields,
@@ -65,6 +66,89 @@ function pickFrom(fields) {
     }
     return "";
   };
+}
+
+export function fieldStr(obj, ...keys) {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v !== null && v !== undefined && String(v).trim() !== "") return String(v).trim();
+  }
+  return "";
+}
+
+/**
+ * Mapeia a resposta da consulta receita-federal/cnpj (data[]) para as chaves de
+ * campo que o buildOwnerFromCartaoCnpjFields lê. Só devolve o que veio preenchido.
+ * Chaves confirmadas por fixture (cadastro-motorista/cadastroApi.test.ts).
+ * (Fonte única — usado pelo "anexar documento" e pelo "reprocessar documentos".)
+ */
+export function mapCnpjConsultaToFields(data) {
+  const row = Array.isArray(data) ? data[0] : null;
+  if (!row || typeof row !== "object") return {};
+  const out = {};
+  // Infosimples MASCARA campos privados com asteriscos ("*****"/"********") — não
+  // guardar a máscara como se fosse dado.
+  const val = (...aliases) => {
+    const v = fieldStr(row, ...aliases);
+    return /^[*\s]+$/.test(v) ? "" : v;
+  };
+  const set = (k, ...aliases) => {
+    const v = val(...aliases);
+    if (v) out[k] = v;
+  };
+  // Identidade + endereço (o que buildOwnerFromCartaoCnpjFields já lê).
+  set("razao_social", "razao_social", "nome_empresarial", "nome");
+  // cep: normaliza p/ dígitos — a Receita devolve endereco_cep COM ponto
+  // ("72.135-180"), que o sanitizeEndereco rejeita (/^\d{5}-?\d{3}$/) e derruba o
+  // endereço TODO. Usa o normalizado (8 díg). enderecoSchema aceita min(8).
+  const cepDigits = onlyDigits(val("normalizado_endereco_cep", "endereco_cep", "cep", "numero_cep"));
+  if (cepDigits.length === 8) out.cep = cepDigits;
+  set("uf", "endereco_uf", "uf", "estado");
+  set("municipio", "endereco_municipio", "municipio", "cidade", "localidade");
+  set("bairro", "endereco_bairro", "bairro");
+  set("logradouro", "endereco_logradouro", "logradouro", "endereco");
+  set("numero", "endereco_numero", "numero", "numero_endereco");
+  set("complemento", "endereco_complemento", "complemento");
+  // Metadados PJ (form rico do proprietário — todos opcionais no ownerSchema).
+  set("nome_fantasia", "nome_fantasia");
+  set("matriz_filial", "matriz_filial");
+  set("data_abertura", "abertura_data", "normalizado_abertura_data", "data_abertura");
+  set("porte", "porte");
+  set("natureza_juridica", "natureza_juridica");
+  set("atividade_principal", "atividade_economica", "atividade_principal", "cnae_principal");
+  set("atividades_secundarias", "atividade_economica_secundaria");
+  set("email", "email");
+  set("telefone", "telefone");
+  set("ente_federativo", "efr", "ente_federativo");
+  set("situacao_cadastral", "situacao_cadastral", "situacao");
+  set("situacao_cadastral_data", "situacao_cadastral_data");
+  set("situacao_cadastral_motivo", "situacao_cadastral_observacoes", "motivo_situacao_cadastral");
+  set("situacao_especial", "situacao_especial");
+  set("situacao_especial_data", "situacao_especial_data");
+  return out;
+}
+
+/**
+ * Cartão-CNPJ: o Vision serve SÓ pra ler o número do CNPJ; os dados reais (razão
+ * social, endereço, metadados PJ) vêm da consulta AUTORITATIVA da Receita
+ * (Infosimples receita-federal/cnpj). Enriquece `fields` IN-PLACE com o retorno
+ * da consulta (a Receita SOBRESCREVE o que o Vision leu). Best-effort: se a
+ * consulta falhar, `fields` fica só com o que o Vision extraiu. Devolve uma nota
+ * observável. Mesma lógica do "anexar documento" — antes o "reprocessar" NÃO
+ * consultava, então os metadados PJ (situação/CNAE/natureza) nunca preenchiam.
+ * Ver [[cargas-ocr-cartao-cnpj-vision-receita]].
+ */
+export async function enrichCartaoCnpjFieldsWithReceita(fields, { correlationId = null } = {}) {
+  const cnpj = onlyDigits(pickFrom(fields)("cnpj", "numero_cnpj", "cnpj_numero"));
+  if (cnpj.length !== 14) return "CNPJ não legível para consulta à Receita";
+  const consulta = await consultarCnpjSidecar({ cnpj, correlationId, timeoutMs: 90_000 });
+  if (!consulta.ok) {
+    return `Receita indisponível: ${consulta.codeMessage || consulta.error || "erro desconhecido"}`;
+  }
+  Object.assign(fields, mapCnpjConsultaToFields(consulta.data));
+  return fieldStr(fields, "logradouro", "endereco")
+    ? "receita_ok"
+    : "Receita respondeu sem endereço — preencha manualmente";
 }
 
 function splitLocal(texto) {
@@ -537,7 +621,14 @@ export async function reprocessCadastroDocuments({ id, correlationId = null, ope
     });
     if (!imagemBase64) return { doc, ok: false, error: "DOWNLOAD_FAILED" };
     const res = await runExtractor(doc.kind, { imagemBase64, idCadastro, correlationId });
-    return { doc, ...res };
+    // Cartão-CNPJ: o Vision só lê o número; os dados reais (razão social, endereço,
+    // metadados PJ) vêm da consulta AUTORITATIVA da Receita. Antes o "Reprocessar"
+    // NÃO consultava — por isso situação/CNAE/natureza/porte vinham vazios.
+    let rfNote = null;
+    if (doc.kind === "cartao-cnpj" && res.ok && res.fields) {
+      rfNote = await enrichCartaoCnpjFieldsWithReceita(res.fields, { correlationId });
+    }
+    return { doc, rfNote, ...res };
   });
 
   // 4+5) RELÊ o `dados` ATUAL, mescla e persiste — tudo numa conexão só (sem OCR
@@ -570,7 +661,10 @@ export async function reprocessCadastroDocuments({ id, correlationId = null, ope
         applyPartial(dados, doc.target, partial);
         changed = true;
       }
-      report.push({ label: doc.label, kind: doc.kind, ok: true, provider: res.provider ?? null, filled });
+      // Falha da consulta à Receita (cartão-CNPJ) vira a message do relatório — o
+      // operador vê PORQUE os dados PJ não vieram, mesmo com o Vision ok.
+      const rfFailMsg = res.rfNote && res.rfNote !== "receita_ok" ? res.rfNote : null;
+      report.push({ label: doc.label, kind: doc.kind, ok: true, provider: res.provider ?? null, message: rfFailMsg, filled });
     }
 
     if (changed) {
