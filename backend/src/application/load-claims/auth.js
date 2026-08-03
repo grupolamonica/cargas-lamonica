@@ -51,16 +51,55 @@ export function getBearerToken(authorizationHeader) {
 // 15s, fila 60s, programação 90s) disparam vários verifies/min por aba abertos.
 // Um cache curto por token colapsa todos os polls dentro da janela num único
 // getUser(). FAIL-SAFE: verificação com erro NUNCA é cacheada (cai no fluxo normal
-// → 401/403). TTL curto (default 30s) mantém a defasagem de revogação trivial.
-const _tokenVerifyCache = new Map(); // accessToken -> { at, user }
+// → 401/403).
+//
+// ATENÇÃO ao mexer no TTL — o que ele atrasa é AUTORIZAÇÃO, não só "a sessão
+// ainda existe": getUser() devolve a linha de auth.users e a autorização sai de
+// lá (app_metadata.role / app_metadata.access_level, ver operator-access.js),
+// NÃO das claims do JWT. Rebaixar/trocar o nível de um operador (hoje só via
+// scripts offline) só passa a valer quando a entrada expira. O MESMO cache serve
+// as sessões de MOTORISTA (requireDriverSession), então o TTL também é a
+// defasagem de sign-out/revogação no portal do motorista.
+// Default 120s (era 30s) — moderado de propósito. Ajustável por
+// AUTH_TOKEN_VERIFY_TTL_MS no backend.env (0 = desliga) sem redeploy, então
+// apertar a revogação é decisão de ops, não de release.
+// CLAMP DE EXPIRAÇÃO: a entrada guarda o `exp` do próprio token, então a
+// validade efetiva é min(TTL, exp do token) — um token vencido NUNCA é servido
+// do cache, por mais longo que seja o TTL. Isso só aperta o comportamento.
+const _tokenVerifyCache = new Map(); // accessToken -> { at, user, expMs }
 const _tokenVerifyInFlight = new Map(); // accessToken -> Promise<user|null>
-const TOKEN_VERIFY_CACHE_MAX = 500;
+// Estouro = flush total (bruto, mas correto). NÃO trocar por "descarta a entrada
+// mais antiga do Map": Map.set numa chave EXISTENTE mantém a posição original de
+// inserção, logo a primeira chave é a de vida mais LONGA (a sessão mais quente),
+// não a menos usada — descartá-la faria o pior despejo possível. Com ~10 tokens
+// ativos o ramo é inalcançável; o teto só existe como trava de memória (a chave é
+// o access token cru, ~1KB, e nunca deve ser logada).
+const TOKEN_VERIFY_CACHE_MAX = 2000;
+// Folga de relógio ao comparar com o `exp` do token (evita servir do cache um
+// token que vence nos próximos instantes).
+const TOKEN_EXP_SKEW_MS = 5_000;
 
 function getTokenVerifyTtlMs() {
   const raw = Number.parseInt(process.env.AUTH_TOKEN_VERIFY_TTL_MS ?? "", 10);
   if (Number.isFinite(raw) && raw >= 0) return raw; // override explícito vence (habilita teste)
   if (process.env.VITEST || process.env.NODE_ENV === "test") return 0; // default OFF em teste
-  return 30_000; // default produção
+  return 120_000; // default produção
+}
+
+// Lê o `exp` (segundos → ms) do payload do JWT SEM verificar assinatura: quem
+// valida o token é o getUser(), e só chegamos aqui depois dele. Serve apenas para
+// não servir do cache um token já vencido.
+// FAIL-SOFT obrigatório: token opaco/malformado devolve null e a entrada passa a
+// ser controlada só pelo TTL (um throw aqui viraria 500 num caminho de 401).
+function readJwtExpMs(token) {
+  try {
+    const payloadSegment = String(token ?? "").split(".")[1];
+    if (!payloadSegment) return null;
+    const payload = JSON.parse(Buffer.from(payloadSegment, "base64url").toString("utf8"));
+    return Number.isFinite(payload?.exp) ? payload.exp * 1000 : null;
+  } catch {
+    return null; // não é JWT (ou payload ilegível) → só TTL
+  }
 }
 
 // Exposto para os testes limparem o estado de módulo entre casos.
@@ -74,8 +113,14 @@ async function verifyUserCached(accessToken) {
 
   if (ttl > 0) {
     const cached = _tokenVerifyCache.get(accessToken);
-    if (cached && Date.now() - cached.at < ttl) {
-      return cached.user;
+    if (cached) {
+      const now = Date.now();
+      if (cached.expMs != null && now >= cached.expMs - TOKEN_EXP_SKEW_MS) {
+        // Token vencido: não pode mais ser servido em nenhuma hipótese.
+        _tokenVerifyCache.delete(accessToken);
+      } else if (now - cached.at < ttl) {
+        return cached.user;
+      }
     }
     const inFlight = _tokenVerifyInFlight.get(accessToken);
     if (inFlight) return inFlight;
@@ -94,7 +139,7 @@ async function verifyUserCached(accessToken) {
 
     if (ttl > 0) {
       if (_tokenVerifyCache.size >= TOKEN_VERIFY_CACHE_MAX) _tokenVerifyCache.clear();
-      _tokenVerifyCache.set(accessToken, { at: Date.now(), user });
+      _tokenVerifyCache.set(accessToken, { at: Date.now(), user, expMs: readJwtExpMs(accessToken) });
     }
     return user;
   })();

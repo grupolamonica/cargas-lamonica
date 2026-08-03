@@ -20,6 +20,8 @@ import {
 } from "../../../../infrastructure/cadastro-bots/angellira-bot-client.js";
 import { insertSecurityAuditEvent } from "../../../../infrastructure/security-audit.js";
 import { logStructuredEvent } from "../../../../infrastructure/security-log.js";
+import { evaluateCandidaturaCnhCategoria } from "../../../../domain/candidatura/cnh-category.js";
+import { namesMatch } from "../../../../domain/identity/identity-match.js";
 
 import { stageAnexosForEntity } from "./anexos-stager.js";
 import { stripUuidIfInvalid } from "./_utils.js";
@@ -76,6 +78,72 @@ export async function runAngelliraPipeline({
   const dados = cadastro?.dados || {};
   const cadastroId = cadastro?.id;
   if (!cadastroId) throw new Error("cadastro.id ausente — pipeline Angellira abortado");
+
+  // Trava de categoria da CNH (D pra cima) — última linha antes do portal
+  // Angellira. Reavalia sobre o dado FRESCO do banco: cobre re-disparo de
+  // cadastro já aprovado e edição de categoria pós-aprovação. Mesma regra da
+  // candidatura/aprovação (D ou E) — distinta do gate do SPX (que exige E).
+  const categoriaBlock = evaluateCandidaturaCnhCategoria(dados);
+  if (categoriaBlock) {
+    logStructuredEvent("warn", "angellira.pipeline.cnh_category_block", {
+      cadastroId, categoria: categoriaBlock.categoria,
+    });
+    const error = {
+      code: "CNH_CATEGORIA_INCOMPATIVEL",
+      message: categoriaBlock.message,
+      categoria: categoriaBlock.categoria,
+      blocked_by: "cnh_category",
+    };
+    const jobId = await markJobInProgress({
+      client, cadastroId, step: "motorista", payload: { step: "motorista", cadastroId },
+    });
+    await markJobError({ client, jobId, error });
+    await insertSecurityAuditEvent(client, {
+      eventType: "operator.cadastro.angellira_pipeline_blocked",
+      actorUserId: operatorId,
+      actorRole: "operator",
+      resourceType: "pending_driver_registration",
+      resourceId: cadastroId,
+      action: "angellira_pipeline",
+      outcome: "blocked",
+      correlationId,
+      metadata: { blocked_by: "cnh_category", categoria: categoriaBlock.categoria },
+    });
+    return { ok: false, blocked: true, results: [{ step: "motorista", status: "BLOCKED", error }] };
+  }
+
+  // Backstop de identidade (última barreira antes do portal): o nome do cadastro
+  // tem de conferir com o nome da CNH (OCR, snapshot em motorista.cnh.nome). No
+  // TOPO — antes da idempotência/steps — pra barrar re-disparo mesmo com job
+  // motorista OK em cache. Lê dado FRESCO (cobre edição pós-aprovação). Fail-open
+  // sem snapshot. É defesa-em-profundidade do wizard; a checagem inforjável no
+  // fluxo público é o cruzamento com o displayName do Angellira (a seguir, #3).
+  const nomeDigitado = dados?.motorista?.nome;
+  const nomeCnh = dados?.motorista?.cnh?.nome ?? dados?.cnh?.nome;
+  if (nomeCnh && !namesMatch(nomeDigitado, nomeCnh)) {
+    logStructuredEvent("warn", "angellira.pipeline.identity_block", { cadastroId });
+    const error = {
+      code: "NOME_DIVERGENTE_CNH",
+      message: `Nome do cadastro ("${nomeDigitado}") diverge do nome da CNH ("${nomeCnh}").`,
+      blocked_by: "identity",
+    };
+    const jobId = await markJobInProgress({
+      client, cadastroId, step: "motorista", payload: { step: "motorista", cadastroId },
+    });
+    await markJobError({ client, jobId, error });
+    await insertSecurityAuditEvent(client, {
+      eventType: "operator.cadastro.angellira_pipeline_blocked",
+      actorUserId: operatorId,
+      actorRole: "operator",
+      resourceType: "pending_driver_registration",
+      resourceId: cadastroId,
+      action: "angellira_pipeline",
+      outcome: "blocked",
+      correlationId,
+      metadata: { blocked_by: "identity" },
+    });
+    return { ok: false, blocked: true, results: [{ step: "motorista", status: "BLOCKED", error }] };
+  }
 
   const steps = Array.isArray(onlySteps) && onlySteps.length
     ? onlySteps.filter((s) => ALL_STEPS.includes(s))
@@ -443,6 +511,10 @@ async function stepMotorista(ctx) {
     idCadastro: ctx.cadastroId,
     payload,
     anexos,
+    // Vínculo padrão do escritório = Agregado (type 26 em /types/drivers).
+    // Explícito aqui (camada da decisão de negócio) além do default do client.
+    // UPDATE de motorista já existente preserva o vínculo real (flow_motorista.py).
+    typeId: 26,
     correlationId: ctx.correlationId,
   });
   ctx.state.motoristaDriverId = result.driverId;

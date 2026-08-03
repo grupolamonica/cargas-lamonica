@@ -1,4 +1,5 @@
 import { getOperatorAccessToken, requestJson, requestMultipart } from "@/services/apiClient";
+import type { OverviewServerSnapshot } from "@/lib/overviewMetrics";
 import type { PublicLeadValidationSummary, PublicLeadValidationOverallStatus } from "@/services/loadClaims";
 
 /**
@@ -2380,6 +2381,19 @@ export async function fetchOperatorOverviewDigest() {
     "/api/operator/overview/digest",
     { accessToken },
   );
+}
+
+/**
+ * Snapshot agregado do Painel. Substitui os 3x `select(500)` que a tela fazia
+ * direto no PostgREST (cargas + load_public_leads + load_claims): a agregação
+ * agora é SQL e a resposta cabe em poucos KB.
+ */
+export async function fetchOperatorOverviewSnapshot() {
+  const accessToken = await getOperatorAccessToken();
+  return requestJson<{
+    snapshot: OverviewServerSnapshot;
+    meta: { correlationId: string; cached?: boolean };
+  }>("/api/operator/overview/snapshot", { accessToken });
 }
 
 export async function fetchDriverLoadsDigest() {

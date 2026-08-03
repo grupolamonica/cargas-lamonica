@@ -28,6 +28,7 @@ import path from "node:path";
 import { DRAFT_FILE_BUCKET } from "../../../candidatura/use-cases/upload-draft-file.js";
 import { getAdminClient } from "../../../load-claims/auth.js";
 import { logStructuredEvent } from "../../../../infrastructure/security-log.js";
+import { downloadDocBase64Cached } from "../../../../infrastructure/supabase/storage-doc-cache.js";
 
 const DEFAULT_BOT_URL = "http://spx-bot:8766";
 const STAGE_TIMEOUT_MS = 30_000;
@@ -47,16 +48,6 @@ function stripBucketPrefix(storagePath, bucket) {
   const p = String(storagePath || "").trim().replace(/^\/+/, "");
   const prefix = `${bucket}/`;
   return p.startsWith(prefix) ? p.slice(prefix.length) : p;
-}
-
-/** Converte Blob/ArrayBuffer/Buffer (download do Supabase) em base64 puro. */
-async function toBase64(downloadData) {
-  if (downloadData && typeof downloadData.arrayBuffer === "function") {
-    return Buffer.from(await downloadData.arrayBuffer()).toString("base64");
-  }
-  if (downloadData instanceof ArrayBuffer) return Buffer.from(downloadData).toString("base64");
-  if (Buffer.isBuffer(downloadData)) return downloadData.toString("base64");
-  return Buffer.from(downloadData).toString("base64");
 }
 
 /** Localiza arquivo no share: {base}/dados_motoristas/{id}/{sub}/{slug}.* (ext varia). */
@@ -111,20 +102,26 @@ async function postAnexo({ baseUrl, cadastroId, base64, tipo, docLabel, correlat
   }
 }
 
-/** Baixa do bucket + estaga. Best-effort. */
-async function stageFromBucket({ storage, baseUrl, cadastroId, bucket, bucketPath, tipo, docLabel, correlationId }) {
+/**
+ * Baixa do bucket + estaga. Best-effort.
+ *
+ * O download passa pelo micro-cache de bytes (storage-doc-cache.js): o preview
+ * dry-run do SPX baixa o conjunto todo e o disparo real baixaria outra vez, e o
+ * crlv do cavalo já saiu do bucket no pipeline Angellira do mesmo "aprovar".
+ * `bucket` é só um RÓTULO — o cache confere contra o bucket real do handle.
+ */
+async function stageFromBucket({ client, storage, baseUrl, cadastroId, bucket, bucketPath, tipo, docLabel, correlationId }) {
   const cleanPath = stripBucketPrefix(bucketPath, bucket);
   if (!cleanPath) return null;
   try {
-    const { data, error } = await storage.download(cleanPath);
-    if (error || !data) {
+    const { base64, error, failed } = await downloadDocBase64Cached({ client, storage, bucket, path: cleanPath });
+    if (failed) {
       logStructuredEvent("warn", "spx.anexos.download_failed", {
         cadastroId, correlationId: correlationId ?? null, docLabel, tipo, path: cleanPath,
         message: error?.message || "download vazio",
       });
       return null;
     }
-    const base64 = await toBase64(data);
     if (!base64) return null;
     return postAnexo({ baseUrl, cadastroId, base64, tipo, docLabel, correlationId });
   } catch (err) {
@@ -210,7 +207,7 @@ export async function stageSpxAnexos({
       for (const s of specs) {
         if (!s.url) continue;
         const p = await stageFromBucket({
-          storage, baseUrl: resolvedBaseUrl, cadastroId, bucket: DRAFT_FILE_BUCKET,
+          client: adminClient, storage, baseUrl: resolvedBaseUrl, cadastroId, bucket: DRAFT_FILE_BUCKET,
           bucketPath: s.url, tipo: s.tipo, docLabel: s.label, correlationId,
         });
         if (p) anexos[s.key] = p;
@@ -257,7 +254,7 @@ export async function stageSpxAnexos({
     try {
       const storage = storageFrom(RISK_DOC_BUCKET);
       const p = await stageFromBucket({
-        storage, baseUrl: resolvedBaseUrl, cadastroId, bucket: RISK_DOC_BUCKET,
+        client: adminClient, storage, baseUrl: resolvedBaseUrl, cadastroId, bucket: RISK_DOC_BUCKET,
         bucketPath: riskDocBucketPath, tipo: "risk_doc", docLabel: "risk_doc", correlationId,
       });
       if (p) anexos.risk_doc_path = p;

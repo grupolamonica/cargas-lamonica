@@ -26,10 +26,39 @@ vi.mock("../../repom/ocr-sidecar-client.js", () => ({
 }));
 
 // Storage admin client — mock do download (retorna Buffer).
-const { downloadMock } = vi.hoisted(() => ({ downloadMock: vi.fn() }));
-vi.mock("../../load-claims/auth.js", () => ({
-  getAdminClient: () => ({ storage: { from: () => ({ download: downloadMock }) } }),
-}));
+// O fake espelha o supabase-js real: supabaseUrl/supabaseKey no CLIENTE (é dele que
+// o micro-cache de bytes — infrastructure/supabase/storage-doc-cache.js — deriva
+// privilégio + partição) e um handle NOVO por .from(), com bucketId.
+// O cliente é MEMOIZADO como em load-claims/auth.js (`_adminClient`): é essa
+// singularidade que faz o cache atravessar requests em produção.
+const { downloadMock, getAdminClientMock } = vi.hoisted(() => {
+  const jwt = `hdr.${Buffer.from(JSON.stringify({ role: "service_role" })).toString("base64url")}.sig`;
+  const download = vi.fn();
+  let singleton = null;
+  return {
+    downloadMock: download,
+    getAdminClientMock: () => {
+      if (!singleton) {
+        singleton = {
+          supabaseUrl: "https://proj.supabase.co",
+          supabaseKey: jwt,
+          storage: {
+            from: (bucketId) => ({
+              url: "https://proj.supabase.co/storage/v1",
+              headers: { "x-client-info": "supabase-js/2" },
+              bucketId,
+              download,
+            }),
+          },
+        };
+      }
+      return singleton;
+    },
+  };
+});
+vi.mock("../../load-claims/auth.js", () => ({ getAdminClient: getAdminClientMock }));
+
+import { __resetStorageDocCache } from "../../../infrastructure/supabase/storage-doc-cache.js";
 
 // Auditoria — no-op nos testes.
 vi.mock("../../../infrastructure/security-audit.js", () => ({ insertSecurityAuditEvent: vi.fn() }));
@@ -46,6 +75,10 @@ describe("reprocessCadastroDocuments (integração pg-mem)", () => {
   beforeEach(async () => {
     await resetTestDatabase();
     vi.clearAllMocks();
+    // Cache de bytes é módulo-level: zera entre casos (os testes reusam os mesmos
+    // storage paths, ora com sucesso ora com falha de download).
+    __resetStorageDocCache();
+    delete process.env.DRAFT_DOC_CACHE_TTL_MS;
     // Download sempre entrega bytes (o base64 exato não importa — o OCR é mock).
     downloadMock.mockResolvedValue({ data: Buffer.from("fake-bytes"), error: null });
     cnhMock.mockResolvedValue({ ok: false, requiresUpload: true });
@@ -288,6 +321,76 @@ describe("reprocessCadastroDocuments (integração pg-mem)", () => {
     expect(dados.cavalo.placa).toBe("XYZ4E56"); // correção concorrente PRESERVADA (não revertida)
     expect(dados.cavalo.marca).toBe("SCANIA"); // OCR do CRLV aplicado
     expect(dados.motorista.nome).toBe("NOME DA CNH"); // OCR da CNH aplicado
+  });
+
+  describe("micro-cache de bytes (egress)", () => {
+    // Motorista que é o próprio proprietário: a MESMA CNH aparece como
+    // motorista.cnh_url e como cavalo_owner.owner_doc_url, então o plano tem 2
+    // entradas com o mesmo storage path (baixadas em paralelo, CONCURRENCY 6).
+    const seedMesmaCnhDuasVezes = () =>
+      seedPendingRegistration({
+        status: "pendente",
+        dados: {
+          motorista: { cpf: "11111111111", nome: "X", cnh_url: "owner/carga/cnh_1.jpg" },
+          cavalo_owner: { tipo: "pf", doc: "11111111111", nome: "X", owner_doc_url: "owner/carga/cnh_1.jpg" },
+        },
+      });
+
+    it("SEM cache (default em teste): o mesmo doc no plano 2x = 2 downloads", async () => {
+      const { id } = await seedMesmaCnhDuasVezes();
+      await reprocessCadastroDocuments({ id });
+      expect(downloadMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("COM cache: single-flight colapsa o doc repetido em 1 download (2 OCRs preservados)", async () => {
+      process.env.DRAFT_DOC_CACHE_TTL_MS = "60000";
+      cnhMock.mockResolvedValue({ ok: true, fields: { nome: "NOME DA CNH" } });
+      const { id } = await seedMesmaCnhDuasVezes();
+
+      const r = await reprocessCadastroDocuments({ id });
+
+      expect(downloadMock).toHaveBeenCalledTimes(1); // 2 -> 1
+      expect(cnhMock).toHaveBeenCalledTimes(2); // os 2 docs continuam sendo extraídos
+      // Mesmos bytes entregues ao sidecar nas duas extrações.
+      const imagens = cnhMock.mock.calls.map((c) => c[0].imagemBase64);
+      expect(new Set(imagens).size).toBe(1);
+      expect(imagens[0]).toBe(Buffer.from("fake-bytes").toString("base64"));
+      expect(r.report.filter((d) => d.ok)).toHaveLength(2);
+      expect((await getDados(id)).motorista.nome).toBe("NOME DA CNH");
+    });
+
+    it("COM cache: re-clicar em Reprocessar dentro do TTL não baixa nada", async () => {
+      process.env.DRAFT_DOC_CACHE_TTL_MS = "60000";
+      const { id } = await seedPendingRegistration({
+        status: "pendente",
+        dados: {
+          motorista: { cpf: "11111111111", nome: "X", cnh_url: "owner/carga/cnh_1.jpg" },
+          cavalo: { placa: "ABC1D23", crlv_url: "owner/carga/crlv_1.jpg" },
+        },
+      });
+
+      await reprocessCadastroDocuments({ id });
+      expect(downloadMock).toHaveBeenCalledTimes(2); // 1ª passada: 2 docs únicos
+      await reprocessCadastroDocuments({ id });
+      expect(downloadMock).toHaveBeenCalledTimes(2); // 2ª passada: 100% cache
+    });
+
+    it("COM cache: download que falha continua falhando (erro não gruda)", async () => {
+      process.env.DRAFT_DOC_CACHE_TTL_MS = "60000";
+      downloadMock.mockResolvedValue({ data: null, error: { message: "not found" } });
+      const { id } = await seedPendingRegistration({
+        status: "pendente",
+        dados: { motorista: { cpf: "11111111111", nome: "X", cnh_url: "owner/carga/cnh_1.jpg" } },
+      });
+
+      const first = await reprocessCadastroDocuments({ id });
+      const second = await reprocessCadastroDocuments({ id });
+
+      expect(downloadMock).toHaveBeenCalledTimes(2); // re-tentou (não cacheou o erro)
+      expect(cnhMock).not.toHaveBeenCalled();
+      expect(first.report[0]).toMatchObject({ ok: false });
+      expect(second.report[0]).toMatchObject({ ok: false });
+    });
   });
 
   describe("mapeadores puros", () => {
