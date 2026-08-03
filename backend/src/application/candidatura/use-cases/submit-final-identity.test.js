@@ -40,6 +40,14 @@ describe("submitCandidaturaFinal — backstop de identidade (chokepoint comparti
   });
   afterEach(() => vi.clearAllMocks());
 
+  it("CPF inválido (dígito verificador) → 422 CPF_INVALIDO, sem entrar na transação", async () => {
+    const res = await submitCandidaturaFinal(
+      makeArgs({ nome: "BRUNA SILVA AMARAL", cpf: "12345678901", cnh: { nome: "BRUNA SILVA AMARAL" } }),
+    );
+    expect(res.statusCode).toBe(422);
+    expect(res.payload.code).toBe("CPF_INVALIDO");
+  });
+
   it("#4 — nome digitado diverge da CNH (OCR) → 422 NOME_DIVERGENTE_CNH, sem entrar na transação", async () => {
     const res = await submitCandidaturaFinal(
       makeArgs({ nome: "FHILIPE MATHEUS SANTOS DUARTE", cpf: "03070300596", cnh: { nome: "BRUNA SILVA AMARAL" } }),

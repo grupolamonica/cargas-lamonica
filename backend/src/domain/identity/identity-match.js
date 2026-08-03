@@ -106,6 +106,30 @@ export function cpfMatches(a, b) {
 }
 
 /**
+ * CPF válido? 11 dígitos, não todos iguais, e os DOIS dígitos verificadores
+ * (mod-11) conferem. Espelho de `frontend/src/lib/brazilianValidators.ts`
+ * (`isValidCpf`) — o backend não validava o DV, então um CPF forjado
+ * (000.000.000-00, dígitos aleatórios) passava direto pela API.
+ *
+ * @param {string} value
+ * @returns {boolean}
+ */
+export function isValidCpf(value) {
+  const cpf = onlyDigits(value);
+  if (cpf.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(cpf)) return false; // todos os dígitos iguais
+
+  const dv = (len) => {
+    let sum = 0;
+    for (let i = 0; i < len; i++) sum += Number(cpf[i]) * (len + 1 - i);
+    const d = 11 - (sum % 11);
+    return d >= 10 ? 0 : d;
+  };
+
+  return dv(9) === Number(cpf[9]) && dv(10) === Number(cpf[10]);
+}
+
+/**
  * Backstop anti-fraude sobre o payload do wizard: o NOME digitado (editável) bate
  * com o NOME da CNH (OCR, imutável em `motorista.cnh.nome`) e o CPF da
  * candidatura bate com o CPF da CNH.
