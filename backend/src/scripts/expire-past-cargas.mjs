@@ -64,6 +64,11 @@ async function main() {
       AND COALESCE(is_template, false) = false
       -- Recorrentes são avançadas pelo motor de recorrência (expirar quebraria a cadeia).
       AND COALESCE(is_recurring, false) = false
+      -- Agenda "A confirmar" (placeholder data=hoje/horario 00:00 + flag): não tem
+      -- carregamento definido para vencer. Mesma carve-out do job de runtime
+      -- (expirePastCargas) — sem ela, uma rodada manual deste script expiraria as
+      -- cargas que o operador ainda não agendou.
+      AND COALESCE(agenda_a_confirmar, false) = false
       AND (
         -- OPEN: passada. DC-271: SEM a exceção da carga lançada ("o dia todo") —
         -- expiram no carregamento como as da planilha. Guard de motorista (haul

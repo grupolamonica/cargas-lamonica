@@ -12,6 +12,7 @@ import {
   mapDriverLoadReadModelItem,
   normalizeOptionalText,
   isMissingAspxMissingColumnError,
+  isMissingAgendaAConfirmarColumnError,
   isMissingDriverVisibilityColumnError,
   isMissingPacoteColumnsError,
   isMissingBonusRequirementsColumnError,
@@ -64,8 +65,15 @@ export async function fetchOperatorDashboardReadModel({ query, correlationId }) 
       index += 1;
       // DC-271: cargas lançadas/manuais expiram no carregamento como as da
       // planilha (removida a exceção "visível o dia todo"), igual ao portal.
+      // Exceção "A confirmar" (agenda indefinida = placeholder hoje/00:00 + flag):
+      // fica fora do corte, igual ao buildDriverLoadFilters — senão esta tela
+      // divergiria do que o motorista realmente vê. Coluna ausente (banco legado)
+      // → cai no fallback sem a exceção junto com as demais colunas opcionais.
+      const excecaoAConfirmar = supportsOptionalColumns
+        ? " OR COALESCE(cargas.agenda_a_confirmar, false) = true"
+        : "";
       clauses.push(
-        `(cargas.data IS NULL OR cargas.data > $${todayGtIndex} OR (cargas.data = $${todayEqIndex} AND (cargas.horario IS NULL OR cargas.horario >= $${nowTimeIndex})))`,
+        `(cargas.data IS NULL OR cargas.data > $${todayGtIndex} OR (cargas.data = $${todayEqIndex} AND (cargas.horario IS NULL OR cargas.horario >= $${nowTimeIndex}))${excecaoAConfirmar})`,
       );
     } else {
       if (status && status !== "todos") {
@@ -374,6 +382,14 @@ async function fetchDriverLoadsReadModelUncached({ query, correlationId }) {
         whereSql = filterContext.whereSql;
         values = filterContext.values;
         itemRows = await runQuery();
+      } else if (isMissingAgendaAConfirmarColumnError(error)) {
+        // Banco sem a coluna agenda_a_confirmar: aplica o corte de expiração a todas
+        // as cargas (comportamento anterior à flag) em vez de derrubar o portal.
+        filterContext = buildFilters({ includeAgendaAConfirmarException: false });
+        parsedQuery = filterContext.parsedQuery;
+        whereSql = filterContext.whereSql;
+        values = filterContext.values;
+        itemRows = await runQuery();
       } else {
         throw error;
       }
@@ -530,18 +546,27 @@ async function fetchDriverLoadFacetsUncached({ correlationId }) {
     const { dateIso: todayIso, timeIso: nowTimeIso } = getSaoPauloWallClock();
     // DC-271: cargas lançadas/manuais expiram no carregamento como as da planilha
     // (removida a exceção "visível o dia todo"), igual ao buildDriverLoadFilters.
-    const notExpiredSql =
-      "(data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3)))";
+    // Exceção "A confirmar": agenda indefinida (placeholder hoje/00:00 + flag) não
+    // entra no corte — mesma regra do buildDriverLoadFilters, senão o facet conta
+    // menos cargas do que a lista mostra.
+    const notExpiredSql = (comExcecaoAConfirmar = true) =>
+      "(data IS NULL OR data > $1 OR (data = $2 AND (horario IS NULL OR horario >= $3))" +
+      (comExcecaoAConfirmar ? " OR COALESCE(agenda_a_confirmar, false) = true" : "") +
+      ")";
 
     // Carga com a viagem fora do ASPX sai da lista (buildDriverLoadFilters) — tem
     // que sair do CONTADOR também, senão facet e lista divergem e o motorista vê
     // "3 cargas em Salvador" e abre uma lista com 2.
     const naoForaDoAspxSql = "aspx_missing_since IS NULL";
-    const buildFacetWhereSql = (includeDriverVisibilityFilter, { comGuardaAspx = true } = {}) => {
+    const buildFacetWhereSql = (
+      includeDriverVisibilityFilter,
+      { comGuardaAspx = true, comExcecaoAConfirmar = true } = {},
+    ) => {
       const guardaAspx = comGuardaAspx ? ` AND ${naoForaDoAspxSql}` : "";
+      const naoExpirada = notExpiredSql(comExcecaoAConfirmar);
       return includeDriverVisibilityFilter
-        ? `status = 'OPEN' AND COALESCE(is_template, false) = false AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC' AND ${sheetUnallocatedSql} AND ${notExpiredSql}${guardaAspx}`
-        : `status = 'OPEN' AND COALESCE(is_template, false) = false AND ${sheetUnallocatedSql} AND ${notExpiredSql}${guardaAspx}`;
+        ? `status = 'OPEN' AND COALESCE(is_template, false) = false AND COALESCE(driver_visibility, 'PUBLIC') = 'PUBLIC' AND ${sheetUnallocatedSql} AND ${naoExpirada}${guardaAspx}`
+        : `status = 'OPEN' AND COALESCE(is_template, false) = false AND ${sheetUnallocatedSql} AND ${naoExpirada}${guardaAspx}`;
     };
     const facetParams = [todayIso, todayIso, nowTimeIso];
 
@@ -551,10 +576,16 @@ async function fetchDriverLoadFacetsUncached({ correlationId }) {
       try {
         rows = await queryDriverLoadCandidateRows(client, { whereSql, values: facetParams });
       } catch (facetError) {
-        if (!isMissingAspxMissingColumnError(facetError)) throw facetError;
-        // Mesma degradação da listagem: sem a coluna, conta sem a guarda.
-        whereSql = buildFacetWhereSql(includeDriverVisibilityFilter, { comGuardaAspx: false });
-        rows = await queryDriverLoadCandidateRows(client, { whereSql, values: facetParams });
+        if (isMissingAgendaAConfirmarColumnError(facetError)) {
+          // Sem a coluna da flag: conta com o corte de expiração em todas as cargas.
+          whereSql = buildFacetWhereSql(includeDriverVisibilityFilter, { comExcecaoAConfirmar: false });
+          rows = await queryDriverLoadCandidateRows(client, { whereSql, values: facetParams });
+        } else {
+          if (!isMissingAspxMissingColumnError(facetError)) throw facetError;
+          // Mesma degradação da listagem: sem a coluna, conta sem a guarda.
+          whereSql = buildFacetWhereSql(includeDriverVisibilityFilter, { comGuardaAspx: false });
+          rows = await queryDriverLoadCandidateRows(client, { whereSql, values: facetParams });
+        }
       }
       const routeCatalogMetricsByLoadId = await fetchRouteCatalogMetricsByLoadId(client, rows);
       const routeLabelByLoadId = buildRouteLabelMap(rows);
