@@ -28,7 +28,28 @@ jobs:
       github.event.workflow_run.run_attempt < 6
     runs-on: ubuntu-latest
     steps:
+      # Um run cujo commit já não é o HEAD da main está superado: a guarda de
+      # ordem do deploy.yml vai abortá-lo de novo a cada tentativa (e deve — ele
+      # publicaria código anterior ao HEAD). Re-tentar aqui seria puro ruído,
+      # com 6 attempts falhando em série.
+      - name: Skip re-run when the run is superseded by a newer commit on main
+        id: freshness
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          RUN_SHA="${{ github.event.workflow_run.head_sha }}"
+          MAIN_SHA="$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)"
+          echo "run=${RUN_SHA} main=${MAIN_SHA}"
+          if [ "$RUN_SHA" = "$MAIN_SHA" ]; then
+            echo "superseded=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            echo "Run superado por commit mais novo na main — re-run cancelado."
+          fi
+
       - name: Re-run failed deploy jobs (transient VPS SSH timeout)
+        if: steps.freshness.outputs.superseded != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

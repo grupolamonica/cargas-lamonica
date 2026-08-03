@@ -3,7 +3,13 @@ name: Deploy
 on:
   push:
     branches: [main]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      allow_out_of_order:
+        description: 'Publicar mesmo que o SHA seja anterior ao HEAD da main (redeploy deliberado de commit antigo)'
+        required: false
+        default: false
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -155,6 +161,21 @@ jobs:
     needs: [build-frontend, build-backend]
     runs-on: ubuntu-latest
     environment: production
+    # Serializa a publicação em produção: um deploy por vez, e o run mais NOVO
+    # cancela o mais ANTIGO que ainda estiver publicando. Sem isto, dois merges
+    # em sequência corriam soltos e a VPS ficava com a imagem de quem terminasse
+    # por último (incidente 03/08/2026: run do 567460e9 terminou 35s depois do
+    # run do 47731714 e reescreveu a VPS com a imagem anterior ao HEAD da main).
+    #
+    # O grupo é compartilhado com rollback.yml — deploy e rollback mexem no mesmo
+    # estado da VPS e nunca devem rodar em paralelo.
+    #
+    # Concurrency só no job de deploy (não no workflow): os builds de todos os
+    # SHAs continuam completando e publicando no GHCR, o que preserva os alvos
+    # de rollback. Só a publicação é serializada.
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
 
@@ -177,6 +198,59 @@ jobs:
 
             # Sync repo config (compose files, scripts, Dockerfiles) to this commit
             git fetch origin main
+
+            # ── Guarda de ordem ────────────────────────────────────────────────
+            # Segunda linha de defesa da corrida entre deploys (a primeira é o
+            # `concurrency: deploy-prod`, que cancela o run antigo em vôo). Cobre
+            # o caso que o cancelamento NÃO cobre: o run antigo chegar ao SSH
+            # depois que o run novo já publicou — aí não há nada "em vôo" para
+            # cancelar e o antigo sobrescreveria a VPS com código anterior.
+            #
+            # Regra: abortar quando o SHA deste run é ancestral (estritamente mais
+            # antigo) do HEAD da main OU do que já está rodando na VPS. Abortamos
+            # ANTES de qualquer mutação (nem `git reset` roda), então a VPS fica
+            # exatamente como estava.
+            #
+            # Rollback deliberado NÃO passa por aqui: rollback.yml tem script
+            # próprio, sem guarda. Para redeployar um commit antigo por este
+            # workflow, use `workflow_dispatch` com allow_out_of_order=true.
+            DEPLOY_SHA="${{ github.sha }}"
+            MAIN_SHA="$(git rev-parse origin/main)"
+            # Vazio em push; "true"/"false" só em workflow_dispatch.
+            ALLOW_OUT_OF_ORDER="${{ github.event.inputs.allow_out_of_order }}"
+
+            # SHA efetivamente rodando na VPS, lido da imagem dos containers
+            # (é o que um `docker ps` mostraria). Vazio = primeira subida.
+            RUNNING_SHA="$(docker ps --format '{{.Image}}' \
+              | grep -oE 'lamonica-backend:sha-[0-9a-f]{40}' \
+              | head -n1 | sed 's/.*sha-//' || true)"
+
+            echo "[order-guard] deploy=${DEPLOY_SHA}"
+            echo "[order-guard] origin/main=${MAIN_SHA}"
+            echo "[order-guard] rodando na VPS=${RUNNING_SHA:-<indeterminado>}"
+
+            if [ "$ALLOW_OUT_OF_ORDER" = "true" ]; then
+              echo "[order-guard] override manual (allow_out_of_order=true) — checagem de ordem desligada."
+            elif ! git cat-file -e "${DEPLOY_SHA}^{commit}" 2>/dev/null; then
+              # Ref fora do histórico local (dispatch de branch não buscada): não
+              # há como comparar ordem, segue.
+              echo "[order-guard] SHA fora do histórico local — sem comparação de ordem, seguindo."
+            else
+              if [ "$DEPLOY_SHA" != "$MAIN_SHA" ] \
+                && git merge-base --is-ancestor "$DEPLOY_SHA" "$MAIN_SHA"; then
+                echo "::error::Deploy fora de ordem abortado: ${DEPLOY_SHA} é ancestral do HEAD da main (${MAIN_SHA}). Um commit mais novo assumiu a main; publicar este run deixaria a VPS atrás do HEAD. Nada foi alterado na VPS."
+                exit 1
+              fi
+              if [ -n "$RUNNING_SHA" ] && [ "$DEPLOY_SHA" != "$RUNNING_SHA" ] \
+                && git cat-file -e "${RUNNING_SHA}^{commit}" 2>/dev/null \
+                && git merge-base --is-ancestor "$DEPLOY_SHA" "$RUNNING_SHA"; then
+                echo "::error::Deploy fora de ordem abortado: ${DEPLOY_SHA} é ancestral do que já roda na VPS (${RUNNING_SHA}). Nada foi alterado na VPS. Para regredir de propósito use o workflow Rollback."
+                exit 1
+              fi
+              echo "[order-guard] ordem OK — seguindo com a publicação."
+            fi
+            # ───────────────────────────────────────────────────────────────────
+
             git reset --hard origin/main
 
             # Authenticate with GHCR
@@ -240,6 +314,20 @@ jobs:
 
             # Bring up with pinned images (includes HTTPS Traefik routers via domain.yml)
             docker compose -f docker-compose.yml -f docker-compose.vps.yml -f docker-compose.domain.yml -f docker-compose.deploy.yml up -d --remove-orphans
+
+            # Confere que os containers subiram na tag pretendida. É a conferência
+            # manual de `docker ps` que revelou o incidente 03/08/2026, agora
+            # automática: o check só fica verde se a VPS estiver neste SHA.
+            RUNNING_NOW="$(docker ps --format '{{.Image}}' \
+              | grep -oE 'lamonica-(frontend|backend):sha-[0-9a-f]{40}' | sort -u || true)"
+            echo "[order-guard] imagens no ar após o up -d:"
+            echo "${RUNNING_NOW:-<nenhuma>}"
+            for svc in frontend backend; do
+              echo "$RUNNING_NOW" | grep -q "lamonica-${svc}:sha-${{ github.sha }}" || {
+                echo "::error::${svc} não subiu na tag pretendida (sha-${{ github.sha }}) — provável deploy concorrente sobrescrevendo esta publicação."
+                exit 1
+              }
+            done
 
             # Clean up old images (keep last 3)
             docker image prune -f --filter "until=72h" || true
