@@ -1628,10 +1628,9 @@ type AllocCellProps = {
   editing: boolean;
   saving: boolean;
   pinning: boolean;
-  allocStatus: string | null;
   onStartEdit: (lh: string) => void;
   onCancelEdit: () => void;
-  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status?: string }) => void;
   onTogglePin: (lh: string, pinned: boolean) => void;
   onDragStartHandle: (lh: string) => void;
   onDragEndHandle: () => void;
@@ -1642,7 +1641,7 @@ type AllocCellProps = {
   onPullStandby?: (lh: string) => void;
 };
 
-function AllocCell({ row, enriched, aspxAssigned, cavaloChecklist, carretaChecklist, editing, saving, pinning, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle, assigningReserva, routeStandbyCount = 0, onPullStandby }: AllocCellProps) {
+function AllocCell({ row, enriched, aspxAssigned, cavaloChecklist, carretaChecklist, editing, saving, pinning, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle, assigningReserva, routeStandbyCount = 0, onPullStandby }: AllocCellProps) {
   // Linha de RESERVA (standby na rota) — exibe o motorista/veículo e um punho de
   // arrasto: o operador puxa o standby para uma carga da MESMA rota (alocar).
   if (row.reserva) {
@@ -1753,15 +1752,16 @@ function AllocCell({ row, enriched, aspxAssigned, cavaloChecklist, carretaCheckl
   // Fixo trava motorista/veículo (intocável). Status-lock (ASPX) também trava.
   const canEditAlloc = editable && !pinned;
   if (editing) {
-    // O editor inline só mexe em motorista/veículo. Reenvia o override de status
-    // quando ele EXISTE (para o backend não perdê-lo), mas OMITE a chave quando não
-    // há override (`null`): mandar "" ali gravava um vazio EXPLÍCITO e a carga
-    // deixava de refletir o status da planilha.
+    // O editor inline só mexe em motorista/veículo, então NUNCA manda `status`:
+    // chave ausente = o backend preserva o alloc_status atual (has("status")=false).
+    // Antes reenviava `status: allocStatus ?? ""` "para não perder o override" — e era
+    // justamente isso que gravava vazio EXPLÍCITO e fazia a carga aparecer SEM status
+    // (COALESCE(alloc_*, sheet_*) devolve "", não cai para a planilha).
     return (
       <InlineAllocEditor
         initial={{ motorista: row.motoristas ?? "", cavalo: row.cavalo ?? "", carreta: row.carreta ?? "", tipo: row.tipo ?? "" }}
         saving={saving}
-        onSave={(v) => onSaveInline({ lh: row.lh, ...v, ...(allocStatus != null ? { status: allocStatus } : {}) })}
+        onSave={(v) => onSaveInline({ lh: row.lh, ...v })}
         onCancel={onCancelEdit}
       />
     );
@@ -1976,7 +1976,6 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   editing,
   saving,
   pinning,
-  allocStatus,
   isDragSource,
   dropIntent,
   onSelect,
@@ -2005,15 +2004,12 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   editing: boolean;
   saving: boolean;
   pinning: boolean;
-  // alloc_status atual do override — reenviado no save inline para NÃO apagar o
-  // status operacional ao editar só motorista/placa.
-  allocStatus: string | null;
   isDragSource: boolean;
   dropIntent: RowDropIntent;
   onSelect: (row: SheetMonitorRowType) => void;
   onStartEdit: (lh: string) => void;
   onCancelEdit: () => void;
-  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status?: string }) => void;
   onTogglePin: (lh: string, pinned: boolean) => void;
   onDragStartHandle: (lh: string) => void;
   onDragEndHandle: () => void;
@@ -2152,7 +2148,6 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
           editing={editing}
           saving={saving}
           pinning={pinning}
-          allocStatus={allocStatus}
           onStartEdit={onStartEdit}
           onCancelEdit={onCancelEdit}
           onSaveInline={onSaveInline}
@@ -2175,7 +2170,6 @@ function SheetMonitorTable({
   resolveEnriched,
   resolveAssigned,
   resolveChecklistLevel,
-  allocByLh,
   selectedLh,
   selectedRowKey,
   editingLh,
@@ -2204,7 +2198,6 @@ function SheetMonitorTable({
   resolveEnriched: (row: SheetMonitorRowType) => SheetMonitorEnrichedRow | undefined;
   resolveAssigned: (row: SheetMonitorRowType) => boolean | null;
   resolveChecklistLevel: (plate: string | null | undefined) => VehicleChecklistLevelEntry | undefined;
-  allocByLh: Record<string, SheetMonitorAllocation>;
   selectedLh: string | null;
   selectedRowKey: string | null;
   editingLh: string | null;
@@ -2215,7 +2208,7 @@ function SheetMonitorTable({
   onSelect: (row: SheetMonitorRowType) => void;
   onStartEdit: (lh: string) => void;
   onCancelEdit: () => void;
-  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status?: string }) => void;
   onTogglePin: (lh: string, pinned: boolean) => void;
   onReassign: (moves: Array<{ lh?: string; cargoId?: string; motorista: string; cavalo: string; carreta: string }>) => void;
   onDescendQueue: (input: { sourceLh: string; targetLh: string; orderedLhs: string[]; pinnedInPath: string[]; aspxInPath: string[] }) => void;
@@ -2490,7 +2483,6 @@ function SheetMonitorTable({
                 editing={row.lh === editingLh}
                 saving={row.lh === savingLh}
                 pinning={row.lh === pinningLh}
-                allocStatus={allocByLh[row.lh]?.alloc_status ?? null}
                 isDragSource={row.lh === dragLh}
                 dropIntent={dropTarget?.key === row.rowKey ? dropTarget.intent : null}
                 onSelect={onSelect}
@@ -4651,7 +4643,9 @@ export default function SheetMonitor() {
   const handleStartEdit = useCallback((lh: string) => setEditingLh(lh), []);
   const handleCancelEdit = useCallback(() => setEditingLh(null), []);
   const handleSaveInline = useCallback(
-    (rawPayload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string; tipo: string }) => {
+    // `status` não vem do editor inline (ele só edita motorista/veículo/tipo) — a
+    // chave ausente faz o backend PRESERVAR o alloc_status atual.
+    (rawPayload: { lh: string; motorista: string; cavalo: string; carreta: string; status?: string; tipo: string }) => {
       // DC-310 — limpa o sufixo `(***NNN)` do dropdown de homônimos antes de comparar/gravar.
       const payload = { ...rawPayload, motorista: stripDriverCpfSuffix(rawPayload.motorista) };
       const target = itemsRef.current.find((r) => r.lh === payload.lh);
@@ -5403,7 +5397,6 @@ export default function SheetMonitor() {
                 resolveEnriched={resolveEnriched}
                 resolveAssigned={resolveAssigned}
                 resolveChecklistLevel={resolveChecklistLevel}
-                allocByLh={allocByLh}
                 selectedLh={selectedRow?.lh ?? null}
                 selectedRowKey={selectedRow?.rowKey ?? null}
                 editingLh={editingLh}

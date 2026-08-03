@@ -96,6 +96,14 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     // "Disponível" ficava preso em alloc_status e a carga aparecia azul
     // "Disponivel" mesmo continuando BOOKED e com motorista (enganoso).
     const wantsAvailable = has("status") && /^dispon[ií]vel$/i.test(norm(payload.status));
+    // Seleção VAZIA no modal ("— sem status (usa a planilha) —") = SOLTAR o override
+    // (→ NULL), não gravar vazio explícito. O rótulo promete voltar a seguir a
+    // planilha, mas "" em alloc_status faz COALESCE(alloc_*, sheet_*) devolver "" e a
+    // carga aparecia SEM status mesmo com a planilha em DESCARREGADO — o mesmo
+    // sintoma que o saneamento (`releaseFrozenAllocStatus`) tem de limpar depois.
+    // Só "Disponível" continua gravando "" (é a ação de reabrir, e aí a planilha
+    // também é limpa no write-back).
+    const wantsClearOverride = has("status") && !wantsAvailable && norm(payload.status) === "";
     // ECO do que já estava na tela ≠ decisão do operador. O modal vem pré-preenchido
     // com o status EFETIVO (e, em viagem SPX, com o overlay ao vivo, que muda sozinho
     // a cada poll) — reenviá-lo criava um override que ninguém escolheu e que nada
@@ -103,9 +111,12 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     // preserva o alloc_status atual, inclusive null = "sem override".
     const statusAtualEfetivo = norm(sheetRow.alloc_status ?? sheetRow.sheet_status).toUpperCase();
     const statusEcho =
-      has("status") && !wantsAvailable && norm(payload.status).toUpperCase() === statusAtualEfetivo;
+      has("status") && !wantsAvailable && !wantsClearOverride &&
+      norm(payload.status).toUpperCase() === statusAtualEfetivo;
     const statusTouched = has("status") && !statusEcho;
-    const finalStatus = statusTouched ? (wantsAvailable ? "" : norm(payload.status)) : (sheetRow.alloc_status ?? null);
+    const finalStatus = statusTouched
+      ? (wantsAvailable ? "" : (wantsClearOverride ? null : norm(payload.status)))
+      : (sheetRow.alloc_status ?? null);
     const finalTipo = has("tipo") ? norm(payload.tipo) : (sheetRow.alloc_tipo ?? null);
     // Motivo da troca (modal "Confirmar troca"): ausente preserva o último motivo.
     const finalDescricao = has("descricao") ? norm(payload.descricao) : (sheetRow.alloc_descricao ?? null);
@@ -300,7 +311,9 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
         // um status que ninguém tocou sobrescrevia na planilha o valor gravado pelo
         // robô ASPX, inclusive CTE EM EMISSÃO/CTE ENVIADO (que só existem lá). O
         // Apps Script (PR #322) só grava a col L quando a chave vem.
-        ...(statusTouched ? { status: finalStatus ?? "" } : {}),
+        // Soltar o override ("usa a planilha") NÃO espelha: a planilha é justamente
+        // a fonte que se quer voltar a seguir — limpar a col L a destruiria.
+        ...(statusTouched && !wantsClearOverride ? { status: finalStatus ?? "" } : {}),
         // Vínculo (col H) só espelha quando o modal envia o campo (senão o robô
         // não toca H — evita apagar o vínculo de linhas não editadas).
         ...(has("vinculo") ? { vinculo: finalVinculo ?? "" } : {}),
