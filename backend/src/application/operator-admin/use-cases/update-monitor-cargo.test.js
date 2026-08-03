@@ -305,6 +305,28 @@ describe("updateMonitorCargo", () => {
     expect(rows[0].status).toBe("BOOKED"); // com motorista, não reabre
   });
 
+  it("'Disponível' COM motorista NÃO apaga o status operacional da carga lançada", async () => {
+    // A carga LANÇADA guarda o status SÓ em alloc_status (não há planilha por baixo):
+    // apagá-lo deixa o overlay ao vivo do SPX preencher a linha (CTE → CARREGADO).
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "RESERVED" });
+    const op = await seedUser({ email: "op-sys-disp-keep@teste.local" });
+    await query(
+      `UPDATE public.cargas SET alloc_motorista = $2, alloc_status = $3, alloc_updated_at = now() WHERE id = $1`,
+      [id, "CLOVIS", "CTE EM EMISSÃO"],
+    );
+
+    await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { motorista: "CLOVIS", carreta: "ABC1D23", status: "Disponível" },
+      correlationId: "c-sys-disp-keep",
+    });
+
+    const { rows } = await query(`SELECT alloc_status, alloc_carreta FROM public.cargas WHERE id = $1`, [id]);
+    expect(rows[0].alloc_status).toBe("CTE EM EMISSÃO");
+    expect(rows[0].alloc_carreta).toBe("ABC1D23");
+  });
+
   it("status 'Disponível' sem motorista numa carga do sistema RESERVED reabre e cancela o lead", async () => {
     const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
     const op = await seedUser({ email: "op-sys-disp3@teste.local" });

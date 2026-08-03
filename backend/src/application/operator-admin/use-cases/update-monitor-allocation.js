@@ -89,13 +89,29 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     const finalMotorista = pinned || !has("motorista") ? (sheetRow.alloc_motorista ?? null) : norm(payload.motorista);
     const finalCavalo = pinned || !has("cavalo") ? (sheetRow.alloc_cavalo ?? null) : norm(payload.cavalo);
     const finalCarreta = pinned || !has("carreta") ? (sheetRow.alloc_carreta ?? null) : norm(payload.carreta);
+    // Motorista EFETIVO depois desta edição (override real OU planilha). Calculado
+    // AQUI porque a decisão sobre "Disponível" (logo abaixo) depende dele.
+    // Enviado explicitamente → vale o valor do operador (inclusive "" = limpou);
+    // ausente → cai pro valor da planilha (`||`) p/ não inventar carga sem motorista.
+    const effMotorista = (explicit("motorista") ? finalMotorista : (finalMotorista || sheetRow.sheet_motorista) || "").toString().trim();
     // "Disponível" é a AÇÃO DE REABRIR, não um status operacional armazenável:
     // normaliza para "" (sem status). O badge "Disponivel" da linha vem da
     // derivação de disponibilidade (openLhSet: OPEN + pública + futura + sem
     // motorista), não de um literal em alloc_status. Sem isso o literal
-    // "Disponível" ficava preso em alloc_status e a carga aparecia azul
+    // "Disponivel" ficava preso em alloc_status e a carga aparecia azul
     // "Disponivel" mesmo continuando BOOKED e com motorista (enganoso).
-    const wantsAvailable = has("status") && /^dispon[ií]vel$/i.test(norm(payload.status));
+    //
+    // COM motorista efetivo, porém, "Disponível" NÃO é reabertura: a carga não pode
+    // voltar pro painel (seria duplo-booking) e o front já barra a escolha. Se ainda
+    // assim chega — aba antiga com bundle velho, ou o valor pré-preenchido do select
+    // (onde "Disponível" é a 1ª opção) indo junto num save de outro campo —, gravar
+    // "" APAGA o status operacional: o efetivo fica vazio e o overlay ao vivo do SPX
+    // passa a preencher a linha (viagem em CTE reaparecendo como CARREGADO). Medido
+    // em produção: 45 viagens com status errado, 18 por esse "" . Então tratamos como
+    // campo AUSENTE — preserva o alloc_status atual e não mexe na planilha.
+    const wantsAvailableRequested = has("status") && /^dispon[ií]vel$/i.test(norm(payload.status));
+    const wantsAvailable = wantsAvailableRequested && effMotorista === "";
+    const availableIgnorado = wantsAvailableRequested && !wantsAvailable;
     // Seleção VAZIA no modal ("— sem status (usa a planilha) —") = SOLTAR o override
     // (→ NULL), não gravar vazio explícito. O rótulo promete voltar a seguir a
     // planilha, mas "" em alloc_status faz COALESCE(alloc_*, sheet_*) devolver "" e a
@@ -113,7 +129,9 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     const statusEcho =
       has("status") && !wantsAvailable && !wantsClearOverride &&
       norm(payload.status).toUpperCase() === statusAtualEfetivo;
-    const statusTouched = has("status") && !statusEcho;
+    // `availableIgnorado` entra aqui junto com o eco: os dois significam "o operador
+    // não decidiu status nenhum" → preserva o alloc_status atual.
+    const statusTouched = has("status") && !statusEcho && !availableIgnorado;
     const finalStatus = statusTouched
       ? (wantsAvailable ? "" : (wantsClearOverride ? null : norm(payload.status)))
       : (sheetRow.alloc_status ?? null);
@@ -223,12 +241,11 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     // Motorista alocado numa carga NORMAL deixa de estar "em reserva": baixa as
     // reservas ativas desse motorista (senão aparece na carga E no standby). Não
     // baixa em cancelamento — aí quem move é a cascata.
-    // Motorista EFETIVO = override real (alloc) OU planilha (`||`): um override
-    // vazio ("") cai pra planilha. Assim NÃO reabrimos (status→OPEN) uma carga que
-    // a planilha ainda escala — senão o portal ofereceria uma carga com motorista
-    // vivo na planilha (duplo-booking). Só reabre quando não há motorista em lugar
-    // nenhum (nem override, nem planilha).
-    const effMotorista = (explicit("motorista") ? finalMotorista : (finalMotorista || sheetRow.sheet_motorista) || "").toString().trim();
+    // `effMotorista` (motorista EFETIVO = override real OU planilha) é calculado no
+    // topo, junto com a decisão de "Disponível": um override vazio ("") cai pra
+    // planilha, então NÃO reabrimos (status→OPEN) uma carga que a planilha ainda
+    // escala — senão o portal ofereceria uma carga com motorista vivo na planilha
+    // (duplo-booking). Só reabre quando não há motorista em lugar nenhum.
     const cancelling = Boolean(finalStatus) && /cancel/i.test(finalStatus);
     // Status "Disponível" numa carga SEM motorista = reabrir pro painel do
     // motorista (volta pra fila do portal). Só quando não há motorista efetivo.
