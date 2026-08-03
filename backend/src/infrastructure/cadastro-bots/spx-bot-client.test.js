@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  SpxBotError,
   __resetCircuitForTests,
   cadastrarMotorista,
   importarMatched,
@@ -106,6 +105,34 @@ describe("spx-bot-client / cadastrarMotorista — error mapping", () => {
     })).rejects.toMatchObject({
       code: "SPX_DRIVER_REPEAT",
       retcode: 271627140,
+    });
+  });
+
+  it("detail como STRING '[271605009] ...' → SPX_TELEFONE_INVALIDO (caso DOMICIO)", async () => {
+    // O sidecar pode devolver o motivo embutido numa STRING (não no objeto
+    // {retcode,erro}). Antes deste fix, retcode/erroMsg ficavam null e caía no
+    // 502 genérico "Falha SPX em etapa desconhecida", escondendo a causa real.
+    mockFetchTwice(502, {
+      detail:
+        "[271605009] Telefone invalido (formato BR esperado: DDD + 9 digitos) (path=/api/driverservice/agency/br/driver/request/validate/basic)",
+    });
+    await expect(cadastrarMotorista({
+      payload: { cpf: "53018634870", driver_name: "DOMICIO" },
+    })).rejects.toMatchObject({
+      code: "SPX_TELEFONE_INVALIDO",
+      retcode: 271605009,
+    });
+  });
+
+  it("detail string com retcode desconhecido → 502 mostra a razão real (não 'etapa desconhecida')", async () => {
+    mockFetchTwice(502, {
+      detail: "[999999999] Algo inesperado no portal (path=/x)",
+    });
+    await expect(cadastrarMotorista({
+      payload: { cpf: "53018634870", driver_name: "X" },
+    })).rejects.toMatchObject({
+      code: "SPX_DOWNSTREAM_FAIL",
+      message: "Algo inesperado no portal",
     });
   });
 

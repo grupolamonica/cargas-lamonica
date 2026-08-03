@@ -201,6 +201,42 @@ describe.sequential("public load leads", () => {
     await harness.closeTestDatabase();
   });
 
+  it("recusa candidatura em carga cuja VIAGEM saiu do ASPX (link direto não passa pela listagem)", async () => {
+    // A listagem do portal e os facets já escondem a carga marcada; o link direto
+    // (WhatsApp, print, histórico do navegador) não passa por eles — daí o gate.
+    // A carga NÃO muda de status: quem cancela/expira é o operador.
+    const { id: loadId } = await harness.seedLoad();
+    await harness.query("UPDATE public.cargas SET aspx_missing_since = now(), aspx_missing_lh = $2 WHERE id = $1", [
+      loadId,
+      "LT1Q8102CLEN1",
+    ]);
+
+    await expect(
+      service.createPublicLoadLeadPreRegistration({
+        loadId,
+        payload: buildPayload(),
+        correlationId: "corr-fora-aspx",
+      }),
+    ).rejects.toMatchObject({ details: { code: "LOAD_OUTSIDE_ASPX" } });
+
+    const leads = await harness.getPublicLeadsByLoad(loadId);
+    const load = await harness.getLoad(loadId);
+    expect(leads).toHaveLength(0);
+    expect(load.status).toBe(LOAD_STATUS.OPEN); // política preservada: status intacto
+  });
+
+  it("carga sem a marca segue aceitando candidatura (a guarda não é geral)", async () => {
+    const { id: loadId } = await harness.seedLoad();
+
+    const response = await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload(),
+      correlationId: "corr-sem-marca",
+    });
+
+    expect(response.statusCode).toBe(201);
+  });
+
   it("creates a public pre-registration and already sends the lead to the operator queue", async () => {
     const { id: loadId } = await harness.seedLoad();
 

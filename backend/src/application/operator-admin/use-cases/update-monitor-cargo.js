@@ -5,6 +5,7 @@ import { ConflictError, NotFoundError, ValidationError } from "../../../domain/l
 import { syncedCarregamentoLabel } from "../../../domain/cargo-schedule.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
 import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
+import { writeAllocationsToSheet, formatSheetDateLabel } from "../../google-sheets/sheet-writeback.js";
 
 // pg devolve DATE como Date (UTC-midnight) e TIME como string. Normaliza pro
 // formato de parede 'YYYY-MM-DD' / 'HH:MM' (UTC, evita off-by-one).
@@ -285,8 +286,62 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
         meta: { correlationId },
       },
       reopenLeadId,
+      // Espelho na planilha (fora da transação) — ver bloco abaixo.
+      sheetMirror: {
+        lh: (lhManual ?? "").toString().trim(),
+        touchesAlloc: has("motorista") || has("cavalo") || has("carreta") || has("status"),
+        statusInformado: has("status"),
+        effective: {
+          motorista: allocMotorista ?? "",
+          cavalo: allocCavalo ?? "",
+          carreta: allocCarreta ?? "",
+          status: allocStatus ?? "",
+        },
+        sheetSource: row.sheet_source ?? null,
+        origem,
+        destino,
+        carregamentoLabel: syncedCarregamentoLabel(fmtDate(data), fmtTime(horario)),
+        descargaLabel: descarga ?? "",
+      },
     };
   });
+
+  // Write-back best-effort na planilha (espelho) — FORA da transação e SEM await.
+  //
+  // PARIDADE com o caminho gêmeo (update-monitor-allocation.js): salvar a linha
+  // "sistema" pelo modal do Monitor gravava alloc_* e NÃO espelhava nada, então a
+  // carga lançada com motorista alocado aqui nunca aparecia na planilha (a Shopee
+  // não via o motorista). Mesmos gates do gêmeo, sem regra nova:
+  //   - só quando a edição toca alocação (motorista/cavalo/carreta/status);
+  //   - createIfMissing (cria-ou-preenche com rota + agenda) SÓ com motorista
+  //     efetivo — sem motorista não cria linha, p/ não poluir a planilha com spot
+  //     vazio; sem motorista cai no update-only, no-op se a linha não existe;
+  //   - gate LH "LT…": só linehaul SPX (planilha Shopee). Carga lançada não
+  //     persiste sheet_source (NULL → roteia p/ shopee); o gate evita criar um LH
+  //     de outra fonte (ex.: Nestlé) na planilha errada;
+  //   - `status` só vai quando o payload informou o campo — senão re-estamparia a
+  //     coluna STATUS com um alloc_status congelado.
+  const mirror = result.sheetMirror;
+  if (mirror?.lh && mirror.touchesAlloc) {
+    const effMotorista = (mirror.effective.motorista ?? "").toString().trim();
+    const isSpxLinehaul = mirror.lh.toUpperCase().startsWith("LT");
+    const update = {
+      lh: mirror.lh,
+      source: mirror.sheetSource,
+      motorista: mirror.effective.motorista,
+      cavalo: mirror.effective.cavalo,
+      carreta: mirror.effective.carreta,
+    };
+    if (mirror.statusInformado) update.status = mirror.effective.status;
+    if (effMotorista && isSpxLinehaul) {
+      update.createIfMissing = true;
+      update.origem = mirror.origem;
+      update.destino = mirror.destino;
+      update.dataCarregamento = formatSheetDateLabel(mirror.carregamentoLabel);
+      update.dataDescarga = formatSheetDateLabel(mirror.descargaLabel);
+    }
+    void writeAllocationsToSheet([update]).catch(() => {});
+  }
 
   // Reabrir carga reservada do sistema: o operador limpou o motorista → cancela
   // o lead do portal (APPROVED → CANCELLED) e a carga volta a OPEN

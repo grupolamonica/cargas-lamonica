@@ -1304,10 +1304,14 @@ function AspxAssignModal({ open, onClose }: { open: boolean; onClose: () => void
 
 type CargoForm = { lh: string; status: string; tipo: string; origem: string; destino: string; carregamento: string; descarga: string; motorista: string; cavalo: string; carreta: string; vinculo: string; tratativas: string; checklistCavalo: string; checklistCarreta: string };
 
-function MonitorCargoFields({ form, setForm, statusOptions }: {
+function MonitorCargoFields({ form, setForm, statusOptions, onStatusTouched }: {
   form: CargoForm;
   setForm: React.Dispatch<React.SetStateAction<CargoForm>>;
   statusOptions: readonly string[];
+  // Disparado quando o operador MEXE no select de status. O caller usa isso para
+  // decidir se manda `status` no payload — comparar o form com o status exibido
+  // não serve, porque em viagem SPX ele muda sozinho a cada poll (ver doSave).
+  onStatusTouched?: () => void;
 }) {
   const set = (k: keyof CargoForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -1318,7 +1322,11 @@ function MonitorCargoFields({ form, setForm, statusOptions }: {
         <input className={field} value={form.lh} onChange={set("lh")} placeholder="opcional" maxLength={120} />
       </label>
       <label className="col-span-1 text-xs font-medium text-muted-foreground">Status
-        <select className={field} value={form.status} onChange={set("status")}>
+        <select
+          className={field}
+          value={form.status}
+          onChange={(e) => { onStatusTouched?.(); set("status")(e); }}
+        >
           <option value="">(sem status)</option>
           {statusOptions.map((s) => (
             <option key={s} value={s}>{s === "Disponível" ? "Disponível (reabrir p/ motorista)" : s}</option>
@@ -1398,9 +1406,12 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
   const queryClient = useQueryClient();
   const [form, setForm] = useState(EMPTY_CARGO_FORM);
   const [confirmChange, setConfirmChange] = useState(false);
+  // O operador mexeu no select de status? (ver buildAndMutate)
+  const [statusDirty, setStatusDirty] = useState(false);
 
   useEffect(() => {
     if (open && row) {
+      setStatusDirty(false);
       setForm({
         lh: row.lh ?? "",
         status: row.status ?? "",
@@ -1450,16 +1461,15 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
       toast.error("Esta carga tem motorista. Remova o motorista antes de deixá-la Disponível.");
       return;
     }
-    // Status só vai quando o operador REALMENTE mudou (mesmo gate do #186 no
-    // AllocEditDialog). O campo vem pré-preenchido com o status EXIBIDO (row.status =
-    // SPX ao vivo p/ viagens SPX); reenviá-lo sem mudança gravava esse eco do SPX em
-    // alloc_status e o "congelava", escondendo o avanço real do SPX depois. Omitir →
-    // o backend preserva o alloc_status atual (has("status")=false; schema opcional).
-    const statusChanged = form.status.trim() !== (row.status ?? "").trim();
+    // Status só vai quando o operador MEXEU no select (`statusDirty`), nunca por
+    // comparação com `row.status`: em viagem SPX esse valor é o overlay ao vivo e
+    // muda sozinho a cada poll, então a comparação dava falso-positivo e gravava o
+    // eco do SPX em alloc_status, "congelando" o status. Omitir → o backend
+    // preserva o alloc_status atual (has("status")=false; schema opcional).
     mutation.mutate({
       cargoId: row.cargoId,
       lh: form.lh.trim(),
-      ...(statusChanged ? { status: form.status.trim() } : {}),
+      ...(statusDirty ? { status: form.status.trim() } : {}),
       tipo: form.tipo.trim(),
       origem: form.origem.trim(),
       destino: form.destino.trim(),
@@ -1508,7 +1518,7 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
             <p className="mt-0.5 whitespace-pre-wrap text-sm leading-snug text-foreground">{row.descricao}</p>
           </div>
         )}
-        <MonitorCargoFields form={form} setForm={setForm} statusOptions={statusOptions} />
+        <MonitorCargoFields form={form} setForm={setForm} statusOptions={statusOptions} onStatusTouched={() => setStatusDirty(true)} />
         <div className="mt-2 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded-lg border border-border/80 px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground">Cancelar</button>
           <button type="button" onClick={save} disabled={mutation.isPending}
@@ -1618,10 +1628,9 @@ type AllocCellProps = {
   editing: boolean;
   saving: boolean;
   pinning: boolean;
-  allocStatus: string | null;
   onStartEdit: (lh: string) => void;
   onCancelEdit: () => void;
-  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status?: string }) => void;
   onTogglePin: (lh: string, pinned: boolean) => void;
   onDragStartHandle: (lh: string) => void;
   onDragEndHandle: () => void;
@@ -1632,7 +1641,7 @@ type AllocCellProps = {
   onPullStandby?: (lh: string) => void;
 };
 
-function AllocCell({ row, enriched, aspxAssigned, cavaloChecklist, carretaChecklist, editing, saving, pinning, allocStatus, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle, assigningReserva, routeStandbyCount = 0, onPullStandby }: AllocCellProps) {
+function AllocCell({ row, enriched, aspxAssigned, cavaloChecklist, carretaChecklist, editing, saving, pinning, onStartEdit, onCancelEdit, onSaveInline, onTogglePin, onDragStartHandle, onDragEndHandle, assigningReserva, routeStandbyCount = 0, onPullStandby }: AllocCellProps) {
   // Linha de RESERVA (standby na rota) — exibe o motorista/veículo e um punho de
   // arrasto: o operador puxa o standby para uma carga da MESMA rota (alocar).
   if (row.reserva) {
@@ -1743,11 +1752,16 @@ function AllocCell({ row, enriched, aspxAssigned, cavaloChecklist, carretaCheckl
   // Fixo trava motorista/veículo (intocável). Status-lock (ASPX) também trava.
   const canEditAlloc = editable && !pinned;
   if (editing) {
+    // O editor inline só mexe em motorista/veículo, então NUNCA manda `status`:
+    // chave ausente = o backend preserva o alloc_status atual (has("status")=false).
+    // Antes reenviava `status: allocStatus ?? ""` "para não perder o override" — e era
+    // justamente isso que gravava vazio EXPLÍCITO e fazia a carga aparecer SEM status
+    // (COALESCE(alloc_*, sheet_*) devolve "", não cai para a planilha).
     return (
       <InlineAllocEditor
         initial={{ motorista: row.motoristas ?? "", cavalo: row.cavalo ?? "", carreta: row.carreta ?? "", tipo: row.tipo ?? "" }}
         saving={saving}
-        onSave={(v) => onSaveInline({ lh: row.lh, ...v, status: allocStatus ?? "" })}
+        onSave={(v) => onSaveInline({ lh: row.lh, ...v })}
         onCancel={onCancelEdit}
       />
     );
@@ -1962,7 +1976,6 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   editing,
   saving,
   pinning,
-  allocStatus,
   isDragSource,
   dropIntent,
   onSelect,
@@ -1991,15 +2004,12 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
   editing: boolean;
   saving: boolean;
   pinning: boolean;
-  // alloc_status atual do override — reenviado no save inline para NÃO apagar o
-  // status operacional ao editar só motorista/placa.
-  allocStatus: string | null;
   isDragSource: boolean;
   dropIntent: RowDropIntent;
   onSelect: (row: SheetMonitorRowType) => void;
   onStartEdit: (lh: string) => void;
   onCancelEdit: () => void;
-  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status?: string }) => void;
   onTogglePin: (lh: string, pinned: boolean) => void;
   onDragStartHandle: (lh: string) => void;
   onDragEndHandle: () => void;
@@ -2138,7 +2148,6 @@ const SheetMonitorRow = memo(function SheetMonitorRow({
           editing={editing}
           saving={saving}
           pinning={pinning}
-          allocStatus={allocStatus}
           onStartEdit={onStartEdit}
           onCancelEdit={onCancelEdit}
           onSaveInline={onSaveInline}
@@ -2161,7 +2170,6 @@ function SheetMonitorTable({
   resolveEnriched,
   resolveAssigned,
   resolveChecklistLevel,
-  allocByLh,
   selectedLh,
   selectedRowKey,
   editingLh,
@@ -2190,7 +2198,6 @@ function SheetMonitorTable({
   resolveEnriched: (row: SheetMonitorRowType) => SheetMonitorEnrichedRow | undefined;
   resolveAssigned: (row: SheetMonitorRowType) => boolean | null;
   resolveChecklistLevel: (plate: string | null | undefined) => VehicleChecklistLevelEntry | undefined;
-  allocByLh: Record<string, SheetMonitorAllocation>;
   selectedLh: string | null;
   selectedRowKey: string | null;
   editingLh: string | null;
@@ -2201,7 +2208,7 @@ function SheetMonitorTable({
   onSelect: (row: SheetMonitorRowType) => void;
   onStartEdit: (lh: string) => void;
   onCancelEdit: () => void;
-  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string }) => void;
+  onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status?: string }) => void;
   onTogglePin: (lh: string, pinned: boolean) => void;
   onReassign: (moves: Array<{ lh?: string; cargoId?: string; motorista: string; cavalo: string; carreta: string }>) => void;
   onDescendQueue: (input: { sourceLh: string; targetLh: string; orderedLhs: string[]; pinnedInPath: string[]; aspxInPath: string[] }) => void;
@@ -2476,7 +2483,6 @@ function SheetMonitorTable({
                 editing={row.lh === editingLh}
                 saving={row.lh === savingLh}
                 pinning={row.lh === pinningLh}
-                allocStatus={allocByLh[row.lh]?.alloc_status ?? null}
                 isDragSource={row.lh === dragLh}
                 dropIntent={dropTarget?.key === row.rowKey ? dropTarget.intent : null}
                 onSelect={onSelect}
@@ -2968,6 +2974,11 @@ function RowDetailModal({
   // uma planilha — LH/rota/agenda inclusive (é a fonte da verdade). Form canônico
   // completo, salvo via updateMonitorCargo (por cargoId). Cargas da planilha ignoram.
   const [cargoForm, setCargoForm] = useState<CargoForm>(EMPTY_CARGO_FORM);
+  // O operador MEXEU no select de status? Só então o status vai no payload — a
+  // comparação com o valor exibido não serve, porque em viagem SPX ele é o overlay
+  // ao vivo e muda sozinho a cada poll (ver doSave/buildAndMutateSystem).
+  const [allocStatusDirty, setAllocStatusDirty] = useState(false);
+  const [cargoStatusDirty, setCargoStatusDirty] = useState(false);
   const [confirmChange, setConfirmChange] = useState(false);
   // Guarda de "alterações não salvas" ao tentar fechar o modal.
   const [confirmClose, setConfirmClose] = useState(false);
@@ -3009,6 +3020,7 @@ function RowDetailModal({
     };
     setAllocForm(allocBase);
     setAllocBaseline(allocBase);
+    setAllocStatusDirty(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- só ao abrir/trocar de linha (não em refetch → preserva edições não salvas)
   }, [rowIdentity, open]);
 
@@ -3037,6 +3049,7 @@ function RowDetailModal({
     };
     setCargoForm(cargoBase);
     setCargoBaseline(cargoBase);
+    setCargoStatusDirty(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- idem: só ao abrir/trocar de linha
   }, [open, rowIdentity]);
 
@@ -3260,26 +3273,19 @@ function RowDetailModal({
       toast.error("Esta carga tem motorista. Remova o motorista antes de deixá-la Disponível.");
       return;
     }
-    // Só grava `status` quando o operador REALMENTE mudou. O campo vem
-    // pré-preenchido com o status EFETIVO (alloc_status ?? planilha); reenviá-lo
-    // sem mudança persistia o status da planilha em alloc_status e o "congelava"
-    // — depois a planilha avançava (ex.: CTE ENVIADO) e o override velho mascarava
-    // o valor real (bug do LT0Q7F02AY781). Omitir → o backend preserva o
-    // alloc_status atual (null = segue refletindo a planilha).
-    // IMPORTANTE: usa `||` (não `??`) p/ CASAR o prefill do form (linha ~2692:
-    // `alloc?.alloc_status || row.status`). Com `??`, quando alloc_status era ""
-    // (vazio explícito), o baseline virava "" mas o campo ficava pré-preenchido com
-    // row.status (SPX ao vivo) → statusChanged dava FALSO-POSITIVO e persistia o SPX
-    // daquele instante em alloc_status ao mudar QUALQUER outro campo (ex.: vínculo),
-    // "congelando" o status. Alinhados, editar só o vínculo não reenvia o status.
-    const initialStatus = alloc?.alloc_status || row.status || "";
-    const statusChanged = allocForm.status !== initialStatus;
+    // Só grava `status` quando o operador MEXEU no select (`allocStatusDirty`).
+    //
+    // Antes isto era uma COMPARAÇÃO (`allocForm.status !== alloc?.alloc_status ||
+    // row.status`) e ela é intrinsecamente instável: o form é pré-preenchido ao
+    // ABRIR o modal, mas `row.status` continua sendo repollado (2 min) e, em viagem
+    // SPX, é o overlay ao vivo. Se o SPX avançasse — ou o sidecar falhasse e o valor
+    // caísse pro da planilha — com o modal aberto, a comparação dava FALSO-POSITIVO
+    // e persistia o eco em alloc_status ao salvar QUALQUER outro campo (ex.: vínculo),
+    // "congelando" o status. A flag não depende de reler nada, então não tem race.
+    // Omitir → o backend preserva o alloc_status atual (null = reflete a planilha).
     saveAllocation.mutate({
       lh: row.lh,
-      // Status só vai quando o operador REALMENTE mudou (gating do #186 — evita
-      // "congelar" o status da planilha em alloc_status). Motorista/veículo seguem
-      // a mesma ideia logo abaixo (só quando editável E trocado).
-      ...(statusChanged ? { status: allocForm.status } : {}),
+      ...(allocStatusDirty ? { status: allocForm.status } : {}),
       tipo: allocForm.tipo, // tipo é livre (não trava por pinned/status)
       // Vínculo (col H): sempre enviado (prefilled com o valor efetivo) — o
       // backend espelha na planilha; se não mudou, reescreve o mesmo valor.
@@ -3325,12 +3331,12 @@ function RowDetailModal({
       toast.error("Esta carga tem motorista. Remova o motorista antes de deixá-la Disponível.");
       return;
     }
-    // Mesmo gate do #186: só manda status se o operador mudou (senão congela o eco do SPX).
-    const statusChanged = cargoForm.status.trim() !== (row.status ?? "").trim();
+    // Mesmo gate do doSave: só manda status se o operador MEXEU no select (comparar
+    // com `row.status` dava falso-positivo quando o overlay do SPX mudava sozinho).
     saveSystemCargo.mutate({
       cargoId: row.cargoId,
       lh: cargoForm.lh.trim(),
-      ...(statusChanged ? { status: cargoForm.status.trim() } : {}),
+      ...(cargoStatusDirty ? { status: cargoForm.status.trim() } : {}),
       tipo: cargoForm.tipo.trim(),
       origem: cargoForm.origem.trim(),
       destino: cargoForm.destino.trim(),
@@ -3538,7 +3544,7 @@ function RowDetailModal({
                      salvo por cargoId via updateMonitorCargo. Não há camada de planilha (sem Fixar/
                      lock de ASPX aqui — a carga é a fonte da verdade). */
                   <>
-                    <MonitorCargoFields form={cargoForm} setForm={setCargoForm} statusOptions={OPERATIONAL_STATUS_OPTIONS} />
+                    <MonitorCargoFields form={cargoForm} setForm={setCargoForm} statusOptions={OPERATIONAL_STATUS_OPTIONS} onStatusTouched={() => setCargoStatusDirty(true)} />
                     {/* Observação de checklist (tratativas) — mesma nota livre da linha da planilha. */}
                     <div className="pt-1">
                       <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Observação do checklist (tratativas)</label>
@@ -3673,7 +3679,7 @@ function RowDetailModal({
                   <label className="mb-1 block text-[0.6rem] font-semibold uppercase tracking-wide text-muted-foreground/60">Status operacional</label>
                   <select
                     value={allocForm.status}
-                    onChange={(e) => setAllocForm((f) => ({ ...f, status: e.target.value }))}
+                    onChange={(e) => { setAllocStatusDirty(true); setAllocForm((f) => ({ ...f, status: e.target.value })); }}
                     className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
                   >
                     <option value="">— sem status (usa a planilha) —</option>
@@ -4637,7 +4643,9 @@ export default function SheetMonitor() {
   const handleStartEdit = useCallback((lh: string) => setEditingLh(lh), []);
   const handleCancelEdit = useCallback(() => setEditingLh(null), []);
   const handleSaveInline = useCallback(
-    (rawPayload: { lh: string; motorista: string; cavalo: string; carreta: string; status: string; tipo: string }) => {
+    // `status` não vem do editor inline (ele só edita motorista/veículo/tipo) — a
+    // chave ausente faz o backend PRESERVAR o alloc_status atual.
+    (rawPayload: { lh: string; motorista: string; cavalo: string; carreta: string; status?: string; tipo: string }) => {
       // DC-310 — limpa o sufixo `(***NNN)` do dropdown de homônimos antes de comparar/gravar.
       const payload = { ...rawPayload, motorista: stripDriverCpfSuffix(rawPayload.motorista) };
       const target = itemsRef.current.find((r) => r.lh === payload.lh);
@@ -5389,7 +5397,6 @@ export default function SheetMonitor() {
                 resolveEnriched={resolveEnriched}
                 resolveAssigned={resolveAssigned}
                 resolveChecklistLevel={resolveChecklistLevel}
-                allocByLh={allocByLh}
                 selectedLh={selectedRow?.lh ?? null}
                 selectedRowKey={selectedRow?.rowKey ?? null}
                 editingLh={editingLh}

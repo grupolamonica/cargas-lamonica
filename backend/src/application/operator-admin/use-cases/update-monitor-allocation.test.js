@@ -85,6 +85,95 @@ describe("updateMonitorAllocation", () => {
     expect(row.sheet_status).toBe("AGUARDANDO CARREGAMENTO");
   });
 
+  it("ECO do status exibido não cria override nem espelha status na planilha", async () => {
+    // O modal vem pré-preenchido com o status EFETIVO; reenviá-lo ao salvar outro
+    // campo criava um override que ninguém escolheu (congelamento) e sobrescrevia
+    // na col L o valor que o robô ASPX havia gravado.
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-eco@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { vinculo: "AGREGADO", status: "AGUARDANDO CARREGAMENTO" },
+      correlationId: "corr-monitor-eco",
+    });
+
+    const row = await getAlloc(id);
+    expect(row.alloc_status).toBeNull(); // segue "sem override" → reflete a planilha
+    const update = writeSpy.mock.calls[0][0][0];
+    expect(update.status).toBeUndefined(); // col L não é tocada
+    expect(update.vinculo).toBe("AGREGADO"); // o campo realmente editado vai
+  });
+
+  it("editar só o vínculo (sem a chave status) preserva alloc_status e não espelha status", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-vinculo@teste.local" });
+    await query(`UPDATE public.cargas SET alloc_status = 'CTE EM EMISSÃO' WHERE id = $1`, [id]);
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { vinculo: "FROTA" },
+      correlationId: "corr-monitor-vinculo",
+    });
+
+    expect((await getAlloc(id)).alloc_status).toBe("CTE EM EMISSÃO"); // preservado
+    expect(writeSpy.mock.calls[0][0][0].status).toBeUndefined();
+  });
+
+  it("status vazio ('— sem status (usa a planilha) —') SOLTA o override e não toca a col L", async () => {
+    // Gravar "" fazia COALESCE(alloc_*, sheet_*) devolver "" → a carga aparecia SEM
+    // status apesar da planilha ter estágio, contrariando o próprio rótulo da opção.
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-semstatus@teste.local" });
+    await query(`UPDATE public.cargas SET alloc_status = 'CTE ENVIADO' WHERE id = $1`, [id]);
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { status: "" },
+      correlationId: "corr-monitor-semstatus",
+    });
+
+    const row = await getAlloc(id);
+    expect(row.alloc_status).toBeNull(); // volta a seguir a planilha
+    expect(row.sheet_status).toBe("AGUARDANDO CARREGAMENTO"); // planilha preservada
+    expect(writeSpy.mock.calls[0][0][0].status).toBeUndefined(); // col L intocada
+  });
+
+  it("'Disponível' continua gravando vazio EXPLÍCITO e espelhando na planilha", async () => {
+    // Distinção deliberada: "Disponível" é reabrir (zera o status na tela e na col L);
+    // "sem status" é devolver a decisão para a planilha.
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-disp@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { motorista: "", status: "Disponível" },
+      correlationId: "corr-monitor-disp",
+    });
+
+    expect((await getAlloc(id)).alloc_status).toBe("");
+    expect(writeSpy.mock.calls[0][0][0].status).toBe("");
+  });
+
+  it("mudança REAL de status grava o override e espelha na planilha", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-status@teste.local" });
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { status: "CTE ENVIADO" },
+      correlationId: "corr-monitor-status",
+    });
+
+    expect((await getAlloc(id)).alloc_status).toBe("CTE ENVIADO");
+    expect(writeSpy.mock.calls[0][0][0].status).toBe("CTE ENVIADO");
+  });
+
   it("limpar o campo grava vazio EXPLÍCITO (\"\") — não ressuscita o valor da planilha", async () => {
     const id = await seedSheetCargo();
     const operator = await seedUser({ email: "op-monitor-clear@teste.local" });
@@ -102,7 +191,10 @@ describe("updateMonitorAllocation", () => {
     expect(row.alloc_motorista).toBe("");
     expect(row.alloc_cavalo).toBe("");
     expect(row.alloc_carreta).toBe("");
-    expect(row.alloc_status).toBe("");
+    // STATUS é a EXCEÇÃO: limpar o status é "usa a planilha" (o próprio rótulo da
+    // opção), então solta o override (null). Gravar "" ali fazia a carga aparecer
+    // SEM status mesmo com a planilha em DESCARREGADO. Só "Disponível" grava "".
+    expect(row.alloc_status).toBeNull();
     // sheet_* segue intocado (a planilha continua com o valor original por baixo)
     expect(row.sheet_motorista).toBe("MOTORISTA DA PLANILHA");
   });

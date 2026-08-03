@@ -20,8 +20,15 @@
 //     datas também em AGUARDANDO CHEGAR NO CLIENTE.
 //  5. Sistema: grava os espelhos cargas.sheet_status/sheet_motorista/sheet_cavalo/
 //     sheet_carreta. Planilha (write-back): status (col L) + motorista/cavalo/carreta
-//     (E/F/G) + datas (col C/D) + origem/destino (col I/J). NÃO toca alloc_* — override
-//     manual do operador é preservado e continua vencendo na exibição.
+//     (E/F/G) + datas (col C/D) + origem/destino (col I/J).
+//  6. OVERRIDE: solta `cargas.alloc_status` (→ NULL) quando ele ficou para trás da
+//     planilha e as regras do DC-316 permitem que ceda — ver
+//     `shouldReleaseAllocStatusOverride`. Motivo: o modal do Monitor grava o status
+//     EXIBIDO como override sem o operador ter escolhido nada (race do prefill) e
+//     nada automático limpa esse valor, então ele congela para sempre. NÃO toca
+//     alloc_motorista/cavalo/carreta — a alocação do operador segue soberana, e
+//     overrides deliberados (CTE EM EMISSÃO/ENVIADO, NO SHOW, CANCELADO) são
+//     preservados pelas mesmas regras.
 //
 // Por que datas + origem/destino vão SÓ para a planilha (não para colunas do sistema):
 //  - datas: o sync RE-LÊ e normaliza a data da planilha (formatBrazilianDateTimeLabel)
@@ -42,6 +49,7 @@ import { writeAllocationsToSheet, isSheetWritebackEnabled } from "../../google-s
 import {
   shouldUpdateAspxStatus,
   shouldUpdateAspxData,
+  shouldReleaseAllocStatusOverride,
   parseAspTripRow,
   __TEST__ as ASPX_RULES,
 } from "../../../domain/operator-admin/aspx-status-rules.js";
@@ -55,7 +63,7 @@ const trim = (v) => String(v ?? "").trim();
 // Colunas lidas de cargas — as MESMAS em qualquer modo (só o WHERE muda).
 const CARGO_COLUMNS = `id, sheet_lh, sheet_source, sheet_status,
                 sheet_motorista, sheet_cavalo, sheet_carreta,
-                alloc_motorista, alloc_cavalo, alloc_carreta`;
+                alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status`;
 
 // Separador da chave composta "<lh><SEP><valor>" do pré-filtro. Vai como
 // PARÂMETRO (não literal) porque o pg-mem dos testes não tem chr(); e é um
@@ -126,6 +134,19 @@ const ALL_CARGOS_SQL = `SELECT ${CARGO_COLUMNS}
 //  (B) EXATA para o bloco de DADOS: o gate abre (upper(trim(status atual)) na lista
 //      derivada de shouldUpdateAspxData) E algum de motorista/cavalo/carreta do ASP
 //      é não-vazio e difere do espelho — as mesmas comparações do JS.
+//
+//  (C) `alloc_status IS NOT NULL` — o OVERRIDE do operador. Este disjunto NÃO é
+//      opcional: desde o #397 (auto-cura do DC-316) o laço pode gravar uma carga
+//      SÓ para soltar um override congelado (`setCol("alloc_status", null)`),
+//      mesmo com o sheet_status já igual ao ASP e motorista/cavalo/carreta
+//      idênticos — um caso que ¬(A) ∧ ¬(B) descartaria. Sem (C) o pré-filtro
+//      reintroduziria em silêncio justamente o bug que o #397 corrige (status
+//      operacional congelado para sempre). Provado por mutação: removendo este
+//      OR, falham o caso (C) do superset E um teste do próprio #397.
+//      É superconjunto porque `shouldReleaseAllocStatusOverride` começa com
+//      `if (allocStatus == null) return false` (aspx-status-rules.js:151): sem
+//      override não há o que soltar. O override VAZIO ("") é non-null e a regra
+//      o trata, então `IS NOT NULL` também o cobre.
 const FILTERED_CARGOS_SQL = `SELECT ${CARGO_COLUMNS}
            FROM public.cargas
           WHERE sheet_lh = ANY($1::text[])
@@ -145,6 +166,7 @@ const FILTERED_CARGOS_SQL = `SELECT ${CARGO_COLUMNS}
                        AND NOT ((sheet_lh || $2::text || btrim(coalesce(sheet_carreta, ''))) = ANY($10::text[])))
                 )
               )
+              OR alloc_status IS NOT NULL
             )`;
 
 /**
@@ -238,9 +260,14 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
           vals.push(value);
         };
 
-        // STATUS (regras DC-316 Bloco 1).
+        // STATUS (regras DC-316 Bloco 1). O âncora é o `sheet_status` — NUNCA o
+        // efetivo (`alloc_status ?? sheet_status`): a proteção de CTE EM EMISSÃO /
+        // CTE ENVIADO mora aqui, e um override velho faria o job apagar o CTE da
+        // coluna L da planilha.
         let statusChanged = false;
+        let novoSheetStatus = statusAtual;
         if (shouldUpdateAspxStatus(statusAtual, asp.status)) {
+          novoSheetStatus = trim(asp.status);
           setCol("sheet_status", asp.status);
           statusChanged = true;
         }
@@ -252,6 +279,35 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
           if (asp.carreta && asp.carreta !== trim(row.sheet_carreta)) setCol("sheet_carreta", asp.carreta);
         }
 
+        // Colunas espelhadas na PLANILHA que mudaram até aqui — o write-back só
+        // faz sentido se alguma delas mudou (soltar o override é só de banco).
+        const sheetColsChanged = sets.length;
+
+        // OVERRIDE do operador (`alloc_status`): decisão SEPARADA da acima e que
+        // não vai para a planilha. O modal do Monitor grava o status EXIBIDO como
+        // override sem o operador ter escolhido nada (race do prefill) e nada
+        // automático limpa esse valor — então o sync solta o override quando as
+        // MESMAS regras do DC-316 permitirem que ele ceda para a planilha.
+        // NULL (e não o status novo) porque é o valor que o resto do código trata
+        // como "sem decisão" → a carga volta a acompanhar a planilha sozinha.
+        //
+        // `hasDriver` distingue o override VAZIO ("") artefato do editor inline —
+        // que fazia a carga aparecer SEM status — do "" deliberado de "Disponível"
+        // (só possível em carga sem motorista). Usa a alocação EFETIVA, e o
+        // motorista recém-vindo do ASPX nesta rodada conta.
+        // Efetivo = COALESCE(alloc, sheet) com a semântica do Monitor: alloc_motorista
+        // = "" é vazio EXPLÍCITO (operador removeu o motorista) e VENCE a planilha —
+        // por isso `!= null` em vez de `||`.
+        const motoristaEfetivo =
+          row.alloc_motorista != null
+            ? trim(row.alloc_motorista)
+            : trim((gate.dados && asp.motorista) || row.sheet_motorista);
+        if (shouldReleaseAllocStatusOverride(row.alloc_status, novoSheetStatus, {
+          hasDriver: motoristaEfetivo !== "",
+        })) {
+          setCol("alloc_status", null);
+        }
+
         if (sets.length === 0) continue; // nada mudou nesta carga
 
         await client.query(
@@ -259,6 +315,10 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
           [...vals, row.id],
         );
         changedCount += 1;
+
+        // Só soltou o override → nada a espelhar na planilha (evita write-back
+        // desnecessário na leva de saneamento dos overrides congelados).
+        if (sheetColsChanged === 0) continue;
 
         // Write-back da planilha. Motorista/cavalo/carreta vão SEMPRE (valor EFETIVO)
         // porque o Apps Script reescreve E/F/G — mandar vazio limparia a célula. Sob o

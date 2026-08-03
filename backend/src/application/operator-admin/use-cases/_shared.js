@@ -114,6 +114,13 @@ export function isDuplicateCodigoViagemError(error) {
 // Phase 10 (cargas-casadas): se a tabela cargas_casadas / coluna viagem_id ainda nao
 // foi aplicada na DB (rollout incremental), a query principal de driver-loads
 // faz fallback para a versao sem JOIN de pacote — comportamento pre-Phase 10.
+/** Banco sem as colunas de "fora do ASPX" (migration 20260731170000 não aplicada).
+ *  O portal do motorista degrada sem a guarda em vez de responder erro. */
+export function isMissingAspxMissingColumnError(error) {
+  const msg = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
+  return msg.includes("aspx_missing_since") || msg.includes("aspx_missing_reason");
+}
+
 export function isMissingPacoteColumnsError(error) {
   const combinedMessage = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
   return (
@@ -680,6 +687,38 @@ export async function findSheetClientId(client) {
 
 // Resolve o id de um cliente pelo nome exato (case-insensitive). Usado p/ lançar
 // cargas de fontes não-Shopee (ex.: Nestlé/Projeto Galileu).
+/** Nomes possíveis do cliente Nestlé, em ordem de preferência: o que o SYNC usa
+ *  (env, fonte da verdade) e depois os nomes historicamente usados na tela. */
+export function nestleClientNameCandidates() {
+  const doEnv = process.env.GOOGLE_SHEET_NESTLE_CLIENT_NAME?.trim();
+  return [doEnv, "Produtos Alimentícios", "Nestlé", "Nestle"].filter(Boolean);
+}
+
+/**
+ * Resolve o cliente Nestlé SEM depender de um nome cravado no código.
+ *
+ * O operador renomeia o cliente na tela (aconteceu em 30/07: "Nestlé" →
+ * "Produtos Alimentícios") e o lançamento passou a falhar em 100% das ofertas
+ * Nestlé porque procurava o literal "Nestle". Agora tenta, em ordem: o nome
+ * informado pelo chamador, o nome do env que o próprio sync usa
+ * (GOOGLE_SHEET_NESTLE_CLIENT_NAME) e os nomes históricos — comparando sem
+ * acento/caixa (normalizeClientName), que é como a tela grava.
+ */
+export async function findNestleClientId(client, preferredName = null) {
+  const candidatos = [preferredName, ...nestleClientNameCandidates()]
+    .map((n) => String(n ?? "").trim())
+    .filter(Boolean);
+  for (const nome of candidatos) {
+    const id = await findClientIdByName(client, nome);
+    if (id) return id;
+  }
+  // Último recurso: casa sem acento/caixa (o env pode divergir da grafia da tela).
+  const alvos = new Set(candidatos.map((n) => normalizeClientName(n)));
+  const { rows } = await client.query("SELECT id, nome FROM public.clientes");
+  const achado = rows.find((r) => alvos.has(normalizeClientName(String(r.nome ?? ""))));
+  return achado?.id ?? null;
+}
+
 export async function findClientIdByName(client, name) {
   const targetName = String(name ?? "").trim();
   if (!targetName) return null;
@@ -1036,6 +1075,9 @@ export async function writeCargo(
 export function buildDriverLoadFilters(query, {
   includeDriverVisibilityFilter = true,
   includePacoteVisibilityFilter = false,
+  // Desligado só no fallback de banco sem a coluna (ver isMissingAspxMissingColumnError):
+  // é melhor servir o portal com a guarda a menos do que devolver erro ao motorista.
+  includeAspxMissingFilter = true,
 } = {}) {
   const parsedQuery = parseDriverLoadsQuery(query);
   const clauses = [
@@ -1056,6 +1098,14 @@ export function buildDriverLoadFilters(query, {
     // Alocação efetiva = override do operador (alloc_motorista, editado no Monitor)
     // tem precedência sobre o que veio da planilha (sheet_motorista).
     "COALESCE(cargas.alloc_motorista, cargas.sheet_motorista, '') = ''",
+    // Carga cuja VIAGEM saiu do ASPX (aspx_missing_since) não pode ser oferecida:
+    // ela não existe mais no portal da Shopee, então uma candidatura aqui vira
+    // frete que ninguém consegue operar. O Monitor já a exclui e o operador vê o
+    // selo "Fora do ASPX" em /cargas — faltava fechar o lado do motorista.
+    // NÃO muda status (a política é "quem cancela/expira é o operador"): é guarda
+    // de LEITURA. Coluna ausente (migration não aplicada) → ver o fallback do
+    // caller, que refaz a consulta sem esta cláusula em vez de derrubar o portal.
+    ...(includeAspxMissingFilter ? ["cargas.aspx_missing_since IS NULL"] : []),
   ];
   const values = [];
   let index = 1;
