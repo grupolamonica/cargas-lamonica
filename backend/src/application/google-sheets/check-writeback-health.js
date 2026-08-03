@@ -37,6 +37,11 @@ async function garantirAppSettings(client) {
   }
 }
 
+/** Mesma normalização do write-back: só "nestle" é outra planilha; o resto é shopee. */
+function normSourceKey(source) {
+  return String(source ?? "").trim().toLowerCase() === "nestle" ? "nestle" : "shopee";
+}
+
 function realertHours() {
   const n = Number(process.env.SHEET_WRITEBACK_ALERT_HOURS);
   return Number.isFinite(n) && n > 0 ? n : 6;
@@ -46,16 +51,22 @@ function realertHours() {
  * Registra os LHs cuja CRIAÇÃO acabou de ser pedida ao Apps Script, para o ciclo
  * seguinte conferir se chegaram. Best-effort: nunca lança (não pode derrubar o sync).
  */
-export async function recordCreateAttempt(lhs, { deps = {} } = {}) {
+export async function recordCreateAttempt(lhs, { sources = [], deps = {} } = {}) {
   const run = deps.withPgClient || withPgClient;
   const lista = [...new Set((lhs || []).map((v) => String(v ?? "").trim()).filter(Boolean))];
   if (lista.length === 0) return { ok: true, recorded: 0 };
+  // Fontes envolvidas (cargas.sheet_source; nulo = shopee, padrão histórico). A
+  // conferência só conclui quando o snapshot DE CADA fonte foi relido — as fontes
+  // sincronizam em momentos diferentes (medido em prod: 5min de defasagem entre
+  // shopee e nestle), então olhar "o snapshot mais novo" daria aviso falso quando
+  // a leitura de uma fonte falha e a da outra não.
+  const fontes = [...new Set((sources.length > 0 ? sources : [null]).map(normSourceKey))];
   try {
     await run(async (client) => {
       await garantirAppSettings(client);
       // UPDATE-então-INSERT em vez de ON CONFLICT com expressão: mesma semântica e
       // portável para o harness de teste.
-      const payload = JSON.stringify({ at: new Date().toISOString(), lhs: lista });
+      const payload = JSON.stringify({ at: new Date().toISOString(), lhs: lista, fontes });
       const { rowCount } = await client.query(
         `UPDATE public.app_settings SET value = $2::jsonb, updated_at = now(),
                 updated_by = 'sheet-writeback-health' WHERE key = $1`,
@@ -101,26 +112,45 @@ export async function checkWritebackHealth({ correlationId = null, deps = {} } =
       const guardado = typeof valor === "string" ? JSON.parse(valor) : valor || {};
       const at = guardado.at ?? null;
       const lhs = Array.isArray(guardado.lhs) ? guardado.lhs.map((v) => String(v)) : [];
+      // Tentativa gravada antes deste campo existir → shopee (era a única fonte com
+      // write-back ligado).
+      const fontes = Array.isArray(guardado.fontes) && guardado.fontes.length > 0
+        ? [...new Set(guardado.fontes.map(normSourceKey))]
+        : ["shopee"];
       if (!at || lhs.length === 0) {
         return { ok: true, skipped: "sem-tentativa-registrada", pedidas: 0, faltando: 0, avisou: false };
       }
 
-      // O snapshot precisa ter sido RELIDO depois da tentativa, senão a conferência
-      // é inconclusiva (foi assim que uma checagem manual errou por 25 segundos).
-      const { rows: snap } = await client.query(
-        `SELECT synced_at FROM public.sheet_monitor_snapshot ORDER BY synced_at DESC LIMIT 1`,
+      // O snapshot DE CADA fonte envolvida precisa ter sido RELIDO depois da
+      // tentativa, senão a conferência é inconclusiva (foi assim que uma checagem
+      // manual errou por 25 segundos). Uma fonte sem snapshot ou com leitura
+      // atrasada segura a conclusão — nunca vira aviso.
+      const { rows: snapRows } = await client.query(
+        `SELECT source, synced_at, rows_json FROM public.sheet_monitor_snapshot`,
       );
-      const syncedAt = snap[0]?.synced_at ?? null;
-      if (!syncedAt || new Date(syncedAt).getTime() <= new Date(at).getTime()) {
-        return { ok: true, skipped: "snapshot-anterior-a-tentativa", pedidas: lhs.length, faltando: 0, avisou: false };
+      const daFonte = new Map(snapRows.map((r) => [normSourceKey(r.source), r]));
+      const desatualizadas = fontes.filter((f) => {
+        const s = daFonte.get(f);
+        return !s?.synced_at || new Date(s.synced_at).getTime() <= new Date(at).getTime();
+      });
+      if (desatualizadas.length > 0) {
+        return {
+          ok: true,
+          skipped: "snapshot-anterior-a-tentativa",
+          fontesDesatualizadas: desatualizadas,
+          pedidas: lhs.length,
+          faltando: 0,
+          avisou: false,
+        };
       }
 
-      // Quais dos LHs pedidos continuam SEM linha na planilha? A comparação é em JS
-      // (o snapshot é um jsonb único por fonte) — evita SQL exótico e fica legível.
-      const { rows: snapRows } = await client.query(`SELECT rows_json FROM public.sheet_monitor_snapshot`);
+      // Quais dos LHs pedidos continuam SEM linha na planilha? Só os snapshots das
+      // fontes envolvidas contam. A comparação é em JS (o snapshot é um jsonb único
+      // por fonte) — evita SQL exótico e fica legível.
       const chegaram = new Set();
-      for (const r of snapRows) {
-        const lista = typeof r.rows_json === "string" ? JSON.parse(r.rows_json) : r.rows_json;
+      for (const f of fontes) {
+        const bruto = daFonte.get(f)?.rows_json;
+        const lista = typeof bruto === "string" ? JSON.parse(bruto) : bruto;
         for (const linha of Array.isArray(lista) ? lista : []) {
           const lh = String(linha?.lh ?? "").trim();
           if (lh) chegaram.add(lh);
@@ -141,6 +171,7 @@ export async function checkWritebackHealth({ correlationId = null, deps = {} } =
 
       logStructuredEvent("error", "sheet-writeback-health.linhas-nao-criadas", {
         correlationId,
+        fontes,
         pedidas: lhs.length,
         faltando: faltando.length,
         exemplos: faltando.slice(0, 5),
@@ -165,6 +196,7 @@ export async function checkWritebackHealth({ correlationId = null, deps = {} } =
           `Planilha não recebeu ${faltando.length} carga(s) que o sistema enviou`,
           "O sistema pediu a criação das linhas e o script da planilha confirmou, mas elas não apareceram. As cargas estão certas no sistema — a planilha está sem elas.",
           JSON.stringify({
+            fontes,
             pedidas: lhs.length,
             faltando: faltando.length,
             lhs: faltando.slice(0, 50),

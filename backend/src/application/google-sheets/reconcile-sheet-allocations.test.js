@@ -7,6 +7,14 @@ vi.mock("../../infrastructure/pg/postgres.js", () => ({
   withPgClient: async (cb) => cb({ query: async () => ({ rows: cannedRows.current }) }),
 }));
 
+// A tentativa de criação é registrada para o próximo ciclo conferir se a linha
+// nasceu (check-writeback-health.js). Aqui só espionamos a chamada.
+const recordCreateAttempt = vi.fn(async () => ({ ok: true }));
+vi.mock("./check-writeback-health.js", () => ({
+  recordCreateAttempt: (...args) => recordCreateAttempt(...args),
+  checkWritebackHealth: async () => ({ ok: true }),
+}));
+
 const { reconcileTakenCargosToSheet } = await import("./reconcile-sheet-allocations.js");
 
 describe("reconcileTakenCargosToSheet", () => {
@@ -20,6 +28,7 @@ describe("reconcileTakenCargosToSheet", () => {
     }));
     globalThis.fetch = fetchMock;
     cannedRows.current = [];
+    recordCreateAttempt.mockClear();
   });
 
   afterEach(() => {
@@ -108,6 +117,34 @@ describe("reconcileTakenCargosToSheet", () => {
     expect(u.dataDescarga).toBe("30/07/2026 04:30");
     // Reconciliador NÃO manda status (não re-rotula a coluna de status).
     expect("status" in u).toBe(false);
+  });
+
+  it("registra a tentativa de criação com a fonte, para o próximo ciclo conferir", async () => {
+    cannedRows.current = [
+      { lh: "LT-CRIA", create_row: true, sheet_source: null, alloc_motorista: "Ana", validation_summary_json: null },
+      { lh: "LT-JA-EXISTE", alloc_motorista: "Bruno", validation_summary_json: null },
+    ];
+
+    await reconcileTakenCargosToSheet();
+
+    expect(recordCreateAttempt).toHaveBeenCalledTimes(1);
+    const [lhs, opts] = recordCreateAttempt.mock.calls[0];
+    // Só o LH cuja CRIAÇÃO foi pedida entra na conferência.
+    expect(lhs).toEqual(["LT-CRIA"]);
+    expect(opts.sources).toEqual([null]);
+  });
+
+  it("não registra tentativa de fonte sem write-back ligado (senão o aviso seria falso)", async () => {
+    // Nestlé sem URL própria: o Apps Script nunca é chamado para ela, então a linha
+    // não nascer é configuração — não é falha para avisar.
+    delete process.env.GOOGLE_SHEET_NESTLE_WRITEBACK_URL;
+    cannedRows.current = [
+      { lh: "NST-1", create_row: true, sheet_source: "nestle", alloc_motorista: "Ana", validation_summary_json: null },
+    ];
+
+    await reconcileTakenCargosToSheet();
+
+    expect(recordCreateAttempt).not.toHaveBeenCalled();
   });
 
   it("pula linha sem nada para gravar (sem motorista e sem placas)", async () => {
