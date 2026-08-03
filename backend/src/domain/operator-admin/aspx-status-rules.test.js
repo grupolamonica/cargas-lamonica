@@ -21,6 +21,33 @@ describe("shouldUpdateAspxStatus (regras DC-316)", () => {
     expect(shouldUpdateAspxStatus("   ", "DESCARREGADO")).toBe(false);
   });
 
+  // Carga que JÁ tem motorista: o vazio não é uma linha "disponível" a proteger, e
+  // ficava vazia para sempre quando a linha nasceu depois de a viagem avançar.
+  it("status vazio COM motorista: aceita o pipeline inteiro", () => {
+    const comMotorista = { hasDriver: true };
+    expect(shouldUpdateAspxStatus("", "DESCARREGADO", comMotorista)).toBe(true);
+    expect(shouldUpdateAspxStatus("", "AGUARDANDO DESCARGA", comMotorista)).toBe(true);
+    expect(shouldUpdateAspxStatus("", "CTE ENVIADO", comMotorista)).toBe(true);
+    expect(shouldUpdateAspxStatus("", "AGUARDANDO CHEGAR NO CLIENTE", comMotorista)).toBe(true);
+  });
+
+  it("status vazio COM motorista: cancelamento/NO SHOW seguem fora (cascata retroativa)", () => {
+    const comMotorista = { hasDriver: true };
+    expect(shouldUpdateAspxStatus("", "CANCELADO", comMotorista)).toBe(false);
+    expect(shouldUpdateAspxStatus("", "DEVOLVIDO", comMotorista)).toBe(false);
+    expect(shouldUpdateAspxStatus("", "NO SHOW", comMotorista)).toBe(false);
+    // Fora do vocabulário do pipeline → não assume.
+    expect(shouldUpdateAspxStatus("", "QUALQUER COISA", comMotorista)).toBe(false);
+  });
+
+  it("hasDriver NÃO afeta status já preenchido (as regras 1-4 valem igual)", () => {
+    const comMotorista = { hasDriver: true };
+    expect(shouldUpdateAspxStatus("NO SHOW", "CARREGADO", comMotorista)).toBe(false);
+    expect(shouldUpdateAspxStatus("CTE EM EMISSÃO", "CARREGADO", comMotorista)).toBe(false);
+    expect(shouldUpdateAspxStatus("AGUARDANDO CHEGAR NO CLIENTE", "DESCARREGADO", comMotorista)).toBe(false);
+    expect(shouldUpdateAspxStatus("CTE ENVIADO", "DESCARREGADO", comMotorista)).toBe(true);
+  });
+
   it("sem status novo → nunca atualiza", () => {
     expect(shouldUpdateAspxStatus("CARREGADO", "")).toBe(false);
     expect(shouldUpdateAspxStatus("", "")).toBe(false);

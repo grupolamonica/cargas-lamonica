@@ -75,19 +75,36 @@ export function normalizeAspxStatus(value) {
  * (o que está hoje na coluna STATUS da planilha / `cargas.sheet_status`).
  * Puro — replica exatamente o Bloco 1 + a regra de status vazio do DC-316.
  *
+ * STATUS VAZIO + MOTORISTA (`hasDriver`): a regra estrita ("vazio só aceita
+ * AGUARDANDO CARREGAMENTO/CARREGADO") existe para não estampar estado avançado numa
+ * linha DISPONÍVEL da planilha. Numa carga que JÁ tem motorista não há nada a
+ * proteger — e a linha ficava vazia para sempre quando ela nasceu depois de a
+ * viagem avançar (medido em prod 03/08/2026: 266 cargas lançadas com status vazio
+ * no sistema e status no ASP). Com motorista, o vazio aceita qualquer estado do
+ * PIPELINE; exceções (CANCELADO/DEVOLVIDO/NO SHOW) continuam fora, porque assumir
+ * cancelamento aqui dispararia a cascata de rota retroativa
+ * (`sweepCancelledCascades` casa COALESCE(alloc_status, sheet_status) LIKE
+ * '%cancel%') — mesma proteção de `shouldReleaseAllocStatusOverride`.
+ *
  * @param {string} statusAtual  status atual (planilha)
  * @param {string} novoStatus   status novo (ASPX / aba ASP)
+ * @param {{ hasDriver?: boolean }} [opts] hasDriver = há motorista na alocação EFETIVA
  * @returns {boolean} true se deve gravar `novoStatus`
  */
-export function shouldUpdateAspxStatus(statusAtual, novoStatus) {
+export function shouldUpdateAspxStatus(statusAtual, novoStatus, { hasDriver = false } = {}) {
   const cur = normalizeAspxStatus(statusAtual);
   const nw = normalizeAspxStatus(novoStatus);
 
   // Sem status novo → nada a fazer.
   if (!nw) return false;
 
-  // Status VAZIO: só aceita AGUARDANDO CARREGAMENTO ou CARREGADO.
-  if (!cur) return STATUS_VAZIO_ACEITA.includes(nw);
+  // Status VAZIO: só aceita AGUARDANDO CARREGAMENTO ou CARREGADO — salvo com
+  // motorista, quando aceita o pipeline inteiro (ver doc acima).
+  if (!cur) {
+    if (STATUS_VAZIO_ACEITA.includes(nw)) return true;
+    if (!hasDriver) return false;
+    return !STATUS_NAO_ASSUMIDOS_DO_VAZIO.includes(nw) && !nw.includes("CANCEL") && STATUS_PIPELINE.includes(nw);
+  }
 
   // Já igual → não faz nada.
   if (cur === nw) return false;
