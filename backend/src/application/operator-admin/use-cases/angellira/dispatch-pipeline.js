@@ -24,6 +24,7 @@ import { evaluateCandidaturaCnhCategoria } from "../../../../domain/candidatura/
 import { namesMatch } from "../../../../domain/identity/identity-match.js";
 
 import { stageAnexosForEntity } from "./anexos-stager.js";
+import { checkOwnerAngelliraReadiness } from "./owner-readiness.js";
 import { stripUuidIfInvalid } from "./_utils.js";
 import {
   findExistingOkJob,
@@ -143,6 +144,40 @@ export async function runAngelliraPipeline({
       metadata: { blocked_by: "identity" },
     });
     return { ok: false, blocked: true, results: [{ step: "motorista", status: "BLOCKED", error }] };
+  }
+
+  // Preflight de prontidão do PROPRIETÁRIO: o Angellira exige `birth` (data de
+  // nascimento) p/ owner PF. Sem ela, o disparo falhava com 422/502 CRÍPTICO
+  // ("birth is required") e cascateava ("owner não cadastrado" no veículo) — o
+  // operador não sabia o que corrigir e ia pro manual (GLPI #29 / caso Fhilipe).
+  // Barra ANTES com mensagem acionável nomeando o proprietário e o campo.
+  const ownerBlock = checkOwnerAngelliraReadiness(dados);
+  if (ownerBlock) {
+    logStructuredEvent("warn", "angellira.pipeline.owner_readiness_block", {
+      cadastroId, owners: ownerBlock.owners,
+    });
+    const error = {
+      code: ownerBlock.code,
+      message: ownerBlock.message,
+      blocked_by: ownerBlock.blocked_by,
+      owners: ownerBlock.owners,
+    };
+    const jobId = await markJobInProgress({
+      client, cadastroId, step: ownerBlock.step, payload: { step: ownerBlock.step, cadastroId },
+    });
+    await markJobError({ client, jobId, error });
+    await insertSecurityAuditEvent(client, {
+      eventType: "operator.cadastro.angellira_pipeline_blocked",
+      actorUserId: operatorId,
+      actorRole: "operator",
+      resourceType: "pending_driver_registration",
+      resourceId: cadastroId,
+      action: "angellira_pipeline",
+      outcome: "blocked",
+      correlationId,
+      metadata: { blocked_by: ownerBlock.blocked_by, owners: ownerBlock.owners },
+    });
+    return { ok: false, blocked: true, results: [{ step: ownerBlock.step, status: "BLOCKED", error }] };
   }
 
   const steps = Array.isArray(onlySteps) && onlySteps.length
