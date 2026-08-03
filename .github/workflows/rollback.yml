@@ -12,6 +12,15 @@ on:
         required: true
         type: string
 
+# Mesmo grupo do job Deploy VPS (deploy.yml): deploy e rollback mutam o mesmo
+# estado da VPS e nunca devem rodar em paralelo. Um rollback disparado durante
+# um deploy em vôo cancela o deploy — o rollback é ação humana deliberada e ganha.
+# O rollback NÃO tem guarda de ordem: regredir para um SHA antigo é exatamente o
+# seu propósito.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
   FRONTEND_IMAGE: ghcr.io/grupolamonica/lamonica-frontend
