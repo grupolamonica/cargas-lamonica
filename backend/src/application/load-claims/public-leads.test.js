@@ -1,7 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LOAD_STATUS, PUBLIC_LEAD_STATUS, PUBLIC_LEAD_EVENT_TYPE } from "../../domain/load-claims/constants.js";
-import { normalizeDriverNameKey } from "../google-sheets/driver-vinculos.js";
+import {
+  invalidateDriverVinculoMapCache,
+  normalizeDriverNameKey,
+} from "../google-sheets/driver-vinculos.js";
 import { getSaoPauloWallClock } from "../../domain/sao-paulo-time.js";
 
 vi.mock("../../infrastructure/pg/postgres.js", async () => {
@@ -59,6 +62,10 @@ describe.sequential("public load leads", () => {
   });
 
   beforeEach(async () => {
+    // O mapa nome→vínculo é memoizado em processo (TTL de 5min, ver
+    // google-sheets/driver-vinculos.js). Cada teste recria o banco, então o cache
+    // precisa ser descartado aqui — senão um teste herda o mapa de outro.
+    invalidateDriverVinculoMapCache();
     vi.stubEnv("PUBLIC_LOAD_WHATSAPP_NUMBER", "5571999999999");
     vi.stubEnv("PUBLIC_LEAD_PRE_REGISTRATION_MAX_ATTEMPTS", "6");
     vi.stubEnv("PUBLIC_LEAD_PRE_REGISTRATION_WINDOW_SECONDS", "600");

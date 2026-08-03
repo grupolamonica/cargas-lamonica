@@ -3,8 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Mock do acesso ao banco: withPgClient devolve linhas canned (não precisa de
 // schema real — o foco do teste é a MONTAGEM dos updates + a decisão de gravar).
 const cannedRows = { current: [] };
+const lastSql = { current: "" };
+const queryCount = { current: 0 };
 vi.mock("../../infrastructure/pg/postgres.js", () => ({
-  withPgClient: async (cb) => cb({ query: async () => ({ rows: cannedRows.current }) }),
+  withPgClient: async (cb) =>
+    cb({
+      query: async (sql) => {
+        lastSql.current = typeof sql === "string" ? sql : (sql?.text ?? "");
+        queryCount.current += 1;
+        return { rows: cannedRows.current };
+      },
+    }),
 }));
 
 const { reconcileTakenCargosToSheet } = await import("./reconcile-sheet-allocations.js");
@@ -20,6 +29,8 @@ describe("reconcileTakenCargosToSheet", () => {
     }));
     globalThis.fetch = fetchMock;
     cannedRows.current = [];
+    lastSql.current = "";
+    queryCount.current = 0;
   });
 
   afterEach(() => {
@@ -112,6 +123,81 @@ describe("reconcileTakenCargosToSheet", () => {
 
   it("pula linha sem nada para gravar (sem motorista e sem placas)", async () => {
     cannedRows.current = [{ lh: "LT-VAZIO", alloc_motorista: null, validation_summary_json: null }];
+    const res = await reconcileTakenCargosToSheet();
+    expect(res.reconciled).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // ── Egress: forma da query ─────────────────────────────────────────────────
+  // O SQL não roda em pg-mem (jsonb_array_elements sobre COLUNA não é suportado
+  // pelo harness — vale para a forma antiga e para a nova), então as guardas são
+  // travadas pelo TEXTO emitido. Qualquer remoção/afrouxamento derruba o teste.
+  describe("forma da query (egress + guardas)", () => {
+    beforeEach(async () => {
+      cannedRows.current = [];
+      await reconcileTakenCargosToSheet();
+    });
+
+    it("expande o snapshot UMA única vez (antes eram dois scans do rows_json)", () => {
+      const matches = lastSql.current.match(/jsonb_array_elements\(/g) ?? [];
+      expect(matches).toHaveLength(1);
+      expect(queryCount.current).toBe(1);
+    });
+
+    it("não seleciona mais o validation_summary_json cru — só o displayName", () => {
+      expect(lastSql.current).toContain("->'driver'->'angelira'->>'displayName'");
+      expect(lastSql.current).toContain("AS angelira_display_name");
+      // Nenhuma referência à coluna crua como item de SELECT.
+      expect(lastSql.current).not.toMatch(/l\.validation_summary_json(?!\s*->)/);
+      expect(lastSql.current).not.toContain("NULL::jsonb AS validation_summary_json");
+    });
+
+    it("mantém TODAS as guardas do reconciliador", () => {
+      const sql = lastSql.current;
+      // Classe (1): só linha EM BRANCO na planilha, e só carga tomada.
+      expect(sql).toContain("blank_sheet");
+      expect(sql).toMatch(/COALESCE\(TRIM\(e->>'motoristas'\), ''\)/);
+      expect(sql).toContain("JOIN blank_sheet b ON b.lh = c.sheet_lh");
+      expect(sql).toMatch(/c\.status = 'RESERVED' OR COALESCE\(TRIM\(c\.alloc_motorista\), ''\) <> ''/);
+      // Classe (2): sem sheet_lh, com alocação, sem linha já escrita, só "LT…".
+      expect(sql).toContain("sheet_has_driver");
+      expect(sql).toContain("LEFT JOIN sheet_has_driver d ON d.lh = c.lh_manual");
+      expect(sql).toContain("d.lh IS NULL");
+      expect(sql).toContain("c.sheet_lh IS NULL");
+      expect(sql).toMatch(/upper\(TRIM\(c\.lh_manual\)\) LIKE 'LT%'/);
+      // Cap por classe/ciclo.
+      expect(sql.match(/LIMIT 100/g) ?? []).toHaveLength(2);
+      // Linha sem LH nunca entra em nenhum dos dois conjuntos.
+      expect(sql).toMatch(/COALESCE\(TRIM\(e->>'lh'\), ''\) <> ''/);
+    });
+  });
+
+  // ── Egress: a coluna extraída no SQL alimenta o mesmo write-back ───────────
+  it("usa angelira_display_name (extraído no SQL) no lugar do JSON inteiro", async () => {
+    cannedRows.current = [
+      {
+        lh: "LT-RESERVA",
+        alloc_motorista: null,
+        horse_plate: "HHH1A11",
+        trailer_plate: "TTT2B22",
+        angelira_display_name: "Maria Souza",
+      },
+    ];
+
+    const res = await reconcileTakenCargosToSheet();
+    expect(res.reconciled).toBe(1);
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.updates[0]).toMatchObject({
+      lh: "LT-RESERVA",
+      motorista: "Maria Souza",
+      cavalo: "HHH1A11",
+      carreta: "TTT2B22",
+    });
+  });
+
+  it("angelira_display_name NULL sem alocação e sem placas → pula (como antes)", async () => {
+    cannedRows.current = [{ lh: "LT-NULO", alloc_motorista: null, angelira_display_name: null }];
     const res = await reconcileTakenCargosToSheet();
     expect(res.reconciled).toBe(0);
     expect(fetchMock).not.toHaveBeenCalled();
