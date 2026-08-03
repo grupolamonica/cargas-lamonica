@@ -20,11 +20,14 @@
 //  - Status vazio: só recebe atualização se o novo status for
 //    AGUARDANDO CARREGAMENTO ou CARREGADO.
 //
-// Além do Bloco 1/2 do DC-316, este módulo decide quando o OVERRIDE do operador
-// (`cargas.alloc_status`) ficou ATRASADO em relação à planilha e deve ser solto —
-// `shouldReleaseAllocStatusOverride`, que compara a posição no pipeline e também
-// trata o override VAZIO ("", que faz a carga aparecer SEM status mesmo com a
-// planilha adiantada).
+// Além do Bloco 1/2 do DC-316, este módulo é a fonte única da ORDEM do pipeline
+// operacional (`STATUS_PIPELINE`) e das duas decisões que dependem dela:
+//  - `shouldReleaseAllocStatusOverride`: o override do operador ficou ATRASADO em
+//    relação à planilha e deve ser solto (inclui o override VAZIO "", que fazia a
+//    carga aparecer SEM status mesmo com a planilha adiantada).
+//  - `shouldOverlayLiveSpxStatus`: o status AO VIVO do SPX pode sobrepor o exibido
+//    no Monitor — só quando AVANÇA, para não rebaixar `CTE EM EMISSÃO`/`CTE ENVIADO`
+//    (vocabulário que o SPX não conhece).
 
 const STATUS_DESCARGA = ["AGUARDANDO DESCARGA", "DESCARREGANDO", "DESCARREGADO"];
 const STATUS_PERMITEM_DESCARGA = ["CTE ENVIADO", "AGUARDANDO DESCARGA", "DESCARREGANDO"];
@@ -167,14 +170,57 @@ export function shouldReleaseAllocStatusOverride(allocStatus, novoStatusPlanilha
   // Já alinhado com a planilha → o override é inócuo, não mexe.
   if (cur === nw) return false;
 
-  const iCur = STATUS_PIPELINE.indexOf(cur);
-  const iNw = STATUS_PIPELINE.indexOf(nw);
+  return isAheadInPipeline(nw, cur);
+}
 
-  // Fora do pipeline dos dois lados (exceção ou valor legado desconhecido):
-  // não há como afirmar que a planilha está à frente → preserva.
-  if (iCur < 0 || iNw < 0) return false;
+/**
+ * Posição no pipeline operacional, ou -1 para status FORA dele (exceções
+ * CANCELADO/DEVOLVIDO/NO SHOW, rótulos legados, vazio). Fonte única da ordem.
+ */
+export function statusPipelinePosition(status) {
+  return STATUS_PIPELINE.indexOf(normalizeAspxStatus(status));
+}
 
-  return iNw > iCur;
+/** `candidato` está estritamente À FRENTE de `referencia`? Fora do pipeline (qualquer
+ *  lado) → false: não há como afirmar avanço, então preserva o que já está. */
+function isAheadInPipeline(candidato, referencia) {
+  const a = statusPipelinePosition(candidato);
+  const b = statusPipelinePosition(referencia);
+  if (a < 0 || b < 0) return false;
+  return a > b;
+}
+
+/**
+ * O status AO VIVO do SPX deve SOBREPOR o status exibido no Monitor?
+ *
+ * O overlay ao vivo (spx-operational-status.js) foi desligado em produção porque
+ * sobrepunha SEMPRE: o vocabulário do SPX não conhece `CTE EM EMISSÃO`/`CTE ENVIADO`
+ * (só existem na planilha), então uma carga em CTE era REBAIXADA para o rótulo do
+ * SPX (`departed` → CARREGADO). Com o overlay desligado, porém, as cargas do
+ * SISTEMA (lançadas na Programação, `lh_manual`) ficaram SEM fonte de status: o sync
+ * ASPX casa por `sheet_lh` e nunca as visita, então o painel mostrava vazio mesmo
+ * com a viagem andando no SPX.
+ *
+ * Regra: o SPX só AVANÇA, nunca rebaixa.
+ *  - tela VAZIA → qualquer rótulo do SPX é melhor que nada (é o caso das cargas do
+ *    sistema, e o que motivou religar o overlay);
+ *  - ambos no pipeline → sobrepõe só se o SPX estiver à FRENTE;
+ *  - exibido FORA do pipeline (`NO SHOW`, `CANCELADO`, rótulo legado) → decisão
+ *    deliberada do operador, preservada.
+ *
+ * @param {string|null|undefined} statusExibido  status EFETIVO hoje (alloc_status ?? planilha)
+ * @param {string|null|undefined} spxLabel       rótulo traduzido do SPX (spxTripStatusLabel)
+ * @returns {boolean} true se o rótulo do SPX deve virar o status exibido
+ */
+export function shouldOverlayLiveSpxStatus(statusExibido, spxLabel) {
+  const cur = normalizeAspxStatus(statusExibido);
+  const nw = normalizeAspxStatus(spxLabel);
+
+  if (!nw) return false;      // sem status ao vivo → nada a sobrepor
+  if (!cur) return true;      // tela vazia → mostra o SPX (inclusive CANCELADO)
+  if (cur === nw) return false;
+
+  return isAheadInPipeline(nw, cur);
 }
 
 // ── Campos de DADOS (Bloco 2 do DC-316) ──────────────────────────────────────

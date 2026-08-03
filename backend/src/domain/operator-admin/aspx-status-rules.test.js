@@ -4,6 +4,8 @@ import {
   shouldUpdateAspxStatus,
   shouldUpdateAspxData,
   shouldReleaseAllocStatusOverride,
+  shouldOverlayLiveSpxStatus,
+  statusPipelinePosition,
   parseAspTripRow,
   normalizeAspxStatus,
 } from "./aspx-status-rules.js";
@@ -165,6 +167,57 @@ describe("shouldReleaseAllocStatusOverride (soltar override atrasado)", () => {
     expect(shouldReleaseAllocStatusOverride("DESCARREGANDO", "AGUARDANDO DESCARGA")).toBe(false);
     expect(shouldReleaseAllocStatusOverride("CARREGADO", "STATUS LEGADO QUALQUER")).toBe(false);
     expect(shouldReleaseAllocStatusOverride("STATUS LEGADO QUALQUER", "CARREGADO")).toBe(false);
+  });
+});
+
+describe("shouldOverlayLiveSpxStatus (status ao vivo do SPX só AVANÇA)", () => {
+  it("tela vazia recebe qualquer rótulo do SPX", () => {
+    // É o caso das cargas do SISTEMA (lh_manual): o sync ASPX casa por sheet_lh e
+    // nunca as visita, então sem overlay o painel fica sem status nenhum.
+    expect(shouldOverlayLiveSpxStatus("", "AGUARDANDO CHEGAR NO CLIENTE")).toBe(true);
+    expect(shouldOverlayLiveSpxStatus(null, "DESCARREGADO")).toBe(true);
+    expect(shouldOverlayLiveSpxStatus("   ", "CANCELADO")).toBe(true); // melhor que vazio
+  });
+
+  it("sobrepõe quando o SPX está à FRENTE no pipeline", () => {
+    expect(shouldOverlayLiveSpxStatus("AGUARDANDO CHEGAR NO CLIENTE", "CARREGADO")).toBe(true);
+    expect(shouldOverlayLiveSpxStatus("CARREGADO", "AGUARDANDO DESCARGA")).toBe(true);
+    expect(shouldOverlayLiveSpxStatus("CTE ENVIADO", "DESCARREGADO")).toBe(true);
+  });
+
+  it("NÃO rebaixa o CTE — o vocabulário de CTE não existe no SPX", () => {
+    expect(shouldOverlayLiveSpxStatus("CTE EM EMISSÃO", "CARREGADO")).toBe(false);
+    expect(shouldOverlayLiveSpxStatus("CTE ENVIADO", "CARREGADO")).toBe(false);
+    expect(shouldOverlayLiveSpxStatus("CTE ENVIADO", "CARREGANDO")).toBe(false);
+  });
+
+  it("nunca regride e não mexe no que já está igual", () => {
+    expect(shouldOverlayLiveSpxStatus("DESCARREGADO", "CARREGADO")).toBe(false);
+    expect(shouldOverlayLiveSpxStatus("AGUARDANDO DESCARGA", "CARREGANDO")).toBe(false);
+    expect(shouldOverlayLiveSpxStatus("CARREGADO", "CARREGADO")).toBe(false);
+    expect(shouldOverlayLiveSpxStatus("CARREGADO", " carregado ")).toBe(false);
+  });
+
+  it("exibido fora do pipeline (decisão do operador) e SPX sem status → preserva", () => {
+    for (const terminal of ["NO SHOW", "CANCELADO", "DEVOLVIDO", "RESERVADO"]) {
+      expect(shouldOverlayLiveSpxStatus(terminal, "DESCARREGADO")).toBe(false);
+    }
+    expect(shouldOverlayLiveSpxStatus("CARREGADO", "")).toBe(false);
+    expect(shouldOverlayLiveSpxStatus("CARREGADO", null)).toBe(false);
+    // Cancelamento do SPX sobre uma carga em andamento NÃO passa: o cancelamento
+    // chega pela planilha (regra 2 do DC-316, que sempre atualiza).
+    expect(shouldOverlayLiveSpxStatus("CARREGADO", "CANCELADO")).toBe(false);
+  });
+});
+
+describe("statusPipelinePosition", () => {
+  it("devolve a ordem do pipeline e -1 fora dele", () => {
+    expect(statusPipelinePosition("AGUARDANDO ACEITE")).toBe(0);
+    expect(statusPipelinePosition(" descarregado ")).toBe(9);
+    expect(statusPipelinePosition("CTE EM EMISSÃO")).toBeGreaterThan(statusPipelinePosition("CARREGADO"));
+    expect(statusPipelinePosition("CANCELADO")).toBe(-1);
+    expect(statusPipelinePosition("")).toBe(-1);
+    expect(statusPipelinePosition(null)).toBe(-1);
   });
 });
 

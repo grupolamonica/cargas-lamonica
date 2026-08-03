@@ -15,6 +15,7 @@
 import { fetchSpxTrips, SpxAspNotConfigured } from "../../../infrastructure/torre/torre-spx-trips-client.js";
 import { fetchSpxTripsByTab } from "../../../infrastructure/spx/spx-allocation-client.js";
 import { spxTripStatusLabel } from "../../../domain/operator-admin/spx-trip-status.js";
+import { shouldOverlayLiveSpxStatus } from "../../../domain/operator-admin/aspx-status-rules.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 
 const LH_TRIP_COL = "LH Trip Number";
@@ -148,10 +149,32 @@ function effectiveDriver(row, allocByLh) {
 }
 
 /**
+ * Status EFETIVO exibido hoje = override do operador (`alloc_status`, "" = vazio
+ * explícito) ?? status da linha. É contra ELE que a trava de "só avança" compara —
+ * comparar com `row.status` (planilha crua) deixaria o SPX rebaixar um override
+ * deliberado de CTE, que é exatamente o motivo de o overlay ter sido desligado.
+ */
+function effectiveStatus(row, allocByLh) {
+  const alloc = allocByLh ? allocByLh[row.lh] : null;
+  const v = alloc && alloc.alloc_status != null ? alloc.alloc_status : row.status ?? "";
+  return String(v).trim();
+}
+
+/**
  * Sobrepõe o status operacional EXIBIDO de uma carga pelo status real do SPX,
- * QUANDO a carga tem motorista alocado no sistema e o LH bate com uma viagem do
- * SPX. Pura/testável. Sem índice, sem motorista ou sem match → devolve a linha
- * inalterada.
+ * QUANDO a carga tem motorista alocado no sistema, o LH bate com uma viagem do SPX
+ * e o rótulo do SPX AVANÇA em relação ao que está exibido
+ * (`shouldOverlayLiveSpxStatus`). Pura/testável. Sem índice, sem motorista, sem
+ * match ou sem avanço → devolve a linha inalterada.
+ *
+ * A trava de "só avança" é o que permite o overlay ficar LIGADO: sem ela o SPX
+ * rebaixava `CTE EM EMISSÃO`/`CTE ENVIADO` (vocabulário que ele não conhece) e o
+ * overlay teve de ser desligado — deixando as cargas do SISTEMA (`lh_manual`, que o
+ * sync ASPX nunca visita porque casa por `sheet_lh`) SEM status nenhum no painel.
+ *
+ * `spxStatus` só é anexado quando VENCE: o front trata `row.spxStatus` como
+ * autoritativo sobre o `alloc_status` (mergeAllocIntoRow), então anexá-lo numa
+ * sobreposição recusada reintroduziria o rebaixamento no cliente.
  *
  * @param {object} row linha do Monitor (tem `lh`, `motoristas`, `status`…)
  * @param {{ spxStatusByLh: Map<string,string>|null, allocByLh?: Record<string,any> }} ctx
@@ -164,5 +187,6 @@ export function applySpxOperationalStatus(row, { spxStatusByLh, allocByLh = {} }
   if (effectiveDriver(row, allocByLh) === "") return row;
   const spxStatus = spxStatusByLh.get(String(lh).trim());
   if (!spxStatus) return row;
+  if (!shouldOverlayLiveSpxStatus(effectiveStatus(row, allocByLh), spxStatus)) return row;
   return { ...row, status: spxStatus, spxStatus };
 }
