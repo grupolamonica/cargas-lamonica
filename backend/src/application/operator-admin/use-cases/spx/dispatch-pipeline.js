@@ -120,11 +120,18 @@ export async function runSpxPipeline({
     };
   }
 
-  // Idempotência: se já tem job OK pra spx_motorista, pula
+  // Idempotência: só PULA quando o SPX está REALMENTE cadastrado/apto. Um job "OK"
+  // cujo etapa é RASCUNHO (request_pendente/importado/completo) NÃO é cadastro
+  // concluído — é um rascunho no SPX (aguardando aprovação da Shopee ou incompleto).
+  // Barrar o re-disparo nesses casos deixava o operador preso em "já cadastrado"
+  // mesmo depois de corrigir os dados ou excluir o rascunho no portal. Para rascunho,
+  // seguimos o fluxo com precheck AO VIVO (skipCache) — que NÃO duplica: REQUEST_PENDENTE
+  // só referencia a request existente, NOT_FOUND cria, IS_MATCHED promove.
   const existing = await findExistingOkJob({ client, cadastroId, step: STEP, target: "spx" });
-  if (existing) {
+  const APTO_ETAPAS = new Set(["ja_cadastrado_nossa_agencia", "reativado"]);
+  if (existing && APTO_ETAPAS.has(existing.response?.etapa)) {
     logStructuredEvent("info", "spx.pipeline.skipped_already_ok", {
-      cadastroId, existingJobId: existing.id,
+      cadastroId, existingJobId: existing.id, etapa: existing.response?.etapa,
     });
     return {
       ok: true,
@@ -136,6 +143,15 @@ export async function runSpxPipeline({
       }],
     };
   }
+  // Re-disparo de um rascunho (job "OK" não-apto): re-checa o SPX AO VIVO em vez de
+  // confiar no estado antigo — assim, se o rascunho foi excluído/corrigido, o
+  // precheck reflete a realidade.
+  const forceLivePrecheck = Boolean(existing);
+  if (existing) {
+    logStructuredEvent("info", "spx.pipeline.redispatch_rascunho", {
+      cadastroId, existingJobId: existing.id, etapa: existing.response?.etapa ?? null,
+    });
+  }
 
   // Cria job IN_PROGRESS
   const jobId = await markJobInProgress({
@@ -145,8 +161,9 @@ export async function runSpxPipeline({
 
   let stepResult;
   try {
-    // 1. Precheck (read-only)
-    const precheck = await performSpxPrecheck({ cadastro, correlationId });
+    // 1. Precheck (read-only). No re-disparo de rascunho, ignora o cache (60s) p/
+    //    refletir o estado real do SPX (ex.: rascunho excluído no portal).
+    const precheck = await performSpxPrecheck({ cadastro, correlationId, skipCache: forceLivePrecheck });
     logStructuredEvent("info", "spx.pipeline.precheck", {
       cadastroId, status: precheck.status,
     });
