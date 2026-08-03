@@ -170,6 +170,20 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
     error: err instanceof Error ? err.message : String(err),
   }));
 
+  // Registra os LHs cuja CRIAÇÃO foi pedida, para o próximo ciclo conferir se a
+  // linha realmente nasceu (o Apps Script responde created:N mesmo quando não
+  // grava — ver check-writeback-health.js). Best-effort: não afeta o resultado.
+  // Só entram fontes com write-back LIGADO: sem URL o Apps Script nunca é chamado
+  // (a linha some por configuração, não por falha) e o aviso seria falso todo dia.
+  const criacoes = updates.filter((u) => u.createIfMissing && isSheetWritebackEnabled(u.source));
+  if (res?.ok && criacoes.length > 0) {
+    const { recordCreateAttempt } = await import("./check-writeback-health.js");
+    await recordCreateAttempt(
+      criacoes.map((u) => u.lh),
+      { sources: criacoes.map((u) => u.source) },
+    );
+  }
+
   if (!res?.ok) {
     warn("writeback-failed", { attempted: updates.length, res });
     return { ok: false, attempted: updates.length, reconciled: 0 };

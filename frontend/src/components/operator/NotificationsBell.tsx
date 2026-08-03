@@ -45,6 +45,7 @@ const KIND_LABEL: Record<string, string> = {
   aspx_trip_missing: "Carga saiu do ASPX",
   aspx_trip_restored: "Viagem voltou ao ASPX",
   aspx_route_missing: "Rota saiu do ASPX",
+  sheet_writeback_broken: "Planilha não recebeu cargas",
   aspx_route_restored: "Rota voltou ao ASPX",
 };
 
@@ -67,6 +68,7 @@ const KIND_TINT: Record<string, string> = {
   aspx_trip_missing: "bg-red-600",
   aspx_trip_restored: "bg-emerald-500",
   aspx_route_missing: "bg-red-700",
+  sheet_writeback_broken: "bg-orange-600",
   aspx_route_restored: "bg-emerald-500",
 };
 
