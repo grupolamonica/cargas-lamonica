@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 /**
- * Saneamento: solta os `cargas.alloc_status` que ficaram CONGELADOS — override
- * gravado pelo modal do Monitor sem o operador ter escolhido nada (race do
- * prefill com o overlay ao vivo do SPX), que depois mascarava o avanço da viagem
- * e ainda era espelhado na coluna L da planilha a cada save de alocação.
+ * Saneamento: solta os `cargas.alloc_status` presos — override gravado pelo Monitor
+ * sem o operador ter escolhido nada (race do prefill com o overlay ao vivo do SPX),
+ * que depois mascarava o avanço da viagem e ainda era espelhado na coluna L da
+ * planilha a cada save de alocação. Cobre os dois sintomas:
+ *   - status ATRASADO (estágio anterior ao real);
+ *   - status VAZIO ("" do editor inline → carga aparece SEM status).
  *
  * Aplica a MESMA regra do sync ASPX (`shouldReleaseAllocStatusOverride`), então
- * overrides deliberados são preservados: CTE EM EMISSÃO, CTE ENVIADO, NO SHOW e
- * CANCELADO. Cobre o resíduo que o sync não alcança (LH fora da janela da Torre).
+ * overrides deliberados são preservados: CTE EM EMISSÃO, CTE ENVIADO, NO SHOW,
+ * CANCELADO e o "" de "Disponível" em carga sem motorista. Cobre o resíduo que o
+ * sync não alcança (LH fora da janela da Torre ou carga que não é linha de planilha).
  *
  * Uso (rodar onde há acesso ao banco):
  *   node backend/src/scripts/release-frozen-alloc-status.mjs            # DRY-RUN (não grava)
@@ -47,8 +50,10 @@ const summary = await releaseFrozenAllocStatus({
 for (const it of summary.items) {
   console.log(`  ${String(it.lh ?? "(sem LH)").padEnd(16)} override[${it.de}] → planilha[${it.para}]`);
 }
+const vazios = summary.items.filter((it) => it.de === "(vazio)").length;
 console.log(
-  `[release-frozen-alloc-status] varridas=${summary.scanned} · a soltar=${summary.released} · aplicado=${summary.applied}`,
+  `[release-frozen-alloc-status] varridas=${summary.scanned} · a soltar=${summary.released}` +
+    ` (atrasados=${summary.released - vazios} · vazios=${vazios}) · aplicado=${summary.applied}`,
 );
 if (!apply && summary.released > 0) {
   console.log("[release-frozen-alloc-status] DRY-RUN — rode com --apply para efetivar.");

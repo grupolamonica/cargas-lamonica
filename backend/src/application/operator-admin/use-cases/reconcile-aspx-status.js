@@ -160,7 +160,21 @@ export async function reconcileAspxStatus({ correlationId = null, deps = {} } = 
         // MESMAS regras do DC-316 permitirem que ele ceda para a planilha.
         // NULL (e não o status novo) porque é o valor que o resto do código trata
         // como "sem decisão" → a carga volta a acompanhar a planilha sozinha.
-        if (shouldReleaseAllocStatusOverride(row.alloc_status, novoSheetStatus)) {
+        //
+        // `hasDriver` distingue o override VAZIO ("") artefato do editor inline —
+        // que fazia a carga aparecer SEM status — do "" deliberado de "Disponível"
+        // (só possível em carga sem motorista). Usa a alocação EFETIVA, e o
+        // motorista recém-vindo do ASPX nesta rodada conta.
+        // Efetivo = COALESCE(alloc, sheet) com a semântica do Monitor: alloc_motorista
+        // = "" é vazio EXPLÍCITO (operador removeu o motorista) e VENCE a planilha —
+        // por isso `!= null` em vez de `||`.
+        const motoristaEfetivo =
+          row.alloc_motorista != null
+            ? trim(row.alloc_motorista)
+            : trim((gate.dados && asp.motorista) || row.sheet_motorista);
+        if (shouldReleaseAllocStatusOverride(row.alloc_status, novoSheetStatus, {
+          hasDriver: motoristaEfetivo !== "",
+        })) {
           setCol("alloc_status", null);
         }
 

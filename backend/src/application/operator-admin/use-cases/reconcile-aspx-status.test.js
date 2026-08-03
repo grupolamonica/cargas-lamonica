@@ -224,7 +224,7 @@ describe("reconcileAspxStatus (DC-316 completo)", () => {
     expect(row.alloc_status).toBe("CTE EM EMISSÃO"); // override do operador vence
   });
 
-  it("override vazio ('Disponível') não é tocado", async () => {
+  it("override vazio SEM motorista ('Disponível' deliberado) não é tocado", async () => {
     const carga = await seedCargo({ cliente_id: clienteId, sheet_lh: "LT-OVR-VAZIO" });
     await setSheetFields(carga.id, {
       sheet_status: "AGUARDANDO CARREGAMENTO",
@@ -234,7 +234,58 @@ describe("reconcileAspxStatus (DC-316 completo)", () => {
 
     await reconcileAspxStatus({ deps: baseDeps([aspRow({ lh: "LT-OVR-VAZIO", status: "CARREGADO" })]) });
 
-    expect((await rowOf(carga.id)).alloc_status).toBe(""); // "" ≠ congelado
+    expect((await rowOf(carga.id)).alloc_status).toBe(""); // reabertura deliberada
+  });
+
+  it("override vazio COM motorista é artefato do editor inline → solta (carga aparecia sem status)", async () => {
+    // `status: allocStatus ?? ""` do editor inline gravava vazio EXPLÍCITO; como
+    // COALESCE(alloc_*, sheet_*) devolve "", a carga ficava SEM status na tela
+    // mesmo com a planilha já em DESCARREGADO.
+    const carga = await seedCargo({ cliente_id: clienteId, sheet_lh: "LT-OVR-VZ-MOT" });
+    await setSheetFields(carga.id, {
+      sheet_status: "DESCARREGADO",
+      sheet_source: "shopee",
+      sheet_motorista: "JOAO DA SILVA",
+      alloc_status: "",
+    });
+
+    const r = await reconcileAspxStatus({ deps: baseDeps([aspRow({ lh: "LT-OVR-VZ-MOT", status: "DESCARREGADO" })]) });
+
+    expect(r).toMatchObject({ ok: true, updated: 1, sheetWrites: 0 });
+    const row = await rowOf(carga.id);
+    expect(row.alloc_status).toBeNull(); // volta a mostrar DESCARREGADO
+    expect(row.sheet_status).toBe("DESCARREGADO"); // planilha intocada
+  });
+
+  it("override vazio com motorista REMOVIDO ('' explícito) não é tocado", async () => {
+    // alloc_motorista = "" vence sheet_motorista (semântica do Monitor): carga sem
+    // motorista → o "" de status é a reabertura deliberada.
+    const carga = await seedCargo({ cliente_id: clienteId, sheet_lh: "LT-OVR-VZ-SEM" });
+    await setSheetFields(carga.id, {
+      sheet_status: "CARREGADO",
+      sheet_source: "shopee",
+      sheet_motorista: "JOAO DA SILVA",
+      alloc_motorista: "",
+      alloc_status: "",
+    });
+
+    await reconcileAspxStatus({ deps: baseDeps([aspRow({ lh: "LT-OVR-VZ-SEM", status: "CARREGADO" })]) });
+
+    expect((await rowOf(carga.id)).alloc_status).toBe("");
+  });
+
+  it("override vazio NÃO assume CANCELADO da planilha (não dispara cascata retroativa)", async () => {
+    const carga = await seedCargo({ cliente_id: clienteId, sheet_lh: "LT-OVR-VZ-CANC" });
+    await setSheetFields(carga.id, {
+      sheet_status: "CANCELADO",
+      sheet_source: "shopee",
+      sheet_motorista: "JOAO DA SILVA",
+      alloc_status: "",
+    });
+
+    await reconcileAspxStatus({ deps: baseDeps([aspRow({ lh: "LT-OVR-VZ-CANC", status: "CANCELADO" })]) });
+
+    expect((await rowOf(carga.id)).alloc_status).toBe(""); // segue mascarado de propósito
   });
 
   it("write-back desligado: sistema atualiza, planilha não é chamada", async () => {

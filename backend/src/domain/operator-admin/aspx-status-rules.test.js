@@ -129,13 +129,34 @@ describe("shouldReleaseAllocStatusOverride (soltar override atrasado)", () => {
     expect(shouldReleaseAllocStatusOverride("CTE EM EMISSÃO", "DEVOLVIDO")).toBe(false);
   });
 
-  it("não mexe em override ausente, vazio ou já alinhado", () => {
+  it("não mexe em override ausente, vazio SEM motorista ou já alinhado", () => {
     expect(shouldReleaseAllocStatusOverride(null, "CARREGADO")).toBe(false);
-    // "" = "Disponível" (ação deliberada de reabrir), não é status congelado.
+    // "" sem motorista = "Disponível" (reabertura deliberada), não é artefato.
     expect(shouldReleaseAllocStatusOverride("", "CARREGADO")).toBe(false);
     expect(shouldReleaseAllocStatusOverride("   ", "CARREGADO")).toBe(false);
+    expect(shouldReleaseAllocStatusOverride("", "CARREGADO", { hasDriver: false })).toBe(false);
     expect(shouldReleaseAllocStatusOverride("CARREGADO", "CARREGADO")).toBe(false);
     expect(shouldReleaseAllocStatusOverride(" carregado ", "CARREGADO")).toBe(false);
+  });
+
+  it("solta o override VAZIO quando há motorista (carga aparecia SEM status)", () => {
+    // Artefato do editor inline (`status: allocStatus ?? ""`): COALESCE devolve ""
+    // e a carga fica sem status mesmo com a planilha em DESCARREGADO.
+    expect(shouldReleaseAllocStatusOverride("", "DESCARREGADO", { hasDriver: true })).toBe(true);
+    expect(shouldReleaseAllocStatusOverride("", "CARREGADO", { hasDriver: true })).toBe(true);
+    expect(shouldReleaseAllocStatusOverride("   ", "CTE ENVIADO", { hasDriver: true })).toBe(true);
+    // Vale também para rótulo fora do pipeline: o vazio não é decisão, a planilha é.
+    expect(shouldReleaseAllocStatusOverride("", "RESERVADO", { hasDriver: true })).toBe(true);
+    // Sem status na planilha não há o que assumir.
+    expect(shouldReleaseAllocStatusOverride("", "", { hasDriver: true })).toBe(false);
+  });
+
+  it("override VAZIO nunca assume cancelamento/NO SHOW da planilha (evita cascata retroativa)", () => {
+    // Soltar aqui desmascararia um CANCELADO e sweepCancelledCascades desceria o
+    // motorista da fila muito depois do fato — decisão de operação, não saneamento.
+    for (const st of ["CANCELADO", "DEVOLVIDO", "NO SHOW", "CANCELADA"]) {
+      expect(shouldReleaseAllocStatusOverride("", st, { hasDriver: true })).toBe(false);
+    }
   });
 
   it("não solta quando a planilha está sem status, atrás ou fora do vocabulário", () => {

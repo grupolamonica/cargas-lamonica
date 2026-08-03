@@ -22,13 +22,23 @@
 //
 // Além do Bloco 1/2 do DC-316, este módulo decide quando o OVERRIDE do operador
 // (`cargas.alloc_status`) ficou ATRASADO em relação à planilha e deve ser solto —
-// `shouldReleaseAllocStatusOverride`, que compara a posição no pipeline.
+// `shouldReleaseAllocStatusOverride`, que compara a posição no pipeline e também
+// trata o override VAZIO ("", que faz a carga aparecer SEM status mesmo com a
+// planilha adiantada).
 
 const STATUS_DESCARGA = ["AGUARDANDO DESCARGA", "DESCARREGANDO", "DESCARREGADO"];
 const STATUS_PERMITEM_DESCARGA = ["CTE ENVIADO", "AGUARDANDO DESCARGA", "DESCARREGANDO"];
 const STATUS_EXCECAO = ["CANCELADO", "DEVOLVIDO"];
 const STATUS_INTOCAVEIS = ["NO SHOW", "CTE EM EMISSÃO"];
 const STATUS_VAZIO_ACEITA = ["AGUARDANDO CARREGAMENTO", "CARREGADO"];
+
+// Destinos que o override VAZIO ("") NÃO assume automaticamente. Soltar o vazio
+// faz o status efetivo virar o da planilha; se lá está um cancelamento, isso
+// desmascararia um CANCELADO e a varredura `sweepCancelledCascades`
+// (COALESCE(alloc_status, sheet_status) LIKE '%cancel%') dispararia a cascata de
+// rota retroativamente — motorista descendo da fila muito depois do fato. O
+// desmascaramento de cancelamento é decisão de operação, não de saneamento.
+const STATUS_NAO_ASSUMIDOS_DO_VAZIO = [...STATUS_EXCECAO, "NO SHOW"];
 
 // Ordem do pipeline operacional (vocabulário DC-136/DC-316). O índice mede o
 // quanto a viagem avançou e serve SÓ para comparar o override do operador com a
@@ -113,23 +123,46 @@ export function shouldUpdateAspxStatus(statusAtual, novoStatus) {
  * passa deles (o ASPX não conhece esse vocabulário), e cedem quando ela passa.
  * Exceções (CANCELADO/DEVOLVIDO/NO SHOW) nunca são soltas: não estão no pipeline.
  *
+ * OVERRIDE VAZIO (""): é o SEGUNDO sintoma do mesmo defeito. O editor inline
+ * mandava `status: allocStatus ?? ""` ao salvar só motorista/veículo, gravando um
+ * vazio EXPLÍCITO — e `COALESCE(alloc_*, sheet_*)` devolve "" (não cai para a
+ * planilha), então a carga passava a aparecer SEM status mesmo com a planilha em
+ * DESCARREGADO. "" também é uma ação legítima ("Disponível", reabrir para o
+ * motorista), e as duas se distinguem pelo MOTORISTA: o backend recusa deixar
+ * Disponível uma carga com motorista (updateMonitorAllocation/updateMonitorCargo),
+ * logo "" + motorista efetivo só pode ser o artefato. Daí o `hasDriver`.
+ *
  * IMPORTANTE: só decide sobre o OVERRIDE. A decisão sobre `sheet_status` continua
  * ancorada no próprio `sheet_status` (via `shouldUpdateAspxStatus`) — ancorá-la no
  * efetivo (`alloc ?? sheet`) faria um override velho derrubar a proteção do CTE na
  * coluna L da planilha.
  *
- * @param {string|null} allocStatus       override atual (null = sem override)
+ * @param {string|null} allocStatus       override atual (null = sem override, "" = vazio explícito)
  * @param {string} novoStatusPlanilha     status da planilha JÁ reconciliado nesta rodada
+ * @param {{ hasDriver?: boolean }} [opts] hasDriver = há motorista na alocação EFETIVA
+ *   (COALESCE(alloc_motorista, sheet_motorista)); só então o override "" é artefato.
  * @returns {boolean} true se o override deve ser limpo (→ NULL)
  */
-export function shouldReleaseAllocStatusOverride(allocStatus, novoStatusPlanilha) {
+export function shouldReleaseAllocStatusOverride(allocStatus, novoStatusPlanilha, { hasDriver = false } = {}) {
   const cur = normalizeAspxStatus(allocStatus);
   const nw = normalizeAspxStatus(novoStatusPlanilha);
 
-  // Sem override, ou override VAZIO ("" = "Disponível", ação deliberada de
-  // reabrir): não há o que soltar. `null` e `""` têm significados diferentes no
-  // Monitor e nenhum dos dois é um status congelado.
-  if (!cur) return false;
+  // Sem override (null = "sem decisão"): não há o que soltar.
+  if (allocStatus == null) return false;
+
+  // Planilha sem status: não há valor melhor para assumir → preserva o override.
+  if (!nw) return false;
+
+  // Override VAZIO ("" = artefato do editor inline OU "Disponível" deliberado).
+  // Só solta com motorista na alocação efetiva — sem motorista, "" é a reabertura
+  // deliberada da carga e mexer nela devolveria status a uma carga disponível.
+  if (!cur) {
+    if (!hasDriver) return false;
+    // Nunca assume cancelamento/NO SHOW vindo da planilha (ver
+    // STATUS_NAO_ASSUMIDOS_DO_VAZIO): dispararia a cascata de rota retroativa.
+    if (STATUS_NAO_ASSUMIDOS_DO_VAZIO.includes(nw) || nw.includes("CANCEL")) return false;
+    return true;
+  }
 
   // Já alinhado com a planilha → o override é inócuo, não mexe.
   if (cur === nw) return false;
@@ -211,6 +244,7 @@ export const __TEST__ = {
   STATUS_EXCECAO,
   STATUS_INTOCAVEIS,
   STATUS_PIPELINE,
+  STATUS_NAO_ASSUMIDOS_DO_VAZIO,
   STATUS_VAZIO_ACEITA,
   STATUS_GATE_DADOS,
   STATUS_GATE_DATAS,

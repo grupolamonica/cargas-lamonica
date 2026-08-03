@@ -12,13 +12,14 @@ import { releaseFrozenAllocStatus } from "./release-frozen-alloc-status.js";
 
 const deps = { withPgClient };
 
-async function seedComOverride(clienteId, lh, { sheet_status, alloc_status }) {
+async function seedComOverride(clienteId, lh, { sheet_status, alloc_status, motorista = null, allocMotorista = null }) {
   const carga = await seedCargo({ cliente_id: clienteId, sheet_lh: lh });
-  await query(`UPDATE public.cargas SET sheet_status = $2, alloc_status = $3 WHERE id = $1`, [
-    carga.id,
-    sheet_status,
-    alloc_status,
-  ]);
+  await query(
+    `UPDATE public.cargas
+        SET sheet_status = $2, alloc_status = $3, sheet_motorista = $4, alloc_motorista = $5
+      WHERE id = $1`,
+    [carga.id, sheet_status, alloc_status, motorista, allocMotorista],
+  );
   return carga.id;
 }
 
@@ -87,14 +88,49 @@ describe("releaseFrozenAllocStatus", () => {
     expect(await allocOf(cancelado)).toBe("CANCELADO");
   });
 
-  it("ignora override vazio ('Disponível') e carga sem status na planilha", async () => {
+  it("ignora override vazio SEM motorista ('Disponível') e carga sem status na planilha", async () => {
     const vazio = await seedComOverride(clienteId, "LT-FZ-VZ", { sheet_status: "CARREGADO", alloc_status: "" });
     const semSheet = await seedComOverride(clienteId, "LT-FZ-SS", { sheet_status: "", alloc_status: "CARREGADO" });
+    // Motorista REMOVIDO pelo operador (alloc "" vence a planilha) → sem motorista.
+    const removido = await seedComOverride(clienteId, "LT-FZ-RM", {
+      sheet_status: "DESCARREGADO",
+      alloc_status: "",
+      motorista: "JOAO DA SILVA",
+      allocMotorista: "",
+    });
 
     const r = await releaseFrozenAllocStatus({ apply: true, deps });
 
     expect(r.released).toBe(0);
     expect(await allocOf(vazio)).toBe("");
     expect(await allocOf(semSheet)).toBe("CARREGADO");
+    expect(await allocOf(removido)).toBe("");
+  });
+
+  it("solta o override VAZIO com motorista (carga aparecia SEM status) e reporta como (vazio)", async () => {
+    const id = await seedComOverride(clienteId, "LT-FZ-VZM", {
+      sheet_status: "DESCARREGADO",
+      alloc_status: "",
+      motorista: "JOAO DA SILVA",
+    });
+
+    const r = await releaseFrozenAllocStatus({ apply: true, deps });
+
+    expect(r).toMatchObject({ released: 1, applied: true });
+    expect(r.items[0]).toMatchObject({ lh: "LT-FZ-VZM", de: "(vazio)", para: "DESCARREGADO" });
+    expect(await allocOf(id)).toBeNull();
+  });
+
+  it("override VAZIO com planilha CANCELADO é preservado (cascata de rota é decisão de operação)", async () => {
+    const id = await seedComOverride(clienteId, "LT-FZ-VZC", {
+      sheet_status: "CANCELADO",
+      alloc_status: "",
+      motorista: "JOAO DA SILVA",
+    });
+
+    const r = await releaseFrozenAllocStatus({ apply: true, deps });
+
+    expect(r.released).toBe(0);
+    expect(await allocOf(id)).toBe("");
   });
 });
