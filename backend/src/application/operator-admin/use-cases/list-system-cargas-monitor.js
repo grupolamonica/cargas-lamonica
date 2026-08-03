@@ -10,7 +10,10 @@
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 
 const SELECT_COLS =
-  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta, alloc_pinned, status, driver_visibility, lh_manual, cliente_id";
+  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta, alloc_pinned, status, driver_visibility, lh_manual, agenda_a_confirmar, cliente_id";
+// Mesmo SELECT sem `agenda_a_confirmar` — usado no fallback de banco sem a coluna
+// (migration 20260717210000): a fonte "sistema" do Monitor não pode cair só por isso.
+const SELECT_COLS_SEM_AGENDA = SELECT_COLS.replace(" agenda_a_confirmar,", "");
 
 /** DATE do Postgres pode chegar como '2026-06-25' ou ISO '2026-06-25T00:00:00.000Z'.
  *  Fatiar os 10 primeiros chars dá a data de parede correta (igual ao fix do
@@ -75,14 +78,17 @@ export function mapSystemCargoToMonitorRow(c, clientesById = {}, now = null) {
   const opStatus = (c.alloc_status || "").trim();
   const lifecycle = (c.status || "").trim().toUpperCase();
   const isPublic = (c.driver_visibility || "PUBLIC").toString().toUpperCase() === "PUBLIC";
-  // Carga lançada/manual do sistema (sheet_lh NULL + lh_manual) fica disponível o
-  // dia inteiro (data >= hoje), igual à exceção do buildDriverLoadFilters — senão
-  // o Monitor mostraria "Em aberto" numa carga que o motorista já enxerga.
-  const isLaunched = !!(c.lh_manual && String(c.lh_manual).trim())
-    && !(c.sheet_lh && String(c.sheet_lh).trim());
+  // DC-271: a exceção "carga lançada fica disponível o dia inteiro (data >= hoje)" foi
+  // removida do buildDriverLoadFilters — carga lançada com hora vencida SAI do portal.
+  // Mantê-la aqui fazia o Monitor anunciar "Disponível" numa carga que o motorista já
+  // não enxerga. A única exceção que sobra é a mesma do portal: agenda "A confirmar"
+  // (agenda_a_confirmar), cujo data/horario é placeholder (dia do lançamento às 00:00)
+  // e portanto não representa carregamento vencido. Banco sem a coluna → undefined →
+  // false: o Monitor volta ao corte puro por data/hora (degradação, não erro).
+  const agendaAConfirmar = c.agenda_a_confirmar === true;
   const isFuture = !now || !dataStr || dataStr > now.todayIso
     || (dataStr === now.todayIso && (!horaStr || horaStr >= now.nowTimeIso))
-    || (isLaunched && dataStr >= now.todayIso);
+    || agendaAConfirmar;
   const openToDriver = lifecycle === "OPEN" && isPublic && motoristas === "" && isFuture;
   let status = opStatus;
   if (!opStatus) {
@@ -160,10 +166,13 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
   // operador. Tolerante a banco sem a coluna (migration não aplicada): repete a
   // leitura sem o filtro em vez de derrubar a fonte "sistema" do Monitor.
   let filterAspxMissing = true;
+  // Idem para agenda_a_confirmar: sem a coluna, relê sem ela (o mapper trata
+  // undefined como false) em vez de derrubar a fonte "sistema".
+  let selectAgendaAConfirmar = true;
   const page = (from) => {
     let q = supabaseClient
       .from("cargas")
-      .select(SELECT_COLS)
+      .select(selectAgendaAConfirmar ? SELECT_COLS : SELECT_COLS_SEM_AGENDA)
       .is("sheet_lh", null)
       .eq("is_template", false)
       .neq("status", "EXPIRED")
@@ -177,6 +186,10 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
     let { data, error } = await page(from);
     if (error && filterAspxMissing && isMissingAspxColumnError(error)) {
       filterAspxMissing = false;
+      ({ data, error } = await page(from));
+    }
+    if (error && selectAgendaAConfirmar && isMissingAgendaAConfirmarColumn(error)) {
+      selectAgendaAConfirmar = false;
       ({ data, error } = await page(from));
     }
     if (error) throw error;
@@ -193,4 +206,10 @@ function isMissingAspxColumnError(error) {
   if (!error) return false;
   if (error.code === "42703") return true;
   return /aspx_missing_since/i.test(String(error.message ?? ""));
+}
+
+/** Coluna agenda_a_confirmar ausente (migration 20260717210000 não aplicada). */
+function isMissingAgendaAConfirmarColumn(error) {
+  if (!error) return false;
+  return /agenda_a_confirmar/i.test(String(error.message ?? ""));
 }

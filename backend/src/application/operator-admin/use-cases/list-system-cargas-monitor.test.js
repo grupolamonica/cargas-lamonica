@@ -70,20 +70,36 @@ describe("mapSystemCargoToMonitorRow", () => {
     expect(comMot.isAvailable).toBe(false);
   });
 
-  it("carga LANÇADA (lh_manual, sem sheet_lh) fica 'Disponível' o dia todo, mesmo com a hora de carregamento passada", () => {
+  it("DC-271: carga LANÇADA com hora vencida NÃO é 'Disponível' (some do portal); só a agenda 'A confirmar' escapa do corte", () => {
     const now = { todayIso: "2026-06-30", nowTimeIso: "12:00" };
-    // HOJE, mas hora já passada (06:00 < 12:00). Espelha a exceção do buildDriverLoadFilters.
+    // HOJE, hora já passada (06:00 < 12:00). Espelha buildDriverLoadFilters pós-DC-271.
     const base = { id: "x", origem: "A", destino: "B", status: "OPEN", alloc_motorista: null, alloc_status: null, driver_visibility: "PUBLIC", data: "2026-06-30", horario: "06:00:00" };
-    // Lançada (lh_manual, sheet_lh nulo) → visível pro motorista o dia todo → "Disponível" ("").
+    // Lançada com agenda DEFINIDA e hora vencida → saiu do portal → "Em aberto".
+    // (Antes o Monitor dizia "Disponível" — divergia do que o motorista via.)
     const lancada = mapSystemCargoToMonitorRow({ ...base, lh_manual: "LT-LAUNCH-1" }, {}, now);
-    expect(lancada.status).toBe("");
-    expect(lancada.isAvailable).toBe(true);
+    expect(lancada.status).toBe("Em aberto");
+    expect(lancada.isAvailable).toBe(false);
     // Sistema SEM lh_manual (mesma data/hora) → regra minuto-a-minuto → "Em aberto".
     expect(mapSystemCargoToMonitorRow({ ...base }, {}, now).status).toBe("Em aberto");
-    // Com sheet_lh (planilha) NÃO ganha o dia inteiro (STD confiável) → "Em aberto".
+    // Planilha (sheet_lh) idem → "Em aberto".
     expect(mapSystemCargoToMonitorRow({ ...base, lh_manual: "LT-X", sheet_lh: "SHEET-1" }, {}, now).status).toBe("Em aberto");
-    // Dia ANTERIOR continua fora, mesmo lançada (o relaxamento é só nível de dia).
-    expect(mapSystemCargoToMonitorRow({ ...base, data: "2026-06-29", lh_manual: "LT-2" }, {}, now).status).toBe("Em aberto");
+
+    // Agenda "A CONFIRMAR": data/horario são placeholder (dia do lançamento às 00:00),
+    // não carregamento vencido — o portal a lista, então o Monitor mostra "Disponível".
+    const aConfirmar = mapSystemCargoToMonitorRow(
+      { ...base, horario: "00:00:00", lh_manual: "B101474063", agenda_a_confirmar: true },
+      {},
+      now,
+    );
+    expect(aConfirmar.status).toBe("");
+    expect(aConfirmar.isAvailable).toBe(true);
+    // Placeholder de dia anterior segue "Disponível" — a flag tira do corte por completo,
+    // igual ao portal (quem encerra a oferta é o operador, ao confirmar/cancelar a agenda).
+    expect(
+      mapSystemCargoToMonitorRow({ ...base, data: "2026-06-29", horario: "00:00:00", lh_manual: "B1-OLD", agenda_a_confirmar: true }, {}, now).status,
+    ).toBe("");
+    // Banco sem a coluna (undefined) → corte puro por data/hora → "Em aberto".
+    expect(mapSystemCargoToMonitorRow({ ...base, lh_manual: "LT-NOCOL" }, {}, now).status).toBe("Em aberto");
   });
 
   it("resolve o cliente da carga via clientesById (id→nome); null sem id/match", () => {
