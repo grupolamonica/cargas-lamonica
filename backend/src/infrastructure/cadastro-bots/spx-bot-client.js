@@ -97,9 +97,24 @@ export class SpxBotError extends Error {
 function mapBotError({ httpStatus, body, fallbackMessage }) {
   const detail = body?.detail;
   const detailObj = (detail && typeof detail === "object") ? detail : null;
-  const retcode = detailObj?.retcode || body?.retcode || null;
+
+  // O sidecar às vezes devolve `detail` como STRING no formato
+  // "[<retcode>] <mensagem> (path=...)" em vez do objeto {retcode,etapa,erro}.
+  // Sem parsear isso, retcode/erroMsg ficavam null e o erro caía no 502 genérico
+  // "Falha SPX em etapa desconhecida", ESCONDENDO do operador a causa real
+  // (ex.: telefone inválido — retcode 271605009, caso DOMICIO). Extraímos o
+  // retcode e uma mensagem legível (sem o prefixo [código] e o sufixo (path=...)).
+  const detailStr = typeof detail === "string" ? detail : null;
+  const detailStrRetcode = detailStr && /^\s*\[(\d+)\]/.test(detailStr)
+    ? Number(detailStr.match(/^\s*\[(\d+)\]/)[1])
+    : null;
+  const detailStrMsg = detailStr
+    ? (detailStr.replace(/^\s*\[\d+\]\s*/, "").replace(/\s*\(path=[^)]*\)\s*$/i, "").trim() || null)
+    : null;
+
+  const retcode = detailObj?.retcode || body?.retcode || detailStrRetcode || null;
   const etapa = detailObj?.etapa || body?.etapa || null;
-  const erroMsg = detailObj?.erro || body?.erro || null;
+  const erroMsg = detailObj?.erro || body?.erro || detailStrMsg || null;
 
   if (httpStatus === 401) {
     return new SpxBotError({
@@ -152,8 +167,10 @@ function mapBotError({ httpStatus, body, fallbackMessage }) {
   if (retcode === 271605009) {
     return new SpxBotError({
       code: "SPX_TELEFONE_INVALIDO",
-      message: erroMsg || "Telefone inválido segundo o SPX.",
-      acao: "Verifique se o telefone tem 11 dígitos.",
+      message: "Telefone do motorista em formato inválido para o SPX — precisa ser celular com DDD + 9 dígitos (11 no total).",
+      acao: "Corrija o telefone do motorista no cadastro para o formato de celular com 11 dígitos "
+        + "(DDD + 9 + os 8 dígitos, ex.: 11987654321) e dispare o SPX novamente. "
+        + "Número com 10 dígitos ou telefone fixo NÃO é aceito pelo SPX.",
       httpStatus, etapa, retcode, raw: body,
     });
   }
@@ -204,8 +221,13 @@ function mapBotError({ httpStatus, body, fallbackMessage }) {
   if (httpStatus === 502) {
     return new SpxBotError({
       code: "SPX_DOWNSTREAM_FAIL",
+      // erroMsg agora carrega a razão real do SPX (inclusive quando veio como
+      // string "[código] mensagem"); só cai em "etapa desconhecida" quando o
+      // sidecar realmente não informou motivo algum.
       message: erroMsg || `Falha SPX em ${etapa || "etapa desconhecida"}.`,
-      acao: "Tente novamente. Se persistir, contate suporte com este código.",
+      acao: erroMsg
+        ? "Corrija o problema indicado na mensagem acima e dispare o SPX novamente. Se persistir, contate o suporte com este código."
+        : "Tente novamente. Se persistir, contate o suporte com este código.",
       httpStatus, etapa, retcode, raw: body,
     });
   }
