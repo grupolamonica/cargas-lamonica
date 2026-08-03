@@ -28,7 +28,13 @@
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
 import { ValidationError } from "../../../domain/load-claims/errors.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
-import { findClientIdByName, findSheetClientId, fetchRouteCatalogMetricsByLoadId } from "./_shared.js";
+import {
+  findNestleClientId,
+  nestleClientNameCandidates,
+  findSheetClientId,
+  fetchRouteCatalogMetricsByLoadId,
+  normalizeClientName,
+} from "./_shared.js";
 import { writeAllocationsToSheet, buildSystemCargoShellRow } from "../../google-sheets/sheet-writeback.js";
 
 /**
@@ -109,7 +115,11 @@ export async function launchCargoFromTrip({
     // Detecção: hint clienteNome OU o lh casa uma oferta em nestle_ofertas. Resolvido
     // ANTES do dedup p/ o write-back da linha-casca rotear a fonte certa (shopee vs
     // nestle) tanto no caminho novo quanto no já-existente.
-    let isNestle = String(clienteNome ?? "").toLowerCase() === "nestle";
+    // Detecção pelo NOME também não pode depender de um literal: compara sem
+    // acento/caixa contra os nomes conhecidos do cliente Nestlé (env do sync +
+    // históricos). Se o operador renomear o cliente, a detecção acompanha.
+    const nomesNestle = new Set(nestleClientNameCandidates().map((n) => normalizeClientName(n)));
+    let isNestle = clienteNome ? nomesNestle.has(normalizeClientName(String(clienteNome))) : false;
     if (!isNestle) {
       try {
         const { rows: nst } = await client.query(
@@ -177,13 +187,18 @@ export async function launchCargoFromTrip({
       };
     }
 
+    // NUNCA resolver o cliente Nestlé por nome cravado: o operador renomeia o
+    // cliente na tela (em 30/07 "Nestlé" virou "Produtos Alimentícios") e o
+    // lançamento passou a falhar em 100% das ofertas Nestlé por 2 dias, sem
+    // diagnóstico. findNestleClientId tenta o nome do chamador, o env que o sync
+    // usa e os nomes históricos, comparando sem acento/caixa.
     const clienteId = isNestle
-      ? await findClientIdByName(client, clienteNome || "Nestle")
+      ? await findNestleClientId(client, clienteNome)
       : await findSheetClientId(client);
     if (!clienteId) {
       throw new ValidationError(
         isNestle
-          ? "Cliente Nestle não encontrado — cadastre o cliente antes de lançar cargas Nestlé."
+          ? `Cliente Nestlé não encontrado (tentados: ${nestleClientNameCandidates().join(", ")}) — confira o nome do cliente na tela de Clientes ou o env GOOGLE_SHEET_NESTLE_CLIENT_NAME.`
           : "Cliente Shopee não encontrado — cadastre o cliente antes de lançar cargas SPX.",
       );
     }
