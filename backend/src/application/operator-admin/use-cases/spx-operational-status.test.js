@@ -42,6 +42,58 @@ describe("applySpxOperationalStatus", () => {
     expect(r.status).toBe("AGUARDANDO CARREGAMENTO");
   });
 
+  it("NÃO rebaixa CTE EM EMISSÃO / CTE ENVIADO (vocabulário que o SPX não conhece)", () => {
+    // Era o motivo de o overlay ter sido desligado em produção: `departed` → CARREGADO
+    // sobrepunha o CTE da planilha e o painel regredia.
+    for (const cte of ["CTE EM EMISSÃO", "CTE ENVIADO"]) {
+      const r = applySpxOperationalStatus(row({ status: cte }), { spxStatusByLh: idx });
+      expect(r.status).toBe(cte);
+      expect(r.spxStatus).toBeUndefined(); // nem anexa: o front trata spxStatus como autoritativo
+    }
+  });
+
+  it("compara com o status EFETIVO (override do operador), não com o da planilha", () => {
+    // Planilha em AGUARDANDO CARREGAMENTO, operador marcou CTE ENVIADO, SPX em CARREGADO:
+    // ancorar em row.status faria o SPX "avançar" e rebaixar o override.
+    const r = applySpxOperationalStatus(row({ status: "AGUARDANDO CARREGAMENTO" }), {
+      spxStatusByLh: idx,
+      allocByLh: { LT1: { alloc_motorista: "JOÃO", alloc_status: "CTE ENVIADO" } },
+    });
+    expect(r.status).toBe("AGUARDANDO CARREGAMENTO"); // linha intacta (o front aplica o override)
+    expect(r.spxStatus).toBeUndefined();
+  });
+
+  it("SPX à frente do CTE sobrepõe (avanço legítimo da viagem)", () => {
+    const r = applySpxOperationalStatus(row({ status: "CTE ENVIADO" }), {
+      spxStatusByLh: new Map([["LT1", "DESCARREGADO"]]),
+    });
+    expect(r.status).toBe("DESCARREGADO");
+    expect(r.spxStatus).toBe("DESCARREGADO");
+  });
+
+  it("carga do SISTEMA sem status na tela → recebe o rótulo do SPX (o caso que motivou religar)", () => {
+    // Carga lançada (lh_manual): o sync ASPX casa por sheet_lh e nunca a visita, então
+    // sem overlay o painel mostrava VAZIO com a viagem já atribuída no SPX.
+    const r = applySpxOperationalStatus(row({ status: "" }), {
+      spxStatusByLh: new Map([["LT1", "AGUARDANDO CHEGAR NO CLIENTE"]]),
+    });
+    expect(r.status).toBe("AGUARDANDO CHEGAR NO CLIENTE");
+    expect(r.spxStatus).toBe("AGUARDANDO CHEGAR NO CLIENTE");
+  });
+
+  it("nunca REGRIDE dentro do pipeline (SPX atrás do exibido → no-op)", () => {
+    const r = applySpxOperationalStatus(row({ status: "DESCARREGADO" }), { spxStatusByLh: idx });
+    expect(r.status).toBe("DESCARREGADO");
+    expect(r.spxStatus).toBeUndefined();
+  });
+
+  it("status exibido FORA do pipeline (NO SHOW / CANCELADO) é decisão do operador e fica", () => {
+    for (const terminal of ["NO SHOW", "CANCELADO"]) {
+      const r = applySpxOperationalStatus(row({ status: terminal }), { spxStatusByLh: idx });
+      expect(r.status).toBe(terminal);
+    }
+  });
+
   it("LH sem viagem no SPX → no-op", () => {
     const r = applySpxOperationalStatus(row({ lh: "LT-NAO-EXISTE" }), { spxStatusByLh: idx });
     expect(r.status).toBe("AGUARDANDO CARREGAMENTO");
