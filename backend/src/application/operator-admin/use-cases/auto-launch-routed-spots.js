@@ -17,7 +17,7 @@
 //   Em ambas:
 //     - não atrasada (carregamento no futuro)
 //     - ainda não lançada (jaLancada=false — dedup por lh_manual/sheet_lh)
-//     - rota (origem→destino) casa uma linha de route_metrics_cache (tem valor)
+//     - rota (origem→destino) casa uma linha ATIVA de route_metrics_cache (tem valor)
 //
 // A carga é lançada via launch-cargo-from-trip (lh_manual, Cidade/UF limpo p/ casar
 // a rota); com a rota cadastrada ela já nasce "ready" no portal (valor/métrica vêm
@@ -35,7 +35,8 @@ const DEFAULT_MAX_PER_RUN = 50;
 /**
  * @param {{ correlationId?: string, maxPerRun?: number, deps?: object }} args
  * @returns {Promise<{ ok: boolean, reason?: string, candidates: number, routed: number,
- *   launched: number, already: number, errors: number, deferred: number, results: object[] }>}
+ *   inactiveRoute: number, launched: number, already: number, errors: number,
+ *   deferred: number, results: object[] }>}
  */
 export async function autoLaunchRoutedSpots({ correlationId, maxPerRun = DEFAULT_MAX_PER_RUN, deps = {} } = {}) {
   const getProg = deps.getProgramacao || getProgramacao;
@@ -43,7 +44,17 @@ export async function autoLaunchRoutedSpots({ correlationId, maxPerRun = DEFAULT
   const matchRoutes = deps.fetchRouteCatalogMetricsByLoadId || fetchRouteCatalogMetricsByLoadId;
   const run = deps.withPgClient || withPgClient;
 
-  const empty = { ok: true, candidates: 0, routed: 0, launched: 0, already: 0, errors: 0, deferred: 0, results: [] };
+  const empty = {
+    ok: true,
+    candidates: 0,
+    routed: 0,
+    inactiveRoute: 0,
+    launched: 0,
+    already: 0,
+    errors: 0,
+    deferred: 0,
+    results: [],
+  };
 
   // Planejado (viagens ofertáveis) + Aceito (p/ pegar as Nestlé aceitas sem motorista).
   // A aba "aceito" também traz viagens SPX aceitas — que NUNCA viram candidato aqui
@@ -80,8 +91,18 @@ export async function autoLaunchRoutedSpots({ correlationId, maxPerRun = DEFAULT
     destino: r.destinoCidadeUf || r.destino,
   }));
   const metricsByLh = await run((client) => matchRoutes(client, routeRows));
-  const routed = candidates.filter((r) => metricsByLh.get(r.lh));
-  if (routed.length === 0) return { ...empty, candidates: candidates.length };
+  // Rota DESATIVADA no catálogo (ativa=false) não gera auto-lançamento. O portal do
+  // motorista já esconde a carga de rota desativada (dashboard-read-model), então
+  // publicar aqui só criava carga fantasma no /cargas e no Monitor — com o preço de
+  // uma tarifa que o operador tinha tirado do ar. `ativa` NULL/ausente = ativa
+  // (schema legado sem a coluna cai no mesmo caminho de antes).
+  const isRouted = (r) => {
+    const metrics = metricsByLh.get(r.lh);
+    return Boolean(metrics) && metrics.ativa !== false;
+  };
+  const inactiveRoute = candidates.filter((r) => metricsByLh.get(r.lh)?.ativa === false).length;
+  const routed = candidates.filter(isRouted);
+  if (routed.length === 0) return { ...empty, candidates: candidates.length, inactiveRoute };
 
   // Teto por ciclo (evita rajada); o excedente é pego no próximo tick. Nunca
   // truncamos em silêncio — o deferido é logado pelo chamador.
@@ -116,6 +137,9 @@ export async function autoLaunchRoutedSpots({ correlationId, maxPerRun = DEFAULT
     ok: true,
     candidates: candidates.length,
     routed: routed.length,
+    // Spots ignorados porque a tarifa casada está desativada — visível pro chamador
+    // (nunca truncamos/descartamos em silêncio).
+    inactiveRoute,
     launched: results.filter((r) => r.state === "launched").length,
     already: results.filter((r) => r.state === "already").length,
     errors: results.filter((r) => r.state === "error").length,
