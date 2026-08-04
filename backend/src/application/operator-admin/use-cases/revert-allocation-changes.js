@@ -2,7 +2,7 @@ import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { ValidationError } from "../../../domain/load-claims/errors.js";
 import { writeAllocationsToSheet } from "../../google-sheets/sheet-writeback.js";
-import { resolveMonitorCargoByLh } from "./_shared.js";
+import { resolveMonitorCargoByLh, resolveCargoFollowingMerge } from "./_shared.js";
 import {
   extractRevertItemsFromAuditEvent,
   allocEqualsStrict,
@@ -99,16 +99,17 @@ export async function revertAllocationChanges({ operatorId, items, requestIp, co
           continue;
         }
 
-        // Resolve + trava a carga (planilha por LH ou sistema por cargoId).
+        // Resolve + trava a carga (planilha por LH ou sistema por cargoId). Segue
+        // o ponteiro de merge: se o cargoId gravado no evento é hoje uma PERDEDORA
+        // (gêmea já mergeada — TWIN_MERGE), reverter direto nela escreveria numa
+        // linha morta (a carga visível/efetiva é a vencedora) — o operador veria
+        // "revertido" sem nada mudar na tela. Resolvendo a vencedora primeiro, a
+        // guarda `allocEqualsStrict` abaixo compara com o estado REAL e visível.
         let cargo;
         if (change.lh) {
           cargo = await resolveMonitorCargoByLh(client, change.lh, { columns: ALLOC_COLUMNS });
         } else {
-          const { rows } = await client.query(
-            `SELECT ${ALLOC_COLUMNS} FROM public.cargas WHERE id = $1 FOR UPDATE`,
-            [change.cargoId],
-          );
-          cargo = rows[0] ?? null;
+          cargo = await resolveCargoFollowingMerge(client, change.cargoId, { columns: ALLOC_COLUMNS, forUpdate: true });
         }
         if (!cargo) {
           skipped.push({ ...ref, auditLogId, reason: "Carga não existe mais." });

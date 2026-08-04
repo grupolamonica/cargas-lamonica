@@ -135,6 +135,20 @@ function auditItem(row, directory) {
     const changes = Array.isArray(row.metadata?.changes) ? row.metadata.changes : [];
     if (changes.length === 0) return null;
   }
+  if (tipo === "system.cargo.twin_alloc_merged") {
+    // Gêmeas unificadas (TWIN_MERGE): explica pro operador por que o histórico de
+    // duas cargas (planilha + lançada) aparece junto a partir daqui.
+    const copied = Array.isArray(row.metadata?.copiedFields)
+      ? row.metadata.copiedFields.map((c) => String(c).replace(/^alloc_/, ""))
+      : [];
+    return {
+      quando: row.created_at,
+      titulo: "Gêmeas unificadas",
+      detalhe: copied.length > 0 ? `Herdou da carga lançada: ${copied.join(", ")}` : "Carga lançada reconhecida como a mesma viagem",
+      por: "Sistema (automático)",
+      tipo: "TWIN_MERGED",
+    };
+  }
   return {
     quando: row.created_at,
     titulo: AUDIT_TITLES[tipo] || "Alteração registrada na carga",
@@ -237,6 +251,20 @@ export async function fetchCargoHistoryByLh({ lh, cargoId, correlationId }) {
     } catch {
       /* sem resolução: seguem as âncoras determinísticas acima */
     }
+    // Gêmeas já MERGEADAS (TWIN_MERGE) que apontam para qualquer âncora conhecida.
+    // O merge não reescreve o passado (merge-launched-twin.js), só marca a
+    // perdedora — sem isto, uma consulta feita só por `cargoId` (sem `lh`, ex.:
+    // carga do sistema sem LH) não achava a perdedora: ela só é encontrada acima
+    // via `lh_manual = lhTrim`, que fica vazio quando não há lh.
+    try {
+      const merged = await client.query(
+        `SELECT id FROM public.cargas WHERE alloc_merged_into_cargo_id = ANY($1)`,
+        [[...anchorIds]],
+      );
+      for (const r of merged.rows) anchorIds.add(r.id);
+    } catch {
+      /* best-effort: segue só com as âncoras já resolvidas */
+    }
     const ids = [...anchorIds];
 
     // Predicado "esta carga", reusado pelos SELECTs em cargas: a lançada (por
@@ -291,6 +319,12 @@ export async function fetchCargoHistoryByLh({ lh, cargoId, correlationId }) {
     // descer na fila, fixar, duplicar: tudo isso é "o que aconteceu com a carga" e o
     // operador não via nada disso (1 de 15 tipos era exibido).
     try {
+      // Gêmeas (lançadas) já MERGEADAS nesta canônica: o merge não reescreve o
+      // passado (merge-launched-twin.js), só marca a perdedora — a alocação feita
+      // no sistema ANTES do merge vive em audit com resource_id = id da PERDEDORA,
+      // não da canônica. Sem esta união, o histórico "sumia" assim que a gêmea era
+      // unificada (o próprio código do merge já documenta esta leitura como o
+      // costurador do histórico, não uma reescrita).
       const audit = await client.query(
         `
           SELECT event_type, actor_user_id, created_at, metadata

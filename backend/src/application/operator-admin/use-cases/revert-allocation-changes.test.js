@@ -10,6 +10,7 @@ import {
   withPgTransaction,
 } from "../test-harness.js";
 import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
+import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({ withPgClient, withPgTransaction }));
 vi.mock("../../google-sheets/sheet-writeback.js", () => ({ writeAllocationsToSheet: vi.fn(async () => {}) }));
@@ -18,6 +19,7 @@ const { updateMonitorAllocation } = await import("./update-monitor-allocation.js
 const { descendQueueCascade } = await import("./descend-queue-cascade.js");
 const { listOperatorAllocationChanges } = await import("./list-operator-allocation-changes.js");
 const { revertAllocationChanges } = await import("./revert-allocation-changes.js");
+const { mergeLaunchedTwinAlloc } = await import("./merge-launched-twin.js");
 
 const LH = "LT-REVERT-1";
 
@@ -195,5 +197,109 @@ describe("revert-allocation-changes (list + revert)", () => {
     expect((await getAlloc(id1)).alloc_motorista).toBe("M1");
     expect((await getAlloc(id2)).alloc_motorista).toBe("M2");
     expect((await getAlloc(id3)).alloc_motorista).toBe("M3");
+  });
+});
+
+// Gêmea já mergeada (TWIN_MERGE): o cargoId gravado num audit ANTIGO pode ser hoje
+// uma PERDEDORA (merge-launched-twin.js só marca, nunca apaga). Ler/travar essa
+// linha direto compara/escreve num estado CONGELADO em vez do efetivo e visível.
+describe("list + revert — cargoId aponta pra uma gêmea já mergeada", () => {
+  beforeEach(async () => {
+    await resetTestDatabase();
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    delete process.env.TWIN_MERGE;
+  });
+  afterAll(async () => {
+    await closeTestDatabase();
+  });
+
+  async function seedReassignEvent({ operatorId, cargoId, before, after }) {
+    let auditLogId = null;
+    await withPgTransaction(async (client) => {
+      await insertSecurityAuditEvent(client, {
+        eventType: "operator.cargo.allocation_reassigned",
+        actorUserId: operatorId,
+        actorRole: "operator",
+        resourceType: "cargo",
+        resourceId: cargoId,
+        action: "update",
+        outcome: "success",
+        metadata: {
+          moves: [{ cargoId, motorista: after, cavalo: null, carreta: null }],
+          beforeMoves: [{ cargoId, motorista: before, cavalo: null, carreta: null }],
+        },
+      });
+      const { rows } = await client.query(
+        `SELECT id FROM public.security_audit_logs WHERE event_type = 'operator.cargo.allocation_reassigned' ORDER BY created_at DESC LIMIT 1`,
+      );
+      auditLogId = rows[0].id;
+    });
+    return auditLogId;
+  }
+
+  it("list: currentMatchesAfter segue a vencedora (não a perdedora congelada) quando os valores divergem", async () => {
+    const op = await seedUser({ email: "op-list-merge@teste.local" });
+    const winnerId = createSheetLoadId("LT-LISTMERGE");
+    await seedCargo({ id: winnerId, sheet_lh: "LT-LISTMERGE", status: "OPEN" });
+    // Vencedora com decisão PRÓPRIA mais recente — o merge não deve sobrescrevê-la.
+    await query(
+      `UPDATE public.cargas SET alloc_motorista = 'MARIA', alloc_updated_at = now() WHERE id = $1`,
+      [winnerId],
+    );
+    const { id: loserId } = await seedCargo({ sheet_lh: null, status: "RESERVED" });
+    await query(
+      `UPDATE public.cargas SET lh_manual = 'LT-LISTMERGE', alloc_motorista = 'PEDRO',
+              alloc_updated_at = now() - interval '1 hour' WHERE id = $1`,
+      [loserId],
+    );
+
+    const auditLogId = await seedReassignEvent({ operatorId: op.id, cargoId: loserId, before: "JOAO", after: "PEDRO" });
+
+    process.env.TWIN_MERGE = "on";
+    const merge = await withPgTransaction((c) => mergeLaunchedTwinAlloc(c, { lh: "LT-LISTMERGE", winnerId }));
+    expect(merge.skipped).toBe("nada_a_migrar"); // vencedora era mais nova — não copiou
+    expect((await getAlloc(winnerId)).alloc_motorista).toBe("MARIA"); // preservada
+
+    const list = await listOperatorAllocationChanges({ operatorId: op.id, query: {} });
+    const ev = list.payload.items.find((i) => i.auditLogId === auditLogId);
+    expect(ev).toBeTruthy();
+    // A carga efetiva/visível (vencedora) é "MARIA", não "PEDRO" — a ação gravada
+    // não bate mais com o estado atual: NÃO é seguro reverter.
+    expect(ev.cargos[0].currentMatchesAfter).toBe(false);
+    expect(ev.revertible).toBe(false);
+  });
+
+  it("revert: segue o ponteiro de merge e escreve na VENCEDORA (visível), não na perdedora morta", async () => {
+    const op = await seedUser({ email: "op-revert-merge@teste.local" });
+    const winnerId = createSheetLoadId("LT-REVMERGE");
+    await seedCargo({ id: winnerId, sheet_lh: "LT-REVMERGE", status: "OPEN" });
+    const { id: loserId } = await seedCargo({ sheet_lh: null, status: "RESERVED" });
+    await query(
+      `UPDATE public.cargas SET lh_manual = 'LT-REVMERGE', alloc_motorista = 'PEDRO', alloc_updated_at = now() WHERE id = $1`,
+      [loserId],
+    );
+
+    const auditLogId = await seedReassignEvent({ operatorId: op.id, cargoId: loserId, before: "JOAO", after: "PEDRO" });
+
+    process.env.TWIN_MERGE = "on";
+    const merge = await withPgTransaction((c) => mergeLaunchedTwinAlloc(c, { lh: "LT-REVMERGE", winnerId }));
+    expect(merge.merged).toBe(true); // vencedora sem decisão própria → herdou "PEDRO"
+    expect((await getAlloc(winnerId)).alloc_motorista).toBe("PEDRO");
+
+    const res = await revertAllocationChanges({
+      operatorId: op.id,
+      items: [{ auditLogId, cargoId: loserId }],
+      correlationId: "c-revert-merge",
+    });
+    expect(res.payload.revertedCount).toBe(1);
+    expect(res.payload.skippedCount).toBe(0);
+
+    // A VENCEDORA (linha efetiva/visível) foi restaurada...
+    expect((await getAlloc(winnerId)).alloc_motorista).toBe("JOAO");
+    // ...a perdedora morta NUNCA é escrita (pré-imagem preservada, como documentado
+    // em merge-launched-twin.js).
+    expect((await getAlloc(loserId)).alloc_motorista).toBe("PEDRO");
   });
 });
