@@ -1855,6 +1855,7 @@ export async function syncGoogleSheetLoads({
       allSheetRowsByLh,
       routeCatalogDefaultsByKey,
       routeTemplateDefaultsByKey,
+      knownCatalogTrechos,
       fallbackSheetClientId,
       syncedAt,
     });

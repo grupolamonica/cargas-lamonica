@@ -6,6 +6,7 @@ import { createSheetLoadId } from "./google-sheet-loads.js";
 
 const source = "shopee";
 const EMPTY_MAP = new Map();
+const EMPTY_SET = new Set();
 
 function baseArgs(overrides = {}) {
   return {
@@ -16,6 +17,7 @@ function baseArgs(overrides = {}) {
     allSheetRowsByLh: new Map(),
     routeCatalogDefaultsByKey: EMPTY_MAP,
     routeTemplateDefaultsByKey: EMPTY_MAP,
+    knownCatalogTrechos: EMPTY_SET,
     fallbackSheetClientId: null,
     syncedAt: new Date(0).toISOString(),
     // O módulo importa `withPgTransaction` da infra REAL por padrão — aqui
