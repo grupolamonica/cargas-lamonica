@@ -444,6 +444,20 @@ export function A1Cnh({
         </div>
       ) : null}
 
+      {/* CPF inválido (dígito verificador) e NÃO é mismatch — o gate já bloqueia,
+          aqui só mostra o motivo em vermelho (RF-05). */}
+      {!cpfMismatch && onlyDigits(data.cpf).length === 11 && !isValidCpf(data.cpf) ? (
+        <div className="admin-tint-danger rounded-2xl border p-3.5 text-sm">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
+            <p className="text-xs text-muted-foreground">
+              <span className="font-semibold text-foreground">CPF inválido.</span>{" "}
+              O CPF lido da CNH não passou na validação (dígito verificador). Confira o arquivo ou fale com a equipe.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       {/* CPF ja cadastrado — alerta INFORMATIVO (nao bloqueia). Mantemos o
           motorista cadastrando para atualizar o cadastro existente; o operador
           analisa quando a vigencia estiver proxima de vencer. Suprime quando o

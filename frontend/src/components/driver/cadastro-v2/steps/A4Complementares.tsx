@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { BrazilianBank } from "@/lib/brazilianBanks";
+import { isValidPis, onlyDigits } from "@/lib/brazilianValidators";
 
 import { BankSelector } from "../widgets/BankSelector";
 
@@ -66,7 +67,7 @@ export function isA4Complete(d: A4Data | undefined): boolean {
     d.sexo &&
       d.estado_civil &&
       d.cor_raca &&
-      (d.pis || "").replace(/\D/g, "").length >= 11 &&
+      isValidPis(d.pis) &&
       d.rg_data &&
       bankOk,
   );
@@ -186,7 +187,13 @@ export function A4Complementares({ value, onChange, onValid }: A4Props) {
             className="h-12"
             placeholder="11 dígitos"
             maxLength={11}
+            aria-invalid={onlyDigits(data.pis).length > 0 && !isValidPis(data.pis)}
           />
+          {onlyDigits(data.pis).length > 0 && !isValidPis(data.pis) ? (
+            <p className="text-xs text-destructive">
+              PIS/PASEP inválido — confira os 11 dígitos.
+            </p>
+          ) : null}
         </div>
 
         <div className="space-y-1">
