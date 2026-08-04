@@ -26,6 +26,17 @@ const PACING_MS = 250; // serial + pausa: o precheck bate no bot SPX (externo).
 const DRAFT_ETAPAS = ["importado", "request_pendente", "completo"];
 // Etapa final quando aprovado — o painel (SPX_ETAPAS_APTO) trata como APTO.
 const APTO_ETAPA = "ja_cadastrado_nossa_agencia";
+// O poller MONITORA rascunho + apto: re-checa os aptos também p/ REFLETIR quando a
+// Shopee DESATIVA (inativo) ou BLOQUEIA (bloqueado) o motorista depois — não só
+// rascunho→apto. Sync de status (RF-08), SPX-only, opt-in.
+const MONITORED_ETAPAS = [...DRAFT_ETAPAS, APTO_ETAPA, "reativado"];
+// precheck.status DEFINITIVO → etapa refletida no job. UNAVAILABLE (transitório) e
+// NOT_FOUND/REQUEST_PENDENTE (ambíguo) NÃO mudam a etapa.
+const STATUS_TO_ETAPA = {
+  IS_MATCHED_NOSSA: APTO_ETAPA,
+  INATIVO: "inativo",
+  BLOQUEADO: "bloqueado",
+};
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
@@ -127,7 +138,7 @@ export async function runSpxAptoPoll({
          WHERE etapa = ANY($1)
          LIMIT $2
         `,
-        [DRAFT_ETAPAS, safeLimit],
+        [MONITORED_ETAPAS, safeLimit],
       );
       rows = res.rows;
     });
@@ -136,12 +147,14 @@ export async function runSpxAptoPoll({
       candidates: rows.length,
       checked: 0,
       aptos: 0,
+      inativos: 0,
+      bloqueados: 0,
       aindaRascunho: 0,
       unavailable: 0,
       updated: 0,
     };
 
-    const toApto = []; // { jobId, etapaAnterior }
+    const transitions = []; // { jobId, etapaAnterior, etapaNova }
 
     // 2. Serial + pausa (o precheck bate no bot SPX). Circuit-breaker do próprio
     //    bot protege contra martelar; aqui só espaçamos.
@@ -153,7 +166,7 @@ export async function runSpxAptoPoll({
         pre = await performSpxPrecheck({
           cadastro: { id: row.cadastro_id, dados: row.dados },
           correlationId,
-          skipCache: true, // sempre re-consulta (o cache de 60s mascararia a aprovação)
+          skipCache: true, // sempre re-consulta (o cache de 60s mascararia a mudança)
         });
       } catch {
         result.unavailable += 1;
@@ -161,21 +174,24 @@ export async function runSpxAptoPoll({
         continue;
       }
       result.checked += 1;
+      const etapaNova = STATUS_TO_ETAPA[pre.status];
       if (pre.status === "UNAVAILABLE") {
         result.unavailable += 1; // transitório — reavalia na próxima leva
-      } else if (pre.status === "IS_MATCHED_NOSSA") {
-        toApto.push({ jobId: row.id, etapaAnterior: row.etapa });
+      } else if (etapaNova && etapaNova !== row.etapa) {
+        // Estado DEFINITIVO que MUDOU (aprovou→apto / desativou→inativo /
+        // bloqueou→bloqueado) → reflete no job.
+        transitions.push({ jobId: row.id, etapaAnterior: row.etapa, etapaNova });
       } else {
-        result.aindaRascunho += 1; // segue rascunho (ainda não aprovado)
+        result.aindaRascunho += 1; // sem mudança (mesmo estado, ou NOT_FOUND ambíguo)
       }
       await sleep(PACING_MS);
     }
 
-    // 3. Promove p/ apto os aprovados. jsonb_set preserva o resto do response;
-    //    a guarda `response->>'etapa' = etapaAnterior` evita clobber concorrente.
-    if (apply && toApto.length) {
+    // 3. Reflete as mudanças de estado. jsonb_set preserva o resto do response; a
+    //    guarda `response->>'etapa' = etapaAnterior` evita clobber concorrente.
+    if (apply && transitions.length) {
       const nowIso = new Date().toISOString();
-      for (const { jobId, etapaAnterior } of toApto) {
+      for (const { jobId, etapaAnterior, etapaNova } of transitions) {
         const { rowCount } = await withPgClient((client) =>
           client.query(
             `
@@ -184,16 +200,18 @@ export async function runSpxAptoPoll({
                      jsonb_set(
                        jsonb_set(COALESCE(response, '{}'::jsonb), '{etapa}', to_jsonb($2::text)),
                        '{etapa_anterior}', to_jsonb($3::text)),
-                     '{apto_via_poller_at}', to_jsonb($4::text)),
+                     '{status_sync_at}', to_jsonb($4::text)),
                    updated_at = now()
              WHERE id = $1 AND status = 'OK' AND response->>'etapa' = $3
             `,
-            [jobId, APTO_ETAPA, etapaAnterior, nowIso],
+            [jobId, etapaNova, etapaAnterior, nowIso],
           ),
         );
         if (rowCount) {
-          result.aptos += 1;
           result.updated += 1;
+          if (etapaNova === APTO_ETAPA) result.aptos += 1;
+          else if (etapaNova === "inativo") result.inativos += 1;
+          else if (etapaNova === "bloqueado") result.bloqueados += 1;
         }
       }
     }

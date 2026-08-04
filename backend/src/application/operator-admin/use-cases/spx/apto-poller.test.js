@@ -101,4 +101,36 @@ describe("runSpxAptoPoll", () => {
     expect(s.checked).toBe(0);
     expect(canned.updates).toHaveLength(0);
   });
+
+  it("reflete INATIVO quando um apto foi desativado na Shopee (RF-08)", async () => {
+    canned.draftRows = [draft("j1", "11111111111", "ja_cadastrado_nossa_agencia")];
+    spxPrecheckMock.mockResolvedValue({ status: "INATIVO" });
+
+    const s = await runSpxAptoPoll({ apply: true });
+
+    expect(s.inativos).toBe(1);
+    expect(s.updated).toBe(1);
+    expect(canned.updates[0][1]).toBe("inativo");
+    expect(canned.updates[0][2]).toBe("ja_cadastrado_nossa_agencia");
+  });
+
+  it("reflete BLOQUEADO quando a Shopee bloqueou (RF-08)", async () => {
+    canned.draftRows = [draft("j1", "11111111111", "reativado")];
+    spxPrecheckMock.mockResolvedValue({ status: "BLOQUEADO" });
+
+    const s = await runSpxAptoPoll({ apply: true });
+
+    expect(s.bloqueados).toBe(1);
+    expect(canned.updates[0][1]).toBe("bloqueado");
+  });
+
+  it("apto que segue apto = sem mudança (não re-grava)", async () => {
+    canned.draftRows = [draft("j1", "11111111111", "ja_cadastrado_nossa_agencia")];
+    spxPrecheckMock.mockResolvedValue({ status: "IS_MATCHED_NOSSA" });
+
+    const s = await runSpxAptoPoll({ apply: true });
+
+    expect(s.aindaRascunho).toBe(1); // etapaNova == etapaAnterior → sem transição
+    expect(canned.updates).toHaveLength(0);
+  });
 });
