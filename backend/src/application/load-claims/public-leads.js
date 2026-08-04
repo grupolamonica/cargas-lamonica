@@ -657,9 +657,27 @@ async function reflectReservationOnSheet(client, { loadId, leadId, trigger, acto
                c.sheet_data_descarga AS descarga_label,
                l.horse_plate AS horse_plate,
                l.trailer_plate AS trailer_plate,
-               l.validation_summary_json AS validation_summary_json
+               l.validation_summary_json AS validation_summary_json,
+               -- MESMA cadeia de fallback de nome que a FILA exibe (ver a query de
+               -- groupLeadsForOperator): 1) Angellira, 2) ASPx, 3) cadastro público.
+               -- Antes só o validation_summary_json vinha aqui, então os itens 2 e 3
+               -- de resolveLeadDriverName estavam mortos neste call-site: motorista
+               -- sem registro no Angellira resolvia "" e o gate if (motorista)
+               -- abaixo pulava a gravação de alloc_*. A Fila mostrava o nome e o
+               -- Monitor não mostrava nada.
+               ad.display_name AS aspx_display_name,
+               pdr_latest.nome_motorista AS pdr_display_name
         FROM public.cargas c
         LEFT JOIN public.load_public_leads l ON l.id = $2
+        LEFT JOIN public.aspx_drivers AS ad ON ad.cpf = l.cpf
+        LEFT JOIN (
+          SELECT DISTINCT ON (dados->'motorista'->>'cpf')
+            dados->'motorista'->>'cpf' AS cpf,
+            dados->'motorista'->>'nome' AS nome_motorista
+          FROM public.pending_driver_registrations
+          WHERE status IN ('pendente', 'em_revisao', 'em_analise', 'submitted', 'draft')
+          ORDER BY dados->'motorista'->>'cpf', created_at DESC
+        ) AS pdr_latest ON pdr_latest.cpf = l.cpf
         WHERE c.id = $1
       `,
       [loadId, leadId],
@@ -679,7 +697,12 @@ async function reflectReservationOnSheet(client, { loadId, leadId, trigger, acto
   const lhManual = info?.lh_manual ? String(info.lh_manual).trim() : "";
   const lhParaPlanilha = sheetLh || lhManual;
   const ehCargaLancada = !sheetLh && Boolean(lhManual);
-  const motorista = resolveLeadDriverName({ validation_summary_json: info?.validation_summary_json }) ?? "";
+  const motorista =
+    resolveLeadDriverName({
+      validation_summary_json: info?.validation_summary_json,
+      aspx_display_name: info?.aspx_display_name,
+      pdr_display_name: info?.pdr_display_name,
+    }) ?? "";
   const cavalo = info?.horse_plate ? String(info.horse_plate).trim() : "";
   const carreta = info?.trailer_plate ? String(info.trailer_plate).trim() : "";
   // Roteia pela fonte da carga (Nestlé tem planilha própria; sem URL configurada
