@@ -849,12 +849,33 @@ async function resolveCanonicalCargoByLh(client, lhTrim, { columns, forUpdate })
  * linha) e a integramos ao ciclo do sync (sheet_synced_at preenchido). A partir
  * daí o override alloc_* do operador tem onde morar e o efetivo = alloc ?? sheet.
  *
- * Idempotente (ON CONFLICT (id) DO NOTHING). Se o LH não está no snapshot, devolve
- * null (LH genuinamente desconhecido → o chamador lança NotFound).
+ * Idempotente (ON CONFLICT (id) DO NOTHING + pré-check por (fonte, LH), ver abaixo).
+ * Se o LH não está em NENHUM snapshot, devolve null (LH genuinamente desconhecido →
+ * o chamador lança NotFound).
+ *
+ * ATENÇÃO — por que NÃO herda campos de uma gêmea lançada aqui: esta função só
+ * chega a materializar quando `resolveMonitorCargoByLh` (a checagem `existing` logo
+ * abaixo) devolve null — e essa checagem casa `lh_manual = $1 AND sheet_lh IS NULL`
+ * incondicionalmente. Ou seja: SE existe uma carga lançada para este LH, `existing`
+ * SEMPRE a encontra primeiro e a função devolve ELA (via withLazyTwinMerge, que só
+ * mergeia quando a linha resolvida já é a canônica) — o ramo de materialização
+ * abaixo só é alcançado quando NÃO há absolutamente nenhuma carga para o LH (nem
+ * planilha, nem lançada), que é o cenário ORIGINAL desta função: viagem que entrou
+ * na planilha já atribuída, sem o operador ter lançado nada na Programação. Herdar
+ * perfil/valor/status de uma "gêmea" nesse ramo é dead code por construção — não
+ * existe gêmea para herdar. "Materializar a canônica E herdar da lançada" (a
+ * consequência real do problema medido: canônica sem valor volta a aparecer "em
+ * preparação") é trabalho da PASSADA DE MERGE do sync (PR seguinte), que
+ * deliberadamente cria a canônica ANTES de a gêmea virar "a única carga" — não
+ * através desta resolução genérica usada pelas telas de edição.
+ *
+ * NÃO materializa quando o status do snapshot é CANCELADO/DEVOLVIDO/NO SHOW: gravar
+ * `sheet_status` com esse valor arma `sweepCancelledCascades` (que não tem janela de
+ * data e roda no fim do mesmo ciclo de sync) sem nenhuma decisão do operador por trás.
  *
  * @param {import("pg").PoolClient} client
  * @param {string} lh
- * @param {{ columns?: string, forUpdate?: boolean }} [opts]
+ * @param {{ columns?: string, forUpdate?: boolean, correlationId?: string|null }} [opts]
  */
 export async function ensureMonitorSheetCargo(client, lh, { columns = "id, sheet_lh", forUpdate = true, correlationId = null } = {}) {
   const existing = await resolveMonitorCargoByLh(client, lh, { columns, forUpdate });
@@ -863,38 +884,65 @@ export async function ensureMonitorSheetCargo(client, lh, { columns = "id, sheet
   const lhTrim = String(lh ?? "").trim();
   if (!lhTrim) return null;
 
-  // Linha correspondente no snapshot da planilha (rota/agenda/motorista/veículo).
-  // Lê a coluna rows_json e filtra em JS (sem jsonb_array_elements) p/ rodar tanto
-  // no Postgres quanto no harness pg-mem dos testes.
+  // Linha correspondente no snapshot da planilha (rota/agenda/motorista/veículo) —
+  // busca em TODAS as fontes (não só `id = 1`, que só cobre a primeira), pra achar
+  // também LH de fontes não-default (ex.: Nestlé). A FONTE encontrada aqui é a que
+  // grava em `sheet_source` — sem isso a canônica nascia órfã do sync (fica de fora
+  // de `fetchExistingSheetLoads`, que filtra por `sheet_source`, e reaparece como
+  // "nova" no próximo ciclo, perdendo status/valor já sincronizados). 3 cargas em
+  // produção já estão nesse estado (sheet_lh preenchido, sheet_source NULL).
   let snapRow = null;
+  let snapSource = null;
   try {
-    const { rows } = await client.query(
-      "SELECT rows_json FROM public.sheet_monitor_snapshot WHERE id = 1",
-    );
-    let list = rows[0]?.rows_json ?? null;
-    if (typeof list === "string") list = JSON.parse(list);
-    if (Array.isArray(list)) {
-      snapRow = list.find((r) => String(r?.lh ?? "").trim() === lhTrim) ?? null;
+    const { rows } = await client.query("SELECT source, rows_json FROM public.sheet_monitor_snapshot");
+    for (const snap of rows) {
+      let list = snap?.rows_json ?? null;
+      if (typeof list === "string") list = JSON.parse(list);
+      if (!Array.isArray(list)) continue;
+      const found = list.find((r) => String(r?.lh ?? "").trim() === lhTrim);
+      if (found) {
+        snapRow = found;
+        snapSource = snap?.source ?? null;
+        break;
+      }
     }
   } catch {
     // Sem snapshot (tabela ausente/pg-mem) → não materializa; cai em NotFound.
     snapRow = null;
   }
   if (!snapRow) return null;
+  if (/cancel|devolv|no[\s-]*show/i.test(String(snapRow.status ?? ""))) return null;
 
-  const cargoId = createSheetLoadId(lhTrim);
-  const clienteId = await findSheetClientId(client);
+  const clienteId = snapSource === "nestle" ? await findNestleClientId(client) : await findSheetClientId(client);
   // Colunas NOT NULL (data/horario/origem/destino): usam o valor do snapshot com
   // fallback seguro (placeholder de agenda p/ linhas sem data — "sem horário").
   const dataValue = /^\d{4}-\d{2}-\d{2}/.test(String(snapRow.data ?? "")) ? String(snapRow.data).slice(0, 10) : getSaoPauloWallClock().dateIso;
   const horarioValue = /^\d{2}:\d{2}/.test(String(snapRow.horario ?? "")) ? String(snapRow.horario).slice(0, 8) : "00:00";
   const hasDriver = String(snapRow.motoristas ?? "").trim() !== "";
+  const cargoId = createSheetLoadId(lhTrim, snapSource);
+
+  // Pré-check por (fonte, LH): o `ON CONFLICT (id)` do INSERT NÃO cobre o índice
+  // único `idx_cargas_source_sheet_lh` (COALESCE(sheet_source,''), sheet_lh) — sem
+  // este SELECT, uma colisão de fonte cairia em 23505 e travaria a transação em
+  // 25P02 (o harness pg-mem não tem SAVEPOINT para recuperar no mesmo statement).
+  // Corrida concorrente já materializando o mesmo LH → relê PELO ID (não pelo
+  // resolvedor genérico: com TWIN_MERGE=off ele usa createSheetLoadId(lh) SEM fonte,
+  // que não bate com o id namespaced que acabamos de calcular para fonte não-default).
+  const { rows: dup } = await client.query(
+    "SELECT id FROM public.cargas WHERE COALESCE(sheet_source, '') = COALESCE($1, '') AND sheet_lh = $2 LIMIT 1",
+    [snapSource, lhTrim],
+  );
+  if (dup.length > 0) {
+    const { rows: jaExisteRows } = await client.query(`SELECT ${columns} FROM public.cargas WHERE id = $1`, [dup[0].id]);
+    return withLazyTwinMerge(client, lh, jaExisteRows[0] ?? null, { columns, forUpdate, correlationId, materialized: true });
+  }
+
   await client.query(
     `INSERT INTO public.cargas
        (id, cliente_id, data, horario, origem, destino, perfil, status, is_template,
-        driver_visibility, sheet_lh, sheet_tipo, sheet_motorista, sheet_cavalo, sheet_carreta,
-        sheet_status, sheet_data_carregamento, sheet_data_descarga, sheet_synced_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 'CARRETA', $7, false, 'PUBLIC', $8, $9, $10, $11, $12, $13, $14, $15, now())
+        driver_visibility, sheet_lh, sheet_source, sheet_tipo, sheet_motorista, sheet_cavalo,
+        sheet_carreta, sheet_status, sheet_data_carregamento, sheet_data_descarga, sheet_synced_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 'CARRETA', $7, false, 'PUBLIC', $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
      ON CONFLICT (id) DO NOTHING`,
     [
       cargoId,
@@ -905,6 +953,7 @@ export async function ensureMonitorSheetCargo(client, lh, { columns = "id, sheet
       String(snapRow.destino ?? ""),
       hasDriver ? "BOOKED" : "OPEN",
       lhTrim,
+      snapSource,
       snapRow.tipo || null,
       snapRow.motoristas || null,
       snapRow.cavalo || null,
@@ -915,8 +964,12 @@ export async function ensureMonitorSheetCargo(client, lh, { columns = "id, sheet
     ],
   );
 
-  const criada = await resolveMonitorCargoByLh(client, lh, { columns, forUpdate });
-  return withLazyTwinMerge(client, lh, criada, { columns, forUpdate, correlationId, materialized: true });
+  // Relê PELO ID que acabamos de calcular/inserir — não pelo resolvedor genérico:
+  // com TWIN_MERGE=off (default) ele usa createSheetLoadId(lh) SEM fonte, que não
+  // bate com o id namespaced de uma fonte não-default (ex.: Nestlé) e devolveria
+  // null mesmo tendo acabado de criar a linha.
+  const { rows: criadaRows } = await client.query(`SELECT ${columns} FROM public.cargas WHERE id = $1`, [cargoId]);
+  return withLazyTwinMerge(client, lh, criadaRows[0] ?? null, { columns, forUpdate, correlationId, materialized: true });
 }
 
 /**
