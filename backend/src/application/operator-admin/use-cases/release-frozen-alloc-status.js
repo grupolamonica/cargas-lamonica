@@ -44,6 +44,10 @@ export async function releaseFrozenAllocStatus({ apply = false, limit = 1000, co
          FROM public.cargas
         WHERE alloc_status IS NOT NULL
           AND COALESCE(sheet_status, '') <> ''
+          -- Unificação da gêmea (TWIN_MERGE): a linha já mergeada é a PRÉ-imagem do
+          -- rollback (ver merge-launched-twin.js) — escrever alloc_status = NULL
+          -- aqui apagaria justamente o que o rollback precisa restaurar.
+          AND alloc_merged_into_cargo_id IS NULL
         ORDER BY data DESC NULLS LAST, id
         LIMIT $1`,
       [limit],

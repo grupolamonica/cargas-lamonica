@@ -126,7 +126,10 @@ export async function acceptAspxTrips({
         client.query(
           `SELECT lh_manual, sheet_source, origem, destino, sheet_data_carregamento, sheet_data_descarga
              FROM public.cargas
-            WHERE lh_manual = ANY($1) AND sheet_lh IS NULL`,
+            WHERE lh_manual = ANY($1) AND sheet_lh IS NULL
+              -- Unificação da gêmea: já mergeada = já existe linha REAL na planilha
+              -- (a canônica); a linha-casca aqui seria supérflua/duplicada.
+              AND alloc_merged_into_cargo_id IS NULL`,
           [acceptedLhs],
         ),
       );

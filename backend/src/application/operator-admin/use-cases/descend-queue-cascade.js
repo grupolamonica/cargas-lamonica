@@ -72,6 +72,12 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
               COALESCE(alloc_status,    sheet_status,    '') AS status
        FROM public.cargas
        WHERE id IN (${idPlaceholders})
+          -- \`id IN\` casa por createSheetLoadId(lh) SEM fonte — morto para
+          -- canônica de fonte não-default (ex.: Nestlé) e para qualquer linha cujo id
+          -- não é o determinístico. Casar TAMBÉM pela coluna \`sheet_lh\` (a mesma
+          -- correção do resolvedor canônico) evita que a canônica caia fora do SELECT
+          -- e a fila seja calculada com um buraco na posição dela.
+          OR sheet_lh IN (${lhPlaceholders})
           OR (lh_manual IN (${lhPlaceholders}) AND sheet_lh IS NULL)
        ORDER BY (data IS NULL), data DESC, horario DESC, sheet_lh, id
        FOR UPDATE`,

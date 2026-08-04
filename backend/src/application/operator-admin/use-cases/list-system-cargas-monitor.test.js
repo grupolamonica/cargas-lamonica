@@ -231,6 +231,9 @@ describe("listSystemCargasForMonitor", () => {
     expect(eqCalls).toContainEqual(["is_template", false]);
     // Carga cuja VIAGEM saiu do ASPX sai do Monitor (continua em /cargas).
     expect(isCalls).toContainEqual(["aspx_missing_since", null]);
+    // Unificação da gêmea (TWIN_MERGE): já mergeada não duplica a canônica no
+    // Monitor como linha do sistema.
+    expect(isCalls).toContainEqual(["alloc_merged_into_cargo_id", null]);
   });
 
   it("banco sem a coluna aspx_missing_since: repete a leitura sem o filtro (não derruba o Monitor)", async () => {

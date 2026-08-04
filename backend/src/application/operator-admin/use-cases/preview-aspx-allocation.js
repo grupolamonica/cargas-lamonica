@@ -79,6 +79,10 @@ async function defaultListCandidates() {
          AND COALESCE(alloc_motorista, sheet_motorista, '') <> ''
          AND lower(COALESCE(alloc_status, sheet_status, '')) NOT LIKE '%cancel%'
          AND (alloc_updated_at IS NOT NULL OR data >= CURRENT_DATE - INTERVAL '4 days')
+         -- Unificação da gêmea: sem dedup por Map nesta query (cada linha vira um
+         -- item do modal) — a perdedora já mergeada preserva alloc_motorista como
+         -- pré-imagem e apareceria como um SEGUNDO item duplicado para o mesmo LH.
+         AND alloc_merged_into_cargo_id IS NULL
        ORDER BY data DESC, horario DESC, sheet_lh
        LIMIT 500`,
     );
