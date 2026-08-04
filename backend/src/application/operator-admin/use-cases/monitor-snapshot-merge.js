@@ -30,7 +30,18 @@ export function labelNonShopeeSnapshotRows(snap) {
   return rows.map((r) =>
     r?.rowKey
       ? r
-      : { ...r, cliente: r?.cliente ?? label, rowKey: `sheet:${snap?.source}:${r?.lh}`, source: "planilha" },
+      : {
+          ...r,
+          cliente: r?.cliente ?? label,
+          rowKey: `sheet:${snap?.source}:${r?.lh}`,
+          source: "planilha",
+          // Fonte da PLANILHA da linha (≠ `source`, que é o TIPO de linha:
+          // planilha/sistema/reserva). O cliente devolve isto nas escritas do
+          // Monitor para o backend resolver a carga no namespace de id certo
+          // (createSheetLoadId(lh, source)) — sem isso a escrita numa linha Nestlé
+          // dava 404. Ausente = Shopee (fonte histórica).
+          sheetSource: snap?.source ?? null,
+        },
   );
 }
 

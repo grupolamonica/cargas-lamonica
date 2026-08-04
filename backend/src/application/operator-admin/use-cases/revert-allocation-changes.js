@@ -9,7 +9,7 @@ import {
 } from "../../../domain/operator-admin/allocation-revert.js";
 
 const ALLOC_COLUMNS =
-  "id, sheet_lh, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, sheet_motorista, sheet_cavalo, sheet_carreta";
+  "id, sheet_lh, sheet_source, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, sheet_motorista, sheet_cavalo, sheet_carreta";
 
 // Efetivo espelhado na planilha após restaurar: um "antes" null (sem override →
 // cai pra planilha) espelha o valor da planilha; string ("" ou valor) espelha ela.
@@ -105,9 +105,35 @@ export async function revertAllocationChanges({ operatorId, items, requestIp, co
         // linha morta (a carga visível/efetiva é a vencedora) — o operador veria
         // "revertido" sem nada mudar na tela. Resolvendo a vencedora primeiro, a
         // guarda `allocEqualsStrict` abaixo compara com o estado REAL e visível.
+        // Resolve + trava a carga (planilha por LH ou sistema por cargoId).
+        // A fonte da planilha (`sheetSource`) sai do próprio audit: é ela que põe o
+        // id no namespace certo (createSheetLoadId(lh, source)). Evento ANTIGO não
+        // gravava o campo — aí `sheetSource` é null e resolvemos como Shopee, que é
+        // exatamente o comportamento de hoje. Reverter uma alocação de OUTRA fonte
+        // registrada antes deste fix não é possível com segurança (o LH sozinho não
+        // identifica a carga: `sheet_lh` só é único POR fonte), então esse item é
+        // SKIPPED com motivo explícito em vez de resolver a carga errada.
         let cargo;
         if (change.lh) {
-          cargo = await resolveMonitorCargoByLh(client, change.lh, { columns: ALLOC_COLUMNS });
+          cargo = await resolveMonitorCargoByLh(client, change.lh, {
+            columns: ALLOC_COLUMNS,
+            source: change.sheetSource ?? null,
+          });
+          if (!cargo && !change.sheetSource) {
+            const { rows: ambiguas } = await client.query(
+              `SELECT COUNT(*)::int AS total FROM public.cargas
+                WHERE sheet_lh = $1 AND COALESCE(sheet_source, '') <> ''`,
+              [change.lh],
+            );
+            if ((ambiguas[0]?.total ?? 0) > 0) {
+              skipped.push({
+                ...ref,
+                auditLogId,
+                reason: "Mudança registrada antes do suporte a múltiplas planilhas (não é possível identificar a planilha da carga).",
+              });
+              continue;
+            }
+          }
         } else {
           cargo = await resolveCargoFollowingMerge(client, change.cargoId, { columns: ALLOC_COLUMNS, forUpdate: true });
         }
@@ -155,6 +181,9 @@ export async function revertAllocationChanges({ operatorId, items, requestIp, co
         if (cargo.sheet_lh != null && change.lh) {
           writebackMoves.push({
             lh: change.lh,
+            // Fonte da carga RESOLVIDA: sem ela o write-back cai na planilha da
+            // Shopee (normSource(null)) e escreveria o LH de outra fonte lá.
+            source: cargo.sheet_source ?? null,
             motorista: effectiveForSheet(before.motorista, cargo.sheet_motorista),
             cavalo: effectiveForSheet(before.cavalo, cargo.sheet_cavalo),
             carreta: effectiveForSheet(before.carreta, cargo.sheet_carreta),

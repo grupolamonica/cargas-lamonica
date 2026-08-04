@@ -30,7 +30,7 @@ import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
  * @param {{ lh: string, operatorId: string, payload: object, requestIp?: string, correlationId?: string }} args
  * @returns {Promise<{ statusCode: number, payload: object }>}
  */
-export async function updateMonitorAllocation({ lh, operatorId, payload, requestIp, correlationId }) {
+export async function updateMonitorAllocation({ lh, source = null, operatorId, payload, requestIp, correlationId }) {
   // Semântica de atualização PARCIAL:
   //  - campo AUSENTE no payload  → preserva o alloc_* atual (não mexe);
   //  - campo enviado como ""     → vazio EXPLÍCITO: grava "" (NÃO null);
@@ -51,7 +51,11 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     // disponível), MATERIALIZA a carga a partir do snapshot. Sem isso a edição/
     // limpeza de motorista/placa dessas linhas falhava com "Carga da planilha não
     // encontrada" (não havia onde gravar o override alloc_*).
+    // `source` = fonte da PLANILHA da linha (Nestlé etc.); sem ela a resolução
+    // derivava sempre o id no namespace da Shopee e a escrita numa linha Nestlé
+    // devolvia 404.
     const sheetRow = await ensureMonitorSheetCargo(client, lh, {
+      source,
       columns: `id, sheet_lh, sheet_source, sheet_motorista, sheet_cavalo, sheet_carreta, sheet_status,
                 alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
                 alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta,
@@ -193,6 +197,11 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       correlationId,
       metadata: {
         lh,
+        // Fonte da PLANILHA da carga. O revert resolve a carga por (LH, fonte) —
+        // `sheet_lh` só é único POR fonte, então o LH sozinho não identifica a carga
+        // num cenário multi-planilha. Evento antigo não tem o campo → tratado como
+        // Shopee no revert (comportamento histórico).
+        sheetSource: sheetRow.sheet_source ?? null,
         motorista: finalMotorista,
         cavalo: finalCavalo,
         carreta: finalCarreta,

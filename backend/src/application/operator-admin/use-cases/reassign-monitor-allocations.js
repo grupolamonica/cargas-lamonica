@@ -47,6 +47,8 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
     if (!lh && !explicitCargoId) throw new ValidationError("Movimentação sem LH nem cargoId.");
     return {
       lh,
+      // Fonte da PLANILHA da linha (Nestlé etc.); ausente = Shopee (histórico).
+      source: (m.source ?? "").toString().trim() || null,
       explicitCargoId,
       motorista: val(m.motorista),
       cavalo: val(m.cavalo),
@@ -81,13 +83,17 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
       let row;
       if (m.explicitCargoId) {
         const { rows } = await client.query(
-          `SELECT id, sheet_lh, alloc_pinned, origem, destino, ${beforeCols} FROM public.cargas WHERE id = $1 FOR UPDATE`,
+          `SELECT id, sheet_lh, sheet_source, alloc_pinned, origem, destino, ${beforeCols} FROM public.cargas WHERE id = $1 FOR UPDATE`,
           [m.explicitCargoId],
         );
         row = rows[0];
       } else {
+        // `m.source` = fonte da PLANILHA da linha arrastada (Nestlé etc.); sem ela
+        // a resolução derivava o id no namespace da Shopee e o arrasto numa linha
+        // Nestlé falhava com "Carga não encontrada".
         row = await ensureMonitorSheetCargo(client, m.lh, {
-          columns: `id, sheet_lh, alloc_pinned, origem, destino, ${beforeCols}`,
+          source: m.source ?? null,
+          columns: `id, sheet_lh, sheet_source, alloc_pinned, origem, destino, ${beforeCols}`,
         });
       }
       if (!row) {
@@ -97,6 +103,8 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
       m.cargoId = row.id;
       // Carga do sistema (sheet_lh NULL) não vai pro write-back da planilha.
       m.sheetLhNull = row.sheet_lh == null;
+      // Fonte da carga RESOLVIDA — roteia o write-back para a planilha certa.
+      m.sheetSource = row.sheet_source ?? null;
       // Efetivo-antes desta carga (p/ beforeMoves no audit → revert).
       m.before = {
         motorista: row.before_motorista ?? "",
@@ -163,11 +171,15 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
       correlationId,
       metadata: {
         count: normalized.length,
-        moves: normalized.map(({ lh, motorista, cavalo, carreta }) => ({ lh, motorista, cavalo, carreta })),
+        // `sheetSource` viaja no audit: o revert resolve a carga por (LH, fonte) —
+        // `sheet_lh` só é único POR fonte. É a fonte da carga RESOLVIDA, não a que
+        // veio do cliente.
+        moves: normalized.map(({ lh, sheetSource, motorista, cavalo, carreta }) => ({ lh, sheetSource: sheetSource ?? null, motorista, cavalo, carreta })),
         // Reverter (DC-283): efetivo-ANTES por carga. Chaveado por lh OU cargoId
         // (carga do sistema sem LH) — o revert resolve a carga por qualquer um.
-        beforeMoves: normalized.map(({ lh, cargoId, before }) => ({
+        beforeMoves: normalized.map(({ lh, sheetSource, cargoId, before }) => ({
           lh: lh || null,
+          sheetSource: sheetSource ?? null,
           cargoId: lh ? null : cargoId,
           motorista: before?.motorista ?? "",
           cavalo: before?.cavalo ?? "",
@@ -188,10 +200,14 @@ export async function reassignMonitorAllocations({ moves, operatorId, requestIp,
   // Só cargas da PLANILHA têm linha na planilha; cargas do sistema — sem LH
   // (só cargoId) OU lançadas por lh_manual (sheet_lh NULL) — NÃO entram no
   // write-back (não têm linha própria na planilha para espelhar).
+  // `source` vai no payload: sem ele o roteamento cai na planilha da SHOPEE
+  // (normSource(null) === 'shopee') e um LH de outra fonte seria escrito na planilha
+  // errada — há LH repetido entre as duas em produção. Fonte sem URL configurada
+  // (Nestlé) vira no-op, que é o comportamento desejado.
   void writeAllocationsToSheet(
     normalized
       .filter((m) => m.lh && !m.sheetLhNull)
-      .map(({ lh, motorista, cavalo, carreta }) => ({ lh, motorista, cavalo, carreta })),
+      .map(({ lh, sheetSource, motorista, cavalo, carreta }) => ({ lh, source: sheetSource ?? null, motorista, cavalo, carreta })),
   ).catch(() => {});
 
   return result;

@@ -1490,8 +1490,10 @@ export async function resolveUpdateMonitorAllocationResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-      const { lh, ...allocation } = sheetMonitorAllocationBodySchema.parse(await parseJsonBody(request));
-      const result = await updateMonitorAllocation({ lh, operatorId, payload: allocation, requestIp, correlationId });
+      // `source` sai do payload de alocação de propósito: é a fonte da PLANILHA da
+      // linha (p/ resolver a carga no namespace de id certo), não um campo alloc_*.
+      const { lh, source, ...allocation } = sheetMonitorAllocationBodySchema.parse(await parseJsonBody(request));
+      const result = await updateMonitorAllocation({ lh, source, operatorId, payload: allocation, requestIp, correlationId });
       // Re-enriquece a linha editada + o fan-out da cascata de cancelamento com o
       // motorista/placa EFETIVO, p/ o selo não ficar "não consultado". Fire-and-
       // forget (não bloqueia o save; o front faz refetch atrasado). Nunca lança.
@@ -1636,8 +1638,8 @@ export async function resolveAssignReservaResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-      const { reservaId, targetLh } = sheetMonitorAssignReservaBodySchema.parse(await parseJsonBody(request));
-      const result = await assignReservaToCarga({ reservaId, targetLh, operatorId, requestIp, correlationId });
+      const { reservaId, targetLh, source } = sheetMonitorAssignReservaBodySchema.parse(await parseJsonBody(request));
+      const result = await assignReservaToCarga({ reservaId, targetLh, source, operatorId, requestIp, correlationId });
       // Re-enriquece a carga de destino (motorista/placa mudaram) p/ o selo
       // Angellira/ASPX refletir o standby puxado. Fire-and-forget, nunca lança.
       const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
@@ -1745,8 +1747,8 @@ export async function resolveSetMonitorAllocationPinResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-      const { lh, pinned } = sheetMonitorPinBodySchema.parse(await parseJsonBody(request));
-      return setMonitorAllocationPin({ lh, pinned, operatorId, requestIp, correlationId });
+      const { lh, source, pinned } = sheetMonitorPinBodySchema.parse(await parseJsonBody(request));
+      return setMonitorAllocationPin({ lh, source, pinned, operatorId, requestIp, correlationId });
     },
   );
 }

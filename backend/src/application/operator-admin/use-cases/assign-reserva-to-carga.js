@@ -18,7 +18,7 @@ import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
  *
  * @param {{ reservaId: string, targetLh: string, operatorId: string, requestIp?: string, correlationId?: string }} args
  */
-export async function assignReservaToCarga({ reservaId, targetLh, operatorId, requestIp, correlationId }) {
+export async function assignReservaToCarga({ reservaId, targetLh, source = null, operatorId, requestIp, correlationId }) {
   const result = await withPgTransaction(async (client) => {
     // 1) Trava a carga de destino PRIMEIRO (cargas-antes-de-reservas) — mesma ordem
     //    do cancel-load-cascade, evitando ciclo de deadlock entre as duas vias.
@@ -27,7 +27,8 @@ export async function assignReservaToCarga({ reservaId, targetLh, operatorId, re
     //    carga — senão puxar um standby p/ essas cargas falhava com "Carga de
     //    destino não encontrada".
     const carga = await ensureMonitorSheetCargo(client, targetLh, {
-      columns: `id, sheet_lh, alloc_pinned, origem, destino, alloc_status, sheet_status,
+      source,
+      columns: `id, sheet_lh, sheet_source, alloc_pinned, origem, destino, alloc_status, sheet_status,
                 alloc_motorista, sheet_motorista, alloc_cavalo, sheet_cavalo, alloc_carreta, sheet_carreta`,
     });
     if (!carga) {
@@ -135,14 +136,23 @@ export async function assignReservaToCarga({ reservaId, targetLh, operatorId, re
       payload: { ok: true, lh: targetLh, bumped, meta: { correlationId } },
       effective: { motorista: reserva.motorista || "", cavalo: reserva.cavalo || "", carreta: reserva.carreta || "" },
       isSystemCargo,
+      // Fonte da carga resolvida — roteia o write-back para a planilha CERTA.
+      sheetSource: carga.sheet_source ?? null,
     };
   });
 
   // Espelho best-effort na planilha (mesma rota das outras edições do Monitor).
   // Carga do SISTEMA (lh_manual, sheet_lh NULL) não tem linha própria na planilha
   // para espelhar — pular evita mexer na linha homônima da planilha.
+  //
+  // `source` é OBRIGATÓRIO no payload do write-back: sem ele o roteamento cai na
+  // planilha da SHOPEE (normSource(null) === 'shopee'), e um LH de outra fonte
+  // (Nestlé) seria escrito na planilha errada — há LH repetido entre as duas em
+  // produção, então o Apps Script casaria a linha homônima e sobrescreveria
+  // motorista/placas dela. Fonte sem URL de write-back configurada (Nestlé) vira
+  // no-op, que é o comportamento desejado.
   if (!result.isSystemCargo) {
-    void writeAllocationsToSheet([{ lh: targetLh, ...result.effective }]).catch(() => {});
+    void writeAllocationsToSheet([{ lh: targetLh, source: result.sheetSource ?? null, ...result.effective }]).catch(() => {});
   }
 
   return { statusCode: result.statusCode, payload: result.payload };

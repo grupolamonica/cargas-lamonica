@@ -1266,6 +1266,11 @@ export interface SheetMonitorRow {
   // Origem da linha: 'planilha' (Shopee, base na planilha), 'sistema' (carga
   // criada no sistema, editável em tudo), 'reserva' (standby).
   source?: "planilha" | "sistema" | "reserva";
+  // Fonte da PLANILHA da linha ('nestle', …) — DIFERENTE de `source`, que é o TIPO
+  // de linha. Ausente/null = Shopee (fonte histórica). Vai de volta nas escritas do
+  // Monitor para o backend resolver a carga no namespace de id certo: `sheet_lh` só
+  // é único POR fonte, então o LH sozinho não identifica a carga.
+  sheetSource?: string | null;
   // id da carga no banco (só para source='sistema') — usado na edição/criação.
   cargoId?: string;
   // status de ciclo de vida da carga do sistema (DRAFT/OPEN/...) — informativo.
@@ -1380,6 +1385,9 @@ export async function fetchSheetMonitor({ refresh = false }: { refresh?: boolean
  */
 export async function updateMonitorAllocation(input: {
   lh: string;
+  /** Fonte da PLANILHA da linha ('nestle', …). Ausente = Shopee. O backend resolve a
+   *  carga por (LH, fonte) — sem ela, escrita em linha Nestlé não achava a carga. */
+  source?: string | null;
   motorista?: string | null;
   cavalo?: string | null;
   carreta?: string | null;
@@ -1413,7 +1421,7 @@ export async function updateMonitorAllocation(input: {
  * Carga da planilha → `lh`; carga do sistema → `cargoId` (uuid). Cada move usa um.
  */
 export async function reassignMonitorAllocations(
-  moves: Array<{ lh?: string; cargoId?: string; motorista: string; cavalo: string; carreta: string }>,
+  moves: Array<{ lh?: string; source?: string | null; cargoId?: string; motorista: string; cavalo: string; carreta: string }>,
 ) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{
@@ -1534,7 +1542,7 @@ export async function fetchAspxAssigned(
  * soltando na linha da carga. Grava a alocação do standby na carga e dá baixa na
  * reserva; se a carga já tinha motorista, esse vira uma nova reserva (swap).
  */
-export async function assignReservaToCarga(input: { reservaId: string; targetLh: string }) {
+export async function assignReservaToCarga(input: { reservaId: string; targetLh: string; source?: string | null }) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{
     ok: boolean;
@@ -1617,7 +1625,7 @@ export async function deleteReserva(input: { reservaId: string }): Promise<{ ok:
  * Fixa ("fixo") ou desafixa a alocação de uma carga. Carga fixa = motorista/veículo
  * intocável (não move por arrasto, edição inline/modal, nem cascata de cancelamento).
  */
-export async function setMonitorAllocationPin(input: { lh: string; pinned: boolean }) {
+export async function setMonitorAllocationPin(input: { lh: string; source?: string | null; pinned: boolean }) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{
     ok: boolean;

@@ -37,10 +37,18 @@ export const sheetMonitorEnrichBodySchema = z.object({
   forceSessionStart: z.string().optional().nullable(),
 }).passthrough();
 
+/** Fonte da PLANILHA da linha do Monitor ('nestle', …). Ausente/null = Shopee, a
+ *  fonte histórica. O backend usa isto para resolver a carga no namespace de id
+ *  certo (createSheetLoadId(lh, source)) — sem a fonte, uma escrita em linha Nestlé
+ *  não encontrava a carga (404). Aba antiga que não mande o campo continua se
+ *  comportando como antes (Shopee). */
+const sheetSourceSchema = z.string().trim().max(40).nullable().optional();
+
 /** Body for PATCH /api/operator/sheet-monitor — alocação editada no Monitor (Fase 0).
  *  Cada campo: string = define override; null/"" = limpa o override (volta ao valor da planilha). */
 export const sheetMonitorAllocationBodySchema = z.object({
   lh: z.string().trim().min(1).max(120),
+  source: sheetSourceSchema,
   motorista: z.string().trim().max(180).nullable().optional(),
   cavalo: z.string().trim().max(40).nullable().optional(),
   carreta: z.string().trim().max(40).nullable().optional(),
@@ -70,6 +78,7 @@ export const sheetMonitorReassignBodySchema = z.object({
   moves: z.array(z.object({
     // Carga da planilha → lh; carga do SISTEMA → cargoId (uuid). Ao menos um.
     lh: z.string().trim().max(120).optional(),
+    source: sheetSourceSchema,
     cargoId: z.string().uuid().optional(),
     motorista: z.string().trim().max(180).optional().default(""),
     cavalo: z.string().trim().max(40).optional().default(""),
@@ -126,6 +135,7 @@ export const sheetMonitorAspxAssignedBodySchema = z.object({
 export const sheetMonitorAssignReservaBodySchema = z.object({
   reservaId: z.string().uuid(),
   targetLh: z.string().trim().min(1).max(120),
+  source: sheetSourceSchema,
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/reserva — cria uma reserva (standby)
@@ -156,6 +166,7 @@ export const sheetMonitorDeleteReservaBodySchema = z.object({
  *  uma carga (motorista/veículo intocável por arrasto, edição e cascata). */
 export const sheetMonitorPinBodySchema = z.object({
   lh: z.string().trim().min(1).max(120),
+  source: sheetSourceSchema,
   pinned: z.boolean(),
 }).strict();
 

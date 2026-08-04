@@ -16,7 +16,7 @@ import { ensureMonitorSheetCargo } from "./_shared.js";
  * @param {{ lh: string, pinned: boolean, operatorId: string, requestIp?: string, correlationId?: string }} args
  * @returns {Promise<{ statusCode: number, payload: object }>}
  */
-export async function setMonitorAllocationPin({ lh, pinned, operatorId, requestIp, correlationId }) {
+export async function setMonitorAllocationPin({ lh, source = null, pinned, operatorId, requestIp, correlationId }) {
   const isPinned = Boolean(pinned);
 
   return withPgTransaction(async (client) => {
@@ -24,7 +24,7 @@ export async function setMonitorAllocationPin({ lh, pinned, operatorId, requestI
     // Programação); materializa a carga do snapshot se a linha da planilha ainda
     // não tem carga — mesma resolução do updateMonitorAllocation, senão fixar/
     // desafixar essas linhas falhava com "Carga da planilha não encontrada".
-    const row = await ensureMonitorSheetCargo(client, lh, { columns: "id, sheet_lh" });
+    const row = await ensureMonitorSheetCargo(client, lh, { source, columns: "id, sheet_lh" });
     if (!row) {
       throw new NotFoundError("Carga da planilha não encontrada para este LH.");
     }
