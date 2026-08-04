@@ -1,5 +1,54 @@
 import { describe, expect, it } from "vitest";
 import { mapSystemCargoToMonitorRow, listSystemCargasForMonitor } from "./list-system-cargas-monitor.js";
+import { applySpxOperationalStatus } from "./spx-operational-status.js";
+
+// Ponta que nenhum teste cobria: o que o operador VÊ na carga lançada depois que a
+// passada da lançada (`reconcile-aspx-status-launched.js`) grava o espelho e solta o
+// override. Antes, o espelho era gravado e ninguém o exibia — a linha continuava
+// vazia e o overlay AO VIVO do SPX (que só avança) passava a mandar nela.
+describe("carga lançada: espelho do portal + overlay ao vivo do SPX (integração de exibição)", () => {
+  const cargaLancada = (over = {}) => ({
+    id: "c1", lh_manual: "LT-1", origem: "A", destino: "B",
+    data: "2026-08-10", horario: "08:00:00", status: "RESERVED",
+    alloc_motorista: "ANA", alloc_status: null, sheet_status: null, ...over,
+  });
+  const idx = (lh, label) => new Map([[lh, label]]);
+
+  it("espelho preenchido é EXIBIDO e o SPX atrasado não o rebaixa", () => {
+    const row = mapSystemCargoToMonitorRow(cargaLancada({ sheet_status: "DESCARREGADO" }));
+    expect(row.status).toBe("DESCARREGADO");
+    const final = applySpxOperationalStatus(row, { spxStatusByLh: idx("LT-1", "CARREGADO") });
+    expect(final.status).toBe("DESCARREGADO"); // só avança
+    expect(final.spxStatus).toBeUndefined();
+  });
+
+  it("sem espelho e sem override, o SPX ao vivo preenche (comportamento preservado)", () => {
+    const row = mapSystemCargoToMonitorRow(cargaLancada());
+    expect(row.status).toBe("");
+    const final = applySpxOperationalStatus(row, { spxStatusByLh: idx("LT-1", "CARREGADO") });
+    expect(final.status).toBe("CARREGADO");
+  });
+
+  it("override do operador vence o espelho, e o SPX ainda avança sobre ele", () => {
+    const row = mapSystemCargoToMonitorRow(
+      cargaLancada({ alloc_status: "CTE EM EMISSÃO", sheet_status: "CARREGADO" }),
+    );
+    expect(row.status).toBe("CTE EM EMISSÃO");
+    // SPX atrás → preserva o CTE
+    expect(applySpxOperationalStatus(row, { spxStatusByLh: idx("LT-1", "CARREGADO") }).status)
+      .toBe("CTE EM EMISSÃO");
+    // SPX à frente → avança
+    expect(applySpxOperationalStatus(row, { spxStatusByLh: idx("LT-1", "DESCARREGADO") }).status)
+      .toBe("DESCARREGADO");
+  });
+
+  it('override VAZIO ("Disponível") vence o espelho — `??`, não `||`', () => {
+    const row = mapSystemCargoToMonitorRow(
+      cargaLancada({ alloc_status: "", sheet_status: "DESCARREGADO", alloc_motorista: null, status: "OPEN" }),
+    );
+    expect(row.status).toBe(""); // segue Disponível/Reservado pela derivação, não "DESCARREGADO"
+  });
+});
 
 describe("mapSystemCargoToMonitorRow", () => {
   it("projeta uma carga do sistema no shape de linha do Monitor", () => {

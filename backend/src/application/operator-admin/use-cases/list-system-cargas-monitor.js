@@ -10,7 +10,7 @@
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 
 const SELECT_COLS =
-  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta, alloc_pinned, status, driver_visibility, lh_manual, agenda_a_confirmar, cliente_id";
+  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, sheet_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta, alloc_pinned, status, driver_visibility, lh_manual, agenda_a_confirmar, cliente_id";
 // Mesmo SELECT sem `agenda_a_confirmar` — usado no fallback de banco sem a coluna
 // (migration 20260717210000): a fonte "sistema" do Monitor não pode cair só por isso.
 const SELECT_COLS_SEM_AGENDA = SELECT_COLS.replace(" agenda_a_confirmar,", "");
@@ -75,7 +75,14 @@ export function mapSystemCargoToMonitorRow(c, clientesById = {}, now = null) {
   // motorista — mesma regra do buildDriverLoadFilters: ciclo de vida OPEN, pública,
   // sem motorista efetivo e carregamento no futuro (relógio de São Paulo). O status
   // operacional (alloc_status), quando o operador define, tem precedência.
-  const opStatus = (c.alloc_status || "").trim();
+  // Status operacional EFETIVO = override do operador ?? espelho do portal
+  // (`sheet_status`). O espelho é gravado pela passada da carga lançada
+  // (`reconcile-aspx-status-launched.js`, gate ASPX_STATUS_LAUNCHED): sem lê-lo aqui, o
+  // valor era gravado e NINGUÉM o exibia — a linha continuava vazia e dependia do
+  // overlay ao vivo do SPX (que cai junto com o sidecar). `??`, não `||`: override ""
+  // é vazio EXPLÍCITO ("Disponível") e vence o espelho, mesma semântica de
+  // COALESCE(alloc_*, sheet_*) das linhas da planilha.
+  const opStatus = (c.alloc_status != null ? c.alloc_status : (c.sheet_status ?? "")).toString().trim();
   const lifecycle = (c.status || "").trim().toUpperCase();
   const isPublic = (c.driver_visibility || "PUBLIC").toString().toUpperCase() === "PUBLIC";
   // DC-271: a exceção "carga lançada fica disponível o dia inteiro (data >= hoje)" foi
