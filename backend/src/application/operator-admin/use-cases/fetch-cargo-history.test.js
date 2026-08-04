@@ -6,17 +6,37 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 // `canned.liveEvents` (opcional) desvia a query dos EVENTOS para o pg-mem: o SQL
 // REAL do use case roda contra um banco de verdade (prova a projeção server-side do
 // validation_summary_json e permite medir bytes). Sem ele, tudo segue mockado.
-const canned = { events: [], allocs: [], audit: [], liveEvents: null };
+// `canned.resolved` são as cargas que representam o LH/cargoId (planilha e/ou
+// sistema); `canned.cascade`, os eventos de lote (remanejar/desfazer) sem resource_id.
+const canned = { events: [], allocs: [], audit: [], cascade: [], resolved: [], liveEvents: null };
+// SQL de cada consulta, capturado p/ os testes de resolução da carga.
+const seenSql = { resolve: null, events: null, allocs: null };
+const seenParams = { resolve: null, events: null, allocs: null, audit: null };
 vi.mock("../../../infrastructure/pg/postgres.js", () => ({
   withPgClient: async (cb) =>
     cb({
       query: async (sql, params) => {
         const text = String(sql);
         if (text.includes("load_public_lead_events")) {
+          seenSql.events = text;
+          seenParams.events = params;
           return canned.liveEvents ? canned.liveEvents(text, params) : { rows: canned.events };
         }
-        if (text.includes("DISTINCT ON (sheet_lh)")) return { rows: canned.allocs };
-        if (text.includes("security_audit_logs")) return { rows: canned.audit };
+        if (text.includes("alloc_motorista")) {
+          seenSql.allocs = text;
+          seenParams.allocs = params;
+          return { rows: canned.allocs };
+        }
+        if (text.includes("security_audit_logs")) {
+          if (text.includes("resource_id IS NULL")) return { rows: canned.cascade };
+          seenParams.audit = params;
+          return { rows: canned.audit };
+        }
+        if (text.includes("FROM public.cargas")) {
+          seenSql.resolve = text;
+          seenParams.resolve = params;
+          return { rows: canned.resolved };
+        }
         return { rows: [] };
       },
     }),
@@ -29,12 +49,15 @@ vi.mock("./audit-logs-read-model.js", () => ({
 }));
 
 const { fetchCargoHistoryByLh } = await import("./fetch-cargo-history.js");
+const { createSheetLoadId } = await import("../../google-sheets/google-sheet-loads.js");
 
 describe("fetchCargoHistoryByLh", () => {
   beforeEach(() => {
     canned.events = [];
     canned.allocs = [];
     canned.audit = [];
+    canned.cascade = [];
+    canned.resolved = [];
     canned.liveEvents = null;
     directory.current = new Map();
   });
@@ -186,6 +209,214 @@ describe("fetchCargoHistoryByLh", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Identificação da carga
+//
+// Um LH do Monitor pode viver em MAIS DE UMA carga — a da planilha (sheet_lh, id
+// determinístico) e a do SISTEMA lançada na Programação (lh_manual, id aleatório) —
+// e a carga do sistema pode nem ter LH. Ler só `sheet_lh = lh` e
+// `resource_id = createSheetLoadId(lh)` deixou 297 cargas de produção com o
+// histórico vazio ou pela metade: o registro estava na OUTRA carga do mesmo LH.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("fetchCargoHistoryByLh · qual carga o LH representa", () => {
+  beforeEach(() => {
+    canned.events = [];
+    canned.allocs = [];
+    canned.audit = [];
+    canned.cascade = [];
+    canned.resolved = [];
+    canned.liveEvents = null;
+    directory.current = new Map();
+    seenSql.resolve = null;
+    seenSql.events = null;
+    seenSql.allocs = null;
+    seenParams.resolve = null;
+    seenParams.events = null;
+    seenParams.allocs = null;
+    seenParams.audit = null;
+  });
+
+  it("procura a carga LANÇADA (lh_manual) além da carga da planilha", async () => {
+    await fetchCargoHistoryByLh({ lh: "LT0Q7R02CH001", correlationId: "c-l1" });
+
+    // Eventos e alocação passam a casar a carga do SISTEMA lançada na Programação.
+    expect(seenSql.events).toContain("c.lh_manual = $1");
+    expect(seenSql.allocs).toContain("c.lh_manual = $1");
+    expect(seenParams.events[0]).toBe("LT0Q7R02CH001");
+    // A carga da planilha entra pelo id determinístico (namespace da fonte).
+    expect(seenParams.events).toContain(createSheetLoadId("LT0Q7R02CH001"));
+  });
+
+  it("NÃO casa por sheet_lh: o mesmo LH existe em duas planilhas (Shopee e Nestlé)", async () => {
+    // `sheet_lh` é único só POR fonte. Um ramo `OR sheet_lh = <LH>` traria a carga da
+    // OUTRA fonte junto e o modal mostraria o histórico de outra carga. A fonte está
+    // no id (`createSheetLoadId(lh, source)`) — é ela que desambigua.
+    await fetchCargoHistoryByLh({ lh: "B101454518", correlationId: "c-l5" });
+    expect(seenSql.events).not.toContain("c.sheet_lh = $1");
+    expect(seenSql.allocs).not.toContain("c.sheet_lh = $1");
+    expect(seenSql.resolve).not.toContain("sheet_lh = $1");
+  });
+
+  it("ancora a auditoria nos ids REAIS da carga (planilha + sistema), não só no id determinístico", async () => {
+    // Resolução devolve a carga do SISTEMA (id aleatório) que carrega este LH.
+    canned.resolved = [{ id: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa" }];
+    canned.audit = [
+      {
+        event_type: "operator.cargo.allocation_updated",
+        actor_user_id: null,
+        created_at: "2026-07-27T10:00:00.000Z",
+        metadata: { changes: [{ field: "motorista", label: "Motorista", before: null, after: "MATHEUS" }] },
+      },
+    ];
+
+    const { items } = (await fetchCargoHistoryByLh({ lh: "LT0Q7R02CH001", correlationId: "c-l2" })).payload;
+
+    // O id aleatório da carga do sistema entra na busca do audit log.
+    expect(seenParams.audit[0]).toContain("aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa");
+    expect(items.map((i) => i.tipo)).toContain("ALLOC_AUDIT");
+  });
+
+  it("aceita cargoId sem LH (carga do sistema que o front não conseguia consultar)", async () => {
+    canned.resolved = [{ id: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb" }];
+    canned.audit = [
+      {
+        event_type: "operator.cargo.monitor_system_updated",
+        actor_user_id: null,
+        created_at: "2026-08-03T12:00:00.000Z",
+        metadata: { changes: [{ field: "status", label: "Status", before: "", after: "CARREGADO" }] },
+      },
+    ];
+
+    const { items } = (
+      await fetchCargoHistoryByLh({ cargoId: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", correlationId: "c-l3" })
+    ).payload;
+
+    // Sem LH, o SQL não compara lh_manual com string vazia — casa só por id.
+    expect(seenSql.events).not.toContain("c.lh_manual = $1");
+    expect(seenSql.events).toContain("c.id = $2");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ titulo: "Carga editada no Monitor" });
+  });
+
+  it("não duplica a alocação quando a carga gêmea (planilha + sistema) repete o mesmo motorista", async () => {
+    const alloc = {
+      alloc_motorista: "PAULO ERIVALDO",
+      alloc_cavalo: "AAA1B11",
+      alloc_carreta: "CCC2D22",
+      alloc_descricao: null,
+      alloc_updated_by: null,
+      alloc_updated_at: "2026-08-01T09:00:00.000Z",
+    };
+    canned.allocs = [
+      { id: "1111", ...alloc },
+      { id: "2222", ...alloc },
+    ];
+
+    const { items } = (await fetchCargoHistoryByLh({ lh: "LT0Q8102C0G21", correlationId: "c-l4" })).payload;
+    expect(items.filter((i) => i.tipo === "ALLOC_OPERADOR")).toHaveLength(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cobertura das ações
+//
+// O histórico mostrava 1 de 15 tipos de evento de carga (`allocation_updated`).
+// Cancelar em cascata, editar a carga, ligar/desligar pro motorista, descer na
+// fila: tudo isso é "o que aconteceu com a carga" e não aparecia.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("fetchCargoHistoryByLh · ações registradas na auditoria", () => {
+  beforeEach(() => {
+    canned.events = [];
+    canned.allocs = [];
+    canned.audit = [];
+    canned.cascade = [];
+    canned.resolved = [];
+    canned.liveEvents = null;
+    directory.current = new Map();
+  });
+
+  it("mostra cancelamento em cascata, edição da carga e mudança de disponibilidade", async () => {
+    directory.current = new Map([["op-3", { displayName: "Rita Alves", email: "rita@x.com" }]]);
+    canned.audit = [
+      {
+        event_type: "operator.cargo.cancel_cascade",
+        actor_user_id: "op-3",
+        created_at: "2026-08-01T10:00:00.000Z",
+        metadata: { motivo: "motorista desistiu" },
+      },
+      {
+        event_type: "operator.cargo.status_toggled",
+        actor_user_id: "op-3",
+        created_at: "2026-08-01T11:00:00.000Z",
+        metadata: { changes: [{ field: "status", label: "Status", before: "OPEN", after: "BOOKED" }] },
+      },
+      {
+        event_type: "operator.cargo.queue_descended",
+        actor_user_id: "op-3",
+        created_at: "2026-08-01T12:00:00.000Z",
+        metadata: { count: 3 },
+      },
+    ];
+
+    const { items } = (await fetchCargoHistoryByLh({ lh: "LT9", correlationId: "c-a1" })).payload;
+
+    expect(items.map((i) => i.titulo)).toEqual([
+      "Carga cancelada (motorista desceu)",
+      "Disponibilidade para o motorista alterada",
+      "Motorista desceu na fila",
+    ]);
+    expect(items[0].detalhe).toBe("motivo: motorista desistiu");
+    expect(items[0].por).toBe("Rita Alves");
+    expect(items[1].detalhe).toBe("Status: OPEN → BOOKED");
+  });
+
+  it("tipo desconhecido aparece sem jargão técnico (tela do operador)", async () => {
+    canned.audit = [
+      { event_type: "operator.cargo.algo_novo", actor_user_id: null, created_at: "2026-08-02T10:00:00.000Z", metadata: {} },
+    ];
+    const { items } = (await fetchCargoHistoryByLh({ lh: "LT10", correlationId: "c-a2" })).payload;
+    expect(items).toHaveLength(1);
+    expect(items[0].titulo).toBe("Alteração registrada na carga");
+    expect(items[0].titulo).not.toContain("operator.cargo");
+  });
+
+  it("no remanejamento em lote, mostra só o trecho DESTA carga", async () => {
+    canned.cascade = [
+      {
+        event_type: "operator.cargo.allocation_reassigned",
+        actor_user_id: null,
+        created_at: "2026-08-02T14:00:00.000Z",
+        metadata: {
+          count: 2,
+          moves: [
+            { lh: "LT-OUTRA", motorista: "OUTRO MOTORISTA", cavalo: "ZZZ9Z99", carreta: "" },
+            { lh: "LT-MINHA", motorista: "MEU MOTORISTA", cavalo: "AAA1A11", carreta: "BBB2B22" },
+          ],
+        },
+      },
+    ];
+
+    const { items } = (await fetchCargoHistoryByLh({ lh: "LT-MINHA", correlationId: "c-a3" })).payload;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ titulo: "Fila remanejada", tipo: "operator.cargo.allocation_reassigned" });
+    expect(items[0].detalhe).toBe("MEU MOTORISTA — cavalo AAA1A11 · carreta BBB2B22");
+    expect(items[0].detalhe).not.toContain("OUTRO MOTORISTA");
+  });
+
+  it("ignora o evento de lote que não menciona esta carga", async () => {
+    canned.cascade = [
+      {
+        event_type: "operator.cargo.allocation_reassigned",
+        actor_user_id: null,
+        created_at: "2026-08-02T14:00:00.000Z",
+        metadata: { moves: [{ lh: "LT-OUTRA", motorista: "OUTRO" }] },
+      },
+    ];
+    const { items } = (await fetchCargoHistoryByLh({ lh: "LT-MINHA", correlationId: "c-a4" })).payload;
+    expect(items).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Projeção server-side do validation_summary_json (egress)
 //
 // A query dos eventos passou a extrair SÓ o nome do Angellira
@@ -274,7 +505,10 @@ function fatSummary(displayName) {
 }
 
 async function seedHistory(lh, summaryJson, { phone = "71999999999", events = ["PRE_REGISTERED", "QUEUED", "WHATSAPP_CLICKED", "APPROVED"] } = {}) {
-  const cargo = await harness.seedCargo({ sheet_lh: lh, status: "RESERVED" });
+  // `id` determinístico como o sync grava em produção — é por ele que a leitura
+  // encontra a carga da planilha (o LH sozinho não identifica: `sheet_lh` é único
+  // só por fonte).
+  const cargo = await harness.seedCargo({ id: createSheetLoadId(lh), sheet_lh: lh, status: "RESERVED" });
   const lead = await harness.seedPublicLead({
     load_id: cargo.id,
     phone,
@@ -307,6 +541,8 @@ describe("fetch-cargo-history · projeção server-side do nome do Angellira (eg
     canned.events = [];
     canned.allocs = [];
     canned.audit = [];
+    canned.cascade = [];
+    canned.resolved = [];
     canned.liveEvents = null;
     directory.current = new Map();
     activeCounter = null;

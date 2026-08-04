@@ -11,7 +11,18 @@ export const cargoCodigoViagemQuerySchema = z.object({
   codigo_viagem: z.string().trim().min(1).max(255),
 });
 
-/** Query for GET /api/operator/cargas/historico?lh= */
-export const cargoHistoryQuerySchema = z.object({
-  lh: z.string().trim().min(1).max(255),
-});
+/**
+ * Query for GET /api/operator/cargas/historico?lh=&cargo_id=
+ *
+ * Aceita `lh` (carga da planilha ou lançada) e/ou `cargo_id` (carga do sistema —
+ * inclusive as SEM LH, que antes ficavam sem histórico porque o front não tinha
+ * identificador para consultar). Pelo menos um dos dois.
+ */
+export const cargoHistoryQuerySchema = z
+  .object({
+    lh: z.string().trim().min(1).max(255).optional(),
+    cargo_id: uuidSchema.optional(),
+  })
+  .refine((v) => Boolean(v.lh || v.cargo_id), {
+    message: "Informe lh ou cargo_id.",
+  });
