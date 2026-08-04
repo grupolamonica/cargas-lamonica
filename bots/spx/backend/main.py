@@ -813,10 +813,28 @@ def lookup_driver(p: LookupDriverPayload):
                 }
 
             if retcode in INATIVO_CODES:
+                # validate/basic sinaliza inativo por retcode mas NAO devolve o
+                # driver_id — sem ele o backend nao consegue reativar (estourava
+                # SPX_INATIVO_SEM_DRIVER_ID; casos VANDO LAUREANO DIAS e +4). O
+                # /driver/list filtrado por CPF traz o driver_id do inativo (ele
+                # esta na nossa agencia, so desativado). Resolve aqui pra o pipeline
+                # reativar via /spx/motorista/ativar. Best-effort: se a lista
+                # falhar, devolve inativo sem id (comportamento antigo).
+                inativo_driver_id = None
+                try:
+                    dl = drivers_mod.list_drivers_in_agency(client, cpf=cpf_clean, count=5)
+                    for it in ((dl or {}).get("list") or (dl or {}).get("items") or []):
+                        did = it.get("driver_id") or it.get("id")
+                        if did:
+                            inativo_driver_id = int(did)
+                            break
+                except (APIErro, SessaoExpirada) as exc_dl:
+                    log_alerta(f"[lookup_driver] list_drivers_in_agency (inativo) falhou: {exc_dl}")
                 return {
                     "ok": True, "encontrado": True, "is_matched": True,
                     "driver_info": None, "retcode": retcode, "erro_validate": erro,
                     "inativo": True,
+                    "existing_driver_id": inativo_driver_id,
                 }
 
             if retcode in BLOQUEADO_CODES:
