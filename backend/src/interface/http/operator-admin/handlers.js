@@ -100,7 +100,17 @@ import { reconcileMonitorDuplicates } from "../../../application/operator-admin/
 import { readSheetSnapshotLhSet } from "../../../application/operator-admin/use-cases/read-sheet-snapshot-lhs.js";
 import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-admin/use-cases/planilha-availability.js";
 import { releaseStaleAllocStatusOverrides } from "../../../application/operator-admin/use-cases/monitor-stale-alloc-status.js";
-import { fetchSpxScheduleIndex, applySpxSchedule } from "../../../application/operator-admin/use-cases/spx-schedule-overlay.js";
+import {
+  fetchSpxScheduleIndex,
+  fetchSpxScheduleIndexFromSidecar,
+  mergeLiveIndexes,
+  applySpxSchedule,
+} from "../../../application/operator-admin/use-cases/spx-schedule-overlay.js";
+import {
+  fetchNestleMonitorIndex,
+  applyNestleSchedule,
+  nestleStatusIndex,
+} from "../../../application/operator-admin/use-cases/nestle-monitor-overlay.js";
 import { applySpxOperationalStatus, fetchSpxStatusIndexFromSnapshot, isSpxMonitorLiveStatusEnabled } from "../../../application/operator-admin/use-cases/spx-operational-status.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 import { evaluateCandidaturaCnhCategoria } from "../../../domain/candidatura/cnh-category.js";
@@ -836,7 +846,7 @@ function compareMonitorRows(a, b) {
 // Monta a visão UNIFICADA do Monitor: linhas da planilha ∪ cargas do sistema
 // (intercaladas por data), com reservas no fim. Cada linha ganha rowKey/source.
 // Summary recalculado sobre as linhas operacionais quando há cargas do sistema.
-function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh: rawAllocByLh = {}, now = null, reservedByLh = {}, spxStatusByLh = null, spxScheduleByLh = null, correlationId = null }) {
+function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh: rawAllocByLh = {}, now = null, reservedByLh = {}, spxStatusByLh = null, spxScheduleByLh = null, nestleByLh = null, correlationId = null }) {
   // Override de STATUS que ficou para trás da planilha é SOLTO antes de qualquer
   // overlay: numa viagem LANÇADA o `alloc_status` nunca era reavaliado (o sync ASPX
   // e o saneamento ancoram em `cargas.sheet_status`, sempre NULL nela) e continuava
@@ -858,6 +868,10 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, o
   // A planilha inteira é de um cliente (ex.: Shopee) — anexa o nome a cada linha
   // da planilha. Cargas do sistema já trazem o próprio cliente (cliente_id→nome).
   const sheetClient = getSheetClientName();
+  // Agenda AO VIVO: SPX (Shopee, casa "LT…") e Galileu (Nestlé, casa "B1…"/
+  // codembarque). Aplicados em SEQUÊNCIA e não em alternativa: os espaços de chave
+  // são disjuntos, então cada linha é tocada por no máximo um deles.
+  const withAgenda = (r) => applyNestleSchedule(applySpxSchedule(r, { spxScheduleByLh }), { nestleByLh });
   const sheetRows = baseRows.map((r) => {
     const withMeta = r.rowKey ? r : { ...r, rowKey: `sheet:${r.lh}`, source: "planilha" };
     const withClient = { ...withMeta, cliente: withMeta.cliente ?? sheetClient };
@@ -871,7 +885,7 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, o
     // verdade do /motorista — e NÃO da agenda exibida; por isso o overlay de agenda não
     // o recalcula. Efeito colateral aceito: se a planilha estiver defasada vs o SPX, a
     // data exibida (SPX) pode divergir do badge (baseado na data da planilha) até o sync.
-    return applySpxSchedule(withStatus, { spxScheduleByLh });
+    return withAgenda(withStatus);
   });
   // Dedup planilha ∪ sistema por LH: uma carga do SISTEMA (lh_manual) com o MESMO
   // LH de uma linha da planilha é a MESMA viagem → mostra só a da planilha (fonte
@@ -885,7 +899,13 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, o
   // Status operacional REAL do SPX/Shopee (Torre) sobrepõe o status das cargas
   // ALOCADAS, casando por LH (== trip_number). Best-effort: sem índice = no-op.
   const withSpx = (r) => applySpxOperationalStatus(r, { spxStatusByLh, allocByLh });
-  const operational = [...visibleSheetRows.map(withSpx), ...dedupedSystemRows.map(withSpx)].sort(compareMonitorRows);
+  // A carga LANÇADA (linha "sistema") também recebe a agenda ao vivo. Ela não tem
+  // planilha por baixo: `data`/`horario` são o que o lançamento gravou UMA vez e
+  // nada os reavaliava — quando o carregamento mudava na fonte (ou nasceu como
+  // placeholder "a confirmar"), a linha exibia o horário velho para sempre. Aplicado
+  // DEPOIS do dedup de propósito: a reconciliação planilha ∪ sistema decide quem
+  // aparece olhando LH/motorista, e não deve mudar de resultado por causa do overlay.
+  const operational = [...visibleSheetRows.map(withSpx), ...dedupedSystemRows.map((r) => withSpx(withAgenda(r)))].sort(compareMonitorRows);
   const reservas = reservaRows.map((r) => (r.rowKey ? r : { ...r, rowKey: `reserva:${r.lh}`, source: "reserva" }));
   const items = reservas.length ? [...operational, ...reservas] : operational;
   const summary = systemRows.length ? buildSheetSummary(operational) : baseSummary;
@@ -931,7 +951,7 @@ export async function resolveSheetMonitorResponse(request) {
     // rodam em PARALELO. Cada thunk é best-effort e engole o próprio erro, então o
     // Promise.all NUNCA rejeita por causa deles: uma falha isolada só zera aquele
     // overlay (comportamento anterior por-bloco preservado), o Monitor serve o resto.
-    const [allocByLh, openLhSet, spxStatusByLh, reservedByLh, reservaRows, systemRows, spxScheduleByLh] = await Promise.all([
+    const [allocByLh, openLhSet, spxLiveStatusByLh, reservedByLh, reservaRows, systemRows, spxScheduleByLh, nestleByLh] = await Promise.all([
       // 1) Overlay da ALOCAÇÃO editada no Monitor (cargas.alloc_*), por LH — a
       //    decisão do operador que sobrepõe a planilha. Pode passar de 1000 →
       //    pagina (best-effort) p/ não perder alocações além da linha 1000.
@@ -1144,12 +1164,36 @@ export async function resolveSheetMonitorResponse(request) {
         }
       })(),
 
-      // 7) Overlay de CARGA/DESCARGA AO VIVO do SPX (Torre asp), por LH. Usa só as
-      //    colunas ETA ORIGEM/DESTINO (geográficas, sem o problema de tradução do
-      //    STATUS). Sobrepõe a agenda da planilha (defasada) nas linhas Shopee. Reusa
-      //    o fetch cacheado da Torre (≤1x/60s). Best-effort: falha → null → sem overlay.
-      fetchSpxScheduleIndex({ correlationId }),
+      // 7) Overlay de CARGA/DESCARGA AO VIVO do SPX, por LH. Fonte PRIMÁRIA = sidecar
+      //    spx-bot (mesmo payload/abas do índice de status do item 3, então sai do fetch
+      //    que já ia acontecer — sem chamada de rede extra e sem o orçamento de 4s que
+      //    zerava o overlay com o cache da Torre frio). Torre /api/spx/asp fica como
+      //    FALLBACK, cobrindo os LHs fora das abas Planejado/Aceito (viagens antigas).
+      //    Best-effort nas duas pontas: ambas falhando → null → sem overlay.
+      (async () => {
+        const [sidecar, torre] = await Promise.all([
+          fetchSpxScheduleIndexFromSidecar({ correlationId }).catch(() => null),
+          fetchSpxScheduleIndex({ correlationId }).catch(() => null),
+        ]);
+        return mergeLiveIndexes(sidecar, torre);
+      })(),
+
+      // 8) Overlay AO VIVO da NESTLÉ (Projeto Galileu: nestle_ofertas/nestle_embarques),
+      //    por código de viagem. Nenhum dos overlays SPX alcança a Nestlé (ambos casam
+      //    "LT…"), então agenda e status dela ficavam congelados no valor do
+      //    lançamento/sync — medido em prod: 26 cargas lançadas com status VAZIO e 3
+      //    presas no placeholder da agenda. Leitura no banco LOCAL, memoizada ~60s.
+      //    Kill-switch: NESTLE_MONITOR_LIVE_ENABLED=false.
+      fetchNestleMonitorIndex({ correlationId }).catch(() => null),
     ]);
+
+    // Status ao vivo: SPX ∪ Nestlé num índice só. O status Nestlé já vem traduzido
+    // p/ o vocabulário do Monitor (nestle-monitor-overlay), então
+    // `applySpxOperationalStatus` vale para as duas fontes SEM ramificar por fonte —
+    // com o mesmo gate de motorista, a mesma trava "só avança" e o mesmo
+    // `row.spxStatus` que o front trata como autoritativo. Os espaços de chave são
+    // disjuntos ("LT…" vs "B1…"/codembarque); ainda assim o SPX tem precedência.
+    const spxStatusByLh = mergeLiveIndexes(spxLiveStatusByLh, nestleStatusIndex(nestleByLh));
 
     // ----------------------------------------------------------------
     // REFRESH path: operator explicitly asked for a fresh sync.
@@ -1199,7 +1243,7 @@ export async function resolveSheetMonitorResponse(request) {
 
           // Return the freshly-parsed rows immediately — no extra DB read needed.
           // Inclui o enriquecimento JÁ salvo (senão o refresh "apaga" os selos).
-          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now, reservedByLh, spxStatusByLh, spxScheduleByLh, correlationId });
+          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now, reservedByLh, spxStatusByLh, spxScheduleByLh, nestleByLh, correlationId });
           // attachRouteCodes/Registration tocam campos DIFERENTES de cada item
           // (routeCodigo vs routeRegistered) e cada um faz um scan próprio → paraleliza.
           const [, , { enrichedByLh, enrichedByCargoId }] = await Promise.all([
@@ -1321,6 +1365,7 @@ export async function resolveSheetMonitorResponse(request) {
         reservedByLh,
         spxStatusByLh,
         spxScheduleByLh,
+        nestleByLh,
         correlationId,
       });
       await Promise.all([
@@ -1348,7 +1393,7 @@ export async function resolveSheetMonitorResponse(request) {
     // No snapshot yet (first use or migration pending). Mesmo sem planilha, as
     // cargas do sistema (+ reservas) devem aparecer no Monitor.
     const { getSheetExportUrl: getUrl } = await import("../../../application/google-sheets/google-sheet-loads.js");
-    const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary, allocByLh, spxStatusByLh, spxScheduleByLh, correlationId });
+    const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary, allocByLh, spxStatusByLh, spxScheduleByLh, nestleByLh, correlationId });
     await Promise.all([
       attachRouteCodes(supabaseClient, unified.items, correlationId),
       attachRouteRegistration(supabaseClient, unified.items, correlationId),
