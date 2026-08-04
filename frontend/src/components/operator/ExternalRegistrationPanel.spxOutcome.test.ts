@@ -47,4 +47,9 @@ describe("deriveSpxOutcome", () => {
     expect(deriveSpxOutcome(job({ status: "OK", response: { etapa: "algo_novo_do_bot" } }))).toBe("RASCUNHO");
     expect(deriveSpxOutcome(job({ status: "OK" }))).toBe("RASCUNHO");
   });
+
+  it("OK + etapa de sync (poller) = INATIVO / BLOQUEADO (RF-08)", () => {
+    expect(deriveSpxOutcome(job({ status: "OK", response: { etapa: "inativo" } }))).toBe("INATIVO");
+    expect(deriveSpxOutcome(job({ status: "OK", response: { etapa: "bloqueado" } }))).toBe("BLOQUEADO");
+  });
 });

@@ -109,6 +109,10 @@ function getSpxErrorInfo(code?: string): { label: string; hint: string | null } 
 // rascunho/solicitação aguardando aprovação. O poller (agendado) reavalia via
 // precheck e vira "apto" quando o SPX passa a devolver IS_MATCHED_NOSSA.
 const SPX_ETAPAS_APTO = new Set(["ja_cadastrado_nossa_agencia", "reativado"]);
+// Etapas de sync de status (RF-08): o apto-poller reflete quando a Shopee
+// DESATIVA/BLOQUEIA o motorista depois de aprovado.
+const SPX_ETAPAS_INATIVO = new Set(["inativo"]);
+const SPX_ETAPAS_BLOQUEADO = new Set(["bloqueado"]);
 
 const SPX_ETAPA_LABELS: Record<string, string> = {
   ja_cadastrado_nossa_agencia: "Já cadastrado e ativo na nossa agência SPX.",
@@ -116,9 +120,11 @@ const SPX_ETAPA_LABELS: Record<string, string> = {
   importado:                   "Perfil importado — solicitação criada, aguardando aprovação da Shopee.",
   request_pendente:            "Solicitação pendente no SPX — aguardando aprovação da Shopee.",
   completo:                    "Rascunho enviado ao SPX — aguardando aprovação da Shopee.",
+  inativo:                     "Motorista INATIVO na nossa agência SPX — precisa reativar (dispare de novo).",
+  bloqueado:                   "Motorista BLOQUEADO pela Shopee Express — contate o SPX para desbloquear.",
 };
 
-type SpxOutcome = "APTO" | "RASCUNHO" | "PROCESSANDO" | "ERRO" | "PENDENTE" | "NONE";
+type SpxOutcome = "APTO" | "RASCUNHO" | "INATIVO" | "BLOQUEADO" | "PROCESSANDO" | "ERRO" | "PENDENTE" | "NONE";
 
 function spxEtapaOf(job: ExternalRegistrationJob | null | undefined): string {
   const etapa = job?.response?.etapa;
@@ -129,7 +135,12 @@ export function deriveSpxOutcome(job: ExternalRegistrationJob | null | undefined
   if (!job) return "NONE";
   if (job.status === "IN_PROGRESS") return "PROCESSANDO";
   if (job.status === "ERROR") return "ERRO";
-  if (job.status === "OK") return SPX_ETAPAS_APTO.has(spxEtapaOf(job)) ? "APTO" : "RASCUNHO";
+  if (job.status === "OK") {
+    const etapa = spxEtapaOf(job);
+    if (SPX_ETAPAS_BLOQUEADO.has(etapa)) return "BLOQUEADO";
+    if (SPX_ETAPAS_INATIVO.has(etapa)) return "INATIVO";
+    return SPX_ETAPAS_APTO.has(etapa) ? "APTO" : "RASCUNHO";
+  }
   return "PENDENTE";
 }
 
@@ -555,12 +566,18 @@ function SpxJobRow({ job }: { job: ExternalRegistrationJob }) {
       // OK+apto = verde; OK+rascunho = âmbar (ainda não é "cadastrado").
       outcome === "APTO"       && "border-emerald-200 bg-emerald-50/40",
       outcome === "RASCUNHO"   && "border-amber-200 bg-amber-50/40",
+      outcome === "INATIVO"    && "border-amber-300 bg-amber-50/60",
+      outcome === "BLOQUEADO"  && "border-rose-200 bg-rose-50/40",
       status === "ERROR"       && "border-rose-200 bg-rose-50/40",
       status === "IN_PROGRESS" && "border-amber-200 bg-amber-50/40",
       status === "PENDING"     && "border-border bg-background",
     )}>
-      {/* Bolinha âmbar quando é rascunho (aguardando aprovação), não verde. */}
-      <StatusDot status={outcome === "RASCUNHO" ? "IN_PROGRESS" : status} />
+      {/* Bolinha: âmbar p/ rascunho/inativo (aguardando/ação), vermelha p/ bloqueado. */}
+      <StatusDot status={
+        outcome === "RASCUNHO" || outcome === "INATIVO" ? "IN_PROGRESS"
+          : outcome === "BLOQUEADO" ? "ERROR"
+            : status
+      } />
       <div className="flex-1 min-w-0">
         <p className="flex items-center gap-1.5 font-medium text-foreground">
           <UserRound className="h-3.5 w-3.5" />
@@ -598,6 +615,16 @@ function SpxJobRow({ job }: { job: ExternalRegistrationJob }) {
         {outcome === "RASCUNHO" ? (
           <p className="mt-0.5 text-[10px] text-amber-700 font-medium">
             Em processamento no SPX — {etapaLabel ?? "rascunho enviado, aguardando aprovação da Shopee."}
+          </p>
+        ) : null}
+        {outcome === "INATIVO" ? (
+          <p className="mt-0.5 text-[10px] text-amber-800 font-medium">
+            Inativo no SPX — {etapaLabel ?? "precisa reativar (dispare o SPX novamente)."}
+          </p>
+        ) : null}
+        {outcome === "BLOQUEADO" ? (
+          <p className="mt-0.5 text-[10px] text-rose-700 font-medium">
+            Bloqueado no SPX — {etapaLabel ?? "contate a Shopee Express para desbloquear."}
           </p>
         ) : null}
       </div>
@@ -720,6 +747,8 @@ function SpxStatusBadge({ outcome }: { outcome: SpxOutcome }) {
   const cfg = {
     APTO:        { color: "border-emerald-300 bg-emerald-100 text-emerald-800", icon: <CheckCircle2 className="h-3 w-3" />,             label: "APTO" },
     RASCUNHO:    { color: "border-amber-300 bg-amber-100 text-amber-800",       icon: <AlertCircle className="h-3 w-3" />,              label: "EM PROCESSAMENTO" },
+    INATIVO:     { color: "border-amber-400 bg-amber-100 text-amber-900",       icon: <AlertCircle className="h-3 w-3" />,              label: "INATIVO" },
+    BLOQUEADO:   { color: "border-rose-300 bg-rose-100 text-rose-800",          icon: <XCircle className="h-3 w-3" />,                  label: "BLOQUEADO" },
     PROCESSANDO: { color: "border-amber-300 bg-amber-100 text-amber-800",       icon: <Loader2 className="h-3 w-3 animate-spin" />,     label: "PROCESSANDO" },
     ERRO:        { color: "border-rose-300 bg-rose-100 text-rose-800",          icon: <XCircle className="h-3 w-3" />,                  label: "COM ERRO" },
     PENDENTE:    { color: "border-slate-300 bg-slate-100 text-slate-700",       icon: <AlertCircle className="h-3 w-3" />,              label: "PENDENTE" },
