@@ -473,7 +473,10 @@ async function fetchRouteCatalogRows(supabaseClient) {
       .select(
         "origin_key, destination_key, origem, destino, distancia_km, duracao_horas, perfil_padrao, valor_padrao, bonus_padrao, ativa, updated_at",
       )
-      .eq("ativa", true)
+      // SEM filtro de `ativa`: precisamos saber que o trecho EXISTE no catalogo
+      // mesmo desativado. createRouteCatalogDefaultsMap ignora as inativas para
+      // preco; createKnownCatalogTrechoSet usa todas para vetar o fallback
+      // hardcoded (ver resolveBaseRouteFallbackValor).
       .order("updated_at", { ascending: false })
       .range(offset, offset + ROUTE_CATALOG_PAGE_SIZE - 1);
 
@@ -522,6 +525,10 @@ function createRouteCatalogDefaultsMap(routeCatalogRows) {
   const defaultsByKey = new Map();
 
   routeCatalogRows.forEach((routeCatalogRow) => {
+    // Linha desativada nao precifica (antes isso vinha do filtro no fetch).
+    if (routeCatalogRow.ativa === false) {
+      return;
+    }
     const defaults = {
       perfil: routeCatalogRow.perfil_padrao ?? null,
       valor: routeCatalogRow.valor_padrao ?? null,
@@ -538,6 +545,39 @@ function createRouteCatalogDefaultsMap(routeCatalogRows) {
   });
 
   return defaultsByKey;
+}
+
+// Trechos que o operador JA cadastrou no catalogo, ativos ou nao. Serve para vetar
+// o fallback hardcoded: se existe tarifa para o trecho, a decisao do operador
+// (inclusive "desativei" ou "limpei o valor") manda — e a tabela fixa do codigo
+// nao pode sobrepor.
+function createKnownCatalogTrechoSet(routeCatalogRows) {
+  const known = new Set();
+
+  routeCatalogRows.forEach((routeCatalogRow) => {
+    if (routeCatalogRow.origin_key && routeCatalogRow.destination_key) {
+      known.add(`${routeCatalogRow.origin_key}|${routeCatalogRow.destination_key}`);
+    }
+    createRouteLookupKeys(routeCatalogRow.origem, routeCatalogRow.destino).forEach((key) => known.add(key));
+  });
+
+  return known;
+}
+
+// BASE_ROUTE_VALUES e um retrato hardcoded da planilha "Tabela 2026 OFICIAL". Ele
+// existe para uma carga de planilha nascer com preco num trecho que o operador
+// ainda NAO cadastrou. O que ele nunca deveria fazer e sobrepor uma decisao do
+// operador: quando havia tarifa cadastrada e ela era desativada (ou tinha o valor
+// limpo), o catalogo — filtrado por ativa — nao respondia e a cadeia caia no valor
+// fixo do codigo, reprecificando a carga no sync seguinte. "Desativar rota" nao
+// era confiavel para carga de planilha. Agora o fallback so vale para trecho
+// desconhecido pelo catalogo.
+function resolveBaseRouteFallbackValor(knownCatalogTrechos, origem, destino) {
+  const isKnown = createRouteLookupKeys(origem, destino).some((key) => knownCatalogTrechos.has(key));
+  if (isKnown) {
+    return null;
+  }
+  return resolveRouteDefaults(BASE_ROUTE_VALUES_BY_KEY, origem, destino)?.valor ?? null;
 }
 
 function createRouteTemplateDefaultsMap(routeTemplateRows) {
@@ -1097,6 +1137,7 @@ function buildSheetLoadPayload({
   existingLoad,
   routeCatalogDefaultsByKey,
   routeTemplateDefaultsByKey,
+  knownCatalogTrechos,
   fallbackSheetClientId,
   syncedAt,
   nowSp,
@@ -1104,7 +1145,11 @@ function buildSheetLoadPayload({
 }) {
   const matchedRouteCatalogDefaults = resolveRouteDefaults(routeCatalogDefaultsByKey, load.origem, load.destino);
   const matchedRouteTemplateDefaults = resolveRouteDefaults(routeTemplateDefaultsByKey, load.origem, load.destino);
-  const matchedBaseRouteValue = resolveRouteDefaults(BASE_ROUTE_VALUES_BY_KEY, load.origem, load.destino);
+  const baseRouteFallbackValor = resolveBaseRouteFallbackValor(
+    knownCatalogTrechos,
+    load.origem,
+    load.destino,
+  );
   const isExistingLoad = Boolean(existingLoad);
 
   // Sheet-sourced fields: always updated from the Google Sheet (source of truth for scheduling/routing)
@@ -1148,7 +1193,7 @@ function buildSheetLoadPayload({
           existingLoad.valor,
           matchedRouteTemplateDefaults?.valor,
           matchedRouteCatalogDefaults?.valor,
-          matchedBaseRouteValue?.valor,
+          baseRouteFallbackValor,
           load.valor,
         ),
         bonus: pickFirstFiniteNumber(
@@ -1198,7 +1243,7 @@ function buildSheetLoadPayload({
         valor: pickFirstFiniteNumber(
           matchedRouteTemplateDefaults?.valor,
           matchedRouteCatalogDefaults?.valor,
-          matchedBaseRouteValue?.valor,
+          baseRouteFallbackValor,
           load.valor,
         ),
         bonus: pickFirstFiniteNumber(
@@ -1237,13 +1282,14 @@ function buildAllocatedSheetLoadPayload({
   row,
   routeCatalogDefaultsByKey,
   routeTemplateDefaultsByKey,
+  knownCatalogTrechos,
   fallbackSheetClientId,
   syncedAt,
   source,
 }) {
   const matchedRouteCatalogDefaults = resolveRouteDefaults(routeCatalogDefaultsByKey, row.origem, row.destino);
   const matchedRouteTemplateDefaults = resolveRouteDefaults(routeTemplateDefaultsByKey, row.origem, row.destino);
-  const matchedBaseRouteValue = resolveRouteDefaults(BASE_ROUTE_VALUES_BY_KEY, row.origem, row.destino);
+  const baseRouteFallbackValor = resolveBaseRouteFallbackValor(knownCatalogTrechos, row.origem, row.destino);
 
   return {
     id: createSheetLoadId(row.lh, source),
@@ -1272,7 +1318,7 @@ function buildAllocatedSheetLoadPayload({
     valor: pickFirstFiniteNumber(
       matchedRouteTemplateDefaults?.valor,
       matchedRouteCatalogDefaults?.valor,
-      matchedBaseRouteValue?.valor,
+      baseRouteFallbackValor,
       row.valor,
     ),
     bonus: pickFirstFiniteNumber(matchedRouteTemplateDefaults?.bonus, matchedRouteCatalogDefaults?.bonus),
@@ -1504,6 +1550,7 @@ export async function syncGoogleSheetLoads({
       .map((load) => [load.sheet_lh, load]),
   );
   const routeCatalogDefaultsByKey = createRouteCatalogDefaultsMap(routeCatalogRows);
+  const knownCatalogTrechos = createKnownCatalogTrechoSet(routeCatalogRows);
   const routeTemplateDefaultsByKey = createRouteTemplateDefaultsMap(routeTemplateRows);
   let revertedToOpenCount = 0;
   let revivedExpiredCount = 0;
@@ -1514,6 +1561,7 @@ export async function syncGoogleSheetLoads({
       existingLoad,
       routeCatalogDefaultsByKey,
       routeTemplateDefaultsByKey,
+      knownCatalogTrechos,
       fallbackSheetClientId,
       syncedAt,
       nowSp,
@@ -1966,6 +2014,7 @@ export async function syncGoogleSheetLoads({
           row,
           routeCatalogDefaultsByKey,
           routeTemplateDefaultsByKey,
+          knownCatalogTrechos,
           fallbackSheetClientId,
           syncedAt,
           source,
