@@ -48,6 +48,16 @@ export function isValidBrazilianPhone(raw: string | null | undefined): boolean {
   return true;
 }
 
+/**
+ * Celular BR estrito: 11 dígitos (DDD válido + 9 + os 8). Diferente de
+ * isValidBrazilianPhone, NÃO aceita fixo de 10 dígitos — é o formato que o SPX
+ * exige (retcode 271605009) e o único que recebe WhatsApp. Use nos campos que
+ * alimentam o disparo SPX (telefone principal do motorista).
+ */
+export function isValidBrazilianMobile(raw: string | null | undefined): boolean {
+  return onlyDigits(raw).length === 11 && isValidBrazilianPhone(raw);
+}
+
 export function normalizePlateValue(raw: string | null | undefined): string {
   return String(raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
