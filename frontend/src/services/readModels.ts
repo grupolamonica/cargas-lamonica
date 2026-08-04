@@ -1366,6 +1366,9 @@ export async function fetchSheetMonitor({ refresh = false }: { refresh?: boolean
       noSnapshot?: boolean;
       snapshotSaved?: boolean;
       snapshotSaveError?: string;
+      // Resposta do refresh sem alguma fonte de planilha (falha ao ler o snapshot
+      // secundário). Quem consome NÃO deve substituir o cache com ela.
+      sourcesIncomplete?: boolean;
     };
   }>(url, { accessToken });
 }

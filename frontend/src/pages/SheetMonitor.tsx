@@ -5193,7 +5193,15 @@ export default function SheetMonitor() {
       // Angellira/ASPX. freshData já traz o enriquecimento salvo (enrichedByLh/
       // ByCargoId) do backend, então os selos NÃO somem. A verificação é feita
       // uma vez (ao abrir o Monitor) e persistida no banco.
-      queryClient.setQueryData([...SHEET_MONITOR_QUERY_KEY], freshData);
+      //
+      // Resposta marcada como INCOMPLETA (o backend não conseguiu ler alguma fonte
+      // de planilha): NÃO substitui o cache — seria trocar a tela completa por uma
+      // sem aquelas linhas. Refaz a leitura normal, que monta todas as fontes.
+      if (freshData?.meta?.sourcesIncomplete) {
+        queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      } else {
+        queryClient.setQueryData([...SHEET_MONITOR_QUERY_KEY], freshData);
+      }
       // Fila operacional usa status da planilha — invalidar para refletir status novo apos sync.
       queryClient.invalidateQueries({ queryKey: ["operator", "public-load-leads"] });
     },
