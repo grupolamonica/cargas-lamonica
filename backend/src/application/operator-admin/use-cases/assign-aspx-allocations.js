@@ -27,7 +27,13 @@ async function defaultListByLhs(lhs) {
               COALESCE(alloc_cavalo,    sheet_cavalo,    '') AS cavalo,
               COALESCE(alloc_carreta,   sheet_carreta,   '') AS carreta
        FROM public.cargas
-       WHERE sheet_lh = ANY($1::text[]) OR lh_manual = ANY($1::text[])`,
+       WHERE (sheet_lh = ANY($1::text[]) OR lh_manual = ANY($1::text[]))
+         -- Unificação da gêmea: a linha já mergeada NUNCA é o alvo (marcador só
+         -- existe na perdedora, nunca na canônica) — excluí-la aqui fecha a
+         -- ambiguidade "as duas têm motorista, dedup escolhe arbitrariamente" que
+         -- sobrevivia mesmo depois do merge (a perdedora preserva o alloc_* como
+         -- pré-imagem do rollback, então ainda aparecia com motorista).
+         AND alloc_merged_into_cargo_id IS NULL`,
       [lhs],
     );
     return rows;

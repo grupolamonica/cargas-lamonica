@@ -145,6 +145,12 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
               AND COALESCE(TRIM(c.lh_manual), '') <> ''
               AND COALESCE(TRIM(c.alloc_motorista), '') <> ''
               AND d.lh IS NULL
+              -- Unificação da gêmea (TWIN_MERGE): esta linha já entregou seus alloc_*
+              -- para a canônica. Sem este filtro, ela continuaria criando/preenchendo
+              -- célula na planilha com o valor da PRÉ-imagem (nunca zerado de propósito),
+              -- e o merge deixaria de ser estável — o valor descartado voltaria a
+              -- reaparecer a cada ciclo.
+              AND c.alloc_merged_into_cargo_id IS NULL
               -- Só linehaul SPX (LT…) → planilha Shopee. Carga lançada não persiste
               -- sheet_source (fica NULL → roteia p/ shopee); o gate LT evita criar um
               -- LH de outra fonte (ex.: Nestlé) na planilha errada. Rever quando o
@@ -172,6 +178,8 @@ export async function reconcileTakenCargosToSheet({ log } = {}) {
               AND COALESCE(TRIM(c.alloc_motorista), '') <> ''
               AND upper(TRIM(c.lh_manual)) LIKE 'LT%'
               AND COALESCE(NULLIF(TRIM(c.alloc_status), ''), NULLIF(TRIM(c.sheet_status), '')) IS NOT NULL
+              -- Mesmo motivo do ramo (2): linha já mergeada fica fora.
+              AND c.alloc_merged_into_cargo_id IS NULL
             LIMIT ${RECONCILE_BATCH_LIMIT}
           )
         `,

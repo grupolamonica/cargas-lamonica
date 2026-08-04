@@ -999,6 +999,14 @@ export async function resolveSheetMonitorResponse(request) {
                 .is("sheet_lh", null)
                 .not("lh_manual", "is", null)
                 .not("alloc_updated_at", "is", null)
+                // Unificação da gêmea (TWIN_MERGE): esta linha já entregou seus
+                // alloc_* para a canônica da planilha (marcador não-nulo). Excluir
+                // aqui, e não só confiar no `if (key && !map[key])` abaixo — a
+                // vencedora só ganha `alloc_updated_at` quando algo FOI copiado; num
+                // merge "nada a migrar" ela pode seguir sem, e a perdedora (que
+                // conserva o próprio `alloc_updated_at` como pré-imagem do rollback)
+                // voltaria a aparecer sob o LH como se fosse a decisão vigente.
+                .is("alloc_merged_into_cargo_id", null)
                 .order("lh_manual", { ascending: true })
                 .range(from, to),
             { label: "cargas_alloc_system", correlationId, partialOnError: true },

@@ -516,4 +516,38 @@ describe("updateMonitorCargo", () => {
       updateMonitorCargo({ cargoId: "99999999-9999-9999-9999-999999999999", operatorId: op.id, payload: { status: "X" } }),
     ).rejects.toThrow();
   });
+
+  // Unificação da gêmea (TWIN_MERGE): editar por este cargoId depois de ele ter
+  // sido mergeado/aposentado gravaria numa linha morta — uma aba antiga com este
+  // id ainda aberta já produziu isso em produção (evento monitor_system_updated
+  // logo após um twin_retired).
+  it("recusa (409) editar carga já MERGEADA (alloc_merged_into_cargo_id preenchido)", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "RESERVED" });
+    const { id: canonicaId } = await seedCargo({ sheet_lh: "LT-MERGED", origem: "A", destino: "B", status: "BOOKED" });
+    await query(`UPDATE public.cargas SET alloc_merged_into_cargo_id = $2 WHERE id = $1`, [id, canonicaId]);
+    const op = await seedUser({ email: "op-merged-guard@teste.local" });
+
+    await expect(
+      updateMonitorCargo({ cargoId: id, operatorId: op.id, payload: { motorista: "FULANO" }, correlationId: "c-merged-guard" }),
+    ).rejects.toThrow(/unificada/i);
+  });
+
+  it("recusa (409) editar carga APOSENTADA (retired_reason preenchido)", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "EXPIRED" });
+    await query(`UPDATE public.cargas SET retired_reason = 'twin_taken' WHERE id = $1`, [id]);
+    const op = await seedUser({ email: "op-retired-guard@teste.local" });
+
+    await expect(
+      updateMonitorCargo({ cargoId: id, operatorId: op.id, payload: { motorista: "FULANO" }, correlationId: "c-retired-guard" }),
+    ).rejects.toThrow(/unificada/i);
+  });
+
+  it("carga do sistema NORMAL (sem marcador) continua editável", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    const op = await seedUser({ email: "op-normal-guard@teste.local" });
+
+    await expect(
+      updateMonitorCargo({ cargoId: id, operatorId: op.id, payload: { motorista: "FULANO" }, correlationId: "c-normal-guard" }),
+    ).resolves.toMatchObject({ statusCode: 200 });
+  });
 });

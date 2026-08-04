@@ -14,7 +14,11 @@ const CANDIDATE_CARGO_WHERE = `status NOT IN ('CANCELLED', 'COMPLETED', 'FAILED'
             AND (sheet_lh IS NOT NULL OR lh_manual IS NOT NULL)
             AND COALESCE(TRIM(origem), '') <> ''
             AND COALESCE(TRIM(destino), '') <> ''
-            AND distancia_km IS NOT NULL`;
+            AND distancia_km IS NOT NULL
+            -- Unificação da gêmea: a perdedora já mergeada fica FORA — sem isso ela
+            -- continua consumindo o batch e recebendo \`valor\` recalculado numa
+            -- linha morta, invisível ao Monitor/portal.
+            AND alloc_merged_into_cargo_id IS NULL`;
 
 const toNum = (v) => {
   if (v === null || v === undefined || v === "") return null;

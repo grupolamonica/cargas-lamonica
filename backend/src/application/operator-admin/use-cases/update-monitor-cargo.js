@@ -58,7 +58,7 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
               alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas,
               alloc_checklist_cavalo, alloc_checklist_carreta,
               origem, destino, data, horario, lh_manual, sheet_data_carregamento, sheet_data_descarga,
-              status, reserved_public_lead_id
+              status, reserved_public_lead_id, alloc_merged_into_cargo_id, retired_reason
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
       [cargoId],
     );
@@ -71,6 +71,19 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     // /api/operator/sheet-monitor (alloc_* por LH) — preserva cascata/pin/writeback.
     if (row.sheet_lh != null && String(row.sheet_lh).trim() !== "") {
       throw new ValidationError("Esta carga é da planilha; edite pela alocação do Monitor.");
+    }
+
+    // Carga MERGEADA (unificação da gêmea, TWIN_MERGE) ou APOSENTADA pelo sync: os
+    // alloc_* dela já foram (ou nunca mais serão) a fonte da verdade — a carga viva é
+    // a canônica da planilha, resolvida por LH via /api/operator/sheet-monitor. Sem
+    // esta guarda, uma aba com este id ainda aberta (cargoId por parâmetro, sem
+    // re-resolver por LH) gravaria 200 OK numa linha morta — já visto em produção após
+    // uma aposentadoria (evento monitor_system_updated pós-twin_retired).
+    if (row.alloc_merged_into_cargo_id != null || row.retired_reason != null) {
+      throw new ConflictError(
+        "Esta carga foi unificada com a linha da planilha; edite pela alocação do Monitor (LH).",
+        { code: "CARGO_MERGED_OR_RETIRED" },
+      );
     }
 
     const pinned = row.alloc_pinned === true;

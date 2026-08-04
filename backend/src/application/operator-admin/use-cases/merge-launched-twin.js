@@ -65,6 +65,23 @@ export function twinMergeMode() {
   return raw === "on" || raw === "dry" ? raw : "off";
 }
 
+/**
+ * Gate SEPARADO (default false): cancelar pelo LH de uma gêmea já mergeada deve
+ * disparar `cancelLoadCascade`?
+ *
+ * Hoje (sem merge) cancelar a carga LANÇADA nunca cascateia — `cancelLoadCascade`
+ * só considera `sheet_lh IS NOT NULL` e o chamador pula explicitamente carga do
+ * sistema (`isSystemCargo`). Com o resolvedor canônico (TWIN_MERGE ligado), o MESMO
+ * LH passa a resolver para a carga da PLANILHA — `isSystemCargo` vira `false` e a
+ * cascata correria como efeito colateral de uma correção de identidade, não de uma
+ * decisão sobre a cascata em si. Como a cascata (sem corte de data) já derrubou 39
+ * motoristas da fila por engano, esse comportamento fica ATRÁS de gate próprio: o
+ * merge de identidade não decide sozinho se a cascata liga.
+ */
+export function isTwinCascadeOnMergedEnabled() {
+  return String(process.env.TWIN_CASCADE_ON_MERGED ?? "").trim().toLowerCase() === "true";
+}
+
 /** Valor EFETIVO de alocação: `??` (COALESCE), igual ao Monitor — "" é decisão explícita. */
 function efetivo(allocValue, sheetValue) {
   return trim(allocValue != null ? allocValue : sheetValue);

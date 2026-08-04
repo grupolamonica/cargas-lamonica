@@ -183,7 +183,13 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
       .is("sheet_lh", null)
       .eq("is_template", false)
       .neq("status", "EXPIRED")
-      .neq("status", "DRAFT"); // rascunho não aparece no Monitor
+      .neq("status", "DRAFT") // rascunho não aparece no Monitor
+      // Unificação da gêmea (TWIN_MERGE): o marcador NÃO muda `status` — uma carga
+      // recém-mergeada pode continuar RESERVED/BOOKED e, sem este filtro, aparecia
+      // aqui como linha do SISTEMA duplicando a canônica que já é exibida como linha
+      // da PLANILHA (o dedup por LH em dedupe-monitor-rows.js só cobre o caso
+      // "sistema OPEN", não este).
+      .is("alloc_merged_into_cargo_id", null);
     if (filterAspxMissing) q = q.is("aspx_missing_since", null);
     return q.order("data", { ascending: false }).range(from, from + pageSize - 1);
   };

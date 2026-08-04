@@ -6,6 +6,7 @@ import { writeAllocationsToSheet, formatSheetDateLabel } from "../../google-shee
 import { cancelLoadCascade } from "./cancel-load-cascade.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
 import { ensureMonitorSheetCargo } from "./_shared.js";
+import { isTwinCascadeOnMergedEnabled } from "./merge-launched-twin.js";
 import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
 
 /**
@@ -71,6 +72,18 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
     // pulado — senão editar só o status escreveria "" e apagaria o motorista/placa
     // vivos da linha da planilha (que vêm do snapshot, não das colunas sheet_*).
     const isSystemCargo = sheetRow.sheet_lh == null;
+    // Este LH resolveu para a canônica da planilha PORQUE existe uma gêmea lançada
+    // já mergeada nela (TWIN_MERGE)? Sem isso, cancelar por este LH passaria a
+    // disparar a cascata de rota como efeito colateral da correção de identidade —
+    // ver isTwinCascadeOnMergedEnabled.
+    let viaTwinMerge = false;
+    if (!isSystemCargo) {
+      const { rows: mergedTwin } = await client.query(
+        `SELECT 1 FROM public.cargas WHERE lh_manual = $1 AND sheet_lh IS NULL AND alloc_merged_into_cargo_id = $2 LIMIT 1`,
+        [lh, cargoId],
+      );
+      viaTwinMerge = mergedTwin.length > 0;
+    }
 
     // Carga FIXA: motorista/veículo são intocáveis — preserva o que já está
     // alocado (ignora os valores recebidos) e deixa passar só o status operacional.
@@ -300,6 +313,7 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
       // fora da transação (write-back e reabertura de reserva).
       cargoId,
       isSystemCargo,
+      viaTwinMerge,
       // Rota + agenda da carga — usados p/ CRIAR a linha da carga do sistema na
       // planilha (createIfMissing) quando ela ainda não existe (ver write-back).
       sheetRowExtras: {
@@ -379,7 +393,13 @@ export async function updateMonitorAllocation({ lh, operatorId, payload, request
   // (cancelLoadCascade) só considera cargas da planilha (sheet_lh IS NOT NULL) e
   // resolve o gatilho por createSheetLoadId(lh), que não existe p/ carga lançada —
   // rodá-la só produziria um NotFound engolido (falso alarme no log). Pula.
-  if (willCascade && !result.isSystemCargo) {
+  //
+  // `viaTwinMerge`: este LH é da canônica SÓ porque uma gêmea lançada foi mergeada
+  // nela — antes do merge, cancelar por este LH era `isSystemCargo=true` e NUNCA
+  // cascateava. Preserva esse comportamento por padrão (gate próprio,
+  // TWIN_CASCADE_ON_MERGED): a unificação de identidade não deve, sozinha, ligar uma
+  // cascata sem corte de data que já derrubou 39 motoristas por engano.
+  if (willCascade && !result.isSystemCargo && !(result.viaTwinMerge && !isTwinCascadeOnMergedEnabled())) {
     // Best-effort: a edição de status já está commitada; se a cascata falhar, o
     // sweep do próximo sync recupera (cancelLoadCascade é idempotente).
     try {
