@@ -1440,7 +1440,14 @@ export async function reassignMonitorAllocations(
  * pinned/status/alocação reais e calcula a cascata — carga fixada é pulada (fica
  * no lugar), nunca bloqueia. `skippedPinned` volta as cargas fixadas mantidas.
  */
-export async function descendQueueCascade(input: { sourceLh: string; targetLh: string; orderedLhs: string[] }) {
+export async function descendQueueCascade(input: {
+  sourceLh: string;
+  targetLh: string;
+  orderedLhs: string[];
+  /** LH → fonte da planilha daquela linha ('nestle', …). Ausente = Shopee. O backend
+   *  resolve cada carga da fila no namespace de id da sua fonte. */
+  sourceByLh?: Record<string, string | null>;
+}) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{
     ok: boolean;

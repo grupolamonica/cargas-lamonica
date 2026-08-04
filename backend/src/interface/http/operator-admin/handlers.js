@@ -1565,8 +1565,8 @@ export async function resolveDescendQueueCascadeResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-      const { sourceLh, targetLh, orderedLhs } = sheetMonitorDescendBodySchema.parse(await parseJsonBody(request));
-      const result = await descendQueueCascade({ sourceLh, targetLh, orderedLhs, operatorId, requestIp, correlationId });
+      const { sourceLh, targetLh, orderedLhs, sourceByLh } = sheetMonitorDescendBodySchema.parse(await parseJsonBody(request));
+      const result = await descendQueueCascade({ sourceLh, targetLh, orderedLhs, sourceByLh, operatorId, requestIp, correlationId });
       // Re-enriquece TODAS as cargas remanejadas com o motorista/placa EFETIVO, p/
       // a fila descida não ficar "não consultado". Fire-and-forget (não bloqueia).
       const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");

@@ -20,22 +20,32 @@ import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
  * motorista (cascata já rodou), é no-op — então pode ser disparada tanto pela
  * edição do operador quanto pelo sync da planilha sem duplicar reservas.
  *
- * @param {{ lh: string, operatorId: string, requestIp?: string, correlationId?: string }} args
+ * MULTI-FONTE: `sheetSource` é a fonte da planilha da carga gatilho — o id da carga
+ * é namespaced por fonte (createSheetLoadId), então sem ela a cascata de uma carga
+ * Nestlé não achava nem a gatilho. A fila travada/remanejada também passa a ser
+ * escopada pela fonte: a fila da rota na Nestlé e a da Shopee são operações
+ * diferentes, e misturá-las escreveria pelo id derivado da fonte errada. (Em
+ * produção nenhuma rota tem cargas das duas fontes, então o escopo não muda nada
+ * hoje — é barreira.)
+ *
+ * @param {{ lh: string, sheetSource?: string|null, operatorId: string, requestIp?: string, correlationId?: string }} args
  * @returns {Promise<{ statusCode: number, payload: object }>}
  */
-export async function cancelLoadCascade({ lh, operatorId, requestIp, correlationId }) {
-  const cargoId = createSheetLoadId(lh);
+export async function cancelLoadCascade({ lh, sheetSource = null, operatorId, requestIp, correlationId }) {
+  const cargoId = createSheetLoadId(lh, sheetSource ?? undefined);
 
   const result = await withPgTransaction(async (client) => {
     // origem/destino da carga gatilho (sem lock — não mudam no cancelamento).
+    // A FONTE vem do banco (não do caller): é ela que escopa a fila abaixo.
     const { rows: head } = await client.query(
-      `SELECT origem, destino FROM public.cargas WHERE id = $1`,
+      `SELECT origem, destino, sheet_source FROM public.cargas WHERE id = $1`,
       [cargoId],
     );
     if (head.length === 0) {
       throw new NotFoundError("Carga da planilha não encontrada para este LH.");
     }
     const { origem, destino } = head[0];
+    const fonteDaFila = head[0].sheet_source ?? null;
 
     // Trava a ROTA inteira na MESMA ordem da fila exibida no Monitor — data+horário
     // DECRESCENTE (mais recente no topo; NULLs por último), igual ao sort do
@@ -44,21 +54,23 @@ export async function cancelLoadCascade({ lh, operatorId, requestIp, correlation
     // (a seguinte na fila), e não a de cima. Ordem determinística também evita
     // deadlock entre cascatas concorrentes na mesma rota.
     const { rows: routeRows } = await client.query(
-      `SELECT sheet_lh, alloc_pinned,
+      `SELECT id, sheet_lh, alloc_pinned,
               COALESCE(alloc_motorista, sheet_motorista, '') AS motorista,
               COALESCE(alloc_cavalo,    sheet_cavalo,    '') AS cavalo,
               COALESCE(alloc_carreta,   sheet_carreta,   '') AS carreta,
               COALESCE(alloc_status,    sheet_status,    '') AS status
        FROM public.cargas
        WHERE origem = $1 AND destino = $2 AND sheet_lh IS NOT NULL
+         AND COALESCE(sheet_source, '') = COALESCE($3, '')
        ORDER BY (data IS NULL), data DESC, horario DESC, sheet_lh
        FOR UPDATE`,
-      [origem, destino],
+      [origem, destino, fonteDaFila],
     );
 
     const loads = routeRows.map((r) => {
       const st = (r.status || "").trim();
       return {
+        id: r.id,
         lh: r.sheet_lh,
         motorista: r.motorista,
         cavalo: r.cavalo,
@@ -85,6 +97,9 @@ export async function cancelLoadCascade({ lh, operatorId, requestIp, correlation
     // Reverter (DC-283): efetivo-ANTES por LH movida (do `loads`) p/ o undo do
     // Monitor restaurar cada carga ao estado pré-cascata.
     const beforeByLh = new Map(loads.map((l) => [l.lh, { motorista: l.motorista, cavalo: l.cavalo, carreta: l.carreta }]));
+    // id REAL de cada carga da fila (já lido na query travada) — as escritas usam
+    // ele em vez de re-derivar createSheetLoadId(lh), que só acertava a Shopee.
+    const idByLh = new Map(loads.map((l) => [l.lh, l.id]));
 
     // Aplica os moves (mesma semântica do reassign: "" = vazio explícito).
     for (const m of moves) {
@@ -100,14 +115,14 @@ export async function cancelLoadCascade({ lh, operatorId, requestIp, correlation
               updated_at = now()
           WHERE id = $1
         `,
-        [createSheetLoadId(m.lh), m.motorista, m.cavalo, m.carreta, operatorId],
+        [idByLh.get(m.lh), m.motorista, m.cavalo, m.carreta, operatorId],
       );
     }
 
     // Reconcilia o ciclo de vida de cada carga tocada pela cascata (a gatilho + as
     // remanejadas): quem ficou com motorista fecha (OPEN→RESERVED); quem ficou vazia
     // reabre (RESERVED→OPEN de Monitor). Ver reconcile-monitor-load-status.js.
-    const touchedIds = new Set([cargoId, ...moves.map((m) => createSheetLoadId(m.lh))]);
+    const touchedIds = new Set([cargoId, ...moves.map((m) => idByLh.get(m.lh)).filter(Boolean)]);
     for (const id of touchedIds) {
       await reconcileMonitorLoadStatus(client, id);
     }

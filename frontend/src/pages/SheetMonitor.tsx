@@ -2215,7 +2215,7 @@ function SheetMonitorTable({
   onSaveInline: (payload: { lh: string; motorista: string; cavalo: string; carreta: string; status?: string }) => void;
   onTogglePin: (lh: string, pinned: boolean) => void;
   onReassign: (moves: Array<{ lh?: string; cargoId?: string; motorista: string; cavalo: string; carreta: string }>) => void;
-  onDescendQueue: (input: { sourceLh: string; targetLh: string; orderedLhs: string[]; pinnedInPath: string[]; aspxInPath: string[] }) => void;
+  onDescendQueue: (input: { sourceLh: string; targetLh: string; orderedLhs: string[]; sourceByLh?: Record<string, string | null>; pinnedInPath: string[]; aspxInPath: string[] }) => void;
   getRouteQueue: (routeKey: string) => SheetMonitorRowType[];
   onAssignReserva: (input: { reservaId: string; targetLh: string }) => void;
   assigningReservaId: string | null;
@@ -2396,10 +2396,15 @@ function SheetMonitorTable({
     // a verdade é do backend. O ripple vai do DESTINO pra baixo (até a origem, se
     // subir; até o fim, se descer).
     const orderedLhs = queue.map((r) => r.lh);
+    // Fonte da planilha de cada linha da fila: o backend resolve cada carga no
+    // namespace de id da SUA fonte (sem isso, carga de outra planilha ficava fora da
+    // cascata). Só entra o que tem fonte — ausente = Shopee.
+    const sourceByLh: Record<string, string | null> = {};
+    for (const r of queue) if (r.sheetSource) sourceByLh[r.lh] = r.sheetSource;
     const rippleRange = tgtQIdx < srcQIdx ? queue.slice(tgtQIdx, srcQIdx + 1) : queue.slice(tgtQIdx);
     const pinnedInPath = rippleRange.filter((r) => r.pinned).map((r) => r.lh);
     const aspxInPath = rippleRange.filter((r) => !r.pinned && r.lh !== src && allocEditPolicy(r).aspxWarning).map((r) => r.lh);
-    onDescendQueue({ sourceLh: src, targetLh: targetRow.lh, orderedLhs, pinnedInPath, aspxInPath });
+    onDescendQueue({ sourceLh: src, targetLh: targetRow.lh, orderedLhs, sourceByLh, pinnedInPath, aspxInPath });
   }, [onDescendQueue, getRouteQueue, onAssignReserva, onReassign]);
 
   if (loading) {
@@ -4767,8 +4772,14 @@ export default function SheetMonitor() {
     },
   });
   const handleDescendQueue = useCallback(
-    (input: { sourceLh: string; targetLh: string; orderedLhs: string[]; pinnedInPath: string[]; aspxInPath: string[] }) => {
-      const run = () => mutateDescend({ sourceLh: input.sourceLh, targetLh: input.targetLh, orderedLhs: input.orderedLhs });
+    (input: { sourceLh: string; targetLh: string; orderedLhs: string[]; sourceByLh?: Record<string, string | null>; pinnedInPath: string[]; aspxInPath: string[] }) => {
+      const run = () =>
+        mutateDescend({
+          sourceLh: input.sourceLh,
+          targetLh: input.targetLh,
+          orderedLhs: input.orderedLhs,
+          sourceByLh: input.sourceByLh,
+        });
       // SEMPRE confirma antes de descer (o operador pediu para perguntar toda vez).
       // O modal ainda destaca carga fixada no caminho (que não muda) e cargas em
       // atribuição no ASPX, quando houver.
