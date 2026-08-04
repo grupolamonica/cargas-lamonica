@@ -136,6 +136,32 @@ describe("spx-bot-client / cadastrarMotorista — error mapping", () => {
     });
   });
 
+  it("CPF bloqueado pela Shopee (271617004) → SPX_CPF_BLOQUEADO_SHOPEE (terminal, não cai no 502 genérico)", async () => {
+    mockFetchTwice(502, {
+      detail:
+        "[271617004] O motorista com esse CPF não pode ser registrado, por favor, entre em contato com a Shopee. (path=/api/driverservice/agency/br/driver/request/validate/basic)",
+    });
+    await expect(cadastrarMotorista({
+      payload: { cpf: "53018634870", driver_name: "X" },
+    })).rejects.toMatchObject({
+      code: "SPX_CPF_BLOQUEADO_SHOPEE",
+      retcode: 271617004,
+    });
+  });
+
+  it("motorista em processamento (271613124) → SPX_EM_PROCESSAMENTO (aguardar, não erro definitivo)", async () => {
+    mockFetchTwice(502, {
+      detail:
+        "[271613124] Este motorista está em processamento, por favor, tente se registrar mais tarde. (path=/api/driverservice/agency/br/driver/request/submit)",
+    });
+    await expect(cadastrarMotorista({
+      payload: { cpf: "53018634870", driver_name: "X" },
+    })).rejects.toMatchObject({
+      code: "SPX_EM_PROCESSAMENTO",
+      retcode: 271613124,
+    });
+  });
+
   it("Sessão expirada (401) → SPX_SESSAO_EXPIRADA", async () => {
     // 401 não retenta (4xx)
     mockFetchOnce(401, { detail: "Sessao expirada: cookies invalidos" });
