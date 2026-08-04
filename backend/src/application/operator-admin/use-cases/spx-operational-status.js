@@ -16,6 +16,7 @@ import { fetchSpxTrips, SpxAspNotConfigured } from "../../../infrastructure/torr
 import { fetchSpxTripsByTab } from "../../../infrastructure/spx/spx-allocation-client.js";
 import { spxTripStatusLabel } from "../../../domain/operator-admin/spx-trip-status.js";
 import { shouldOverlayLiveSpxStatus } from "../../../domain/operator-admin/aspx-status-rules.js";
+import { lookupByMonitorLh } from "../../../domain/operator-admin/monitor-lh.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 
 const LH_TRIP_COL = "LH Trip Number";
@@ -185,7 +186,11 @@ export function applySpxOperationalStatus(row, { spxStatusByLh, allocByLh = {} }
   if (!lh) return row;
   // Só cargas COM motorista alocado no sistema (regra: "após alocar um motorista").
   if (effectiveDriver(row, allocByLh) === "") return row;
-  const spxStatus = spxStatusByLh.get(String(lh).trim());
+  // Lookup tolerante ao LH MULTI-CÓDIGO: o índice recebido é SPX ∪ Nestlé, e a
+  // célula de LH da Nestlé pode trazer os códigos do grupo separados por vírgula
+  // ("B101474063, B101473490"), que nenhuma chave do índice tem. LH da Shopee não
+  // tem vírgula, então nada muda para ela. Ver domain/operator-admin/monitor-lh.js.
+  const spxStatus = lookupByMonitorLh(spxStatusByLh, lh);
   if (!spxStatus) return row;
   if (!shouldOverlayLiveSpxStatus(effectiveStatus(row, allocByLh), spxStatus)) return row;
   return { ...row, status: spxStatus, spxStatus };

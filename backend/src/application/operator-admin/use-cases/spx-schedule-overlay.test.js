@@ -1,6 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fetchSpxScheduleIndex, applySpxSchedule } from "./spx-schedule-overlay.js";
+import {
+  __resetSpxScheduleSidecarCache,
+  applySpxSchedule,
+  epochToSchedule,
+  fetchSpxScheduleIndex,
+  fetchSpxScheduleIndexFromSidecar,
+  mergeLiveIndexes,
+} from "./spx-schedule-overlay.js";
 import { SpxAspNotConfigured, SpxAspUnavailable } from "../../../infrastructure/torre/torre-spx-trips-client.js";
 
 // Linha da Torre asp (chaves humanas, como o payload real).
@@ -126,5 +133,99 @@ describe("applySpxSchedule (sobrepõe agenda por LH)", () => {
     const idx = new Map([["LT-XYZ", { carga: { label: "x", dateIso: "2026-07-21", timeIso: "18:00", at: "2026-07-21T18:00" }, descarga: null }]]);
     const out = applySpxSchedule(nestle, { spxScheduleByLh: idx });
     expect(out.carregamentoLabel).toBe("20/07/2026 08:00");
+  });
+});
+
+// ── Fonte PRIMÁRIA: sidecar SPX ─────────────────────────────────────────────────
+// 1785855600 = 2026-08-04 12:00 BRT; 1785920400 = 2026-08-05 06:00 BRT.
+const tripRow = (lh, o = {}) => ({
+  trip_number: lh,
+  carregamento_ts: o.carregamento ?? 0,
+  descarga_ts: o.descarga ?? 0,
+  std: o.std ?? 0,
+});
+
+describe("epochToSchedule (epoch → agenda BRT)", () => {
+  it("converte para o MESMO shape que a Torre produz", () => {
+    expect(epochToSchedule(1785855600)).toEqual({
+      label: "04/08/2026 12:00",
+      dateIso: "2026-08-04",
+      timeIso: "12:00",
+      at: "2026-08-04T12:00",
+    });
+  });
+
+  it("0/ausente/inválido → null (0 é 'sem data' no payload SPX)", () => {
+    expect(epochToSchedule(0)).toBeNull();
+    expect(epochToSchedule(null)).toBeNull();
+    expect(epochToSchedule("abc")).toBeNull();
+  });
+});
+
+describe("fetchSpxScheduleIndexFromSidecar", () => {
+  beforeEach(() => {
+    __resetSpxScheduleSidecarCache();
+    process.env.SPX_MONITOR_STATUS_CACHE_SECONDS = "0"; // sem memo entre casos
+  });
+
+  it("indexa carregamento (STA origem) e descarga do payload do sidecar", async () => {
+    const fetchSpxTripsByTab = vi.fn(async (qt) => ({
+      trips: qt === 1 ? [tripRow("LT0Q8602CPLC1", { carregamento: 1786050000, descarga: 1786114800 })] : [],
+    }));
+    const idx = await fetchSpxScheduleIndexFromSidecar({ deps: { fetchSpxTripsByTab } });
+    expect(idx.get("LT0Q8602CPLC1").carga.at).toBe("2026-08-06T18:00");
+    expect(idx.get("LT0Q8602CPLC1").descarga.at).toBe("2026-08-07T12:00");
+  });
+
+  it("usa as MESMAS abas/janelas do índice de status (fetch compartilhado)", async () => {
+    const fetchSpxTripsByTab = vi.fn(async () => ({ trips: [] }));
+    await fetchSpxScheduleIndexFromSidecar({ deps: { fetchSpxTripsByTab } });
+    expect(fetchSpxTripsByTab).toHaveBeenCalledTimes(2);
+    expect(fetchSpxTripsByTab.mock.calls[0][0]).toBe(1);
+    expect(fetchSpxTripsByTab.mock.calls[0][1]).toMatchObject({ daysBack: 45, daysForward: 30 });
+    expect(fetchSpxTripsByTab.mock.calls[1][0]).toBe(2);
+  });
+
+  it("cai para std quando carregamento_ts vem 0", async () => {
+    const fetchSpxTripsByTab = vi.fn(async (qt) => ({
+      trips: qt === 1 ? [tripRow("LT9", { carregamento: 0, std: 1785855600 })] : [],
+    }));
+    const idx = await fetchSpxScheduleIndexFromSidecar({ deps: { fetchSpxTripsByTab } });
+    expect(idx.get("LT9").carga.at).toBe("2026-08-04T12:00");
+  });
+
+  it("uma aba fora do ar não derruba a outra", async () => {
+    const fetchSpxTripsByTab = vi.fn(async (qt) => {
+      if (qt === 1) throw new Error("planejado fora");
+      return { trips: [tripRow("LT_ACEITO", { carregamento: 1785855600 })] };
+    });
+    const idx = await fetchSpxScheduleIndexFromSidecar({ deps: { fetchSpxTripsByTab } });
+    expect(idx.get("LT_ACEITO").carga.at).toBe("2026-08-04T12:00");
+  });
+
+  it("todas as abas fora do ar → null (Monitor segue sem overlay)", async () => {
+    const fetchSpxTripsByTab = vi.fn(async () => {
+      throw new Error("sidecar fora");
+    });
+    expect(await fetchSpxScheduleIndexFromSidecar({ deps: { fetchSpxTripsByTab } })).toBeNull();
+  });
+});
+
+describe("mergeLiveIndexes", () => {
+  it("o PRIMEIRO índice vence (sidecar antes da Torre)", () => {
+    const sidecar = new Map([["LT1", { carga: { at: "2026-08-06T18:00" }, descarga: null }]]);
+    const torre = new Map([
+      ["LT1", { carga: { at: "1999-01-01T00:00" }, descarga: null }],
+      ["LT2", { carga: { at: "2026-08-07T00:00" }, descarga: null }],
+    ]);
+    const out = mergeLiveIndexes(sidecar, torre);
+    expect(out.get("LT1").carga.at).toBe("2026-08-06T18:00");
+    // A Torre ainda cobre o que o sidecar não viu (viagens fora de Planejado/Aceito).
+    expect(out.get("LT2").carga.at).toBe("2026-08-07T00:00");
+  });
+
+  it("ignora índices null/vazios; nada casando → null", () => {
+    expect(mergeLiveIndexes(null, new Map())).toBeNull();
+    expect(mergeLiveIndexes(null, new Map([["LT1", { carga: null, descarga: null }]])).size).toBe(1);
   });
 });

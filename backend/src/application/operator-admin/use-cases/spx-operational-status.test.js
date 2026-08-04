@@ -204,3 +204,28 @@ describe("isSpxMonitorLiveStatusEnabled (kill-switch)", () => {
     else process.env.SPX_MONITOR_LIVE_STATUS_ENABLED = prev;
   });
 });
+
+// ── LH MULTI-CÓDIGO (Nestlé) ───────────────────────────────────────────────────
+// O índice de status recebido é SPX ∪ Nestlé; a célula de LH da Nestlé pode trazer
+// os códigos do grupo separados por vírgula, que nenhuma chave do índice tem.
+describe("applySpxOperationalStatus — LH multi-código", () => {
+  it("casa o status pela parte do LH quando a célula traz vários códigos", () => {
+    const idx = new Map([["B101473490", "CARREGADO"]]);
+    const row = { lh: "B101474063, B101473490", motoristas: "JOAO", status: "" };
+    const out = applySpxOperationalStatus(row, { spxStatusByLh: idx });
+    expect(out.status).toBe("CARREGADO");
+    expect(out.spxStatus).toBe("CARREGADO");
+  });
+
+  it("LH da Shopee (sem vírgula) continua no get direto", () => {
+    const idx = new Map([["LT0Q8602CPLC1", "CARREGADO"]]);
+    const row = { lh: "LT0Q8602CPLC1", motoristas: "JOAO", status: "" };
+    expect(applySpxOperationalStatus(row, { spxStatusByLh: idx }).status).toBe("CARREGADO");
+  });
+
+  it("nenhuma parte casando → linha inalterada", () => {
+    const idx = new Map([["B999", "CARREGADO"]]);
+    const row = { lh: "B101474063, B101473490", motoristas: "JOAO", status: "" };
+    expect(applySpxOperationalStatus(row, { spxStatusByLh: idx })).toBe(row);
+  });
+});
