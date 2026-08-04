@@ -116,6 +116,11 @@ const schemaSql = `
     lh_manual text,
     superseded_by_cargo_id uuid,
     retired_reason text,
+    -- Marcador de MERGE da gêmea (migration 20260804140000). Distinto de
+    -- retired_reason: aquele é aposentadoria pelo sync, este é "os alloc_* desta
+    -- carga lançada foram herdados pela canônica da planilha".
+    alloc_merged_into_cargo_id uuid,
+    alloc_merged_at timestamptz,
     aspx_missing_since timestamptz,
     aspx_missing_lh text,
     aspx_missing_notified_at timestamptz,
