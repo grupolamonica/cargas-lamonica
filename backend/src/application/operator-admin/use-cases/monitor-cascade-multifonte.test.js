@@ -79,20 +79,34 @@ describe.sequential("descendQueueCascade — multi-planilha", () => {
     expect(await allocOf(idA)).toBe("");
   });
 
-  it("SEM o mapa, a mesma fila Nestlé é recusada (não embaralha em silêncio)", async () => {
-    await seedSheetCargo({ lh: "B101000001", source: "nestle", data: "2026-08-10", motorista: "MOTORISTA A" });
-    await seedSheetCargo({ lh: "B101000002", source: "nestle", data: "2026-08-09" });
-    const op = await harness.seedUser({ email: "op-desc-sem-mapa@test.local" });
+  // O #430 passou a casar tambem pela COLUNA sheet_lh, entao a fila Nestle deixou de
+  // dar 404 mesmo sem o mapa. Mas esse ramo NAO tem escopo de fonte, e sheet_lh e
+  // unico so POR fonte: com o mesmo LH nas duas planilhas, as duas cargas entram no
+  // SELECT e a fila pode ser montada com a carga da planilha ERRADA. Com o mapa, a
+  // cascata toca so a fonte declarada.
+  it("LH vivo nas DUAS planilhas: a cascata toca so a carga da fonte declarada", async () => {
+    const idNestleA = await seedSheetCargo({ lh: "B101454518", source: "nestle", data: "2026-08-10", motorista: "MOTORISTA NESTLE" });
+    const idNestleB = await seedSheetCargo({ lh: "B101455346", source: "nestle", data: "2026-08-09" });
+    // Homonimas na Shopee (caso real de producao), inclusive com motorista.
+    const idShopeeA = await seedSheetCargo({ lh: "B101454518", source: "shopee", data: "2026-08-10", motorista: "MOTORISTA SHOPEE" });
+    const idShopeeB = await seedSheetCargo({ lh: "B101455346", source: "shopee", data: "2026-08-09" });
+    const op = await harness.seedUser({ email: "op-desc-2fontes@test.local" });
 
-    await expect(
-      descend({
-        sourceLh: "B101000001",
-        targetLh: "B101000002",
-        orderedLhs: ["B101000001", "B101000002"],
-        operatorId: op.id,
-        correlationId: "c-desc-sem-mapa",
-      }),
-    ).rejects.toThrow();
+    await descend({
+      sourceLh: "B101454518",
+      targetLh: "B101455346",
+      orderedLhs: ["B101454518", "B101455346"],
+      sourceByLh: { B101454518: "nestle", B101455346: "nestle" },
+      operatorId: op.id,
+      correlationId: "c-desc-2fontes",
+    });
+
+    // A fila da NESTLE andou...
+    expect(await allocOf(idNestleB)).toBe("MOTORISTA NESTLE");
+    expect(await allocOf(idNestleA)).toBe("");
+    // ...e nenhuma das homonimas da SHOPEE foi tocada.
+    expect(await allocOf(idShopeeA)).toBe("(null)");
+    expect(await allocOf(idShopeeB)).toBe("(null)");
   });
 
   it("fila da SHOPEE segue funcionando sem mapa (comportamento histórico)", async () => {

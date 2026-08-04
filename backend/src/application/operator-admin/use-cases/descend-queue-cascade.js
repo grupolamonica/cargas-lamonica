@@ -79,7 +79,7 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, sour
     const idPlaceholders = sheetIds.map((_, i) => `$${i + 1}`).join(", ");
     const lhPlaceholders = order.map((_, i) => `$${sheetIds.length + i + 1}`).join(", ");
     const { rows } = await client.query(
-      `SELECT id, sheet_lh, lh_manual, origem, destino, alloc_pinned,
+      `SELECT id, sheet_lh, sheet_source, lh_manual, origem, destino, alloc_pinned,
               COALESCE(alloc_motorista, sheet_motorista, '') AS motorista,
               COALESCE(alloc_cavalo,    sheet_cavalo,    '') AS cavalo,
               COALESCE(alloc_carreta,   sheet_carreta,   '') AS carreta,
@@ -104,6 +104,13 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, sour
     for (const r of rows) {
       const key = r.sheet_lh ?? r.lh_manual;
       if (!key) continue;
+      // O ramo `sheet_lh IN (...)` do SELECT nao tem escopo de fonte, e `sheet_lh` e
+      // unico so POR fonte: um LH vivo nas DUAS planilhas traz as duas cargas aqui e
+      // a fila ficaria com a carga da planilha ERRADA. Quando o cliente declarou a
+      // fonte daquela linha, descarta o que nao e dela. Sem fonte declarada, mantem o
+      // comportamento de hoje (a primeira da ordenacao vence).
+      const fonteDeclarada = fonteDoLh(key);
+      if (fonteDeclarada && r.sheet_lh != null && (r.sheet_source ?? "") !== fonteDeclarada) continue;
       const existing = byLh.get(key);
       if (!existing || (existing.sheet_lh == null && r.sheet_lh != null)) byLh.set(key, r);
     }
