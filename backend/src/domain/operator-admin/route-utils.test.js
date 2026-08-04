@@ -3,7 +3,44 @@ import { describe, it, expect } from "vitest";
 import {
   normalizeRouteCodeLocation,
   canonicalizeRouteLookupLocation,
+  resolveCascadeTariff,
 } from "./route-utils.js";
+
+describe("resolveCascadeTariff — o dinheiro segue a tarifa", () => {
+  it("tarifa ativa com valor propaga valor e bônus", () => {
+    expect(resolveCascadeTariff({ ativa: true, valor: 25700, bonus: 300 })).toEqual({
+      valor: 25700,
+      bonus: 300,
+    });
+  });
+
+  it("LIMPAR o valor da tarifa limpa o da carga (não mantém o preço antigo)", () => {
+    expect(resolveCascadeTariff({ ativa: true, valor: null, bonus: null })).toEqual({
+      valor: null,
+      bonus: null,
+    });
+  });
+
+  it("valor ausente no payload equivale a limpar (não vira undefined no SQL)", () => {
+    expect(resolveCascadeTariff({ ativa: true })).toEqual({ valor: null, bonus: null });
+  });
+
+  it("rota DESATIVADA zera o dinheiro mesmo com valor preenchido", () => {
+    expect(resolveCascadeTariff({ ativa: false, valor: 14700, bonus: 500 })).toEqual({
+      valor: null,
+      bonus: null,
+    });
+  });
+
+  it("ativa null/undefined = ativa (schema legado sem a coluna não zera preço)", () => {
+    expect(resolveCascadeTariff({ ativa: null, valor: 900 }).valor).toBe(900);
+    expect(resolveCascadeTariff({ valor: 900 }).valor).toBe(900);
+  });
+
+  it("chamada sem argumentos não quebra", () => {
+    expect(resolveCascadeTariff()).toEqual({ valor: null, bonus: null });
+  });
+});
 
 describe("normalizeRouteCodeLocation — chave do CÓDIGO de rota (só variações de formato)", () => {
   it("dobra o MESMO local escrito diferente (planilha vs sistema vs sem UF) na mesma chave", () => {

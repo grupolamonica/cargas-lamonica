@@ -5,7 +5,11 @@ import {
   isMissingRouteCatalogColumnsError,
   resolveRouteMetricsIfNeeded,
 } from "./_shared.js";
-import { createRouteLookupKeys, buildRouteCatalogKeys } from "../../../domain/operator-admin/route-utils.js";
+import {
+  createRouteLookupKeys,
+  buildRouteCatalogKeys,
+  resolveCascadeTariff,
+} from "../../../domain/operator-admin/route-utils.js";
 import { normalizeVehicleProfile } from "../../../domain/vehicle-profiles.js";
 
 /**
@@ -180,14 +184,23 @@ export async function saveRouteTrecho({ operatorId, payload, requestIp, correlat
           .map((row) => row.id);
         if (matchingIds.length === 0) continue;
         const idPlaceholders = matchingIds.map((_, i) => `$${i + 5}`).join(", ");
+        // O dinheiro segue a tarifa (ver resolveCascadeTariff) — mesma regra do
+        // update-route: sem COALESCE, para que limpar a tarifa ou desativar o trecho
+        // limpe o preço da carga em vez de deixá-la servindo o valor antigo.
+        // km/duração seguem com COALESCE — fato físico do trecho, não tarifa.
+        const { valor: cascadeValor, bonus: cascadeBonus } = resolveCascadeTariff({
+          ativa: payload.ativa,
+          valor: tarifa.valor,
+          bonus: tarifa.bonus,
+        });
         const cascadeResult = await client.query(
           `
             UPDATE public.cargas
-            SET valor = COALESCE($1, valor), bonus = COALESCE($2, bonus),
+            SET valor = $1, bonus = $2,
                 distancia_km = COALESCE($3, distancia_km), duracao_horas = COALESCE($4, duracao_horas)
             WHERE id IN (${idPlaceholders})
           `,
-          [tarifa.valor, tarifa.bonus, resolvedMetrics.distancia_km, resolvedMetrics.duracao_horas, ...matchingIds],
+          [cascadeValor, cascadeBonus, resolvedMetrics.distancia_km, resolvedMetrics.duracao_horas, ...matchingIds],
         );
         cascadedCargaCount += cascadeResult.rowCount || 0;
       }

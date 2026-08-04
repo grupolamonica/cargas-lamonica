@@ -151,6 +151,26 @@ export function buildRouteCatalogKeys(origin, destination) {
   };
 }
 
+// O DINHEIRO SEGUE A TARIFA. Regra única da cascata rota→cargas abertas, usada
+// pelo update-route (rota avulsa) e pelo save-route-trecho (multi-tarifa) para não
+// divergirem: o valor/bônus da carga é o da tarifa, e some quando a tarifa some.
+//
+// Por que não COALESCE(novo, atual) no SQL: com COALESCE, limpar o valor da rota
+// (ou desativá-la) deixava a carga aberta servindo o preço ANTIGO indefinidamente
+// — preço órfão. O operador via a rota sem valor / desativada e a carga no ar com
+// o valor velho, e a única saída era editar carga por carga.
+//
+// Rota desativada (`ativa === false`) zera o dinheiro: se a tarifa não vale mais,
+// não há preço a ofertar. `ativa` undefined/null = ativa (schema legado).
+// Só o dinheiro é zerado — km e duração são fato físico do trecho, não tarifa.
+export function resolveCascadeTariff({ ativa, valor, bonus } = {}) {
+  const tarifaAtiva = ativa !== false;
+  return {
+    valor: tarifaAtiva ? valor ?? null : null,
+    bonus: tarifaAtiva ? bonus ?? null : null,
+  };
+}
+
 export function createRouteLookupKeys(origin, destination) {
   const originKey = normalizeRouteLocation(origin);
   const destinationKey = normalizeRouteLocation(destination);
