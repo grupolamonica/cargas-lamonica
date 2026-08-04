@@ -290,6 +290,35 @@ describe("updateMonitorCargo", () => {
     expect(row.alloc_status ?? "").toBe("");
   });
 
+  // Bug de campo: o operador marcava "Disponível" e o status voltava para o rótulo
+  // antigo (ex.: "AGUARDANDO CHEGAR NO CLIENTE"). A leitura do Monitor é
+  // COALESCE(alloc_status, sheet_status); "Disponível" zera o alloc_status e apenas
+  // descobria o sheet_status residual, gravado na carga LANÇADA pelo write-back de
+  // status do ASPX. Como a carga já estava OPEN, o bloco de reabertura era pulado
+  // pela guarda `status !== 'OPEN'` e o sheet_status nunca era limpo.
+  it("'Disponível' limpa o sheet_status residual do ASPX mesmo na carga JÁ aberta", async () => {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "OPEN" });
+    await query(`UPDATE public.cargas SET sheet_status = $2 WHERE id = $1`, [
+      id,
+      "AGUARDANDO CHEGAR NO CLIENTE",
+    ]);
+    const op = await seedUser({ email: "op-sys-disp-open@teste.local" });
+
+    await updateMonitorCargo({
+      cargoId: id,
+      operatorId: op.id,
+      payload: { motorista: "", cavalo: "", carreta: "", status: "Disponível" },
+      correlationId: "c-sys-disp-open",
+    });
+
+    const { rows } = await query(`SELECT status, sheet_status, alloc_status FROM public.cargas WHERE id = $1`, [id]);
+    expect(rows[0].status).toBe("OPEN"); // segue aberta
+    expect(rows[0].alloc_status ?? "").toBe(""); // "Disponível" não é status armazenável
+    // O rótulo residual sai: sem isto o Monitor exibia o status antigo de novo e o
+    // operador não tinha como limpá-lo pela tela.
+    expect(rows[0].sheet_status).toBeNull();
+  });
+
   it("status 'Disponível' COM motorista NÃO reabre a carga do sistema", async () => {
     const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "BOOKED" });
     const op = await seedUser({ email: "op-sys-disp2@teste.local" });
