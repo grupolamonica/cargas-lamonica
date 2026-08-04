@@ -707,6 +707,48 @@ async function bootstrap() {
     console.info("[reconcile-aspx-status] desabilitado (defina ASPX_STATUS_RECONCILE_ENABLED=true para ligar)");
   }
 
+  // 4f-ter. AGENDA da carga LANÇADA (lh_manual) em dia com a fonte da viagem: portal
+  //     SPX (Shopee) e Galileu (Nestlé). O overlay do Monitor já mostra o horário ao
+  //     vivo, mas `cargas.data`/`horario` — que governam o PORTAL DO MOTORISTA, a
+  //     expiração e a ordenação — só eram gravados no lançamento e nunca revisitados
+  //     (o auto-lançamento descarta o que já está lançado). Timer PRÓPRIO, gate
+  //     próprio: LAUNCHED_SCHEDULE_SYNC = off (default) | dry | on. Como isto move a
+  //     agenda que o motorista vê, o caminho é ligar em "dry", conferir o log
+  //     `launched-schedule-sync.dry-run` e só então passar para "on".
+  //     Intervalo: LAUNCHED_SCHEDULE_SYNC_INTERVAL_MIN (default 5min).
+  {
+    const { launchedScheduleSyncMode } = await import(
+      "./application/operator-admin/use-cases/reconcile-launched-cargo-schedule.js"
+    );
+    const scheduleMode = launchedScheduleSyncMode();
+    if (scheduleMode === "off") {
+      console.info("[launched-schedule-sync] desabilitado (LAUNCHED_SCHEDULE_SYNC=dry|on para ligar)");
+    } else {
+      const intervalMin = Math.max(1, Number(process.env.LAUNCHED_SCHEDULE_SYNC_INTERVAL_MIN || 5));
+      let syncingSchedule = false;
+      setInterval(async () => {
+        if (syncingSchedule) return;
+        syncingSchedule = true;
+        try {
+          const { reconcileLaunchedCargoSchedule } = await import(
+            "./application/operator-admin/use-cases/reconcile-launched-cargo-schedule.js"
+          );
+          const r = await reconcileLaunchedCargoSchedule();
+          if (r.updated) {
+            console.info(
+              `[launched-schedule-sync] modo ${r.mode}: ${r.updated} agenda(s) ${r.mode === "dry" ? "MUDARIAM" : "sincronizada(s)"} (${r.checked} verificada(s))`,
+            );
+          }
+        } catch (err) {
+          console.error("[launched-schedule-sync] erro:", err?.message);
+        } finally {
+          syncingSchedule = false;
+        }
+      }, intervalMin * 60 * 1000);
+      console.info(`[launched-schedule-sync] timer ativo em modo ${scheduleMode} (intervalo ${intervalMin}min)`);
+    }
+  }
+
   // 4f-bis. Vigia as cargas LANÇADAS (Programação, lh_manual "LT…") e avisa quando a
   //     VIAGEM SAIU DO ASPX (Shopee cancelou/removeu do portal depois do lançamento).
   //     A carga NUNCA é apagada: sai do Monitor, fica em /cargas com o selo "Fora do

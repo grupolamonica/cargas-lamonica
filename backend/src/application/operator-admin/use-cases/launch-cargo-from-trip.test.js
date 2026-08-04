@@ -14,6 +14,11 @@ import { launchCargoFromTrip } from "./launch-cargo-from-trip.js";
 
 const deps = { withPgClient };
 
+// `cargas.data` chega como Date (UTC-midnight) no harness pg-mem e como string
+// no Postgres real — normaliza p/ a data de PAREDE nos dois casos.
+const dateOnly = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10));
+const timeOnly = (v) => String(v ?? "").slice(0, 5);
+
 const validTrip = {
   lh: "LT1ABC",
   origem: "SAO PAULO SP",
@@ -80,6 +85,60 @@ describe("launchCargoFromTrip", () => {
     expect(second.payload.id).toBe(first.payload.id);
     const { rows } = await query("SELECT id FROM public.cargas WHERE lh_manual = $1", ["LT1ABC"]);
     expect(rows).toHaveLength(1);
+  });
+
+  it("relançar com agenda NOVA sincroniza data/horario junto com o rótulo", async () => {
+    await seedCliente({ nome: "Shopee" });
+    const first = await launchCargoFromTrip({ ...validTrip, correlationId: "c5", deps });
+    // A viagem foi remarcada no portal: mesma LH, carregamento outro.
+    const second = await launchCargoFromTrip({ ...validTrip, data: "2026-07-24", horario: "18:00", correlationId: "c6", deps });
+
+    expect(second.payload.id).toBe(first.payload.id);
+    expect(second.payload.updated).toBe(true);
+    const { rows } = await query(
+      "SELECT data, horario, sheet_data_carregamento, agenda_a_confirmar FROM public.cargas WHERE id = $1",
+      [first.payload.id],
+    );
+    // As colunas canônicas (portal do motorista, expiração, ordenação) acompanham o
+    // rótulo denormalizado — antes só o rótulo mudava e as duas divergiam.
+    expect(dateOnly(rows[0].data)).toBe("2026-07-24");
+    expect(timeOnly(rows[0].horario)).toBe("18:00");
+    expect(rows[0].sheet_data_carregamento).toBe("2026-07-24T18:00");
+  });
+
+  it("relançar a carga 'a confirmar' com data real confirma a agenda inteira", async () => {
+    await seedCliente({ nome: "Shopee" });
+    const first = await launchCargoFromTrip({ ...validTrip, data: "", horario: "", deps });
+    const { rows: antes } = await query("SELECT agenda_a_confirmar FROM public.cargas WHERE id = $1", [first.payload.id]);
+    expect(antes[0].agenda_a_confirmar).toBe(true);
+
+    await launchCargoFromTrip({ ...validTrip, data: "2026-07-28", horario: "07:30", deps });
+
+    const { rows } = await query(
+      "SELECT data, horario, sheet_data_carregamento, agenda_a_confirmar FROM public.cargas WHERE id = $1",
+      [first.payload.id],
+    );
+    // A flag cai E o placeholder hoje/00:00 sai com ela: limpar só a flag deixava a
+    // carga com data no passado e a tirava do portal do motorista.
+    expect(rows[0].agenda_a_confirmar).toBe(false);
+    expect(dateOnly(rows[0].data)).toBe("2026-07-28");
+    expect(timeOnly(rows[0].horario)).toBe("07:30");
+    expect(rows[0].sheet_data_carregamento).toBe("2026-07-28T07:30");
+  });
+
+  it("relançar SEM data (ainda 'a confirmar') NÃO mexe na agenda já confirmada pelo operador", async () => {
+    await seedCliente({ nome: "Shopee" });
+    const first = await launchCargoFromTrip({ ...validTrip, correlationId: "c7", deps });
+    await launchCargoFromTrip({ ...validTrip, data: "", horario: "", deps });
+
+    const { rows } = await query(
+      "SELECT data, horario, sheet_data_carregamento, agenda_a_confirmar FROM public.cargas WHERE id = $1",
+      [first.payload.id],
+    );
+    expect(dateOnly(rows[0].data)).toBe("2026-07-20");
+    expect(timeOnly(rows[0].horario)).toBe("08:00");
+    expect(rows[0].sheet_data_carregamento).toBe("2026-07-20T08:00");
+    expect(rows[0].agenda_a_confirmar).toBe(false);
   });
 
   it("rejeita quando o cliente Shopee não está cadastrado", async () => {

@@ -153,6 +153,16 @@ export async function launchCargoFromTrip({
         // Quando ainda é "a confirmar" (sem data no offer), NÃO sobrescreve a agenda —
         // o operador pode já ter confirmado a carga manualmente. Só sincroniza a agenda
         // quando há data real; nesse caso limpa a flag.
+        //
+        // `data`/`horario` entram JUNTO com o rótulo. Antes só o rótulo denormalizado
+        // (`sheet_data_carregamento`) era atualizado e as colunas canônicas ficavam no
+        // valor do primeiro lançamento — inclusive no placeholder hoje/00:00 de uma
+        // carga que nasceu "a confirmar". As duas coisas divergiam de forma silenciosa
+        // e cara: o rótulo (que as telas PREFEREM exibir) mostrava o horário certo
+        // enquanto `data`/`horario` — que governam o portal do motorista, a expiração e
+        // a ordenação do Monitor — apontavam para o passado, tirando a carga do portal
+        // no mesmo movimento em que `agenda_a_confirmar` virava false (a flag era a
+        // única coisa que mantinha o placeholder visível).
         await client.query(
           `UPDATE public.cargas
               SET origem = $1, destino = $2,
@@ -160,12 +170,14 @@ export async function launchCargoFromTrip({
                   bonus = COALESCE(bonus, $8),
                   distancia_km = COALESCE(distancia_km, $9),
                   duracao_horas = COALESCE(duracao_horas, $10),
+                  data = CASE WHEN $6::boolean THEN data ELSE $11::date END,
+                  horario = CASE WHEN $6::boolean THEN horario ELSE $12::time END,
                   sheet_data_carregamento = CASE WHEN $6::boolean THEN sheet_data_carregamento ELSE $3 END,
                   sheet_data_descarga = COALESCE($4, sheet_data_descarga),
                   agenda_a_confirmar = CASE WHEN $6::boolean THEN agenda_a_confirmar ELSE false END,
                   updated_at = now()
             WHERE id = $5`,
-          [origemTrim, destinoTrim, carregamentoLabel, descargaValue, ex.id, aConfirmar, valorValue, bonusValue, distanciaValue, duracaoValue],
+          [origemTrim, destinoTrim, carregamentoLabel, descargaValue, ex.id, aConfirmar, valorValue, bonusValue, distanciaValue, duracaoValue, dataValue, horarioValue],
         );
         updated = true;
       }
