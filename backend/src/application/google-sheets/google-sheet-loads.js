@@ -7,6 +7,7 @@ import { createSupabaseAdminClient } from "../../infrastructure/supabase/admin-c
 import { normalizeVehicleProfile } from "../../domain/vehicle-profiles.js";
 import { baseRouteValues as BASE_ROUTE_VALUES } from "../../domain/operator-admin/base-route-values.js";
 import { getSaoPauloWallClock } from "../../domain/sao-paulo-time.js";
+import { promoteLaunchedTwinsBeforeRetirement } from "./promote-launched-twins.js";
 
 const DEFAULT_SHEET_ID = process.env.GOOGLE_SHEET_ID?.trim() || "";
 const DEFAULT_SHEET_GID = process.env.GOOGLE_SHEET_GID?.trim() || "0";
@@ -1278,7 +1279,10 @@ function buildSheetLoadPayload({
 // sistema. Nasce BOOKED, com os campos sheet_* de alocação preenchidos e o
 // valor/perfil resolvidos do catálogo de rotas (a planilha do cliente não traz
 // valor). Espelha a planilha inteira em /cargas — não só as disponíveis.
-function buildAllocatedSheetLoadPayload({
+// Exportado para promote-launched-twins.js: mesma derivação de perfil/valor/bonus/
+// distância (catálogo/template de rota) usada aqui para linhas "puxar tudo" (Nestlé)
+// serve à materialização da canônica para uma gêmea LANÇADA tomada (Shopee incluso).
+export function buildAllocatedSheetLoadPayload({
   row,
   routeCatalogDefaultsByKey,
   routeTemplateDefaultsByKey,
@@ -1830,6 +1834,44 @@ export async function syncGoogleSheetLoads({
   // duplicata só era limpa quando a planilha marcava motorista (caso 1) ou numa rodada
   // seguinte (caso 2) — a janela media ~20h. Kill-switch: SHEET_TWIN_RETIRE_ON_CREATE=false.
   const createdTwinLhs = process.env.SHEET_TWIN_RETIRE_ON_CREATE === "false" ? [] : createdSheetLhs;
+
+  // ── Unificação da gêmea: materializa a canônica + migra a decisão do operador
+  // ANTES de o CTE abaixo aposentar a gêmea ─────────────────────────────────────
+  // O caso (1) do CTE aposenta a gêmea "tomada" (takenSheetLhs) SEM exigir que uma
+  // canônica exista — `canonica_id` é uma subquery que pode devolver NULL, e mede
+  // em produção: 65 de 66 `twin_taken` têm esse ponteiro NULL. Acontece porque o
+  // upsert do sync (mais acima) só cria carga p/ linha DISPONÍVEL — uma viagem que
+  // chega à planilha JÁ com motorista nunca ganha canônica pelo caminho normal, e
+  // a decisão do operador (alloc_*) fica numa lápide sem ninguém apontando pra ela.
+  // Gate TWIN_MERGE=off (default) → função é no-op instantâneo, ORDEM aqui não
+  // muda nada hoje. Isolado: uma falha nunca derruba o sync.
+  let twinPromotion = { mode: "off", candidatos: 0, materializados: 0, mergeados: 0, bloqueados: 0, ignoradosCancelamento: 0 };
+  try {
+    twinPromotion = await promoteLaunchedTwinsBeforeRetirement({
+      source,
+      takenSheetLhs,
+      existingLoadsBySheetLh,
+      currentSheetKeys,
+      allSheetRowsByLh,
+      routeCatalogDefaultsByKey,
+      routeTemplateDefaultsByKey,
+      knownCatalogTrechos,
+      fallbackSheetClientId,
+      syncedAt,
+    });
+    if (twinPromotion.materializados > 0) {
+      console.info(
+        `[google-sheet-loads] ${twinPromotion.materializados} gêmea(s) lançada(s) materializada(s) antes da aposentadoria (${twinPromotion.mergeados} com alocação migrada, ${twinPromotion.bloqueados} bloqueada(s))`,
+        twinPromotion,
+      );
+    }
+  } catch (twinPromotionError) {
+    console.error("[google-sheet-loads] promoção de gêmeas lançadas falhou (isolada)", {
+      source,
+      message: twinPromotionError?.message,
+    });
+  }
+
   if (takenSheetLhs.length > 0 || openSheetLhs.length > 0 || createdTwinLhs.length > 0) {
     try {
       const reconcileResult = await withPgClient((pgClient) =>
@@ -2106,6 +2148,7 @@ export async function syncGoogleSheetLoads({
     revivedExpiredCount,
     skippedInvalidLoadsCount: invalidRows.length,
     cancelCascadeSwept,
+    twinPromotion,
     sheetUrl,
   };
 }

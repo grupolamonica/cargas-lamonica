@@ -1,0 +1,230 @@
+// backend/src/application/google-sheets/promote-launched-twins.js
+//
+// Materializa a CANÔNICA (linha da planilha) para uma gêmea LANÇADA que a Shopee
+// (ou outra fonte) já mostra com motorista ("tomada") — e migra a decisão do
+// operador para ela (mergeLaunchedTwinAlloc) — ANTES de google-sheet-loads.js
+// aposentar essa gêmea no CTE de reconciliação.
+//
+// POR QUE ISTO É NECESSÁRIO (achado, não suposição): o CTE de aposentadoria
+// (google-sheet-loads.js, bloco "twins") aposenta a gêmea "tomada" (caso 1) só com
+// `c.lh_manual = ANY($1::text[])` — SEM exigir que uma canônica exista.
+// `canonica_id` (o rastro de "quem passou a valer") é uma subquery que pode
+// devolver NULL. Medido em produção: 65 de 66 `twin_taken` têm `canonica_id` NULL.
+// Isso acontece porque o UPSERT do sync (mais acima no mesmo arquivo) só cria carga
+// para linha DISPONÍVEL (sem motorista) — uma viagem que a planilha já mostra com
+// motorista NUNCA ganha canônica pelo caminho normal. A lançada é aposentada para
+// um id que não aponta a lugar nenhum, e a decisão do operador (motorista, veículo,
+// status) fica numa lápide inalcançável — nem o resolvedor a encontra mais (o antigo
+// `resolveMonitorCargoByLh`, sem filtro de `retired_reason`, ainda a devolvia; mas
+// a partir do momento em que TWIN_MERGE liga o resolvedor canônico, uma lápide
+// nunca é devolvida como alvo — e sem canônica não sobra NADA para editar).
+//
+// Roda ANTES do CTE de aposentadoria (mesmo ciclo, mesma leitura de `takenSheetLhs`):
+// para cada LH tomado que ainda NÃO tem canônica, se existe uma gêmea lançada VIVA
+// (não aposentada, não já mergeada), materializa a canônica herdando dela (via
+// `buildAllocatedSheetLoadPayload`, a MESMA derivação de perfil/valor/bonus/distância
+// usada para "puxar tudo da planilha") e chama `mergeLaunchedTwinAlloc` na MESMA
+// transação — identidade e dado nascem juntos, sem janela de estado misto.
+//
+// GATE `TWIN_MERGE` = "off" (default, nenhum efeito) | "dry" | "on" (aplica).
+//
+// "dry" NÃO insere a canônica quando ela ainda não existe: fazer isso e depois
+// desfazer exigiria um ROLLBACK real, e o harness pg-mem dos testes NÃO desfaz um
+// BEGIN/ROLLBACK emitido por SQL cru (confirmado empiricamente — limitação do
+// harness, não de Postgres de verdade). Por isso "dry" aqui é CONSERVADOR por
+// construção, não por escolha de design: quando não há canônica ainda, só CONTA
+// (materializaria) sem tentar prever se o merge seria bloqueado — prever isso sem
+// escrever exigiria duplicar a lógica de bloqueio de mergeLaunchedTwinAlloc contra
+// uma vencedora hipotética. Quando a canônica JÁ existe (corrida com outro ciclo, ou
+// com a materialização lazy de ensureMonitorSheetCargo), "dry" chama
+// `mergeLaunchedTwinAlloc` de verdade em modo dry — esse caminho SÓ LÊ, sem
+// depender de rollback nenhum, e o resultado é exato.
+//
+// Best-effort e ISOLADO por LH: uma falha (inclusive lock não obtido — outro
+// processo editando a mesma gêmea nesse instante) pula o LH; o próximo ciclo tenta
+// de novo. Nunca derruba o sync.
+
+import { withPgTransaction } from "../../infrastructure/pg/postgres.js";
+import { logStructuredEvent } from "../../infrastructure/security-log.js";
+import { buildAllocatedSheetLoadPayload } from "./google-sheet-loads.js";
+import { mergeLaunchedTwinAlloc, twinMergeMode } from "../operator-admin/use-cases/merge-launched-twin.js";
+
+const DEFAULT_BATCH_LIMIT = 50;
+// Mesmo padrão de reconcile-aspx-status-launched.js / merge-launched-twin.js: nunca
+// migra/materializa por cima de um destino cancelado (arma sweepCancelledCascades,
+// que não tem janela de data e roda no fim do mesmo ciclo de sync).
+const CANCEL_STATUS_RE = /cancel|devolv|no[\s-]*show/i;
+
+const ZERO_RESULT = Object.freeze({
+  mode: "off",
+  candidatos: 0,
+  materializados: 0,
+  mergeados: 0,
+  bloqueados: 0,
+  ignoradosCancelamento: 0,
+  promovidos: [],
+});
+
+/**
+ * @param {{
+ *   source: string,
+ *   takenSheetLhs: string[],
+ *   existingLoadsBySheetLh: Map<string, object>,
+ *   currentSheetKeys: Set<string>,
+ *   allSheetRowsByLh: Map<string, object>,
+ *   routeCatalogDefaultsByKey: Map<string, object>,
+ *   routeTemplateDefaultsByKey: Map<string, object>,
+ *   knownCatalogTrechos: Set<string>,
+ *   fallbackSheetClientId: string|null,
+ *   syncedAt: string,
+ *   correlationId?: string|null,
+ *   limit?: number,
+ *   deps?: { withPgTransaction?: Function, mergeLaunchedTwinAlloc?: Function },
+ * }} args
+ * @returns {Promise<{ mode: string, candidatos: number, materializados: number,
+ *   mergeados: number, bloqueados: number, ignoradosCancelamento: number, promovidos: string[] }>}
+ */
+export async function promoteLaunchedTwinsBeforeRetirement({
+  source,
+  takenSheetLhs,
+  existingLoadsBySheetLh,
+  currentSheetKeys,
+  allSheetRowsByLh,
+  routeCatalogDefaultsByKey,
+  routeTemplateDefaultsByKey,
+  knownCatalogTrechos,
+  fallbackSheetClientId,
+  syncedAt,
+  correlationId = null,
+  limit = DEFAULT_BATCH_LIMIT,
+  deps = {},
+}) {
+  const mode = twinMergeMode();
+  if (mode === "off") return ZERO_RESULT;
+
+  const run = deps.withPgTransaction || withPgTransaction;
+  const doMerge = deps.mergeLaunchedTwinAlloc || mergeLaunchedTwinAlloc;
+
+  // Candidatos: LH tomado nesta rodada e SEM canônica (nem pré-existente, nem
+  // criada agora como disponível — este 2º caso não deveria coincidir com "tomado",
+  // mas o filtro é defensivo e barato).
+  const candidatos = (takenSheetLhs || []).filter(
+    (lh) => !existingLoadsBySheetLh.has(lh) && !currentSheetKeys.has(lh),
+  );
+  if (candidatos.length === 0) return { ...ZERO_RESULT, mode };
+
+  let materializados = 0;
+  let mergeados = 0;
+  let bloqueados = 0;
+  let ignoradosCancelamento = 0;
+  const promovidos = [];
+  const truncado = candidatos.length > limit;
+
+  for (const lh of candidatos.slice(0, limit)) {
+    const row = allSheetRowsByLh.get(lh);
+    if (!row) continue;
+    if (CANCEL_STATUS_RE.test(String(row.status ?? ""))) {
+      ignoradosCancelamento += 1;
+      continue;
+    }
+
+    let resultado;
+    try {
+      resultado = await run(async (client) => {
+        // Doador: gêmea LANÇADA viva (nunca aposentada nem já mergeada). Lock
+        // WAIT padrão (sem NOWAIT) — mesma decisão já tomada em atomic-claim.js
+        // (F-2) e pelo mesmo motivo: NOWAIT exigiria capturar/remapear 55P03 do
+        // Postgres (que o harness pg-mem dos testes nem consegue PARSEAR — "AST
+        // .skip.type nowait não suportado") por uma contenção que é curta e rara
+        // (o operador editando essa MESMA gêmea no exato instante do ciclo do
+        // sync) — o lote é pequeno (≤50 LHs/ciclo) e cada LH é sua própria
+        // transação, então esperar não trava o restante do lote.
+        const { rows: doadorRows } = await client.query(
+          `SELECT id FROM public.cargas
+            WHERE lh_manual = $1 AND sheet_lh IS NULL
+              AND alloc_merged_into_cargo_id IS NULL AND retired_reason IS NULL
+            LIMIT 1 FOR UPDATE`,
+          [lh],
+        );
+        if (doadorRows.length === 0) return { skipped: "sem_gemea" };
+
+        // Pré-check por (fonte, LH): corrida concorrente (dois ciclos de sync, ou
+        // a materialização lazy de ensureMonitorSheetCargo) pode ter criado a
+        // canônica entre a leitura de `existingLoadsBySheetLh` e agora.
+        const { rows: dup } = await client.query(
+          "SELECT id FROM public.cargas WHERE COALESCE(sheet_source, '') = COALESCE($1, '') AND sheet_lh = $2 LIMIT 1",
+          [source ?? null, lh],
+        );
+
+        if (dup.length > 0) {
+          // Canônica JÁ EXISTE de verdade — mergeLaunchedTwinAlloc só LÊ em modo
+          // dry, então este ramo é exato em qualquer modo, sem precisar escrever.
+          const merge = await doMerge(client, { lh, winnerId: dup[0].id, mode, correlationId });
+          return { winnerId: dup[0].id, merge };
+        }
+
+        if (mode === "dry") {
+          // Sem canônica ainda: "dry" não insere (ver nota no topo do arquivo —
+          // o harness de teste não sustenta rollback de verdade, e inserir de
+          // propósito para depois descartar em produção seria escrita real
+          // disfarçada). Só sinaliza que esta LH SERIA materializada.
+          return { wouldMaterialize: true };
+        }
+
+        const payload = buildAllocatedSheetLoadPayload({
+          row,
+          routeCatalogDefaultsByKey,
+          routeTemplateDefaultsByKey,
+          knownCatalogTrechos,
+          fallbackSheetClientId,
+          syncedAt,
+          source,
+        });
+        const cols = Object.keys(payload);
+        const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
+        await client.query(
+          `INSERT INTO public.cargas (${cols.join(", ")}) VALUES (${placeholders}) ON CONFLICT (id) DO NOTHING`,
+          cols.map((c) => payload[c]),
+        );
+        const merge = await doMerge(client, { lh, winnerId: payload.id, mode, correlationId });
+        return { winnerId: payload.id, merge };
+      });
+    } catch (err) {
+      logStructuredEvent("warn", "promote-launched-twins.lh-failed", {
+        correlationId,
+        source,
+        lh,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
+
+    if (resultado.skipped) continue;
+    materializados += 1;
+    promovidos.push(lh);
+    // `currentSheetKeys` só ganha a chave quando algo foi REALMENTE persistido
+    // (mode "on", ou "dry" batendo no ramo "canônica já existia" — nesse caso a
+    // chave já era real de qualquer forma, não é um efeito desta função).
+    if (mode === "on" || resultado.winnerId) currentSheetKeys.add(lh);
+    // `mergeLaunchedTwinAlloc` devolve `merged:false` SEMPRE em modo dry (por
+    // desenho — é o contrato dele: "dry" nunca afirma ter mergeado, só decide).
+    // "Mergearia" em dry é: não foi bloqueado E haveria algo a copiar.
+    const merge = resultado.merge;
+    if (merge?.merged || (mode === "dry" && !merge?.skipped && (merge?.copiedFields?.length ?? 0) > 0)) {
+      mergeados += 1;
+    } else if (merge?.skipped && !["nada_a_migrar", "sem_gemea"].includes(merge.skipped)) {
+      bloqueados += 1;
+    }
+  }
+
+  const stats = { mode, candidatos: candidatos.length, materializados, mergeados, bloqueados, ignoradosCancelamento, promovidos, truncado };
+  if (materializados > 0 || ignoradosCancelamento > 0 || truncado) {
+    logStructuredEvent(mode === "dry" ? "warn" : "info", `promote-launched-twins.${mode === "dry" ? "dry-run" : "aplicado"}`, {
+      correlationId,
+      source,
+      ...stats,
+      promovidos: promovidos.slice(0, 15),
+    });
+  }
+  return stats;
+}
