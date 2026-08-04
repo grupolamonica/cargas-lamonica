@@ -528,11 +528,20 @@ export interface CargoHistoryEvent {
   tipo: string;
 }
 
-/** Histórico de eventos de uma carga (por LH da planilha) — modal do Monitor. */
-export async function fetchCargoHistory(lh: string) {
+/**
+ * Histórico de eventos de uma carga — modal do Monitor.
+ *
+ * Manda os DOIS identificadores quando existem: o mesmo LH pode viver na carga da
+ * planilha e na carga do sistema (lançada na Programação), e a carga do sistema
+ * pode não ter LH nenhum — nesse caso só o `cargoId` a encontra.
+ */
+export async function fetchCargoHistory(scope: { lh?: string; cargoId?: string }) {
   const accessToken = await getOperatorAccessToken();
+  const params = new URLSearchParams();
+  if (scope.lh) params.set("lh", scope.lh);
+  if (scope.cargoId) params.set("cargo_id", scope.cargoId);
   return requestJson<{ items: CargoHistoryEvent[]; meta: unknown }>(
-    `/api/operator/cargas/historico?lh=${encodeURIComponent(lh)}`,
+    `/api/operator/cargas/historico?${params.toString()}`,
     { accessToken },
   );
 }

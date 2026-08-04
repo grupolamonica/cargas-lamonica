@@ -303,8 +303,13 @@ export async function resolveLookupCargoByCodigoViagemResponse(request) {
 
 export async function resolveCargoHistoryResponse(request) {
   return withOperatorSession(request, "cargo-history", async ({ correlationId }) => {
-    const { lh } = cargoHistoryQuerySchema.parse({ lh: getQueryParam(request, "lh") });
-    return fetchCargoHistoryByLh({ lh, correlationId });
+    // `cargo_id` cobre a carga do SISTEMA sem LH (o Monitor a exibe, mas ela não
+    // tem por onde ser identificada pelo LH).
+    const { lh, cargo_id: cargoId } = cargoHistoryQuerySchema.parse({
+      lh: getQueryParam(request, "lh") || undefined,
+      cargo_id: getQueryParam(request, "cargo_id") || undefined,
+    });
+    return fetchCargoHistoryByLh({ lh, cargoId, correlationId });
   });
 }
 

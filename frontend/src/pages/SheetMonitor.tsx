@@ -500,8 +500,12 @@ function cargoHistoryDotClass(tipo: string): string {
     case "QUEUED":
     case "PRE_REGISTERED":
     case "WHATSAPP_CLICKED":
+    case "operator.cargo.allocation_reassigned":
+    case "operator.cargo.queue_descended":
       return "bg-amber-500";
     case "CANCELLED":
+    case "operator.cargo.cancel_cascade":
+    case "operator.cargo.deleted":
       return "bg-red-500";
     default:
       return "bg-primary/60";
@@ -3219,12 +3223,15 @@ function RowDetailModal({
     },
   });
 
-  // Histórico da carga (eventos: fila, reserva/aprovação, write-back na planilha)
-  // — "as mudanças feitas em cada etapa". Por LH; só busca com o modal aberto.
+  // Histórico da carga (fila, reserva/aprovação, write-back na planilha e as ações
+  // do operador) — "as mudanças feitas em cada etapa". Só busca com o modal aberto.
+  // Manda LH **e** cargoId: o mesmo LH pode viver em duas cargas (planilha + a
+  // lançada na Programação) e a carga do sistema pode não ter LH — sem o cargoId
+  // ela nem era consultada e mostrava "Sem histórico" para sempre.
   const historyEvents = useQuery({
-    queryKey: ["admin", "cargo-history", row?.lh ?? ""],
-    queryFn: () => fetchCargoHistory(row!.lh),
-    enabled: open && !!row?.lh,
+    queryKey: ["admin", "cargo-history", row?.lh ?? "", row?.cargoId ?? ""],
+    queryFn: () => fetchCargoHistory({ lh: row?.lh || undefined, cargoId: row?.cargoId || undefined }),
+    enabled: open && (!!row?.lh || !!row?.cargoId),
     staleTime: 30_000,
   });
 
