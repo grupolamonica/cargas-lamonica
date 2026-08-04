@@ -451,6 +451,23 @@ function StepECarretaOwnerImpl({
             };
           });
         }
+        // PJ: pré-preenche a metadata rica da Receita no ccPJ (mesma lógica do
+        // StepC) — o buildSubmitDados emite no owner da carreta. Merge preserva
+        // edits manuais de IE (onChange do ccPJ mescla).
+        const pjMeta: Record<string, string> = {};
+        for (const k of [
+          "nome_fantasia", "matriz_filial", "data_abertura", "porte",
+          "natureza_juridica", "atividade_principal", "atividades_secundarias",
+          "email", "telefone", "ente_federativo", "situacao_cadastral",
+          "situacao_cadastral_data", "situacao_cadastral_motivo",
+          "situacao_especial", "situacao_especial_data", "inscricao_estadual",
+        ]) {
+          const metaVal = str(k);
+          if (metaVal) pjMeta[k] = metaVal;
+        }
+        if (Object.keys(pjMeta).length > 0) {
+          setCcPJData((current) => ({ ...(current ?? {}), ...pjMeta }));
+        }
       }
       // 2026-05-20 — Cascade ANTT backend-only; nao dispara aqui no front.
     },
@@ -789,7 +806,7 @@ function StepECarretaOwnerImpl({
                         >
                           <CcInscricaoPropPJ
                             value={ccPJData}
-                            onChange={setCcPJData}
+                            onChange={(d) => setCcPJData((cur) => ({ ...(cur ?? {}), ...d }))}
                             onValid={setCcPJValid}
                           />
                         </WizardStepCard>
