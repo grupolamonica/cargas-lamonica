@@ -8,6 +8,7 @@ import {
   normalizeRouteLocation,
   canonicalizeRouteLookupLocation,
   createRouteLookupKeys,
+  stripRouteStateSuffix,
 } from "../../domain/operator-admin/route-utils.js";
 
 import {
@@ -291,6 +292,74 @@ function mergeBaseRoutesWithCatalog(routes) {
     .map((route) => mapPersistedRoute(route, null));
 
   return [...mergedBaseRoutes, ...extraPersistedRoutes];
+}
+
+// Nomes de origem/destino COMO AS CARGAS REALMENTE CHEGAM (estação do SPX, grafia da
+// planilha do cliente). O matching carga→rota canonicaliza — apaga sufixo operacional
+// ("-03") e aplica apelidos de cidade — então o operador vê "São José do Rio Preto/SP"
+// na tela de Rotas e não encontra a carga que chegou como "SJ Rio Preto-03/SP", e
+// conclui que a carga foi puxada sem rota cadastrada. Isto torna o apelido VISÍVEL:
+// cada rota passa a listar os nomes que a alimentam.
+//
+// Indexa cada par (origem, destino) de carga por TODAS as suas chaves de lookup, e a
+// rota consulta pela própria chave — é exatamente a regra de match da produção
+// (createRouteLookupKeys), então o que aparece aqui é o que de fato casa o preço.
+//
+// SOMENTE LEITURA: não altera preço, catálogo nem carga.
+async function fetchCargoLocationLabelsByTrecho(client) {
+  const labelsByTrecho = new Map();
+
+  try {
+    const { rows } = await client.query(`
+      SELECT DISTINCT origem, destino
+        FROM public.cargas
+       WHERE origem IS NOT NULL AND destino IS NOT NULL
+         AND BTRIM(origem) <> '' AND BTRIM(destino) <> ''
+       LIMIT 5000
+    `);
+
+    rows.forEach((row) => {
+      createRouteLookupKeys(row.origem, row.destino).forEach((routeKey) => {
+        if (!labelsByTrecho.has(routeKey)) {
+          labelsByTrecho.set(routeKey, []);
+        }
+        labelsByTrecho.get(routeKey).push({ origem: row.origem, destino: row.destino });
+      });
+    });
+  } catch {
+    // Visibilidade é acessório: se a leitura falhar, a lista de rotas segue normal.
+    return new Map();
+  }
+
+  return labelsByTrecho;
+}
+
+// Apelidos de UMA rota: os nomes de carga do trecho cuja GRAFIA difere da rota
+// cadastrada. O nome idêntico ao da rota é omitido (não é apelido, é a própria rota).
+function buildRouteAliasLabels(route, labelsByTrecho) {
+  const trechoKey = `${route.origin_key}|${route.destination_key}`;
+  const candidates = labelsByTrecho.get(trechoKey) || [];
+  // Compara SEM o sufixo de UF: "São José do Rio Preto/SP" e "SAO JOSE DO RIO PRETO"
+  // são o MESMO nome (a mesma rota aparece nas duas grafias — base da planilha sem
+  // "/UF" e registro do operador com "/UF"). Só o sufixo de UF é ruído; o sufixo
+  // operacional ("-03") NÃO é normalizado aqui, porque é exatamente o apelido que
+  // queremos mostrar.
+  const sameName = (a, b) =>
+    stripRouteStateSuffix(normalizeRouteLocation(a)) === stripRouteStateSuffix(normalizeRouteLocation(b));
+
+  const seen = new Set();
+  const aliases = [];
+
+  candidates.forEach((candidate) => {
+    if (sameName(candidate.origem, route.origem) && sameName(candidate.destino, route.destino)) return;
+
+    const label = `${candidate.origem} → ${candidate.destino}`;
+    if (seen.has(label)) return;
+    seen.add(label);
+    aliases.push(label);
+  });
+
+  return aliases.sort((a, b) => a.localeCompare(b, "pt-BR"));
 }
 
 async function fetchPersistedRoutes(client) {
@@ -944,11 +1013,24 @@ export async function fetchOperatorRoutesListReadModel({ query, correlationId })
 
   return withPgClient(async (client) => {
     const { rows, supportsCatalogFields } = await fetchPersistedRoutes(client);
-    const mergedRoutes = mergeBaseRoutesWithCatalog(rows);
+    const labelsByTrecho = await fetchCargoLocationLabelsByTrecho(client);
+    // `apelidos_de_carga` entra ANTES do filtro para que a busca da tela também
+    // encontre a rota pelo nome com que a carga chega ("SJ Rio Preto-03").
+    const mergedRoutes = mergeBaseRoutesWithCatalog(rows).map((route) => ({
+      ...route,
+      apelidos_de_carga: buildRouteAliasLabels(route, labelsByTrecho),
+    }));
     const filteredRoutes = mergedRoutes.filter((route) => {
       const matchesSearch =
         !search ||
-        [route.origem, route.destino, route.perfil_padrao || "", route.observacoes || "", route.base_route_label || ""]
+        [
+          route.origem,
+          route.destino,
+          route.perfil_padrao || "",
+          route.observacoes || "",
+          route.base_route_label || "",
+          ...(route.apelidos_de_carga || []),
+        ]
           .join(" ")
           .toLowerCase()
           .includes(search);

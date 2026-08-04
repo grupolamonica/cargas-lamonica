@@ -62,6 +62,8 @@ interface RouteTrechoGroup {
   source: "base" | "base+db" | "db";
   persisted: boolean;
   updated_at: string | null;
+  // Nomes com que as cargas do trecho chegam, quando diferem do nome cadastrado.
+  apelidos_de_carga: string[];
   tarifas: OperatorRouteListItem[];
 }
 
@@ -94,6 +96,7 @@ function groupRoutesByTrecho(items: OperatorRouteListItem[]): RouteTrechoGroup[]
         source: item.source,
         persisted: item.persisted,
         updated_at: item.updated_at,
+        apelidos_de_carga: [],
         tarifas: [],
       };
       groups.set(key, group);
@@ -106,6 +109,11 @@ function groupRoutesByTrecho(items: OperatorRouteListItem[]): RouteTrechoGroup[]
     group.cliente_id = group.cliente_id ?? item.cliente_id ?? null;
     group.rota_id = group.rota_id ?? item.rota_id ?? null;
     group.base_route_label = group.base_route_label ?? item.base_route_label ?? null;
+    // Uniao entre as variantes do trecho (uma por perfil/eixos) — o apelido vale
+    // para o trecho todo, nao para uma tarifa especifica.
+    for (const apelido of item.apelidos_de_carga ?? []) {
+      if (!group.apelidos_de_carga.includes(apelido)) group.apelidos_de_carga.push(apelido);
+    }
     group.ativa = group.ativa || item.ativa;
     group.persisted = group.persisted || item.persisted;
     if (item.source === "db" || item.source === "base+db") group.source = item.source;
@@ -615,6 +623,26 @@ const ManageRoutes = () => {
                   {detailGroup.tarifas.length === 1 ? "veículo cadastrado" : "veículos cadastrados"}
                 </DialogDescription>
               </DialogHeader>
+
+              {detailGroup.apelidos_de_carga.length > 0 ? (
+                <div className="rounded-md border border-border/60 bg-muted/20 p-4">
+                  <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                    <MapPinned className="h-3.5 w-3.5 text-primary" />
+                    Também recebe cargas com estes nomes
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    As cargas chegam com o nome da estação de origem (SPX) ou a grafia da planilha do
+                    cliente. Estes nomes caem nesta rota e usam o preço dela:
+                  </p>
+                  <ul className="mt-2 space-y-1">
+                    {detailGroup.apelidos_de_carga.map((apelido) => (
+                      <li key={apelido} className="text-sm font-medium text-foreground">
+                        {apelido}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
 
               <div className="grid gap-3 sm:grid-cols-3">
                 <Card className="border-border/60 bg-muted/20 shadow-none">
