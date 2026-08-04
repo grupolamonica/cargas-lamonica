@@ -191,6 +191,24 @@ describe("fetchCargoHistoryByLh", () => {
     expect(alloc[1].detalhe).toBe("Motorista: FERNANDO → vazio");
   });
 
+  // O id da carga de planilha é namespaced por fonte: derivar sem fonte só acerta a
+  // SHOPEE, e era por isso que o histórico da carga Nestlé vinha vazio.
+  it("ancora o histórico no id da FONTE quando ela é informada (Nestlé)", async () => {
+    await fetchCargoHistoryByLh({ lh: "B101464733", source: "nestle", correlationId: "c-src-nestle" });
+
+    const idNestle = createSheetLoadId("B101464733", "nestle");
+    const idShopee = createSheetLoadId("B101464733");
+    expect(idNestle).not.toBe(idShopee);
+    expect(seenParams.audit?.[0]).toContain(idNestle);
+    expect(seenParams.audit?.[0]).not.toContain(idShopee);
+  });
+
+  it("sem fonte, ancora no id da SHOPEE (byte-idêntico ao comportamento anterior)", async () => {
+    await fetchCargoHistoryByLh({ lh: "LT1Q8402D53N1", correlationId: "c-src-shopee" });
+
+    expect(seenParams.audit?.[0]).toContain(createSheetLoadId("LT1Q8402D53N1"));
+  });
+
   it("cai no rótulo 'Motorista (final NNNN)' quando não há nome do Angellira", async () => {
     canned.events = [
       {

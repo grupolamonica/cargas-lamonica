@@ -3234,8 +3234,16 @@ function RowDetailModal({
   // lançada na Programação) e a carga do sistema pode não ter LH — sem o cargoId
   // ela nem era consultada e mostrava "Sem histórico" para sempre.
   const historyEvents = useQuery({
-    queryKey: ["admin", "cargo-history", row?.lh ?? "", row?.cargoId ?? ""],
-    queryFn: () => fetchCargoHistory({ lh: row?.lh || undefined, cargoId: row?.cargoId || undefined }),
+    // A FONTE entra na chave: o mesmo LH vive nas duas planilhas, e sem ela as duas
+    // linhas compartilhariam a entrada de cache — o modal mostraria o historico da
+    // carga da outra planilha.
+    queryKey: ["admin", "cargo-history", row?.lh ?? "", row?.cargoId ?? "", row?.sheetSource ?? ""],
+    queryFn: () =>
+      fetchCargoHistory({
+        lh: row?.lh || undefined,
+        cargoId: row?.cargoId || undefined,
+        source: row?.sheetSource ?? undefined,
+      }),
     enabled: open && (!!row?.lh || !!row?.cargoId),
     staleTime: 30_000,
   });

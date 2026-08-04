@@ -307,11 +307,12 @@ export async function resolveCargoHistoryResponse(request) {
   return withOperatorSession(request, "cargo-history", async ({ correlationId }) => {
     // `cargo_id` cobre a carga do SISTEMA sem LH (o Monitor a exibe, mas ela não
     // tem por onde ser identificada pelo LH).
-    const { lh, cargo_id: cargoId } = cargoHistoryQuerySchema.parse({
+    const { lh, cargo_id: cargoId, source } = cargoHistoryQuerySchema.parse({
       lh: getQueryParam(request, "lh") || undefined,
       cargo_id: getQueryParam(request, "cargo_id") || undefined,
+      source: getQueryParam(request, "source") || undefined,
     });
-    return fetchCargoHistoryByLh({ lh, cargoId, correlationId });
+    return fetchCargoHistoryByLh({ lh, cargoId, source, correlationId });
   });
 }
 

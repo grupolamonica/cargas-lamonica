@@ -535,11 +535,14 @@ export interface CargoHistoryEvent {
  * planilha e na carga do sistema (lançada na Programação), e a carga do sistema
  * pode não ter LH nenhum — nesse caso só o `cargoId` a encontra.
  */
-export async function fetchCargoHistory(scope: { lh?: string; cargoId?: string }) {
+export async function fetchCargoHistory(scope: { lh?: string; cargoId?: string; source?: string | null }) {
   const accessToken = await getOperatorAccessToken();
   const params = new URLSearchParams();
   if (scope.lh) params.set("lh", scope.lh);
   if (scope.cargoId) params.set("cargo_id", scope.cargoId);
+  // Fonte da planilha da linha: o id da carga e namespaced por fonte, entao sem ela
+  // o historico da carga Nestle vinha vazio. Ausente = Shopee.
+  if (scope.source) params.set("source", scope.source);
   return requestJson<{ items: CargoHistoryEvent[]; meta: unknown }>(
     `/api/operator/cargas/historico?${params.toString()}`,
     { accessToken },

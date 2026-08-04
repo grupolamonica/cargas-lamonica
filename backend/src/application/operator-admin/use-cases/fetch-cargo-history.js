@@ -208,7 +208,7 @@ function cascadeItem(row, { lh, ids }, directory) {
  *   `lh` (carga da planilha ou lançada) e/ou `cargoId` (carga do sistema, inclusive
  *   as SEM LH — que o front nem conseguia consultar antes). Pelo menos um.
  */
-export async function fetchCargoHistoryByLh({ lh, cargoId, correlationId }) {
+export async function fetchCargoHistoryByLh({ lh, cargoId, source = null, correlationId }) {
   return withPgClient(async (client) => {
     let eventRows = [];
     let allocRows = [];
@@ -225,13 +225,17 @@ export async function fetchCargoHistoryByLh({ lh, cargoId, correlationId }) {
     // Id determinístico da carga da PLANILHA — âncora histórica dos audit logs e
     // fallback quando a carga ainda não existe no banco (linha só no snapshot).
     //
-    // NAMESPACE: `createSheetLoadId(lh)` sem fonte = namespace da SHOPEE. É o mesmo
-    // que esta leitura já usava; a carga Nestlé segue fora (limitação conhecida e
-    // deliberada, igual à cascata). NÃO casar por `sheet_lh = <LH>`: `sheet_lh` é
-    // único só POR FONTE e há LH vivo nas duas planilhas ao mesmo tempo — o ramo
-    // traria o histórico da carga da OUTRA fonte para dentro desta. Mostrar o
-    // histórico de outra carga é pior do que não mostrar nenhum.
-    const sheetCargoId = lhTrim ? createSheetLoadId(lhTrim) : "";
+    // NAMESPACE: o id da carga de planilha é namespaced por fonte, então derivar sem
+    // fonte só acerta a SHOPEE — era por isso que o histórico da carga Nestlé vinha
+    // vazio. `source` chega da linha do Monitor (`sheetSource`); ausente = Shopee,
+    // idêntico ao comportamento anterior.
+    //
+    // Segue valendo NÃO casar por `sheet_lh = <LH>`: `sheet_lh` é único só POR FONTE
+    // e há LH vivo nas duas planilhas ao mesmo tempo — o ramo traria o histórico da
+    // carga da OUTRA fonte para dentro desta. Mostrar o histórico de outra carga é
+    // pior do que não mostrar nenhum. A fonte no id é o que desambigua.
+    const fonte = String(source ?? "").trim() || undefined;
+    const sheetCargoId = lhTrim ? createSheetLoadId(lhTrim, fonte) : "";
 
     // Todas as cargas que representam este LH/carga: a da planilha (id determinístico
     // da fonte) + a do SISTEMA lançada na Programação (`lh_manual`, `sheet_lh` nulo) +

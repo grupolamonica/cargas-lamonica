@@ -21,6 +21,10 @@ export const cargoCodigoViagemQuerySchema = z.object({
 export const cargoHistoryQuerySchema = z
   .object({
     lh: z.string().trim().min(1).max(255).optional(),
+    // Fonte da PLANILHA da linha ('nestle', …). Ausente = Shopee. O id da carga de
+    // planilha e namespaced por fonte, entao sem ela o historico da carga Nestle
+    // ficava vazio.
+    source: z.string().trim().max(40).optional(),
     cargo_id: uuidSchema.optional(),
   })
   .refine((v) => Boolean(v.lh || v.cargo_id), {
