@@ -837,6 +837,41 @@ async function resolveCanonicalCargoByLh(client, lhTrim, { columns, forUpdate })
 }
 
 /**
+ * Segue o ponteiro `alloc_merged_into_cargo_id` de uma carga até a VENCEDORA
+ * atual. Usado pelas telas de histórico/reverter (DC — pós-merge-de-gêmeas):
+ * um `cargoId` de audit log antigo pode apontar para uma carga que já foi
+ * MERGEADA (marcada perdedora) — ler/travar essa linha direto mostra um estado
+ * congelado (pré-merge) em vez do estado real e visível ao operador.
+ *
+ * No máximo 1 salto por desenho: `merge-launched-twin.js` nunca marca a
+ * VENCEDORA como perdedora de outro merge (só a carga lançada, sheet_lh IS
+ * NULL, é alvo). O laço até 5 saltos é só defensivo. Devolve a linha final
+ * (a vencedora, se havia ponteiro; a própria linha, senão) ou null se o id
+ * não existir mais.
+ *
+ * @param {import("pg").PoolClient} client
+ * @param {string} cargoId
+ * @param {{ columns?: string, forUpdate?: boolean }} [opts]
+ */
+export async function resolveCargoFollowingMerge(client, cargoId, { columns = "*", forUpdate = false } = {}) {
+  let id = cargoId;
+  for (let hop = 0; hop < 5; hop += 1) {
+    const { rows } = await client.query(
+      `SELECT ${columns}, alloc_merged_into_cargo_id AS __merged_into
+         FROM public.cargas WHERE id = $1${forUpdate ? " FOR UPDATE" : ""}`,
+      [id],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    const mergedInto = row.__merged_into;
+    delete row.__merged_into;
+    if (!mergedInto) return row;
+    id = mergedInto;
+  }
+  return null;
+}
+
+/**
  * Como resolveMonitorCargoByLh, mas MATERIALIZA a carga da planilha quando ela
  * ainda não existe no sistema.
  *

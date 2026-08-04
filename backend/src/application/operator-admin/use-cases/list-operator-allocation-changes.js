@@ -96,13 +96,32 @@ export async function listOperatorAllocationChanges({ operatorId, query, correla
         params.push(...lhParams);
       }
       const { rows } = await client.query(
-        `SELECT id, sheet_lh, lh_manual, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status
+        `SELECT id, sheet_lh, lh_manual, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status,
+                alloc_merged_into_cargo_id
            FROM public.cargas WHERE ${clauses.join(" OR ")}`,
         params,
       );
+
+      // Gêmea já mergeada (TWIN_MERGE): a alocação atual de verdade vive na
+      // VENCEDORA, não na perdedora (que fica com o estado congelado de antes do
+      // merge). Sem isto, "currentMatchesAfter" comparava com um snapshot morto —
+      // ou marcava revertível algo que já não é seguro reverter, ou marcava "a
+      // carga foi alterada depois" quando na verdade só foi unificada.
+      const winnerIds = [...new Set(rows.filter((r) => r.alloc_merged_into_cargo_id).map((r) => r.alloc_merged_into_cargo_id))];
+      let winnersById = new Map();
+      if (winnerIds.length > 0) {
+        const { rows: winnerRows } = await client.query(
+          `SELECT id, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status
+             FROM public.cargas WHERE id IN (${winnerIds.map((_, i) => `$${i + 1}`).join(", ")})`,
+          winnerIds,
+        );
+        winnersById = new Map(winnerRows.map((w) => [w.id, w]));
+      }
+
       for (const r of rows) {
-        byId.set(r.id, r);
-        if (r.sheet_lh == null && r.lh_manual != null) byLhManual.set(r.lh_manual, r);
+        const effective = r.alloc_merged_into_cargo_id ? winnersById.get(r.alloc_merged_into_cargo_id) ?? r : r;
+        byId.set(r.id, effective);
+        if (r.sheet_lh == null && r.lh_manual != null) byLhManual.set(r.lh_manual, effective);
       }
     }
 
