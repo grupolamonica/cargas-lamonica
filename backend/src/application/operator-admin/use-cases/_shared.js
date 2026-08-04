@@ -7,6 +7,7 @@ import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 import { ConflictError, ForbiddenError, NotFoundError } from "../../../domain/load-claims/errors.js";
 import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
+import { mergeLaunchedTwinAlloc, twinMergeMode } from "./merge-launched-twin.js";
 import { getRouteInfo } from "../../../infrastructure/geoapify/index.js";
 import {
   parseNullableNumber,
@@ -771,6 +772,7 @@ export async function findClientIdByName(client, name) {
  */
 export async function resolveMonitorCargoByLh(client, lh, { columns = "id, sheet_lh", forUpdate = true } = {}) {
   const lhTrim = String(lh ?? "").trim();
+  if (twinMergeMode() !== "off") return resolveCanonicalCargoByLh(client, lhTrim, { columns, forUpdate });
   const sheetCargoId = createSheetLoadId(lhTrim);
   const { rows } = await client.query(
     `SELECT ${columns}
@@ -781,6 +783,57 @@ export async function resolveMonitorCargoByLh(client, lh, { columns = "id, sheet
     [sheetCargoId, lhTrim],
   );
   return rows[0] ?? null;
+}
+
+/**
+ * Resolução CANÔNICA por LH (atrás do gate TWIN_MERGE). Substitui a heurística
+ * "quem tem alloc_updated_at vence", que é a origem de dois defeitos medidos:
+ *
+ *  1. a LÁPIDE ganhava. Carga lançada aposentada pelo sync (`retired_reason`) ou já
+ *     mergeada guarda `alloc_updated_at` e por isso continuava sendo o alvo de
+ *     escrita: caso real LT1Q8302D4IK2, aposentada 09:48 e recebendo trocas de
+ *     carreta às 11:09/11:16/11:18 — o operador editava uma linha morta.
+ *  2. o braço `id = createSheetLoadId(lh)` é MORTO para Nestlé: o id determinístico é
+ *     namespaced por fonte, então a canônica de outra fonte nunca casava (404 ao
+ *     alocar linha Nestlé). Aqui casamos pela COLUNA `sheet_lh`.
+ *
+ * Ordem: canônica (da planilha) sempre vence; entre lançadas, a VIVA vence a lápide;
+ * só então o desempate por alocação e por criação.
+ *
+ * NÃO filtra por `status`: o operador edita viagem passada legitimamente (o status
+ * chega dias depois) e centenas de lançadas sem gêmea nenhuma estão EXPIRED — filtrar
+ * por ciclo de vida quebraria o Monitor para viagem histórica. O discriminador é a
+ * IDENTIDADE (existe canônica) + o marcador de merge.
+ *
+ * LH em DUAS fontes (existe em shopee e nestle) é ambiguidade real: lança
+ * ConflictError em vez de escolher por heurística e gravar na planilha errada.
+ */
+async function resolveCanonicalCargoByLh(client, lhTrim, { columns, forUpdate }) {
+  const { rows } = await client.query(
+    `SELECT ${columns}, sheet_lh AS __canonica, sheet_source AS __fonte
+       FROM public.cargas
+      WHERE sheet_lh = $1 OR (lh_manual = $1 AND sheet_lh IS NULL)
+      ORDER BY (sheet_lh IS NOT NULL) DESC,
+               (alloc_merged_into_cargo_id IS NULL AND retired_reason IS NULL) DESC,
+               (alloc_updated_at IS NOT NULL) DESC,
+               created_at ASC, id ASC
+      ${forUpdate ? "FOR UPDATE" : ""}`,
+    [lhTrim],
+  );
+  if (rows.length === 0) return null;
+  const canonicas = rows.filter((r) => r.__canonica != null);
+  if (canonicas.length > 1) {
+    const fontes = [...new Set(canonicas.map((r) => r.__fonte ?? "(sem fonte)"))];
+    logStructuredEvent("warn", "monitor.canonical-cargo.ambiguous", { lh: lhTrim, fontes });
+    throw new ConflictError(
+      `O código de viagem "${lhTrim}" existe em mais de uma planilha (${fontes.join(", ")}). Resolva a duplicidade antes de editar.`,
+      { code: "AMBIGUOUS_TRIP_SOURCE" },
+    );
+  }
+  const escolhida = rows[0];
+  delete escolhida.__canonica;
+  delete escolhida.__fonte;
+  return escolhida;
 }
 
 /**
@@ -803,9 +856,9 @@ export async function resolveMonitorCargoByLh(client, lh, { columns = "id, sheet
  * @param {string} lh
  * @param {{ columns?: string, forUpdate?: boolean }} [opts]
  */
-export async function ensureMonitorSheetCargo(client, lh, { columns = "id, sheet_lh", forUpdate = true } = {}) {
+export async function ensureMonitorSheetCargo(client, lh, { columns = "id, sheet_lh", forUpdate = true, correlationId = null } = {}) {
   const existing = await resolveMonitorCargoByLh(client, lh, { columns, forUpdate });
-  if (existing) return existing;
+  if (existing) return withLazyTwinMerge(client, lh, existing, { columns, forUpdate, correlationId });
 
   const lhTrim = String(lh ?? "").trim();
   if (!lhTrim) return null;
@@ -862,6 +915,47 @@ export async function ensureMonitorSheetCargo(client, lh, { columns = "id, sheet
     ],
   );
 
+  const criada = await resolveMonitorCargoByLh(client, lh, { columns, forUpdate });
+  return withLazyTwinMerge(client, lh, criada, { columns, forUpdate, correlationId, materialized: true });
+}
+
+/**
+ * MERGE LAZY: quando a linha resolvida é a CANÔNICA (da planilha) e existe gêmea
+ * lançada com decisão do operador, herda os `alloc_*` dela AGORA, na MESMA transação,
+ * e devolve a linha RELIDA.
+ *
+ * Por que na mesma transação (e não num passo separado): a escrita de alocação é
+ * PARCIAL — "campo ausente no payload preserva o alloc_* da linha resolvida"
+ * (update-monitor-allocation) — e o modal só reenvia motorista/veículo quando o
+ * operador realmente trocou. Se a identidade mudasse antes do dado, editar só o status
+ * gravaria na canônica com `alloc_motorista` NULL: o motorista sairia da tela, o
+ * write-back mandaria "" e apagaria a célula da planilha, e `reconcileMonitorLoadStatus`
+ * reabriria a carga. Mudando identidade e dado juntos, a semântica parcial segue segura.
+ *
+ * Best-effort: falha no merge NÃO derruba a edição do operador (ele volta a escrever na
+ * linha resolvida, como hoje). Gate TWIN_MERGE=off → no-op.
+ */
+async function withLazyTwinMerge(client, lh, row, { columns, forUpdate, correlationId = null, materialized = false } = {}) {
+  if (!row || twinMergeMode() === "off") return row;
+  // Só a canônica herda. Linha lançada (sheet_lh nulo) não é destino de merge.
+  if (row.sheet_lh == null || String(row.sheet_lh).trim() === "") return row;
+  try {
+    const r = await mergeLaunchedTwinAlloc(client, {
+      lh,
+      winnerId: row.id,
+      correlationId,
+      materialized,
+    });
+    if (!r.merged) return row;
+  } catch (err) {
+    logStructuredEvent("warn", "monitor.twin-merge.failed", {
+      correlationId,
+      lh: String(lh ?? "").trim(),
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return row;
+  }
+  // Relê para o caller receber a linha JÁ com os alloc_* herdados.
   return resolveMonitorCargoByLh(client, lh, { columns, forUpdate });
 }
 
