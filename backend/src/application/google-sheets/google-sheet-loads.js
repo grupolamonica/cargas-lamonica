@@ -465,7 +465,10 @@ async function fetchExistingSheetLoads(supabaseClient, source = SHEET_SOURCE_SHO
   return existingLoads;
 }
 
-async function fetchRouteCatalogRows(supabaseClient) {
+// Exportadas para o backfill da unificação da gêmea (scripts/twin-merge-backfill.mjs):
+// materializar uma canônica FORA do ciclo do sync precisa da mesma derivação de
+// perfil/valor/bonus/distância que buildAllocatedSheetLoadPayload usa.
+export async function fetchRouteCatalogRows(supabaseClient) {
   const routeCatalogRows = [];
 
   for (let offset = 0; ; offset += ROUTE_CATALOG_PAGE_SIZE) {
@@ -496,7 +499,7 @@ async function fetchRouteCatalogRows(supabaseClient) {
   return routeCatalogRows;
 }
 
-async function fetchRouteTemplateRows(supabaseClient) {
+export async function fetchRouteTemplateRows(supabaseClient) {
   const routeTemplateRows = [];
 
   for (let offset = 0; ; offset += ROUTE_TEMPLATE_PAGE_SIZE) {
@@ -522,7 +525,7 @@ async function fetchRouteTemplateRows(supabaseClient) {
   return routeTemplateRows;
 }
 
-function createRouteCatalogDefaultsMap(routeCatalogRows) {
+export function createRouteCatalogDefaultsMap(routeCatalogRows) {
   const defaultsByKey = new Map();
 
   routeCatalogRows.forEach((routeCatalogRow) => {
@@ -552,7 +555,7 @@ function createRouteCatalogDefaultsMap(routeCatalogRows) {
 // o fallback hardcoded: se existe tarifa para o trecho, a decisao do operador
 // (inclusive "desativei" ou "limpei o valor") manda — e a tabela fixa do codigo
 // nao pode sobrepor.
-function createKnownCatalogTrechoSet(routeCatalogRows) {
+export function createKnownCatalogTrechoSet(routeCatalogRows) {
   const known = new Set();
 
   routeCatalogRows.forEach((routeCatalogRow) => {
@@ -581,7 +584,7 @@ function resolveBaseRouteFallbackValor(knownCatalogTrechos, origem, destino) {
   return resolveRouteDefaults(BASE_ROUTE_VALUES_BY_KEY, origem, destino)?.valor ?? null;
 }
 
-function createRouteTemplateDefaultsMap(routeTemplateRows) {
+export function createRouteTemplateDefaultsMap(routeTemplateRows) {
   const defaultsByKey = new Map();
 
   routeTemplateRows.forEach((routeTemplateRow) => {
@@ -779,7 +782,7 @@ export class SheetClientNotConfiguredError extends Error {
   }
 }
 
-async function resolveSheetClientId(supabaseClient, clientName = DEFAULT_SHEET_CLIENT_NAME) {
+export async function resolveSheetClientId(supabaseClient, clientName = DEFAULT_SHEET_CLIENT_NAME) {
   const trimmedClientName = clientName.trim();
 
   if (!trimmedClientName) {
