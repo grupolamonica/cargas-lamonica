@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { isValidBrazilianPhone } from "@/lib/brazilianValidators";
+import { isValidBrazilianMobile, isValidBrazilianPhone } from "@/lib/brazilianValidators";
 import { MoreOptionsToggle } from "@/components/driver/ui";
 
 export interface A2Data {
@@ -85,7 +85,9 @@ export function A2Telefone({
     if (secondaryDigits) telefones.push(secondaryDigits);
     onChange({ telefones, telefone_primario: primaryDigits });
 
-    const primaryValid = isValidBrazilianPhone(primaryDigits);
+    // Principal EXIGE celular (11 díg, DDD + 9) — é o contact_number do SPX
+    // (271605009) e o que recebe WhatsApp. Fixo de 10 dígitos não serve.
+    const primaryValid = isValidBrazilianMobile(primaryDigits);
     const secondaryValid =
       secondaryDigits.length === 0 || isValidBrazilianPhone(secondaryDigits);
     onValid(primaryValid && secondaryValid);
@@ -95,8 +97,8 @@ export function A2Telefone({
   const primaryDigits = primary.replace(/\D/g, "");
   const secondaryDigits = secondary.replace(/\D/g, "");
   const primaryError =
-    primaryDigits.length > 0 && !isValidBrazilianPhone(primaryDigits)
-      ? "Telefone inválido. Use DDD + número."
+    primaryDigits.length > 0 && !isValidBrazilianMobile(primaryDigits)
+      ? "Informe um celular com DDD + 9 dígitos (11 números). Telefone fixo não é aceito."
       : "";
   const secondaryError =
     secondaryDigits.length > 0 && !isValidBrazilianPhone(secondaryDigits)

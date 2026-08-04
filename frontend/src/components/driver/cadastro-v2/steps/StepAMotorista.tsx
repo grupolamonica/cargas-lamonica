@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { isValidBrazilianPhone, isValidCpf } from "@/lib/brazilianValidators";
+import { isValidBrazilianMobile, isValidCpf } from "@/lib/brazilianValidators";
 
 import { StepHeader } from "../StepHeader";
 import { WizardStepCard } from "../widgets/WizardStepCard";
@@ -74,16 +74,6 @@ type Validity = {
 const SUB_KEYS = ["a1", "a1b", "a2", "a3", "a4"] as const;
 type SubKey = (typeof SUB_KEYS)[number];
 
-function formatPhoneMask(value: string): string {
-  const digits = value.replace(/\D/g, "").slice(0, 11);
-  if (digits.length <= 2) return digits;
-  if (digits.length <= 7) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
-  if (digits.length <= 10) {
-    return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
-  }
-  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
-}
-
 /**
  * Container da Etapa A — agrega as sub-etapas do motorista (A1..A3) em formato
  * stepper-accordion: somente UMA sub-etapa visível por vez, auto-colapsa ao
@@ -120,7 +110,7 @@ function StepAMotoristaImpl({
   const [validity, setValidity] = useState<Validity>(() => ({
     a1: Boolean(value?.a1?.cpf && isValidCpf(value.a1.cpf) && value.a1.nome),
     a1b: Boolean(value?.a1b?.fileName),
-    a2: Boolean(value?.a2?.telefone_primario && isValidBrazilianPhone(value.a2.telefone_primario)),
+    a2: Boolean(value?.a2?.telefone_primario && isValidBrazilianMobile(value.a2.telefone_primario)),
     a3: Boolean(
       value?.a3?.cep &&
         (value.a3.cep.replace(/\D/g, "").length === 8) &&
