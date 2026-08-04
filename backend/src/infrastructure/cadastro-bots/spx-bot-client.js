@@ -91,6 +91,9 @@ export class SpxBotError extends Error {
  *   271605004  Driver inativo — precisa /ativar
  *   271627140  CPF já cadastrado (DRIVER_REPEAT)
  *   271617003  DRIVER_BLOCKED — bloqueado
+ *   271617004  CPF bloqueado pela Shopee (externo/permanente — não re-tentar)
+ *   271613124  Motorista em processamento (aguardar, não é erro definitivo)
+ *   271605013  CNH vazia (barrado antes pelo checkCnhPresentGate)
  *   991900001  OCR não extraiu CRLV
  *   991900013..18 Erros de upload
  */
@@ -215,6 +218,31 @@ function mapBotError({ httpStatus, body, fallbackMessage }) {
       acao: "A Shopee/SPX só aceita veículos com até 20 anos de fabricação. O cadastro ficou "
         + "salvo como RASCUNHO mas NÃO foi submetido com este veículo. Não há como concluir o "
         + "SPX com um cavalo/carreta acima do limite de idade.",
+      httpStatus, etapa, retcode, raw: body,
+    });
+  }
+  if (retcode === 271617004) {
+    // CPF bloqueado pela Shopee — bloqueio EXTERNO e permanente. Vinha como 502
+    // genérico ("tente novamente") e o operador re-disparava em vão (visto 5x na
+    // auditoria). Terminal: re-tentar NÃO muda o resultado.
+    return new SpxBotError({
+      code: "SPX_CPF_BLOQUEADO_SHOPEE",
+      message: erroMsg || "O motorista com esse CPF não pode ser registrado — bloqueio da Shopee.",
+      acao: "Bloqueio EXTERNO da Shopee Express para este CPF — NÃO adianta re-disparar. "
+        + "Só a Shopee resolve: o motorista precisa acionar o suporte da Shopee Express.",
+      httpStatus, etapa, retcode, raw: body,
+    });
+  }
+  if (retcode === 271613124) {
+    // Motorista "em processamento": uma submissão anterior ainda está rodando no
+    // SPX. Não é erro definitivo — vinha como 502 "tente novamente" e virava spam
+    // de re-disparo. Peça pra AGUARDAR e verificar depois.
+    return new SpxBotError({
+      code: "SPX_EM_PROCESSAMENTO",
+      message: erroMsg
+        || "Motorista em processamento no SPX — uma solicitação anterior ainda está sendo processada.",
+      acao: "Aguarde alguns minutos e clique em Verificar (não re-dispare em sequência). "
+        + "Quando o SPX terminar de processar, o cadastro conclui.",
       httpStatus, etapa, retcode, raw: body,
     });
   }
