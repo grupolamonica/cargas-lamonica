@@ -691,9 +691,9 @@ async function bootstrap() {
           "./application/operator-admin/use-cases/reconcile-aspx-status-launched.js"
         );
         const rl = await reconcileAspxStatusForLaunched();
-        if (rl.updated) {
+        if (rl.updated || rl.ignoradasNaPlanilha) {
           console.info(
-            `[aspx-status-launched] modo ${rl.mode}: ${rl.updated} carga(s) lançada(s) ${rl.mode === "dry" ? "MUDARIAM" : "sincronizada(s)"} (${rl.sheetWrites} na planilha; ${rl.checked} verificada(s))`,
+            `[aspx-status-launched] modo ${rl.mode}: ${rl.updated} carga(s) lançada(s) ${rl.mode === "dry" ? "MUDARIAM" : "sincronizada(s)"} (${rl.sheetWrites} na planilha; ${rl.checked} verificada(s); ${rl.ignoradasNaPlanilha ?? 0} fora por já estar na planilha)`,
           );
         }
       } catch (err) {
