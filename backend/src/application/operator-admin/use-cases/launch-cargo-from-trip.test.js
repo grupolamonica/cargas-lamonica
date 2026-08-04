@@ -62,6 +62,20 @@ describe("launchCargoFromTrip", () => {
     expect(rows[0].driver_visibility).toBe("PUBLIC");
   });
 
+  // A coluna nao era gravada, entao TODA carga lancada ficava com sheet_source NULL
+  // e o write-back roteava por normSource(null) === 'shopee': "puxar reserva" /
+  // "reverter" numa carga NESTLE lancada fazia POST na planilha da SHOPEE, que pode
+  // ter linha com o mesmo LH (ha LH repetido entre as duas em producao).
+  it("grava sheet_source='shopee' na carga lancada (roteia o write-back pela fonte)", async () => {
+    await seedCliente({ nome: "Shopee" });
+    const op = await seedUser({ email: "op-src-shopee@test.local" });
+
+    const res = await launchCargoFromTrip({ ...validTrip, operatorId: op.id, correlationId: "c-src", deps });
+
+    const { rows } = await query("SELECT sheet_source FROM public.cargas WHERE id = $1", [res.payload.id]);
+    expect(rows[0].sheet_source).toBe("shopee");
+  });
+
   it("idempotente: carga da planilha (sheet_lh) com o mesmo LH → devolve a existente", async () => {
     await seedCliente({ nome: "Shopee" });
     const existing = await seedCargo({ sheet_lh: "LT1ABC", status: "OPEN", origem: "X", destino: "Y" });

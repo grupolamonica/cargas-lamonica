@@ -215,14 +215,21 @@ export async function launchCargoFromTrip({
       );
     }
 
+    // `sheet_source` = fonte da viagem lançada. O INSERT não gravava a coluna, então
+    // TODA carga lançada ficava com sheet_source NULL e o write-back roteava por
+    // normSource(null) === 'shopee': puxar reserva / reverter numa carga NESTLÉ
+    // lançada fazia POST na planilha da SHOPEE, que pode ter linha com o mesmo LH
+    // (há LH repetido entre as duas em produção) e teria motorista/placas
+    // sobrescritos. Gravando a fonte, o write-back de uma fonte sem URL configurada
+    // (Nestlé) vira no-op — o comportamento desejado — e a Shopee segue igual.
     const { rows } = await client.query(
       `INSERT INTO public.cargas
          (cliente_id, data, horario, origem, destino, perfil, status, is_template,
           driver_visibility, lh_manual, sheet_data_carregamento, sheet_data_descarga,
-          agenda_a_confirmar, created_by, valor, bonus, distancia_km, duracao_horas)
-       VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', false, 'PUBLIC', $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          agenda_a_confirmar, created_by, valor, bonus, distancia_km, duracao_horas, sheet_source)
+       VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', false, 'PUBLIC', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING id`,
-      [clienteId, dataValue, horarioValue, origemTrim, destinoTrim, perfilValue, lhTrim, carregamentoLabel, descargaValue, aConfirmar, operatorId, valorValue, bonusValue, distanciaValue, duracaoValue],
+      [clienteId, dataValue, horarioValue, origemTrim, destinoTrim, perfilValue, lhTrim, carregamentoLabel, descargaValue, aConfirmar, operatorId, valorValue, bonusValue, distanciaValue, duracaoValue, source ?? null],
     );
 
     return {
