@@ -449,6 +449,51 @@ describe("google sheet loads sync", () => {
     });
   });
 
+  // O fallback hardcoded (BASE_ROUTE_VALUES) existe para trecho que o operador ainda
+  // NÃO cadastrou. Quando existe tarifa cadastrada, a decisão do operador manda —
+  // inclusive "desativei" ou "limpei o valor". Antes, o catálogo (filtrado por ativa)
+  // não respondia e a cadeia caía nos 14000 fixos do código: desativar a rota não
+  // segurava o preço, e a carga voltava precificada no sync seguinte.
+  it("rota cadastrada e DESATIVADA veta o fallback hardcoded (não reprecifica a carga)", async () => {
+    const supabaseClient = createSupabaseMock({
+      routeCatalogRows: [
+        {
+          id: "route-off",
+          origin_key: "sao jose do rio preto",
+          destination_key: "simoes filho",
+          origem: "SAO JOSE DO RIO PRETO",
+          destino: "SIMOES FILHO",
+          distancia_km: 1855,
+          duracao_horas: null,
+          perfil_padrao: "CARRETA",
+          valor_padrao: null,
+          bonus_padrao: null,
+          ativa: false,
+          updated_at: "2026-08-04T13:15:30.000Z",
+        },
+      ],
+    });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV_WITH_OPERATIONAL_ALIASES)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV_WITH_OPERATIONAL_ALIASES),
+    });
+
+    await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+    });
+
+    const upsertCall = supabaseClient.calls.find((call) => call[0] === "upsert");
+    expect(upsertCall).toBeTruthy();
+    expect(upsertCall[2][0].sheet_lh).toBe("LT0Q4302267L1");
+    // Sem os 14000 da tabela fixa: a tarifa existe e foi desativada/zerada.
+    expect(upsertCall[2][0].valor).not.toBe(14000);
+  });
+
   it("uses route catalog defaults when origem and destino identify a configured route", async () => {
     const supabaseClient = createSupabaseMock({
       routeCatalogRows: [
