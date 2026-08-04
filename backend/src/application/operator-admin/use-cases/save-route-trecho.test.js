@@ -184,6 +184,64 @@ describe("saveRouteTrecho", () => {
     expect(Number(rows[0].bonus)).toBe(333);
   });
 
+  // Preço órfão: antes, a cascata usava COALESCE(novo, atual) — limpar ou desativar
+  // a tarifa deixava a carga aberta servindo o valor antigo indefinidamente.
+  it("cascata: LIMPAR o valor da tarifa limpa o valor da carga aberta", async () => {
+    const op = await seedUser({ email: "op-trecho-clear@teste.local" });
+    const cargo = await seedCargo({
+      origem: ORIGEM,
+      destino: DESTINO,
+      perfil: "CARRETA",
+      status: "OPEN",
+      valor: 14700,
+      bonus: 500,
+    });
+    await query(`UPDATE public.cargas SET eixos = 2 WHERE id = $1`, [cargo.id]);
+
+    const res = await saveRouteTrecho({
+      operatorId: op.id,
+      payload: trecho([{ perfil: "CARRETA", eixos: 2, valor: null, bonus: null, bonus_exigencias: null }]),
+      correlationId: "c-clear",
+    });
+
+    expect(res.payload.cascadedCargaCount).toBe(1);
+    const { rows } = await query(`SELECT valor, bonus FROM public.cargas WHERE id = $1`, [cargo.id]);
+    expect(rows[0].valor).toBeNull();
+    expect(rows[0].bonus).toBeNull();
+  });
+
+  it("cascata: DESATIVAR o trecho zera o dinheiro da carga e preserva km/duração", async () => {
+    const op = await seedUser({ email: "op-trecho-off@teste.local" });
+    const cargo = await seedCargo({
+      origem: ORIGEM,
+      destino: DESTINO,
+      perfil: "CARRETA",
+      status: "OPEN",
+      valor: 14700,
+      bonus: 500,
+    });
+    await query(`UPDATE public.cargas SET eixos = 2 WHERE id = $1`, [cargo.id]);
+
+    await saveRouteTrecho({
+      operatorId: op.id,
+      // Tarifa continua com valor no payload — o que tira o preço do ar é ativa=false.
+      payload: trecho([{ perfil: "CARRETA", eixos: 2, valor: 14700, bonus: 500, bonus_exigencias: null }], {
+        ativa: false,
+      }),
+      correlationId: "c-off",
+    });
+
+    const { rows } = await query(
+      `SELECT valor, bonus, distancia_km, duracao_horas FROM public.cargas WHERE id = $1`,
+      [cargo.id],
+    );
+    expect(rows[0].valor).toBeNull();
+    expect(rows[0].bonus).toBeNull();
+    // km/duração são fato físico do trecho — vêm da rota, não são zerados.
+    expect(Number(rows[0].distancia_km)).toBe(1600);
+    expect(Number(rows[0].duracao_horas)).toBe(30);
+  });
+
   it("cascata NÃO atinge carga de outro perfil no mesmo trecho", async () => {
     const op = await seedUser({ email: "op-trecho-cascade-guard@teste.local" });
     const cargo = await seedCargo({

@@ -6,7 +6,11 @@ import {
   isMissingRouteCatalogColumnsError,
   resolveRouteMetricsIfNeeded,
 } from "./_shared.js";
-import { createRouteLookupKeys, buildRouteCatalogKeys } from "../../../domain/operator-admin/route-utils.js";
+import {
+  createRouteLookupKeys,
+  buildRouteCatalogKeys,
+  resolveCascadeTariff,
+} from "../../../domain/operator-admin/route-utils.js";
 import { normalizeVehicleProfile } from "../../../domain/vehicle-profiles.js";
 
 // Editar a rota para um trecho (origem→destino) + perfil + nº de eixos que já
@@ -115,19 +119,32 @@ export async function updateOperatorRoute({ routeId, operatorId, payload, reques
         .map((row) => row.id);
 
       if (matchingIds.length > 0) {
+        // O dinheiro segue a tarifa (ver resolveCascadeTariff): sem COALESCE, para
+        // que limpar/desativar a tarifa limpe o preço da carga em vez de deixá-la
+        // servindo o valor antigo. `routeMutationSchema` é a representação COMPLETA
+        // da rota (não é patch parcial), então espelhar o payload na carga é seguro.
+        // km/duração seguem com COALESCE — fato físico do trecho, não tarifa.
+        const { valor: cascadeValor, bonus: cascadeBonus } = resolveCascadeTariff({
+          ativa: payload.ativa,
+          valor: payload.valor_padrao,
+          bonus: payload.bonus_padrao,
+        });
+        // `id IN (placeholders)` em vez de `= ANY($n::uuid[])`: o harness de teste
+        // (pg-mem) não casa o array-cast, então a cascata ficava sem cobertura.
+        const idPlaceholders = matchingIds.map((_, i) => `$${i + 6}`).join(", ");
         const cascadeResult = await client.query(
           `
             UPDATE public.cargas
             SET
-              valor = COALESCE($1, valor), bonus = COALESCE($2, bonus),
+              valor = $1, bonus = $2,
               perfil = COALESCE($3, perfil), distancia_km = COALESCE($4, distancia_km),
               duracao_horas = COALESCE($5, duracao_horas)
-            WHERE id = ANY($6::uuid[])
+            WHERE id IN (${idPlaceholders})
           `,
           [
-            payload.valor_padrao, payload.bonus_padrao, perfilPadrao,
+            cascadeValor, cascadeBonus, perfilPadrao,
             resolvedMetrics.distancia_km, resolvedMetrics.duracao_horas,
-            matchingIds,
+            ...matchingIds,
           ],
         );
         cascadedCargaCount = cascadeResult.rowCount || 0;

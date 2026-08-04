@@ -27,13 +27,17 @@ function row(lh, o = {}) {
 }
 
 // deps: getProgramacao (rows), fetchRouteCatalogMetricsByLoadId (Set de LHs com rota), launch (spy)
-function makeDeps({ rows = [], routedLhs = new Set(), statusCode = 200, launch } = {}) {
+// `inactiveLhs`: LHs cuja rota casada existe mas está DESATIVADA (ativa=false) no catálogo.
+function makeDeps({ rows = [], routedLhs = new Set(), inactiveLhs = new Set(), statusCode = 200, launch } = {}) {
   const launchCargoFromTrip = launch || vi.fn(async () => ({ payload: { alreadyExists: false, id: "cargo-1" } }));
   return {
     getProgramacao: vi.fn(async () => ({ statusCode, payload: { rows, error: statusCode === 200 ? undefined : "SPX_UNAVAILABLE" } })),
     fetchRouteCatalogMetricsByLoadId: vi.fn(async (_client, rrows) => {
       const m = new Map();
-      for (const r of rrows) m.set(r.id, routedLhs.has(r.id) ? { valor_padrao: 1 } : null);
+      for (const r of rrows) {
+        if (inactiveLhs.has(r.id)) m.set(r.id, { valor_padrao: 1, ativa: false });
+        else m.set(r.id, routedLhs.has(r.id) ? { valor_padrao: 1 } : null);
+      }
       return m;
     }),
     launchCargoFromTrip,
@@ -134,6 +138,31 @@ describe("autoLaunchRoutedSpots (DC-201)", () => {
     expect(res.launched).toBe(1);
     expect(res.deferred).toBe(1);
     expect(deps.launchCargoFromTrip).toHaveBeenCalledTimes(1);
+  });
+
+  it("rota DESATIVADA no catálogo não gera auto-lançamento (e conta em inactiveRoute)", async () => {
+    const rows = [
+      row("LT-ON"), // rota ativa → lança
+      row("LT-OFF"), // rota casada mas ativa=false → NÃO lança
+    ];
+    const deps = makeDeps({ rows, routedLhs: new Set(["LT-ON"]), inactiveLhs: new Set(["LT-OFF"]) });
+    const res = await autoLaunchRoutedSpots({ deps });
+
+    expect(res.candidates).toBe(2);
+    expect(res.routed).toBe(1);
+    expect(res.inactiveRoute).toBe(1);
+    expect(res.launched).toBe(1);
+    expect(deps.launchCargoFromTrip).toHaveBeenCalledTimes(1);
+    expect(deps.launchCargoFromTrip).toHaveBeenCalledWith(expect.objectContaining({ lh: "LT-ON" }));
+  });
+
+  it("todas as rotas casadas desativadas → nada lançado, mas reporta inactiveRoute", async () => {
+    const deps = makeDeps({ rows: [row("LT-OFF")], inactiveLhs: new Set(["LT-OFF"]) });
+    const res = await autoLaunchRoutedSpots({ deps });
+    expect(res.candidates).toBe(1);
+    expect(res.routed).toBe(0);
+    expect(res.inactiveRoute).toBe(1);
+    expect(deps.launchCargoFromTrip).not.toHaveBeenCalled();
   });
 
   it("sem candidatos → no-op limpo", async () => {
