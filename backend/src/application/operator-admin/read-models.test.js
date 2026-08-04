@@ -241,6 +241,87 @@ describe("operator-admin read models", () => {
     });
   });
 
+  // Fase 2 (aditiva) — visibilidade do apelido. O operador via "São José do Rio
+  // Preto/SP" na tela de Rotas e não achava a carga que chegou como
+  // "SJ Rio Preto-03/SP", concluindo que a carga foi puxada sem rota cadastrada.
+  // A rota agora lista os nomes com que as cargas dela realmente chegam.
+  describe("apelidos_de_carga (nomes com que a carga chega)", () => {
+    const ORIGEM_ROTA = "São José do Rio Preto/SP";
+    const DESTINO_ROTA = "Simões Filho/BA";
+
+    async function seedRotaComCargas() {
+      await seedRoute({
+        origin_key: "sao jose do rio preto",
+        destination_key: "simoes filho",
+        origem: ORIGEM_ROTA,
+        destino: DESTINO_ROTA,
+        perfil_padrao: "CARRETA",
+        valor_padrao: 14700,
+      });
+      // Estações distintas do SPX que colapsam no MESMO trecho pelo matcher.
+      await seedCargo({ origem: "SJ Rio Preto-03/SP", destino: "Simoes Filho/BA", status: "OPEN" });
+      await seedCargo({ origem: "SJ Rio Preto-05/SP", destino: "Simoes Filho/BA", status: "OPEN" });
+      // Carga com a MESMA grafia da rota — não é apelido, deve ficar de fora.
+      await seedCargo({ origem: ORIGEM_ROTA, destino: DESTINO_ROTA, status: "OPEN" });
+      // Carga de outro trecho — não deve vazar para esta rota.
+      await seedCargo({ origem: "Guarulhos/SP", destino: "Simoes Filho/BA", status: "OPEN" });
+    }
+
+    const findRota = (items) =>
+      items.find((item) => item.origin_key === "sao jose do rio preto" && item.destination_key === "simoes filho");
+
+    it("lista os nomes divergentes e omite o nome igual ao da rota", async () => {
+      await seedRotaComCargas();
+
+      const response = await readModels.fetchOperatorRoutesListReadModel({
+        query: { page: "1", pageSize: "200", status: "todas" },
+        correlationId: "corr-apelidos",
+      });
+
+      const rota = findRota(response.payload.items);
+      expect(rota, "rota do trecho deveria estar na lista").toBeTruthy();
+      expect(rota.apelidos_de_carga).toEqual([
+        "SJ Rio Preto-03/SP → Simoes Filho/BA",
+        "SJ Rio Preto-05/SP → Simoes Filho/BA",
+      ]);
+      // O nome idêntico à rota não é apelido, e o trecho de Guarulhos não vaza.
+      expect(rota.apelidos_de_carga.join(" ")).not.toMatch(/São José do Rio Preto\/SP → Simões Filho\/BA/);
+      expect(rota.apelidos_de_carga.join(" ")).not.toMatch(/Guarulhos/);
+    });
+
+    it("a busca da tela encontra a rota pelo nome com que a carga chega", async () => {
+      await seedRotaComCargas();
+
+      const response = await readModels.fetchOperatorRoutesListReadModel({
+        // O operador digita o que ele VÊ na carga, não o nome cadastrado.
+        query: { page: "1", pageSize: "200", status: "todas", search: "sj rio preto-05" },
+        correlationId: "corr-apelidos-busca",
+      });
+
+      expect(findRota(response.payload.items), "busca pelo apelido deveria achar a rota").toBeTruthy();
+    });
+
+    it("rota sem carga no trecho vem com lista vazia (nunca undefined)", async () => {
+      await seedRoute({
+        origin_key: "salvador",
+        destination_key: "aracaju",
+        origem: "Salvador/BA",
+        destino: "Aracaju/SE",
+        perfil_padrao: "CARRETA",
+      });
+
+      const response = await readModels.fetchOperatorRoutesListReadModel({
+        query: { page: "1", pageSize: "200", status: "todas" },
+        correlationId: "corr-apelidos-vazio",
+      });
+
+      const rota = response.payload.items.find(
+        (item) => item.origin_key === "salvador" && item.destination_key === "aracaju",
+      );
+      expect(rota.apelidos_de_carga).toEqual([]);
+    });
+  });
+
   it("normaliza metricas numericas persistidas no catalogo de rotas", async () => {
     await seedRoute({
       origem: "CAMPO GRANDE",

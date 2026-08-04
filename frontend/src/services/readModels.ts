@@ -282,6 +282,14 @@ export interface OperatorRouteListItem {
   source: "base" | "base+db" | "db";
   rota_id: string | null;
   cliente_id: string | null;
+  /**
+   * Nomes com que as cargas deste trecho realmente chegam (estacao do SPX, grafia
+   * da planilha) quando divergem do nome cadastrado na rota. O matching
+   * carga->rota canonicaliza (apaga sufixo "-03", aplica apelidos de cidade),
+   * entao a rota "Sao Jose do Rio Preto/SP" recebe carga "SJ Rio Preto-03/SP" e o
+   * operador nao encontrava o vinculo na tela. Opcional: backend antigo nao envia.
+   */
+  apelidos_de_carga?: string[];
 }
 
 export interface OperatorDriverApplicationItem {
