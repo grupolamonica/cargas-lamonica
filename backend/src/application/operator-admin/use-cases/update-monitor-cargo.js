@@ -205,8 +205,27 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     // (volta pro painel do motorista: mesmo gate do portal — OPEN + pública +
     // futura + sem motorista). A RESERVADA é reaberta pelo cancelPublicLoadLead
     // (reopenLeadId), que também baixa o lead do portal — evita duplo-booking.
-    if (reopening && !reopenLeadId && row.status !== "OPEN") {
-      await client.query(`UPDATE public.cargas SET status = 'OPEN', updated_at = now() WHERE id = $1`, [cargoId]);
+    // "Disponível" também apaga o status operacional RESIDUAL vindo da planilha/ASPX
+    // (sheet_status). Sem isso o operador NÃO conseguia tirar o rótulo da tela: a
+    // leitura do Monitor é COALESCE(alloc_status, sheet_status), então zerar o
+    // alloc_status (que é o que "Disponível" faz) só descobria o sheet_status
+    // antigo — e o campo "voltava" para, p.ex., "AGUARDANDO CHEGAR NO CLIENTE".
+    // A premissa original ("a carga do sistema não tem sheet_* por baixo") deixou de
+    // valer quando o write-back de status do ASPX passou a gravar sheet_status na
+    // carga LANÇADA.
+    //
+    // Sem a guarda `row.status !== "OPEN"`: numa carga JÁ aberta o bloco inteiro era
+    // pulado, então o sheet_status residual nunca era limpo — justamente o caso do
+    // operador que tenta reabrir uma carga que já está OPEN.
+    if (reopening && !reopenLeadId) {
+      await client.query(
+        `UPDATE public.cargas
+            SET status = CASE WHEN status <> 'OPEN' THEN 'OPEN' ELSE status END,
+                sheet_status = NULL,
+                updated_at = now()
+          WHERE id = $1`,
+        [cargoId],
+      );
     }
 
     // Fecha/reabre a carga do sistema conforme a alocação efetiva: com motorista +
