@@ -33,6 +33,7 @@ import { performSpxPrecheck } from "./precheck.js";
 import { checkCnhCategoryGate } from "./cnh-category-gate.js";
 import { checkCrlvGate } from "./crlv-gate.js";
 import { checkTelefoneGate } from "./telefone-gate.js";
+import { checkCnhPresentGate } from "./cnh-present-gate.js";
 import { mapSpxMotoristaPayload } from "./payload-mapper.js";
 import { buildImportedDriverInfo } from "./import-driver-info.js";
 import { generateDossie } from "../unificada/generate-dossie.js";
@@ -104,6 +105,14 @@ export async function runSpxPipeline({
       return {
         ok: true, dry_run: true, precheck_status: precheck.status,
         results: [{ step: STEP, status: "BLOCKED", error: telBlockDry }],
+      };
+    }
+    // Gate de CNH (271605013): sem o registro da CNH o SPX falha com 502 opaco.
+    const cnhBlockDry = checkCnhPresentGate(cadastro?.dados);
+    if (cnhBlockDry) {
+      return {
+        ok: true, dry_run: true, precheck_status: precheck.status,
+        results: [{ step: STEP, status: "BLOCKED", error: cnhBlockDry }],
       };
     }
     const { anexosMap, radExpireDate } = await prepareSpxDocs({ client, cadastro, operatorId, correlationId });
@@ -208,6 +217,14 @@ export async function runSpxPipeline({
         });
         await markJobError({ client, jobId, error: telBlock });
         return { ok: false, results: [{ step: STEP, status: "BLOCKED", error: telBlock }] };
+      }
+      // Gate de CNH (271605013): sem o registro o SPX falha com 502 opaco. Barra
+      // aqui com mensagem clara p/ o operador anexar a CNH e re-disparar.
+      const cnhBlock = checkCnhPresentGate(cadastro?.dados);
+      if (cnhBlock) {
+        logStructuredEvent("warn", "spx.pipeline.cnh_ausente_block", { cadastroId });
+        await markJobError({ client, jobId, error: cnhBlock });
+        return { ok: false, results: [{ step: STEP, status: "BLOCKED", error: cnhBlock }] };
       }
     }
 
