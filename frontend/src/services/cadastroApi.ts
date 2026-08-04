@@ -860,6 +860,23 @@ export type CartaoCnpjExtracted = {
   bairro: string;
   logradouro: string;
   numero: string;
+  // Metadados PJ ricos (Receita, via enrich do sidecar) — paridade com o
+  // mapCnpjConsultaToFields do operador. Todos opcionais no ownerSchema.
+  matriz_filial: string;
+  data_abertura: string;
+  porte: string;
+  natureza_juridica: string;
+  atividade_principal: string;
+  atividades_secundarias: string;
+  email: string;
+  telefone: string;
+  ente_federativo: string;
+  situacao_cadastral: string;
+  situacao_cadastral_data: string;
+  situacao_cadastral_motivo: string;
+  situacao_especial: string;
+  situacao_especial_data: string;
+  inscricao_estadual: string;
 };
 
 export async function ocrCartaoCnpj(file: File): Promise<CartaoCnpjExtracted> {
@@ -877,6 +894,23 @@ export async function ocrCartaoCnpj(file: File): Promise<CartaoCnpjExtracted> {
     bairro: v("bairro"),
     logradouro: v("logradouro", "endereco"),
     numero: v("numero", "numero_endereco"),
+    // Primário = chave que o enrich do sidecar emite (nome do campo do owner);
+    // aliases = chaves cruas da Receita, como fallback.
+    matriz_filial: v("matriz_filial"),
+    data_abertura: v("data_abertura", "abertura_data", "normalizado_abertura_data"),
+    porte: v("porte", "porte_empresa"),
+    natureza_juridica: v("natureza_juridica", "natureza_juridica_descricao"),
+    atividade_principal: v("atividade_principal", "atividade_economica", "cnae_principal"),
+    atividades_secundarias: v("atividades_secundarias", "atividade_economica_secundaria"),
+    email: v("email"),
+    telefone: v("telefone"),
+    ente_federativo: v("ente_federativo", "efr"),
+    situacao_cadastral: v("situacao_cadastral", "situacao"),
+    situacao_cadastral_data: v("situacao_cadastral_data"),
+    situacao_cadastral_motivo: v("situacao_cadastral_motivo", "situacao_cadastral_observacoes"),
+    situacao_especial: v("situacao_especial"),
+    situacao_especial_data: v("situacao_especial_data"),
+    inscricao_estadual: v("inscricao_estadual"),
   };
 }
 

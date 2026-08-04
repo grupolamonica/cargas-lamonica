@@ -142,3 +142,59 @@ describe("buildSubmitDados / identidade completa do proprietário PF (data_nasci
     expect(dados.cavalo_owner?.data_nascimento).toBeUndefined();
   });
 });
+
+// #4 — paridade PJ: a metadata rica da Receita (situação/natureza/porte/CNAE/
+// abertura/fantasia) pré-preenchida no ccPJ pelo wizard deve chegar no payload do
+// owner (antes só o "Anexar/Reprocessar" do operador trazia).
+describe("buildSubmitDados / metadata rica do proprietário PJ (#4)", () => {
+  const withPjOwnerRich = (): ConfirmationWizardData =>
+    ({
+      stepA: null,
+      stepB: { ownerIsDriver: false },
+      stepC: {
+        owner: { documento: "12345678000199", nome: "TRANSP EXEMPLO LTDA", docType: "cnpj" },
+        ccPJ: {
+          inscricao_estadual: "112233",
+          isento_ie: false,
+          nome_fantasia: "EXEMPLO LOG",
+          natureza_juridica: "Sociedade Empresária Limitada",
+          porte: "ME",
+          data_abertura: "2010-05-01",
+          atividade_principal: "Transporte rodoviário de carga",
+          situacao_cadastral: "ATIVA",
+          situacao_cadastral_data: "2010-05-01",
+        },
+      },
+      stepD: null,
+      stepE: {},
+      collectedCarretaOwners: [],
+      horsePlate: "ABC1D23",
+      cpf: "06658670692",
+    }) as unknown as ConfirmationWizardData;
+
+  it("emite os campos ricos do ccPJ no cavalo_owner PJ", () => {
+    const dados = buildSubmitDados(withPjOwnerRich()) as {
+      cavalo_owner?: {
+        tipo?: string;
+        inscricao_estadual?: string;
+        nome_fantasia?: string;
+        natureza_juridica?: string;
+        porte?: string;
+        data_abertura?: string;
+        atividade_principal?: string;
+        situacao_cadastral?: string;
+        situacao_cadastral_data?: string;
+      };
+    };
+    const o = dados.cavalo_owner;
+    expect(o?.tipo).toBe("pj");
+    expect(o?.inscricao_estadual).toBe("112233");
+    expect(o?.nome_fantasia).toBe("EXEMPLO LOG");
+    expect(o?.natureza_juridica).toBe("Sociedade Empresária Limitada");
+    expect(o?.porte).toBe("ME");
+    expect(o?.data_abertura).toBe("2010-05-01");
+    expect(o?.atividade_principal).toBe("Transporte rodoviário de carga");
+    expect(o?.situacao_cadastral).toBe("ATIVA");
+    expect(o?.situacao_cadastral_data).toBe("2010-05-01");
+  });
+});

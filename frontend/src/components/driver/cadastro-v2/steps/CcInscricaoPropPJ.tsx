@@ -15,6 +15,23 @@ export interface CcPropPJData {
   inscricao_estadual?: string;
   isento_ie?: boolean;
   telefone?: string;
+  // Metadados PJ ricos pré-preenchidos do OCR/Receita (cartão CNPJ) — não têm
+  // UI própria aqui; fluem via ccPJ → buildSubmitDados → owner (ownerSchema os
+  // aceita, todos opcionais). Paridade com o "Anexar/Reprocessar" do operador.
+  nome_fantasia?: string;
+  matriz_filial?: string;
+  data_abertura?: string;
+  porte?: string;
+  natureza_juridica?: string;
+  atividade_principal?: string;
+  atividades_secundarias?: string;
+  email?: string;
+  ente_federativo?: string;
+  situacao_cadastral?: string;
+  situacao_cadastral_data?: string;
+  situacao_cadastral_motivo?: string;
+  situacao_especial?: string;
+  situacao_especial_data?: string;
 }
 
 export interface CcInscricaoPropPJProps {

@@ -669,6 +669,26 @@ async def _enrich_cartao_cnpj_com_receita(env: dict) -> dict:
             "bairro": _consulta_valor(cdata, "endereco_bairro", "bairro"),
             "logradouro": _consulta_valor(cdata, "endereco_logradouro", "logradouro", "endereco"),
             "numero": _consulta_valor(cdata, "endereco_numero", "numero", "numero_endereco"),
+            "complemento": _consulta_valor(cdata, "endereco_complemento", "complemento"),
+            # Metadados PJ ricos (paridade com o mapCnpjConsultaToFields do backend —
+            # antes o enrich só trazia razão social + endereço, então o cadastro pelo
+            # WIZARD ficava sem situação/natureza/porte/CNAE; só o "Anexar/Reprocessar"
+            # do operador trazia tudo). Mesmas chaves de origem da Receita.
+            "nome_fantasia": _consulta_valor(cdata, "nome_fantasia", "fantasia"),
+            "matriz_filial": _consulta_valor(cdata, "matriz_filial"),
+            "data_abertura": _consulta_valor(cdata, "abertura_data", "normalizado_abertura_data", "data_abertura", "data_inicio_atividade"),
+            "porte": _consulta_valor(cdata, "porte", "porte_empresa"),
+            "natureza_juridica": _consulta_valor(cdata, "natureza_juridica", "natureza_juridica_descricao"),
+            "atividade_principal": _consulta_valor(cdata, "atividade_economica", "atividade_principal", "atividade_principal_descricao", "cnae_principal"),
+            "atividades_secundarias": _consulta_valor(cdata, "atividade_economica_secundaria", "atividades_secundarias"),
+            "email": _consulta_valor(cdata, "email"),
+            "telefone": _consulta_valor(cdata, "telefone"),
+            "ente_federativo": _consulta_valor(cdata, "efr", "ente_federativo"),
+            "situacao_cadastral": _consulta_valor(cdata, "situacao_cadastral", "situacao"),
+            "situacao_cadastral_data": _consulta_valor(cdata, "situacao_cadastral_data", "normalizado_situacao_cadastral_data", "data_situacao_cadastral"),
+            "situacao_cadastral_motivo": _consulta_valor(cdata, "situacao_cadastral_observacoes", "motivo_situacao_cadastral"),
+            "situacao_especial": _consulta_valor(cdata, "situacao_especial"),
+            "situacao_especial_data": _consulta_valor(cdata, "situacao_especial_data"),
         }
         # Endereço de CNPJ frequentemente é "S/N" (sem número) — a Receita devolve o
         # número vazio. Como o enderecoSchema exige `numero` (min 1) e o sanitizador
@@ -678,7 +698,8 @@ async def _enrich_cartao_cnpj_com_receita(env: dict) -> dict:
         if mapped["logradouro"] and not mapped["numero"]:
             mapped["numero"] = "S/N"
         for k, v in mapped.items():
-            if v:
+            # Ignora valores mascarados pela Infosimples ("*****") — não são dado real.
+            if v and not all(ch in "* " for ch in str(v)):
                 campos[k] = {"valor": v, "score": None}
         env.setdefault("header", {})["rf_enriched"] = True
         log.info(

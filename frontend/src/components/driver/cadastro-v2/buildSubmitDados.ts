@@ -11,9 +11,30 @@ import type { StepCData } from "./steps/StepCProprietarioCavalo";
 import type { StepEData } from "./steps/StepECarretaOwner";
 import type { CollectedCarretaOwner } from "./steps/StepDCarretas";
 import type { AnttTitularData } from "./widgets/AnttTitularPrompt";
+import type { CcPropPJData } from "./steps/CcInscricaoPropPJ";
 
 function digitsOnly(v: string | undefined | null): string {
   return (v ?? "").replace(/\D/g, "");
+}
+
+// Metadata rica do PJ (Receita) que o wizard pré-preenche no ccPJ a partir do
+// cartão CNPJ — emitida no owner (ownerSchema aceita todas, opcionais). Espelha
+// o mapCnpjConsultaToFields do operador. inscricao_estadual/isento_ie/telefone
+// já são emitidos à parte.
+function pjMetaExtras(ccPJ: CcPropPJData | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!ccPJ) return out;
+  const keys: (keyof CcPropPJData)[] = [
+    "nome_fantasia", "matriz_filial", "data_abertura", "porte", "natureza_juridica",
+    "atividade_principal", "atividades_secundarias", "email", "ente_federativo",
+    "situacao_cadastral", "situacao_cadastral_data", "situacao_cadastral_motivo",
+    "situacao_especial", "situacao_especial_data",
+  ];
+  for (const k of keys) {
+    const v = ccPJ[k];
+    if (typeof v === "string" && v.trim()) out[k] = v.trim();
+  }
+  return out;
 }
 
 // ── Motorista ────────────────────────────────────────────────────────────────
@@ -396,6 +417,8 @@ function buildOwnerFromStepC(stepC: StepCData) {
       ? { isento_ie: ccPJ.isento_ie }
       : {}),
     ...(ccPJ?.telefone ? { telefone: ccPJ.telefone.replace(/\D/g, "") } : {}),
+    // Metadata rica do PJ (Receita) — paridade com o operador (#4).
+    ...pjMetaExtras(ccPJ),
     // 19/05 — storage_path do documento (CNH PF / cartao CNPJ PJ) do owner.
     ...(stepC.ownerDocStoragePath
       ? { owner_doc_url: stepC.ownerDocStoragePath }
@@ -462,6 +485,8 @@ function buildOwnerFromCollected(
         ? { isento_ie: ccPJ.isento_ie }
         : {}),
       ...(ccPJ?.telefone ? { telefone: ccPJ.telefone.replace(/\D/g, "") } : {}),
+      // Metadata rica do PJ (Receita) — paridade com o operador (#4).
+      ...pjMetaExtras(ccPJ),
       // 19/05 — storage_path do documento do proprietario desta carreta.
       ...(stepE.ownerDocStoragePath
         ? { owner_doc_url: stepE.ownerDocStoragePath }
