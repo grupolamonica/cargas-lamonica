@@ -21,6 +21,7 @@
 //   3. Para cada chamado declarado, lê a comprovação em `docs/chamados/<N>.md`.
 //      Sem esse arquivo, não responde nada.
 //   4. Anexa a comprovação, publica a resposta e marca como Solucionado.
+//   5. Abre card no board DC para todo chamado em aberto que ainda não tem um.
 //
 // Reexecutar é seguro: a idempotência vive no próprio GLPI (marca no histórico do
 // chamado), então não há arquivo de estado para corromper ou dessincronizar.
@@ -37,8 +38,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { answerGlpiTicket } from "../backend/src/application/glpi/answer-glpi-ticket.js";
+import { syncTicketsToJira } from "../backend/src/application/glpi/sync-tickets-to-jira.js";
 import { chamadosDeclaradosNoCommit, parseTicketProof } from "../backend/src/application/glpi/ticket-proof.js";
 import { isGlpiConfigured } from "../backend/src/infrastructure/glpi/glpi-client.js";
+import { isJiraConfigured } from "../backend/src/infrastructure/jira/jira-client.js";
 
 const RAIZ = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DIAS_PADRAO = 30;
@@ -130,12 +133,16 @@ async function main() {
     ? new Map([[Number(forcado), sha]])
     : chamadosDeclaradosAte(sha, dias);
 
+  // Sem `return` aqui: as duas metades do ciclo são independentes. Não ter chamado
+  // para responder nesta janela não pode impedir a criação de card para chamado
+  // novo — que é justamente o caso mais comum num dia sem deploy de correção.
   if (chamados.size === 0) {
     console.log("nenhum chamado declarado em commit deployado nesta janela.");
+    await abreCardsNoJira();
     return;
   }
 
-  const resumo = { respondidos: 0, ignorados: 0, semProva: 0, erros: 0 };
+  const resumo = { respondidos: 0, responderia: 0, ignorados: 0, semProva: 0, erros: 0 };
 
   for (const [chamadoId, commitSha] of chamados) {
     const { caminho, conteudo } = leComprovacao(sha, chamadoId);
@@ -161,6 +168,7 @@ async function main() {
       console.log(`#${chamadoId}  [dry-run] responderia a partir de ${commitSha.slice(0, 8)}`);
       console.log(`           anexo: ${caminho}`);
       console.log(`           texto: ${prova.resposta.split("\n")[0].slice(0, 80)}...`);
+      resumo.responderia += 1;
       continue;
     }
 
@@ -189,11 +197,53 @@ async function main() {
     }
   }
 
+  const respondidos = modoSeco
+    ? `${resumo.responderia} responderia`
+    : `${resumo.respondidos} respondido(s)`;
   console.log(
-    `\nresumo: ${resumo.respondidos} respondido(s) · ${resumo.ignorados} já tratado(s) · ` +
+    `\nresumo: ${respondidos} · ${resumo.ignorados} já tratado(s) · ` +
       `${resumo.semProva} sem comprovação · ${resumo.erros} erro(s)`,
   );
+
+  await abreCardsNoJira();
+
   if (resumo.erros > 0) process.exitCode = 1;
+}
+
+/**
+ * Segunda metade do ciclo: chamado em aberto que ainda não tem card vira Bug no
+ * board DC.
+ *
+ * Roda DEPOIS de responder, e sem derrubar o ciclo se falhar: um problema no Jira
+ * não pode impedir que os chamados já corrigidos sejam respondidos. Sem credencial
+ * do Jira, apenas avisa e segue.
+ */
+async function abreCardsNoJira() {
+  if (!isJiraConfigured()) {
+    console.log("\njira: sem JIRA_EMAIL/JIRA_API_TOKEN — nenhum card criado.");
+    return;
+  }
+
+  if (modoSeco) {
+    console.log("\njira: [dry-run] não cria card.");
+    return;
+  }
+
+  try {
+    const { criados, jaExistiam, examinados } = await syncTicketsToJira({
+      correlationId: "glpi-worker-jira",
+    });
+    for (const card of criados) {
+      console.log(`jira: chamado #${card.chamadoId} → ${card.key}  ${card.url}`);
+    }
+    console.log(
+      `jira: ${examinados} chamado(s) em aberto · ${criados.length} card(s) novo(s) · ` +
+        `${jaExistiam} já tinha(m) card`,
+    );
+  } catch (erro) {
+    console.error(`jira: FALHOU — ${erro instanceof Error ? erro.message : String(erro)}`);
+    console.error("      Os chamados já corrigidos foram respondidos normalmente.");
+  }
 }
 
 main().catch((erro) => {

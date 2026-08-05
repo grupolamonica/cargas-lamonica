@@ -13,6 +13,7 @@ A cada ciclo, o worker:
 2. Varre os commits até esse ponto procurando o trailer `Chamado: GLPI #N`.
 3. Lê a comprovação em `docs/chamados/N.md`.
 4. Anexa a comprovação no chamado, publica a resposta e marca como **Solucionado**.
+5. Abre card no board **DC** para todo chamado em aberto que ainda não tem um.
 
 Ela responde **sozinha**, sem revisão humana — foi a decisão tomada em 05/08/2026.
 As travas da seção 6 fazem o papel do revisor.
@@ -70,6 +71,23 @@ GLPI_USER_TOKEN=...
 ```
 
 Sem os dois, o worker sai com código 2 e não faz nada.
+
+### 3.4 Token do Jira (para o card automático)
+
+Só para a criação de card. Gerar em **id.atlassian.com → Segurança → Criar e
+gerenciar tokens de API** (é um token pessoal, não a senha da conta) e preencher:
+
+```
+JIRA_EMAIL=seu.email@grupolamonica.com.br
+JIRA_API_TOKEN=...
+```
+
+Sem essas duas, o worker responde os chamados normalmente e só não cria card — a
+falta de Jira nunca impede a resposta ao operador.
+
+O card sai como **Bug** no projeto **DC**, com os labels `chamado-glpi` e
+`glpi-<id>`. A deduplicação usa o label, não o título: renomear o card no board não
+faz o worker criar outro.
 
 ## 4. Como marcar um chamado como resolvido por um PR
 
