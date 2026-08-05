@@ -16,6 +16,7 @@ from typing import Any
 from . import constants as K
 from . import cnh_split, drivers, lookups, uploads
 from .client import APIErro, SPXClient
+from .datas import _to_unix_seconds
 from .logger import log_alerta, log_erro, log_info
 
 
@@ -78,47 +79,6 @@ def _esta_vazio(valor: Any) -> bool:
     if isinstance(valor, (int, float)):
         return valor == 0
     return False
-
-
-def _epoch_seconds(dt: datetime) -> int:
-    """int(dt.timestamp()) que NAO quebra em datas pre-1970 no Windows.
-
-    FIX 2026-06-25 (caso FLAVIO DONIZETTE PINHEIRO, nasc. 10/10/1958): no
-    Windows, datetime.timestamp() de um datetime NAIVE anterior a 1970 lanca
-    OSError(22, 'Invalid argument') — o mktime do C runtime nao aceita epoch
-    negativo. Isso derrubava o cadastro SPX INTEIRO de motoristas mais velhos
-    (birth_day pre-1970), com 'OSError: [Errno 22] Invalid argument' -> HTTP 500.
-    Fallback p/ calculo UTC manual (epoch negativo via aritmetica de timedelta) —
-    suficiente p/ campos de DATA (birth_day/license_expire), onde o offset de
-    fuso nao muda o dia que o SPX armazena. Pos-1970 segue identico (.timestamp()).
-    """
-    try:
-        return int(dt.timestamp())
-    except (OSError, OverflowError, ValueError):
-        from datetime import timezone
-        aware = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-        return int((aware - datetime(1970, 1, 1, tzinfo=timezone.utc)).total_seconds())
-
-
-def _to_unix_seconds(d: str | int | datetime | None) -> int:
-    """Aceita 'YYYY-MM-DD', 'DD/MM/YYYY', datetime, unix int."""
-    if d is None or d == "":
-        return 0
-    if isinstance(d, int):
-        return d
-    if isinstance(d, datetime):
-        return _epoch_seconds(d)
-    s = str(d).strip()
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y"):
-        try:
-            return _epoch_seconds(datetime.strptime(s, fmt))
-        except ValueError:
-            continue
-    # ja eh epoch como string?
-    try:
-        return int(float(s))
-    except ValueError:
-        raise ValueError(f"data invalida: {d!r}")
 
 
 def _merge_com_existente(novo: dict, existente: dict, locked: set[str]) -> tuple[dict, list[str]]:
