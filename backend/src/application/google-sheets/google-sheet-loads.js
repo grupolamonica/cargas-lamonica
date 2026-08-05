@@ -7,7 +7,7 @@ import { createSupabaseAdminClient } from "../../infrastructure/supabase/admin-c
 import { normalizeVehicleProfile } from "../../domain/vehicle-profiles.js";
 import { baseRouteValues as BASE_ROUTE_VALUES } from "../../domain/operator-admin/base-route-values.js";
 import { getSaoPauloWallClock } from "../../domain/sao-paulo-time.js";
-import { promoteLaunchedTwinsBeforeRetirement } from "./promote-launched-twins.js";
+import { mergeTwinsWithCanonicalBeforeRetirement, promoteLaunchedTwinsBeforeRetirement } from "./promote-launched-twins.js";
 
 const DEFAULT_SHEET_ID = process.env.GOOGLE_SHEET_ID?.trim() || "";
 const DEFAULT_SHEET_GID = process.env.GOOGLE_SHEET_GID?.trim() || "0";
@@ -19,6 +19,29 @@ const EXISTING_SHEET_LOADS_PAGE_SIZE = 1000;
 const ROUTE_CATALOG_PAGE_SIZE = 1000;
 const ROUTE_TEMPLATE_PAGE_SIZE = 1000;
 const SHEET_LOADS_TABLE = "cargas";
+
+// A gêmea lançada carrega ALGUMA decisão do operador? Fragmento SQL sobre o alias `c`
+// do CTE de gêmeas (ramos 2 e 3), onde `c` é a carga LANÇADA.
+//
+// Lista completa e deliberada — é o conjunto que `CAMPOS_MIGRAVEIS` de
+// merge-launched-twin.js migra, mais `alloc_status` e `alloc_pinned`. Antes o ramo (2)
+// não checava NADA e o ramo (3) checava só motorista e status, então tratativas,
+// verditos de checklist, tipo, vínculo, motivo da troca e "fixo" eram descartados sem
+// erro e sem rastro na tela. `alloc_pinned` entra porque "fixar" é uma decisão
+// explícita de travar aquele motorista naquela carga.
+const TEM_DECISAO_DO_OPERADOR = `(
+                       COALESCE(c.alloc_motorista, '') <> ''
+                       OR COALESCE(c.alloc_cavalo, '') <> ''
+                       OR COALESCE(c.alloc_carreta, '') <> ''
+                       OR COALESCE(c.alloc_status, '') <> ''
+                       OR COALESCE(c.alloc_tipo, '') <> ''
+                       OR COALESCE(c.alloc_vinculo, '') <> ''
+                       OR COALESCE(c.alloc_descricao, '') <> ''
+                       OR COALESCE(c.alloc_tratativas, '') <> ''
+                       OR COALESCE(c.alloc_checklist_cavalo, '') <> ''
+                       OR COALESCE(c.alloc_checklist_carreta, '') <> ''
+                       OR c.alloc_pinned IS TRUE
+                     )`;
 const SHEET_CLIENTS_TABLE = "clientes";
 const ROUTE_CATALOG_TABLE = "route_metrics_cache";
 // `tipo` NÃO é obrigatório: nem toda planilha tem coluna de tipo de carga (a
@@ -1877,6 +1900,33 @@ export async function syncGoogleSheetLoads({
     });
   }
 
+  // ── Migração da decisão para os ramos (2) e (3) do CTE ────────────────────────
+  // Diferente do caso (1), aqui a canônica JÁ EXISTE (os dois ramos exigem
+  // `EXISTS (... s.sheet_lh = c.lh_manual ...)`) — falta só migrar os `alloc_*` antes
+  // de a gêmea ser aposentada. Sem esta passada a decisão do operador DESAPARECE:
+  // o ramo (2) não checa alocação nenhuma e o ramo (3) checa só motorista e status,
+  // deixando passar tratativas, checklists, tipo, vínculo, descrição e "fixo".
+  // Medido em produção: LT0Q8702D3541 e LT0Q8602CP8A1 têm canônica e a lápide nunca
+  // foi mergeada. Isolada e no-op com o gate off, igual à passada acima.
+  let twinOpenMerge = { mode: "off", candidatos: 0, mergeados: 0, bloqueados: 0 };
+  try {
+    twinOpenMerge = await mergeTwinsWithCanonicalBeforeRetirement({
+      source,
+      lhs: [...openSheetLhs, ...createdTwinLhs],
+    });
+    if (twinOpenMerge.mergeados > 0) {
+      console.info(
+        `[google-sheet-loads] ${twinOpenMerge.mergeados} gêmea(s) com canônica existente tiveram a alocação migrada antes da aposentadoria (${twinOpenMerge.bloqueados} bloqueada(s))`,
+        twinOpenMerge,
+      );
+    }
+  } catch (twinOpenMergeError) {
+    console.error("[google-sheet-loads] merge de gêmeas com canônica existente falhou (isolado)", {
+      source,
+      message: twinOpenMergeError?.message,
+    });
+  }
+
   if (takenSheetLhs.length > 0 || openSheetLhs.length > 0 || createdTwinLhs.length > 0) {
     try {
       const reconcileResult = await withPgClient((pgClient) =>
@@ -1943,9 +1993,17 @@ export async function syncGoogleSheetLoads({
                    -- duplicada no portal. Só aposenta quando a lançada NÃO tem
                    -- reserva/candidatura ativa e quando a linha da planilha existe
                    -- OPEN e pronta (com valor) — nunca remove o único spot visível.
+                   --
+                   -- E só aposenta quando NÃO há decisão do operador a perder: ou ela
+                   -- já foi migrada (alloc_merged_into_cargo_id preenchido pela passada
+                   -- mergeTwinsWithCanonicalBeforeRetirement, que roda logo antes), ou
+                   -- não existe nenhuma. Este ramo não checava alocação NENHUMA —
+                   -- medido em produção: LT0Q8702D3541 e LT0Q8602CP8A1 perderam a
+                   -- decisão do operador em silêncio, sem erro e sem rastro na tela.
                    OR (
                      c.lh_manual = ANY($3::text[])
                      AND c.status = 'OPEN'
+                     AND (c.alloc_merged_into_cargo_id IS NOT NULL OR NOT ${TEM_DECISAO_DO_OPERADOR})
                      AND c.reserved_public_lead_id IS NULL
                      AND NOT EXISTS (
                        SELECT 1 FROM public.load_public_leads l
@@ -1963,14 +2021,18 @@ export async function syncGoogleSheetLoads({
                    -- (3) PREVENCAO: a linha da planilha desta LH NASCEU nesta rodada.
                    -- Fecha a janela de duplicata (medida em prod: ~20h) sem esperar o
                    -- motorista ser marcado na planilha. Mesmas guardas do caso (2) — so
-                   -- aposenta lancada OPEN, sem alocacao de Monitor, sem reserva e sem
-                   -- candidatura ativa — e exige a canonica VIVA (nao-terminal), senao
-                   -- sobraria ZERO carga viva para a viagem.
+                   -- aposenta lancada OPEN, sem decisao do operador a perder, sem reserva
+                   -- e sem candidatura ativa — e exige a canonica VIVA (nao-terminal),
+                   -- senao sobraria ZERO carga viva para a viagem.
+                   --
+                   -- Checava só alloc_motorista e alloc_status, deixando passar
+                   -- tratativas, checklists, tipo, vínculo, descrição e "fixo" — todos
+                   -- decisão do operador, todos perdidos em silêncio. Agora usa o mesmo
+                   -- predicado completo do ramo (2).
                    OR (
                      c.lh_manual = ANY($4::text[])
                      AND c.status = 'OPEN'
-                     AND COALESCE(c.alloc_motorista, '') = ''
-                     AND COALESCE(c.alloc_status, '') = ''
+                     AND (c.alloc_merged_into_cargo_id IS NOT NULL OR NOT ${TEM_DECISAO_DO_OPERADOR})
                      AND c.reserved_public_lead_id IS NULL
                      AND NOT EXISTS (
                        SELECT 1 FROM public.load_public_leads l

@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { closeTestDatabase, query, resetTestDatabase, seedCargo, seedPublicLead, withPgClient, withPgTransaction } from "../operator-admin/test-harness.js";
-import { promoteLaunchedTwinsBeforeRetirement } from "./promote-launched-twins.js";
+import { mergeTwinsWithCanonicalBeforeRetirement, promoteLaunchedTwinsBeforeRetirement } from "./promote-launched-twins.js";
 import { createSheetLoadId } from "./google-sheet-loads.js";
 
 const source = "shopee";
@@ -351,5 +351,101 @@ describe("promoteLaunchedTwinsBeforeRetirement", () => {
 
     expect(r.candidatos).toBe(0);
     expect(r.materializados).toBe(0);
+  });
+});
+
+describe("mergeTwinsWithCanonicalBeforeRetirement", () => {
+  beforeEach(async () => { await resetTestDatabase(); });
+  afterEach(() => { delete process.env.TWIN_MERGE; });
+  afterAll(async () => { await closeTestDatabase(); });
+
+  const args = (over = {}) => ({
+    source,
+    lhs: [],
+    deps: { withPgTransaction, withPgClient },
+    ...over,
+  });
+
+  async function seedCanonica(lh) {
+    const id = createSheetLoadId(lh, source);
+    await seedCargo({ id, sheet_lh: lh, origem: "A", destino: "B", status: "OPEN" });
+    await query(`UPDATE public.cargas SET sheet_source = $2 WHERE id = $1`, [id, source]);
+    return id;
+  }
+
+  it("gate off → no-op declarado", async () => {
+    const r = await mergeTwinsWithCanonicalBeforeRetirement(args({ lhs: ["LT-X"] }));
+    expect(r).toMatchObject({ mode: "off", mergeados: 0 });
+  });
+
+  it("migra a decisão do operador que os ramos (2)/(3) descartavam em silêncio", async () => {
+    // Campos que o ramo (2) NUNCA checava e o (3) deixava passar.
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-OPEN-MERGE";
+    const gemeaId = await seedDoador(lh, { alloc_motorista: "CLOVIS" });
+    await query(
+      `UPDATE public.cargas SET alloc_tratativas = $2, alloc_checklist_cavalo = $3, alloc_vinculo = $4 WHERE id = $1`,
+      [gemeaId, "aguardando 2a via do CRLV", "Aprovado", "TERCEIRO"],
+    );
+    const canonicaId = await seedCanonica(lh);
+
+    const r = await mergeTwinsWithCanonicalBeforeRetirement(args({ lhs: [lh] }));
+
+    expect(r).toMatchObject({ mode: "on", candidatos: 1, mergeados: 1, bloqueados: 0 });
+    const can = await query(
+      `SELECT alloc_motorista, alloc_tratativas, alloc_checklist_cavalo, alloc_vinculo FROM public.cargas WHERE id = $1`,
+      [canonicaId],
+    );
+    expect(can.rows[0]).toMatchObject({
+      alloc_motorista: "CLOVIS",
+      alloc_tratativas: "aguardando 2a via do CRLV",
+      alloc_checklist_cavalo: "Aprovado",
+      alloc_vinculo: "TERCEIRO",
+    });
+    // A gêmea passa a apontar para a canônica → o CTE pode aposentá-la sem perda.
+    const gem = await query(`SELECT alloc_merged_into_cargo_id FROM public.cargas WHERE id = $1`, [gemeaId]);
+    expect(gem.rows[0].alloc_merged_into_cargo_id).toBe(canonicaId);
+  });
+
+  it("pré-filtra LH sem gêmea e LH sem canônica (não gasta o lote)", async () => {
+    process.env.TWIN_MERGE = "on";
+    const comTudo = "LT-OK";
+    await seedDoador(comTudo, { alloc_motorista: "CLOVIS" });
+    await seedCanonica(comTudo);
+    // Só gêmea, sem canônica → não é trabalho deste passo (é da promoção).
+    await seedDoador("LT-SO-GEMEA", { alloc_motorista: "ANA" });
+    // Só canônica, sem gêmea → nada a migrar.
+    await seedCanonica("LT-SO-CANONICA");
+
+    const r = await mergeTwinsWithCanonicalBeforeRetirement(
+      args({ lhs: [comTudo, "LT-SO-GEMEA", "LT-SO-CANONICA", "LT-INEXISTENTE"] }),
+    );
+
+    expect(r).toMatchObject({ candidatosBrutos: 4, candidatos: 1, mergeados: 1 });
+    expect(r.mergeadosLhs).toEqual([comTudo]);
+  });
+
+  it("gêmea já mergeada não entra nos candidatos (idempotente)", async () => {
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-JA-MERGEADA";
+    const gemeaId = await seedDoador(lh, { alloc_motorista: "CLOVIS" });
+    const canonicaId = await seedCanonica(lh);
+    await query(`UPDATE public.cargas SET alloc_merged_into_cargo_id = $2 WHERE id = $1`, [gemeaId, canonicaId]);
+
+    const r = await mergeTwinsWithCanonicalBeforeRetirement(args({ lhs: [lh] }));
+
+    expect(r).toMatchObject({ candidatos: 0, mergeados: 0 });
+  });
+
+  it("bloqueio do merge (lead ativo na perdedora) é contado, não engolido", async () => {
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-BLOQ-OPEN";
+    const gemeaId = await seedDoador(lh, { alloc_motorista: "CLOVIS" });
+    await seedPublicLead({ load_id: gemeaId, status: "QUEUED" });
+    await seedCanonica(lh);
+
+    const r = await mergeTwinsWithCanonicalBeforeRetirement(args({ lhs: [lh] }));
+
+    expect(r).toMatchObject({ candidatos: 1, mergeados: 0, bloqueados: 1 });
   });
 });

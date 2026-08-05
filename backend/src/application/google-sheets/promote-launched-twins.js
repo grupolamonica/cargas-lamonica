@@ -315,3 +315,144 @@ export async function promoteLaunchedTwinsBeforeRetirement({
   }
   return stats;
 }
+
+const ZERO_MERGE_EXISTENTE = Object.freeze({
+  mode: "off",
+  candidatos: 0,
+  candidatosBrutos: 0,
+  mergeados: 0,
+  bloqueados: 0,
+  nadaAMigrar: 0,
+  mergeadosLhs: [],
+});
+
+/**
+ * Migra a decisão do operador das gêmeas cujos LHs vão ser aposentados pelos ramos
+ * (2) `twin_open_duplicate` e (3) `twin_superseded_on_create` do CTE — ANTES de eles
+ * rodarem.
+ *
+ * POR QUE (medido em produção): esses dois ramos aposentam a gêmea sem migrar `alloc_*`.
+ * O ramo (2) só checa `status = 'OPEN'`, reserva e lead — NÃO checa alocação nenhuma.
+ * O ramo (3) checa apenas `alloc_motorista` e `alloc_status`, deixando passar
+ * `alloc_tratativas`, `alloc_checklist_cavalo/carreta`, `alloc_tipo`, `alloc_vinculo`,
+ * `alloc_descricao` e `alloc_pinned`. Resultado: LT0Q8702D3541 e LT0Q8602CP8A1 têm
+ * canônica, mas a lápide NUNCA foi mergeada — a decisão do operador simplesmente
+ * desapareceu da tela, sem erro e sem rastro visível.
+ *
+ * Diferente da promoção acima, aqui a canônica JÁ EXISTE por definição (os dois ramos
+ * exigem `EXISTS (... s.sheet_lh = c.lh_manual ...)`), então não há nada a materializar
+ * — só a migração. `mergeLaunchedTwinAlloc` faz todo o trabalho e já traz as guardas
+ * (cancelamento no destino, reserva/lead na perdedora, não sobrescrever decisão mais
+ * nova da vencedora).
+ *
+ * Pré-filtro pela EXISTÊNCIA de gêmea não-mergeada, mesma razão do starvation
+ * corrigido na passada de cima: `openSheetLhs` é o conjunto de TODAS as linhas
+ * disponíveis da planilha (milhares), e quase nenhuma tem gêmea.
+ *
+ * @param {{ source: string, lhs: string[], correlationId?: string|null, limit?: number,
+ *           deps?: { withPgTransaction?: Function, withPgClient?: Function, mergeLaunchedTwinAlloc?: Function } }} args
+ */
+export async function mergeTwinsWithCanonicalBeforeRetirement({ source, lhs, correlationId = null, limit = DEFAULT_BATCH_LIMIT, deps = {} }) {
+  const mode = twinMergeMode();
+  if (mode === "off") return ZERO_MERGE_EXISTENTE;
+
+  const run = deps.withPgTransaction || withPgTransaction;
+  const readClient = deps.withPgClient || withPgClient;
+  const doMerge = deps.mergeLaunchedTwinAlloc || mergeLaunchedTwinAlloc;
+
+  const brutos = Array.from(new Set((lhs || []).map((l) => String(l ?? "").trim()).filter(Boolean)));
+  if (brutos.length === 0) return { ...ZERO_MERGE_EXISTENTE, mode };
+
+  // Só LHs que TÊM gêmea lançada ainda não mergeada E canônica na mesma fonte —
+  // qualquer outro não tem trabalho a fazer e não deve gastar slot do lote.
+  //
+  // DUAS consultas simples + interseção em JS, em vez de um EXISTS correlacionado com
+  // COALESCE sobre parâmetro: essa forma não roda no harness pg-mem dos testes (mesma
+  // família de limitações já documentada aqui e em find-allocation-conflicts.js). As
+  // duas são indexadas e o custo é o mesmo na prática.
+  let candidatos = [];
+  try {
+    const [gemeas, canonicas] = await Promise.all([
+      readClient((client) =>
+        client.query(
+          `SELECT DISTINCT lh_manual AS lh FROM public.cargas
+            WHERE lh_manual = ANY($1::text[])
+              AND sheet_lh IS NULL
+              AND alloc_merged_into_cargo_id IS NULL`,
+          [brutos],
+        ),
+      ),
+      readClient((client) =>
+        client.query(
+          `SELECT DISTINCT sheet_lh AS lh, sheet_source FROM public.cargas
+            WHERE sheet_lh = ANY($1::text[])`,
+          [brutos],
+        ),
+      ),
+    ]);
+    const fonte = source ?? null;
+    const comCanonica = new Set(
+      canonicas.rows
+        .filter((r) => (r.sheet_source ?? null) === fonte)
+        .map((r) => String(r.lh ?? "").trim()),
+    );
+    const comGemea = new Set(gemeas.rows.map((r) => String(r.lh_manual ?? r.lh ?? "").trim()));
+    candidatos = brutos.filter((lh) => comGemea.has(lh) && comCanonica.has(lh));
+  } catch (err) {
+    logStructuredEvent("warn", "merge-twins-existentes.prefiltro-falhou", {
+      correlationId,
+      source,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return { ...ZERO_MERGE_EXISTENTE, mode, candidatosBrutos: brutos.length };
+  }
+
+  if (candidatos.length === 0) return { ...ZERO_MERGE_EXISTENTE, mode, candidatosBrutos: brutos.length };
+
+  let mergeados = 0;
+  let bloqueados = 0;
+  let nadaAMigrar = 0;
+  const mergeadosLhs = [];
+  const truncado = candidatos.length > limit;
+
+  for (const lh of candidatos.slice(0, limit)) {
+    try {
+      const merge = await run(async (client) => {
+        const { rows: can } = await client.query(
+          "SELECT id FROM public.cargas WHERE sheet_lh = $1 AND COALESCE(sheet_source, '') = COALESCE($2, '') LIMIT 1",
+          [lh, source ?? null],
+        );
+        if (can.length === 0) return { skipped: "sem_canonica" };
+        return doMerge(client, { lh, winnerId: can[0].id, mode, correlationId });
+      });
+
+      if (merge?.merged || (mode === "dry" && !merge?.skipped && (merge?.copiedFields?.length ?? 0) > 0)) {
+        mergeados += 1;
+        mergeadosLhs.push(lh);
+      } else if (merge?.skipped === "nada_a_migrar" || merge?.skipped === "sem_gemea") {
+        nadaAMigrar += 1;
+      } else if (merge?.skipped) {
+        bloqueados += 1;
+      }
+    } catch (err) {
+      // Isolado por LH: uma falha nunca derruba o sync nem o resto do lote.
+      logStructuredEvent("warn", "merge-twins-existentes.lh-failed", {
+        correlationId,
+        source,
+        lh,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const stats = { mode, candidatos: candidatos.length, candidatosBrutos: brutos.length, mergeados, bloqueados, nadaAMigrar, mergeadosLhs, truncado };
+  if (mergeados > 0 || bloqueados > 0 || truncado) {
+    logStructuredEvent(mode === "dry" ? "warn" : "info", `merge-twins-existentes.${mode === "dry" ? "dry-run" : "aplicado"}`, {
+      correlationId,
+      source,
+      ...stats,
+      mergeadosLhs: mergeadosLhs.slice(0, 15),
+    });
+  }
+  return stats;
+}

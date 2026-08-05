@@ -1210,11 +1210,63 @@ describe("google sheet loads sync", () => {
     expect(reconcileCall.params[3].length).toBeGreaterThan(0);
     expect(reconcileCall.sql).toContain("c.lh_manual = ANY($4::text[])");
     expect(reconcileCall.sql).toContain("twin_superseded_on_create");
-    // Guardas do ramo novo: nunca aposenta lancada com alocacao de Monitor...
-    expect(reconcileCall.sql).toContain("COALESCE(c.alloc_motorista, '') = ''");
-    expect(reconcileCall.sql).toContain("COALESCE(c.alloc_status, '') = ''");
+    // Guardas do ramo novo: nunca aposenta lancada que carregue decisao do operador
+    // AINDA NAO MIGRADA. Antes checava só motorista e status — tratativas, verditos de
+    // checklist, tipo, vínculo, motivo da troca e "fixo" passavam batido e a decisão
+    // era descartada em silêncio (medido em produção: LT0Q8702D3541, LT0Q8602CP8A1).
+    expect(reconcileCall.sql).toContain("c.alloc_merged_into_cargo_id IS NOT NULL OR NOT");
+    for (const campo of [
+      "c.alloc_motorista",
+      "c.alloc_cavalo",
+      "c.alloc_carreta",
+      "c.alloc_status",
+      "c.alloc_tipo",
+      "c.alloc_vinculo",
+      "c.alloc_descricao",
+      "c.alloc_tratativas",
+      "c.alloc_checklist_cavalo",
+      "c.alloc_checklist_carreta",
+    ]) {
+      expect(reconcileCall.sql, campo).toContain(`COALESCE(${campo}, '') <> ''`);
+    }
+    expect(reconcileCall.sql).toContain("c.alloc_pinned IS TRUE");
     // ... e exige a canonica VIVA (nao-terminal) — senao sobraria zero carga viva.
     expect(reconcileCall.sql).toContain("s.status NOT IN ('EXPIRED', 'CANCELLED', 'COMPLETED', 'FAILED')");
+  });
+
+  it("ramo (2) twin_open_duplicate também exige decisão migrada (antes não checava NADA)", async () => {
+    // O ramo (2) só olhava status OPEN, reserva e candidatura — nenhuma checagem de
+    // alocação. Uma gêmea OPEN com tratativas/checklist/fixo do operador era aposentada
+    // e a decisão desaparecia sem erro e sem rastro na tela.
+    const supabaseClient = createSupabaseMock();
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+
+    await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    const reconcileCall = pgQueryCalls.find(
+      (c) => c.sql.includes("c.lh_manual = ANY($1::text[])") && c.sql.includes("public.load_public_leads"),
+    );
+    expect(reconcileCall).toBeTruthy();
+
+    const ramo2 = reconcileCall.sql.slice(
+      reconcileCall.sql.indexOf("(2) viagem DISPONÍVEL"),
+      reconcileCall.sql.indexOf("(3) PREVENCAO"),
+    );
+    expect(ramo2).toContain("c.lh_manual = ANY($3::text[])");
+    expect(ramo2).toContain("c.alloc_merged_into_cargo_id IS NOT NULL OR NOT");
+    expect(ramo2).toContain("COALESCE(c.alloc_tratativas, '') <> ''");
+    expect(ramo2).toContain("c.alloc_pinned IS TRUE");
   });
 
   it("grava o rastro da aposentadoria (retired_reason + superseded_by_cargo_id) e emite auditoria", async () => {
