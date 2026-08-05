@@ -908,6 +908,55 @@ describe.sequential("public load leads", () => {
     expect(reopened.alloc_carreta).toBe("");
   });
 
+  // O aceite resolvia o nome SÓ pelo Angellira: quem não tem registro lá reservava
+  // e a alocação do sistema ficava em branco — a Fila exibia o nome (ela usa a
+  // cadeia Angellira → ASPx → cadastro pendente) e o Monitor não mostrava nada.
+  it("reservar pela Fila grava alloc_motorista com o nome do ASPx quando o Angellira não achou o motorista", async () => {
+    const operator = await harness.seedOperator();
+    const { id: loadId } = await harness.seedLoad();
+
+    const semAngellira = {
+      schemaVersion: 1,
+      checkedAt: "2026-08-04T13:00:00.000Z",
+      candidateSubmittedAt: "2026-08-04T12:00:00.000Z",
+      overallStatus: "VALID",
+      missingFields: [],
+      warnings: [],
+      driver: {
+        // Caso real de produção: CPF não encontrado no Angellira.
+        angelira: { status: "NOT_FOUND", found: false, displayName: null, validUntil: null },
+        aspx: { status: "FOUND", found: true },
+      },
+      plates: [],
+      vigency: { status: "VALID", validUntil: "2026-12-31", daysUntilExpiry: 200, source: "ANGELLIRA_DRIVER" },
+      support: { whatsappNumber: "5571999999999", whatsappUrl: "https://wa.me/5571999999999" },
+      sources: { angelira: { status: "OK" }, aspx: { status: "OK" } },
+    };
+    mockValidatePublicLeadPreRegistration.mockResolvedValueOnce({
+      summary: semAngellira,
+      storedSummary: semAngellira,
+    });
+
+    const preregistered = await service.createPublicLoadLeadPreRegistration({
+      loadId,
+      payload: buildPayload({ cpf: "222.222.222-22", phone: "(71) 92222-2222" }),
+      correlationId: "corr-alloc-aspx-prereg",
+    });
+    await harness.seedAspxDriver({ cpf: "22222222222", displayName: "Maria Santos ASPx" });
+
+    await service.approvePublicLoadLead({
+      loadId,
+      leadId: preregistered.payload.lead.id,
+      operatorId: operator.id,
+      correlationId: "corr-alloc-aspx-approve",
+    });
+
+    const reserved = await harness.getLoad(loadId);
+    expect(reserved.status).toBe(LOAD_STATUS.RESERVED);
+    expect(reserved.alloc_motorista).toBe("Maria Santos ASPx");
+    expect(reserved.alloc_source).toBe("operator");
+  });
+
   const isoDateOf = (value) =>
     value instanceof Date
       ? `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, "0")}-${String(value.getUTCDate()).padStart(2, "0")}`

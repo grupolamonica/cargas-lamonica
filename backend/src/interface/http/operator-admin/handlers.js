@@ -99,6 +99,7 @@ import { listSystemCargasForMonitor } from "../../../application/operator-admin/
 import { reconcileMonitorDuplicates } from "../../../application/operator-admin/use-cases/dedupe-monitor-rows.js";
 import { readSheetSnapshotLhSet } from "../../../application/operator-admin/use-cases/read-sheet-snapshot-lhs.js";
 import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-admin/use-cases/planilha-availability.js";
+import { applySystemReservationStatus } from "../../../application/operator-admin/use-cases/system-reservation-status.js";
 import { releaseStaleAllocStatusOverrides } from "../../../application/operator-admin/use-cases/monitor-stale-alloc-status.js";
 import {
   fetchSpxScheduleIndex,
@@ -851,7 +852,7 @@ function compareMonitorRows(a, b) {
 // Monta a visão UNIFICADA do Monitor: linhas da planilha ∪ cargas do sistema
 // (intercaladas por data), com reservas no fim. Cada linha ganha rowKey/source.
 // Summary recalculado sobre as linhas operacionais quando há cargas do sistema.
-function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh: rawAllocByLh = {}, now = null, reservedByLh = {}, spxStatusByLh = null, spxScheduleByLh = null, nestleByLh = null, correlationId = null }) {
+function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, openLhSet = null, allocByLh: rawAllocByLh = {}, now = null, reservedByLh = {}, reservedByCargoId = {}, spxStatusByLh = null, spxScheduleByLh = null, nestleByLh = null, correlationId = null }) {
   // Override de STATUS que ficou para trás da planilha é SOLTO antes de qualquer
   // overlay: numa viagem LANÇADA o `alloc_status` nunca era reavaliado (o sync ASPX
   // e o saneamento ancoram em `cargas.sheet_status`, sempre NULL nela) e continuava
@@ -910,7 +911,18 @@ function buildUnifiedMonitor({ baseRows, systemRows, reservaRows, baseSummary, o
   // placeholder "a confirmar"), a linha exibia o horário velho para sempre. Aplicado
   // DEPOIS do dedup de propósito: a reconciliação planilha ∪ sistema decide quem
   // aparece olhando LH/motorista, e não deve mudar de resultado por causa do overlay.
-  const operational = [...visibleSheetRows.map(withSpx), ...dedupedSystemRows.map((r) => withSpx(withAgenda(r)))].sort(compareMonitorRows);
+  //
+  // Rede de segurança da RESERVA nas linhas do SISTEMA (withReserva) — gêmea do que
+  // applyPlanilhaAvailabilityStatus já faz nas linhas da planilha. Vem por ÚLTIMO:
+  //   - depois do dedup: injetar motorista não pode mudar QUEM vence a reconciliação
+  //     planilha × sistema (é rótulo, não alocação);
+  //   - depois de applySpxOperationalStatus: esse overlay só toca carga COM motorista
+  //     e não deve passar a agir sobre a linha por causa do nome injetado aqui.
+  const withReserva = (r) => applySystemReservationStatus(r, { reservedByCargoId });
+  const operational = [
+    ...visibleSheetRows.map(withSpx),
+    ...dedupedSystemRows.map((r) => withReserva(withSpx(withAgenda(r)))),
+  ].sort(compareMonitorRows);
   const reservas = reservaRows.map((r) => (r.rowKey ? r : { ...r, rowKey: `reserva:${r.lh}`, source: "reserva" }));
   const items = reservas.length ? [...operational, ...reservas] : operational;
   const summary = systemRows.length ? buildSheetSummary(operational) : baseSummary;
@@ -956,7 +968,7 @@ export async function resolveSheetMonitorResponse(request) {
     // rodam em PARALELO. Cada thunk é best-effort e engole o próprio erro, então o
     // Promise.all NUNCA rejeita por causa deles: uma falha isolada só zera aquele
     // overlay (comportamento anterior por-bloco preservado), o Monitor serve o resto.
-    const [allocByLh, openLhSet, spxLiveStatusByLh, reservedByLh, reservaRows, systemRows, spxScheduleByLh, nestleByLh] = await Promise.all([
+    const [allocByLh, openLhSet, spxLiveStatusByLh, reserved, reservaRows, systemRows, spxScheduleByLh, nestleByLh] = await Promise.all([
       // 1) Overlay da ALOCAÇÃO editada no Monitor (cargas.alloc_*), por LH — a
       //    decisão do operador que sobrepõe a planilha. Pode passar de 1000 →
       //    pagina (best-effort) p/ não perder alocações além da linha 1000.
@@ -1072,32 +1084,47 @@ export async function resolveSheetMonitorResponse(request) {
         ? fetchSpxStatusIndexFromSnapshot({ correlationId }).catch(() => null)
         : Promise.resolve(null),
 
-      // 4) Cargas RESERVADAS por lead da Fila (motorista do portal), por LH — a
-      //    planilha dessas linhas está vazia, mas a carga NÃO está fechada: está
-      //    Reservada (nome do lead aprovado; fallback telefone). Falha → {} (linhas
+      // 4) Cargas RESERVADAS por lead da Fila (motorista do portal) — a planilha
+      //    dessas linhas está vazia, mas a carga NÃO está fechada: está Reservada
+      //    (nome do lead aprovado; fallback telefone). Falha → mapas vazios (linhas
       //    voltam a aparecer como "Fechada", comportamento anterior).
+      //
+      //    Devolve DOIS mapas da MESMA leitura:
+      //    - byLh      → chaveado por `sheet_lh`, para as linhas da PLANILHA
+      //                  (comportamento histórico, inalterado);
+      //    - byCargoId → chaveado pelo id da carga, para as linhas do SISTEMA.
+      //      A carga LANÇADA tem `sheet_lh` NULL, então nunca entrava no byLh e a
+      //      reserva da Fila não aparecia na linha (caso das cargas Nestlé, que só
+      //      existem como carga lançada). Por id não depende de LH — cobre também
+      //      carga sem LH nenhum. Ver system-reservation-status.js.
       (async () => {
-        const map = {};
+        const byLh = {};
+        const byCargoId = {};
         try {
           const reservedRows = await withPgClient((client) =>
             client
               .query(
-                `SELECT c.sheet_lh,
+                `SELECT c.id AS cargo_id, c.sheet_lh,
+                    l.id AS lead_id,
                     NULLIF(TRIM(l.validation_summary_json->'driver'->'angelira'->>'displayName'), '') AS nome,
                     l.phone, l.horse_plate, l.trailer_plate
              FROM public.cargas c
              LEFT JOIN public.load_public_leads l ON l.id = c.reserved_public_lead_id
-             WHERE c.status = 'RESERVED' AND c.sheet_lh IS NOT NULL`,
+             WHERE c.status = 'RESERVED'`,
               )
               .then((res) => res.rows),
           );
           for (const r of reservedRows) {
-            if (!r.sheet_lh) continue;
-            map[r.sheet_lh] = {
+            const rotulo = {
               motorista: r.nome || (r.phone ? `Reservado (fila) · ${r.phone}` : "Reservado (fila)"),
               cavalo: r.horse_plate || "",
               carreta: r.trailer_plate || "",
             };
+            if (r.sheet_lh) byLh[r.sheet_lh] = rotulo;
+            // Linha do sistema: só quando existe LEAD de verdade. Carga reservada
+            // por outra via (sem reserved_public_lead_id) não pode ser rotulada
+            // "Reservado (fila)" — seria inventar uma origem que não houve.
+            if (r.cargo_id && r.lead_id) byCargoId[r.cargo_id] = rotulo;
           }
         } catch (reservedErr) {
           logStructuredEvent("warn", "sheet-monitor.reserved-lhs-read-failed", {
@@ -1105,7 +1132,7 @@ export async function resolveSheetMonitorResponse(request) {
             message: reservedErr instanceof Error ? reservedErr.message : String(reservedErr),
           });
         }
-        return map;
+        return { byLh, byCargoId };
       })(),
 
       // 5) Motoristas em RESERVA (standby por rota) — linhas geradas pela cascata de
@@ -1256,7 +1283,7 @@ export async function resolveSheetMonitorResponse(request) {
 
           // Return the freshly-parsed rows immediately — no extra DB read needed.
           // Inclui o enriquecimento JÁ salvo (senão o refresh "apaga" os selos).
-          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now, reservedByLh, spxStatusByLh, spxScheduleByLh, nestleByLh, correlationId });
+          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now, reservedByLh: reserved.byLh, reservedByCargoId: reserved.byCargoId, spxStatusByLh, spxScheduleByLh, nestleByLh, correlationId });
           // attachRouteCodes/Registration tocam campos DIFERENTES de cada item
           // (routeCodigo vs routeRegistered) e cada um faz um scan próprio → paraleliza.
           const [, , { enrichedByLh, enrichedByCargoId }] = await Promise.all([
@@ -1375,7 +1402,8 @@ export async function resolveSheetMonitorResponse(request) {
         openLhSet,
         allocByLh,
         now,
-        reservedByLh,
+        reservedByLh: reserved.byLh,
+        reservedByCargoId: reserved.byCargoId,
         spxStatusByLh,
         spxScheduleByLh,
         nestleByLh,
@@ -1406,7 +1434,7 @@ export async function resolveSheetMonitorResponse(request) {
     // No snapshot yet (first use or migration pending). Mesmo sem planilha, as
     // cargas do sistema (+ reservas) devem aparecer no Monitor.
     const { getSheetExportUrl: getUrl } = await import("../../../application/google-sheets/google-sheet-loads.js");
-    const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary, allocByLh, spxStatusByLh, spxScheduleByLh, nestleByLh, correlationId });
+    const unified = buildUnifiedMonitor({ baseRows: [], systemRows, reservaRows, baseSummary: emptySummary, allocByLh, reservedByCargoId: reserved.byCargoId, spxStatusByLh, spxScheduleByLh, nestleByLh, correlationId });
     await Promise.all([
       attachRouteCodes(supabaseClient, unified.items, correlationId),
       attachRouteRegistration(supabaseClient, unified.items, correlationId),

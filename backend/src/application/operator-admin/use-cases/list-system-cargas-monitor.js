@@ -55,6 +55,11 @@ function parseDescarga(v) {
 const SYSTEM_LIFECYCLE_LABEL = {
   DRAFT: "Rascunho",
   BOOKED: "Reservado",
+  // RESERVED faltava no mapa: a carga reservada pela Fila SEM motorista resolvido
+  // caía no `?? lifecycle` abaixo e a linha exibia o token cru "RESERVED" em badge
+  // cinza (nenhum estilo do resolveSheetStatusStyle casa "reserved"), o oposto de
+  // "reservada" para o operador. Mesmo rótulo de BOOKED — os dois são reserva.
+  RESERVED: "Reservado",
   CANCELLED: "Cancelado",
   EXPIRED: "Expirada",
 };

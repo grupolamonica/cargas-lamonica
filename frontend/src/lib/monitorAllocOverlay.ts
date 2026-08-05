@@ -17,6 +17,26 @@ export function effectiveAllocField(
   return allocValue ?? sheetValue ?? "";
 }
 
+/**
+ * Motorista da linha para uso em campo EDITÁVEL.
+ *
+ * O Monitor injeta um motorista VIEW-ONLY nas linhas reservadas pela Fila (o rótulo
+ * "Reservado (fila) · <telefone>", ou o nome do lead) só para a linha não parecer
+ * vazia — isso NÃO é alocação gravada em `cargas.alloc_*`.
+ *
+ * Os modais pré-preenchem o campo de motorista a partir de `row.motoristas` e o save
+ * SEMPRE reenvia o campo. Usar o valor cru fazia o rótulo ser PERSISTIDO como
+ * motorista real quando o operador salvava qualquer outra coisa na carga (trocar o
+ * destino, por exemplo). Para EXIBIR, use `row.motoristas` normalmente; para
+ * pré-preencher/comparar campo editável, use esta função.
+ */
+export function editableDriver(
+  row?: { motoristas?: string | null; motoristaViewOnly?: boolean } | null,
+): string {
+  if (!row || row.motoristaViewOnly) return "";
+  return row.motoristas ?? "";
+}
+
 // Ordem do pipeline operacional. ESPELHA `STATUS_PIPELINE` de
 // backend/src/domain/operator-admin/aspx-status-rules.js (fonte única da regra) —
 // mudou lá, muda aqui. Estados de EXCEÇÃO (CANCELADO/DEVOLVIDO/NO SHOW) ficam
