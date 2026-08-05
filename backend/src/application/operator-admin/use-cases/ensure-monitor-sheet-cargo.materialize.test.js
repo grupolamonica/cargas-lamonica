@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { closeTestDatabase, query, resetTestDatabase, seedCargo, withPgTransaction } from "../test-harness.js";
 import { ensureMonitorSheetCargo } from "./_shared.js";
@@ -109,5 +109,100 @@ describe("ensureMonitorSheetCargo — materialização a partir do snapshot", ()
     // Nenhuma linha nova (canônica) foi criada.
     const count = await query(`SELECT count(*)::int AS n FROM public.cargas`);
     expect(count.rows[0].n).toBe(1);
+  });
+});
+
+// A LÁPIDE (gêmea aposentada/mergeada) deixou de ser aceita como alvo de escrita.
+// Antes, `existing` a devolvia, `withLazyTwinMerge` fazia no-op (só a canônica é
+// destino de merge) e a materialização nunca rodava: a escrita ia 200 OK numa linha
+// morta e o operador achava que tinha salvo. Medido em produção (05/08).
+describe("ensureMonitorSheetCargo — lápide não é alvo de escrita", () => {
+  beforeEach(async () => { await resetTestDatabase(); });
+  afterEach(() => { delete process.env.TWIN_MERGE; });
+  afterAll(async () => { await closeTestDatabase(); });
+
+  async function seedLapide(lh, { alloc_motorista = "SILON", retired_reason = "twin_taken", alloc_merged_into_cargo_id = null } = {}) {
+    const { id } = await seedCargo({ sheet_lh: null, origem: "A", destino: "B", status: "EXPIRED" });
+    await query(
+      `UPDATE public.cargas
+          SET lh_manual = $2, alloc_motorista = $3, retired_reason = $4, alloc_merged_into_cargo_id = $5
+        WHERE id = $1`,
+      [id, lh, alloc_motorista, retired_reason, alloc_merged_into_cargo_id],
+    );
+    return id;
+  }
+
+  it("gate ON: materializa a canônica e HERDA a decisão da lápide (não grava nela)", async () => {
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-LAPIDE-1";
+    const lapideId = await seedLapide(lh);
+    await seedSnapshot({ source: "shopee", rows: [{ lh, origem: "A", destino: "B", data: "2026-08-10", horario: "09:00:00", motoristas: "ANA" }] });
+
+    const row = await withPgTransaction((c) => ensureMonitorSheetCargo(c, lh, { columns: "id, sheet_lh, alloc_motorista" }));
+
+    // Devolveu a CANÔNICA, não a lápide.
+    expect(row.id).not.toBe(lapideId);
+    expect(row.sheet_lh).toBe(lh);
+    // E a decisão do operador que estava presa na lápide veio junto.
+    expect(row.alloc_motorista).toBe("SILON");
+    const lapide = await query(`SELECT alloc_merged_into_cargo_id FROM public.cargas WHERE id = $1`, [lapideId]);
+    expect(lapide.rows[0].alloc_merged_into_cargo_id).toBe(row.id);
+  });
+
+  it("gate ON: lápide JÁ mergeada também não é alvo (materializa/resolve a canônica)", async () => {
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-LAPIDE-MERGED";
+    const lapideId = await seedLapide(lh, { retired_reason: null, alloc_merged_into_cargo_id: createSheetLoadId(lh, "shopee") });
+    await seedSnapshot({ source: "shopee", rows: [{ lh, origem: "A", destino: "B", data: "2026-08-10", horario: "09:00:00" }] });
+
+    const row = await withPgTransaction((c) => ensureMonitorSheetCargo(c, lh, { columns: "id, sheet_lh" }));
+
+    expect(row.id).not.toBe(lapideId);
+    expect(row.sheet_lh).toBe(lh);
+  });
+
+  it("gate ON: lápide SEM linha na planilha → null (404 honesto, não escrita fantasma)", async () => {
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-LAPIDE-SEM-SNAP";
+    await seedLapide(lh);
+
+    const row = await withPgTransaction((c) => ensureMonitorSheetCargo(c, lh, { columns: "id, sheet_lh" }));
+
+    expect(row).toBeNull();
+  });
+
+  it("gate ON: linha da planilha CANCELADA → null (não materializa sobre cancelamento)", async () => {
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-LAPIDE-CANCEL";
+    await seedLapide(lh);
+    await seedSnapshot({ source: "shopee", rows: [{ lh, origem: "A", destino: "B", data: "2026-08-10", horario: "09:00:00", status: "CANCELADO" }] });
+
+    const row = await withPgTransaction((c) => ensureMonitorSheetCargo(c, lh, { columns: "id, sheet_lh" }));
+
+    expect(row).toBeNull();
+  });
+
+  it("gate OFF: devolve a lápide (comportamento anterior preservado byte a byte)", async () => {
+    delete process.env.TWIN_MERGE;
+    const lh = "LT-LAPIDE-OFF";
+    const lapideId = await seedLapide(lh);
+    await seedSnapshot({ source: "shopee", rows: [{ lh, origem: "A", destino: "B", data: "2026-08-10", horario: "09:00:00" }] });
+
+    const row = await withPgTransaction((c) => ensureMonitorSheetCargo(c, lh, { columns: "id, sheet_lh" }));
+
+    expect(row.id).toBe(lapideId);
+  });
+
+  it("gate ON: gêmea VIVA (não aposentada) continua sendo devolvida — regressão", async () => {
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-VIVA";
+    const vivaId = await seedLapide(lh, { retired_reason: null });
+    await query(`UPDATE public.cargas SET status = 'RESERVED' WHERE id = $1`, [vivaId]);
+    await seedSnapshot({ source: "shopee", rows: [{ lh, origem: "A", destino: "B", data: "2026-08-10", horario: "09:00:00" }] });
+
+    const row = await withPgTransaction((c) => ensureMonitorSheetCargo(c, lh, { columns: "id, sheet_lh" }));
+
+    expect(row.id).toBe(vivaId);
+    expect(row.sheet_lh).toBeNull();
   });
 });
