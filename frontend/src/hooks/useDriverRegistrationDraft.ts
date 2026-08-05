@@ -60,6 +60,42 @@ function extractStep(dados: Record<string, unknown>): string {
   return typeof raw === "string" && raw.length > 0 ? raw : DEFAULT_STEP;
 }
 
+// Blindagem de documentos (bug da selfie/CRLV que "sumia"): quando um upload
+// completa, o storage_path chega ASSÍNCRONO ao draft e podia se perder na janela
+// do debounce se o wizard avançasse/fechasse — o cadastro ia pro submit sem o
+// path e o servidor barrava com "Anexe o documento" mesmo já anexado. Solução:
+// detectar quando um storage_path de documento é ADICIONADO/ALTERADO e forçar o
+// save na hora (sem debounce). Coleta recursiva de valores cujas chaves são de
+// path de documento (storage_path / storageUrl / *_url / *StoragePath).
+const DOC_PATH_KEY_RE = /(storage_path|storageUrl|StoragePath)$|_url$|comprovanteUrl$/i;
+
+export function collectDocPaths(node: unknown, acc: Set<string>): Set<string> {
+  if (!node || typeof node !== "object") return acc;
+  if (Array.isArray(node)) {
+    for (const item of node) collectDocPaths(item, acc);
+    return acc;
+  }
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (typeof value === "string") {
+      const v = value.trim();
+      if (v && DOC_PATH_KEY_RE.test(key)) acc.add(v);
+    } else if (value && typeof value === "object") {
+      collectDocPaths(value, acc);
+    }
+  }
+  return acc;
+}
+
+/** true se `next` tem algum storage_path de documento que `prev` não tinha. */
+export function docPathWasAdded(prev: unknown, next: unknown): boolean {
+  const prevPaths = collectDocPaths(prev, new Set());
+  const nextPaths = collectDocPaths(next, new Set());
+  for (const p of nextPaths) {
+    if (!prevPaths.has(p)) return true;
+  }
+  return false;
+}
+
 /**
  * Hook do wizard v2 de cadastro (CADASTRO-09 / D-05).
  *
@@ -83,6 +119,12 @@ export function useDriverRegistrationDraft({
   const [data, setDataState] = useState<Record<string, unknown>>(
     localInitial?.data ?? {},
   );
+  // Ref sempre com o `data` mais recente — o setData compara o estado ANTERIOR
+  // (dataRef.current) contra o novo p/ detectar upload de documento (blindagem).
+  const dataRef = useRef<Record<string, unknown>>(localInitial?.data ?? {});
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
   const [currentStep, setCurrentStepState] = useState<string>(
     localInitial?.currentStep ?? DEFAULT_STEP,
   );
@@ -290,8 +332,37 @@ export function useDriverRegistrationDraft({
     [cargaId, cpf, isAnonymous, isOperator, operatorSave, saveMutation],
   );
 
+  // Save IMEDIATO (sem debounce) de um payload explícito — usado quando um
+  // storage_path de documento é adicionado (blindagem). Recebe o payload em vez
+  // de ler `data` do closure, evitando salvar o estado antigo (stale).
+  const runServerSaveNow = useCallback(
+    (payload: Record<string, unknown>) => {
+      if (debounceTimer.current) {
+        clearTimeout(debounceTimer.current);
+        debounceTimer.current = null;
+      }
+      if (isOperator) {
+        void operatorSave(payload);
+        return;
+      }
+      if (!cargaId) return;
+      if (isAnonymous && !cpf) return;
+      saveMutation.mutate({
+        cargaId,
+        dados: payload,
+        ...(isAnonymous && cpf ? { cpf } : {}),
+      });
+    },
+    [cargaId, cpf, isAnonymous, isOperator, operatorSave, saveMutation],
+  );
+
   const setData = useCallback(
     (next: Record<string, unknown>) => {
+      // Blindagem: se este setData ADICIONA um storage_path de documento
+      // (upload recém-concluído), salva JÁ — não pode esperar o debounce
+      // (janela em que o path se perdia se o wizard avançasse/fechasse).
+      const docAdded = docPathWasAdded(dataRef.current, next);
+      dataRef.current = next; // sincrono: setCurrentStep no mesmo tick lê o mais recente
       setDataState(next);
       if (driverUserId) {
         writeDraft({
@@ -301,15 +372,21 @@ export function useDriverRegistrationDraft({
           currentStep,
         });
       }
-      scheduleServerSave(next);
+      if (docAdded) runServerSaveNow(next);
+      else scheduleServerSave(next);
     },
-    [cargaId, currentStep, driverUserId, scheduleServerSave],
+    [cargaId, currentStep, driverUserId, runServerSaveNow, scheduleServerSave],
   );
 
   const setCurrentStep = useCallback(
     (step: string) => {
       setCurrentStepState(step);
-      const merged = { ...data, __currentStep: step };
+      // Mescla sobre o `data` MAIS RECENTE (dataRef.current), não o closure —
+      // que ficava stale quando um persistSlice roda no mesmo tick (ex.: OCR
+      // grava renavam/chassi e o wizard avança), fazendo o save do step
+      // sobrescrever no servidor os campos recém-preenchidos.
+      const merged = { ...dataRef.current, __currentStep: step };
+      dataRef.current = merged;
       setDataState(merged);
       if (driverUserId) {
         writeDraft({
@@ -321,7 +398,7 @@ export function useDriverRegistrationDraft({
       }
       scheduleServerSave(merged);
     },
-    [cargaId, data, driverUserId, scheduleServerSave],
+    [cargaId, driverUserId, scheduleServerSave],
   );
 
   const flushAndClose = useCallback(async () => {
