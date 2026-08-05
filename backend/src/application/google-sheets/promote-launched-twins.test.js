@@ -150,6 +150,47 @@ describe("promoteLaunchedTwinsBeforeRetirement", () => {
     expect(viva.rows[0].alloc_merged_into_cargo_id).toBe(winnerId);
   });
 
+  it("on: linha da planilha SEM data herda a agenda da gêmea (não estoura 23502)", async () => {
+    // Reproduzido em produção: a Shopee publica algumas viagens sem data de
+    // carregamento. `buildAllocatedSheetLoadPayload` devolve data/horario NULL e
+    // `cargas.data` é NOT NULL → o INSERT estourava 23502, o catch por LH engolia e o
+    // CTE aposentava a gêmea de qualquer forma (LT0Q8302CP7K1, CLOVIS BRITO FILHO).
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-PROMOTE-SEM-DATA";
+    const doadorId = await seedDoador(lh, {
+      alloc_motorista: "CLOVIS",
+      alloc_updated_at: new Date("2026-08-01").toISOString(),
+      data: "2026-08-03",
+      horario: "14:00:00",
+    });
+
+    const r = await promoteLaunchedTwinsBeforeRetirement(
+      baseArgs({
+        takenSheetLhs: [lh],
+        allSheetRowsByLh: new Map([[lh, sheetRow(lh, { data: null, horario: null, carregamentoLabel: null })]]),
+      }),
+    );
+
+    expect(r).toMatchObject({ mode: "on", materializados: 1, mergeados: 1, ignoradosSemAgenda: 0 });
+    const winnerId = createSheetLoadId(lh, source);
+    const cargo = await query(
+      `SELECT data, horario, alloc_motorista FROM public.cargas WHERE id = $1`,
+      [winnerId],
+    );
+    expect(cargo.rows[0]).toBeTruthy();
+    // Agenda herdada da gêmea — a única data existente para essa viagem.
+    // pg devolve DATE como Date em UTC-midnight: comparar via ISO (String(Date)
+    // renderiza no fuso local e daria off-by-one em BRT).
+    const dataIso = cargo.rows[0].data instanceof Date
+      ? cargo.rows[0].data.toISOString().slice(0, 10)
+      : String(cargo.rows[0].data).slice(0, 10);
+    expect(dataIso).toBe("2026-08-03");
+    expect(String(cargo.rows[0].horario)).toContain("14:00");
+    expect(cargo.rows[0].alloc_motorista).toBe("CLOVIS");
+    const doador = await query(`SELECT alloc_merged_into_cargo_id FROM public.cargas WHERE id = $1`, [doadorId]);
+    expect(doador.rows[0].alloc_merged_into_cargo_id).toBe(winnerId);
+  });
+
   it("dry SEM canônica existente: só CONTA (materializaria), não insere nada", async () => {
     process.env.TWIN_MERGE = "dry";
     const lh = "LT-PROMOTE-DRY";

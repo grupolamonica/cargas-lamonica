@@ -210,6 +210,37 @@ describe("runTwinMergeBackfill (apply)", () => {
     expect(doador.rows[0].alloc_merged_into_cargo_id).toBe(winnerId);
   });
 
+  it("apply: linha do snapshot SEM data herda a agenda do doador (não cai em ERRO)", async () => {
+    // Reproduzido ao rodar em produção: a Shopee publica algumas viagens sem data de
+    // carregamento; `cargas.data` é NOT NULL, então o INSERT estourava 23502 e o LH
+    // caía na classe ERRO com a decisão do operador presa na lápide
+    // (LT0Q8302CP7K1 / CLOVIS BRITO FILHO).
+    await seedCliente({ id: "00000000-0000-0000-0000-0000000000c1" });
+    const lh = "LT-BACK-SEM-DATA";
+    const doadorId = await seedDoador(lh, {
+      alloc_motorista: "CLOVIS",
+      alloc_updated_at: new Date("2026-08-01").toISOString(),
+      data: "2026-08-03",
+      horario: "14:00:00",
+    });
+    await seedSnapshot([sheetRow(lh, { data: null, horario: null, carregamentoLabel: null })]);
+
+    const r = await runTwinMergeBackfill({ apply: true, limit: Infinity, deps: commonDeps() });
+
+    expect(r.relatorio[0].classe).toBe("MERGE_PURO");
+    const winnerId = createSheetLoadId(lh, source);
+    const cargo = await query(`SELECT data, horario, alloc_motorista FROM public.cargas WHERE id = $1`, [winnerId]);
+    expect(cargo.rows[0]).toBeTruthy();
+    // pg devolve DATE como Date em UTC-midnight — comparar via ISO, nunca String(Date).
+    const dataIso = cargo.rows[0].data instanceof Date
+      ? cargo.rows[0].data.toISOString().slice(0, 10)
+      : String(cargo.rows[0].data).slice(0, 10);
+    expect(dataIso).toBe("2026-08-03");
+    expect(cargo.rows[0].alloc_motorista).toBe("CLOVIS");
+    const doador = await query(`SELECT alloc_merged_into_cargo_id FROM public.cargas WHERE id = $1`, [doadorId]);
+    expect(doador.rows[0].alloc_merged_into_cargo_id).toBe(winnerId);
+  });
+
   it("apply com canônica já existente mergeia de verdade (sem duplicar linha)", async () => {
     const lh = "LT-BACK-APPLY-2";
     await seedDoador(lh, { alloc_motorista: "CLOVIS" });
