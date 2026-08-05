@@ -127,6 +127,69 @@ describe("acceptAspxTrips", () => {
     expect(arg.dataCarregamento).toBe("05/08/2026 14:00");
   });
 
+  // DC-201: o auto-lançamento não relança o já-lançado, então um spot lançado
+  // não-aceito e aceito DEPOIS ficaria com trip_accepted_at NULL para sempre — e o
+  // Monitor esconderia uma viagem que a agência já considera nossa.
+  it("aceite REAL marca trip_accepted_at na carga lançada (mão única, só o que está NULL)", async () => {
+    process.env.SPX_ACCEPT_WRITE_ENABLED = "true";
+    const queries = [];
+    const withPgClient = async (fn) =>
+      fn({
+        query: async (sql, params) => {
+          queries.push({ sql, params });
+          return /UPDATE/i.test(sql) ? { rowCount: 1, rows: [] } : { rows: [] };
+        },
+      });
+    await acceptAspxTrips({
+      lhs: ["LT1"],
+      operatorId: "op",
+      deps: {
+        acceptTrip: vi.fn().mockResolvedValue({ retcode: 0 }),
+        fetchIndex: async () => indexWith([["LT1", { tripId: 501 }]]),
+        withPgClient,
+        writeAllocationsToSheet: vi.fn(async () => ({ ok: true })),
+      },
+    });
+
+    const update = queries.find((q) => /UPDATE public\.cargas/i.test(q.sql));
+    expect(update).toBeTruthy();
+    expect(update.sql).toMatch(/trip_accepted_at = now\(\)/);
+    expect(update.sql).toMatch(/trip_accepted_at IS NULL/); // não reescreve aceite antigo
+    expect(update.sql).toMatch(/sheet_lh IS NULL/); // só carga lançada, nunca a da planilha
+    expect(update.params).toEqual([["LT1"]]);
+    expect(recordSecurityAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ acceptanceMarked: 1 }) }),
+    );
+  });
+
+  it("marcador falhando NÃO derruba o aceite nem a linha-casca (best-effort separado)", async () => {
+    process.env.SPX_ACCEPT_WRITE_ENABLED = "true";
+    const writeSpy = vi.fn(async () => ({ ok: true }));
+    let call = 0;
+    // 1ª chamada = UPDATE do marcador (explode); 2ª = SELECT da linha-casca (ok).
+    const withPgClient = async (fn) => {
+      call += 1;
+      if (call === 1) throw new Error("coluna ausente");
+      return fn({
+        query: async () => ({
+          rows: [{ lh_manual: "LT1", sheet_source: null, origem: "A", destino: "B", sheet_data_carregamento: null, sheet_data_descarga: null }],
+        }),
+      });
+    };
+    const res = await acceptAspxTrips({
+      lhs: ["LT1"],
+      operatorId: "op",
+      deps: {
+        acceptTrip: vi.fn().mockResolvedValue({ retcode: 0 }),
+        fetchIndex: async () => indexWith([["LT1", { tripId: 501 }]]),
+        withPgClient,
+        writeAllocationsToSheet: writeSpy,
+      },
+    });
+    expect(res.payload.summary.accepted).toBe(1);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("aceite em dry_run (kill switch off) → NÃO escreve na planilha (nem consulta o banco)", async () => {
     const acceptSpy = vi.fn().mockResolvedValue({ dry_run: true });
     const writeSpy = vi.fn(async () => ({ ok: true }));
