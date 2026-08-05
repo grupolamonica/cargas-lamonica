@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { closeTestDatabase, query, resetTestDatabase, seedCargo, seedPublicLead, withPgTransaction } from "../operator-admin/test-harness.js";
+import { closeTestDatabase, query, resetTestDatabase, seedCargo, seedPublicLead, withPgClient, withPgTransaction } from "../operator-admin/test-harness.js";
 import { promoteLaunchedTwinsBeforeRetirement } from "./promote-launched-twins.js";
 import { createSheetLoadId } from "./google-sheet-loads.js";
 
@@ -20,9 +20,9 @@ function baseArgs(overrides = {}) {
     knownCatalogTrechos: EMPTY_SET,
     fallbackSheetClientId: null,
     syncedAt: new Date(0).toISOString(),
-    // O módulo importa `withPgTransaction` da infra REAL por padrão — aqui
-    // substituímos pela versão do harness (pg-mem) via injeção de dependência.
-    deps: { withPgTransaction },
+    // O módulo importa `withPgTransaction`/`withPgClient` da infra REAL por padrão —
+    // aqui substituímos pela versão do harness (pg-mem) via injeção de dependência.
+    deps: { withPgTransaction, withPgClient },
     ...overrides,
   };
 }
@@ -230,7 +230,11 @@ describe("promoteLaunchedTwinsBeforeRetirement", () => {
     expect(doador.rows[0].alloc_merged_into_cargo_id).toBeNull(); // marcador não foi gravado
   });
 
-  it("sem gêmea (LH tomado mas nenhuma carga lançada) → não materializa nada", async () => {
+  it("sem gêmea (LH tomado mas nenhuma carga lançada) → PRÉ-FILTRADO, não gasta o lote", async () => {
+    // Era o starvation medido em produção: `candidatos: 4475, materializados: 0`. LH
+    // tomado sem gêmea consumia um slot do lote, devolvia sem_gemea e reaparecia
+    // idêntico no ciclo seguinte — os 50 slots ficavam presos nos mesmos LHs para
+    // sempre e nenhum LH COM gêmea era alcançado. Agora nem entra em `candidatos`.
     process.env.TWIN_MERGE = "on";
     const lh = "LT-SEM-GEMEA";
 
@@ -238,9 +242,28 @@ describe("promoteLaunchedTwinsBeforeRetirement", () => {
       baseArgs({ takenSheetLhs: [lh], allSheetRowsByLh: new Map([[lh, sheetRow(lh)]]) }),
     );
 
-    expect(r).toMatchObject({ candidatos: 1, materializados: 0, mergeados: 0 });
+    expect(r).toMatchObject({ candidatos: 0, candidatosBrutos: 1, materializados: 0, mergeados: 0 });
     const count = await query(`SELECT count(*)::int AS n FROM public.cargas`);
     expect(count.rows[0].n).toBe(0);
+  });
+
+  it("o lote (limit) passa a valer para LHs COM gêmea, não é gasto pelos sem gêmea", async () => {
+    process.env.TWIN_MERGE = "on";
+    const comGemea = ["LT-COM-1", "LT-COM-2"];
+    const semGemea = Array.from({ length: 30 }, (_, i) => `LT-VAZIO-${i}`);
+    for (const lh of comGemea) await seedDoador(lh, { alloc_motorista: "CLOVIS" });
+
+    const rows = new Map();
+    // Os sem-gêmea vêm PRIMEIRO: na versão antiga eles esgotariam o lote de 2 e os
+    // dois LHs com gêmea nunca seriam alcançados.
+    for (const lh of [...semGemea, ...comGemea]) rows.set(lh, sheetRow(lh));
+
+    const r = await promoteLaunchedTwinsBeforeRetirement(
+      baseArgs({ takenSheetLhs: [...semGemea, ...comGemea], allSheetRowsByLh: rows, limit: 2 }),
+    );
+
+    expect(r).toMatchObject({ candidatosBrutos: 32, candidatos: 2, materializados: 2, truncado: false });
+    expect(r.promovidos.sort()).toEqual(comGemea);
   });
 
   it("status de cancelamento no snapshot → ignora (não arma o sweep sem migrar nada)", async () => {

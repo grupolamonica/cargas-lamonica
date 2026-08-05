@@ -45,7 +45,7 @@
 // processo editando a mesma gêmea nesse instante) pula o LH; o próximo ciclo tenta
 // de novo. Nunca derruba o sync.
 
-import { withPgTransaction } from "../../infrastructure/pg/postgres.js";
+import { withPgClient, withPgTransaction } from "../../infrastructure/pg/postgres.js";
 import { logStructuredEvent } from "../../infrastructure/security-log.js";
 import { buildAllocatedSheetLoadPayload } from "./google-sheet-loads.js";
 import { mergeLaunchedTwinAlloc, twinMergeMode } from "../operator-admin/use-cases/merge-launched-twin.js";
@@ -59,6 +59,7 @@ const CANCEL_STATUS_RE = /cancel|devolv|no[\s-]*show/i;
 const ZERO_RESULT = Object.freeze({
   mode: "off",
   candidatos: 0,
+  candidatosBrutos: 0,
   materializados: 0,
   mergeados: 0,
   bloqueados: 0,
@@ -81,7 +82,7 @@ const ZERO_RESULT = Object.freeze({
  *   syncedAt: string,
  *   correlationId?: string|null,
  *   limit?: number,
- *   deps?: { withPgTransaction?: Function, mergeLaunchedTwinAlloc?: Function },
+ *   deps?: { withPgTransaction?: Function, withPgClient?: Function, mergeLaunchedTwinAlloc?: Function },
  * }} args
  * @returns {Promise<{ mode: string, candidatos: number, materializados: number,
  *   mergeados: number, bloqueados: number, ignoradosCancelamento: number, promovidos: string[] }>}
@@ -110,10 +111,49 @@ export async function promoteLaunchedTwinsBeforeRetirement({
   // Candidatos: LH tomado nesta rodada e SEM canônica (nem pré-existente, nem
   // criada agora como disponível — este 2º caso não deveria coincidir com "tomado",
   // mas o filtro é defensivo e barato).
-  const candidatos = (takenSheetLhs || []).filter(
+  const candidatosBrutos = (takenSheetLhs || []).filter(
     (lh) => !existingLoadsBySheetLh.has(lh) && !currentSheetKeys.has(lh),
   );
-  if (candidatos.length === 0) return { ...ZERO_RESULT, mode };
+  if (candidatosBrutos.length === 0) return { ...ZERO_RESULT, mode };
+
+  // PRÉ-FILTRO por "tem gêmea lançada" — UMA query indexada, antes do lote.
+  //
+  // Sem isto a passada era INEFETIVA em produção. Medido no ciclo seguinte ao deploy:
+  // `candidatos: 4475, materializados: 0, truncado: true`. A esmagadora maioria dos LHs
+  // tomados na planilha NUNCA foi lançada pela Programação (viagem Shopee que já entra
+  // atribuída), então não tem gêmea — cada um desses consumia um dos 50 slots do lote,
+  // devolvia `sem_gemea` e reaparecia idêntico no ciclo seguinte. O teto era gasto
+  // inteiro nos mesmos 50 LHs sem gêmea, para sempre, e nenhum LH COM gêmea era
+  // alcançado (starvation).
+  //
+  // Aumentar `DEFAULT_BATCH_LIMIT` seria a correção errada: abriria uma transação com
+  // FOR UPDATE por candidato — 4475 transações a cada ciclo de sync (5 min). O pré-filtro
+  // resolve com uma consulta só, e o lote passa a valer para o que realmente dá trabalho.
+  let candidatos = candidatosBrutos;
+  try {
+    const comGemea = await (deps.withPgClient || withPgClient)((client) =>
+      client.query(
+        `SELECT DISTINCT lh_manual FROM public.cargas
+          WHERE lh_manual = ANY($1::text[])
+            AND sheet_lh IS NULL
+            AND alloc_merged_into_cargo_id IS NULL`,
+        [candidatosBrutos],
+      ),
+    );
+    const vivos = new Set(comGemea.rows.map((r) => String(r.lh_manual ?? "").trim()));
+    candidatos = candidatosBrutos.filter((lh) => vivos.has(lh));
+  } catch (err) {
+    // Falha no pré-filtro NUNCA piora o comportamento: cai no conjunto bruto (que é o
+    // que a versão anterior usava) e o lote/limite seguem protegendo o ciclo.
+    logStructuredEvent("warn", "promote-launched-twins.prefiltro-falhou", {
+      correlationId,
+      source,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+  if (candidatos.length === 0) {
+    return { ...ZERO_RESULT, mode, candidatos: 0, candidatosBrutos: candidatosBrutos.length };
+  }
 
   let materializados = 0;
   let mergeados = 0;
@@ -262,7 +302,9 @@ export async function promoteLaunchedTwinsBeforeRetirement({
     }
   }
 
-  const stats = { mode, candidatos: candidatos.length, materializados, mergeados, bloqueados, ignoradosCancelamento, ignoradosSemAgenda, promovidos, truncado };
+  // `candidatosBrutos` (antes do pré-filtro) fica no log: é o número que revelou o
+  // starvation, e a razão entre os dois é o sinal de saúde da passada.
+  const stats = { mode, candidatos: candidatos.length, candidatosBrutos: candidatosBrutos.length, materializados, mergeados, bloqueados, ignoradosCancelamento, ignoradosSemAgenda, promovidos, truncado };
   if (materializados > 0 || ignoradosCancelamento > 0 || ignoradosSemAgenda > 0 || truncado) {
     logStructuredEvent(mode === "dry" ? "warn" : "info", `promote-launched-twins.${mode === "dry" ? "dry-run" : "aplicado"}`, {
       correlationId,
