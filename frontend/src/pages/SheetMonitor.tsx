@@ -55,7 +55,7 @@ import { allocEditPolicy, isSpxTrip } from "@/lib/monitorEditPolicy";
 import { routeCanonKey } from "@/lib/routeCanonical";
 import { computeSwapMoves } from "@/lib/monitorReorder";
 import { editableDriver, mergeAllocIntoRow, effectiveAllocField } from "@/lib/monitorAllocOverlay";
-import { isDuplicateAllocationError } from "@/lib/allocationConflict";
+import { allocationChangedBaseline, isAllocationChangedError, isDuplicateAllocationError } from "@/lib/allocationConflict";
 import {
   assignAspxAllocations,
   createMonitorCargo,
@@ -2998,6 +2998,11 @@ function RowDetailModal({
   // duas viagens no mesmo dia podem ser legítimas, mas não podem passar em silêncio
   // (incidente de 05/08: mesmo motorista e mesmo cavalo em duas viagens).
   const [dupConfirm, setDupConfirm] = useState<{ mensagem: string; run: () => void } | null>(null);
+  // Aviso de edição SIMULTÂNEA: outra pessoa gravou nesta carga depois que a tela
+  // carregou. O backend recusa com 409 (ALLOCATION_CHANGED) dizendo quem mexeu e o que
+  // está lá agora; confirmar reenvia com o carimbo NOVO como baseline (sem isso, o
+  // reenvio cairia no mesmo aviso em loop).
+  const [staleConfirm, setStaleConfirm] = useState<{ mensagem: string; run: () => void } | null>(null);
   // Fecha o modal DEPOIS de um save bem-sucedido — só quando o operador escolhe
   // "Salvar e sair" na guarda. Save normal (botão Salvar) mantém o modal ABERTO.
   const closeAfterSaveRef = useRef(false);
@@ -3098,7 +3103,10 @@ function RowDetailModal({
             alloc_checklist_cavalo: "checklistCavalo" in v ? (v.checklistCavalo ?? null) : (prev?.alloc_checklist_cavalo ?? null),
             alloc_checklist_carreta: "checklistCarreta" in v ? (v.checklistCarreta ?? null) : (prev?.alloc_checklist_carreta ?? null),
             alloc_pinned: prev?.alloc_pinned ?? false,
-            alloc_updated_at: new Date().toISOString(),
+            // Carimbo REAL do banco (não do cliente): é a baseline da PRÓXIMA edição na
+            // concorrência otimista. Um timestamp gerado aqui divergiria do banco e o
+            // save seguinte acusaria edição simultânea inexistente.
+            alloc_updated_at: data?.allocUpdatedAt ?? prev?.alloc_updated_at ?? null,
           };
           return { ...old, allocByLh: { ...old.allocByLh, [lh]: next } };
         });
@@ -3118,6 +3126,17 @@ function RowDetailModal({
         setDupConfirm({
           mensagem: err instanceof Error ? err.message : "",
           run: () => saveAllocation.mutate({ ...(variables ?? {}), confirmDuplicate: true }),
+        });
+        return;
+      }
+      if (isAllocationChangedError(err)) {
+        setStaleConfirm({
+          mensagem: err instanceof Error ? err.message : "",
+          run: () => saveAllocation.mutate({
+            ...(variables ?? {}),
+            confirmOverwrite: true,
+            expectedAllocUpdatedAt: allocationChangedBaseline(err),
+          }),
         });
         return;
       }
@@ -3155,7 +3174,10 @@ function RowDetailModal({
             alloc_checklist_cavalo: "checklistCavalo" in v ? (v.checklistCavalo ?? null) : (prev?.alloc_checklist_cavalo ?? null),
             alloc_checklist_carreta: "checklistCarreta" in v ? (v.checklistCarreta ?? null) : (prev?.alloc_checklist_carreta ?? null),
             alloc_pinned: prev?.alloc_pinned ?? false,
-            alloc_updated_at: new Date().toISOString(),
+            // Carimbo REAL do banco (não do cliente): é a baseline da PRÓXIMA edição na
+            // concorrência otimista. Um timestamp gerado aqui divergiria do banco e o
+            // save seguinte acusaria edição simultânea inexistente.
+            alloc_updated_at: data?.allocUpdatedAt ?? prev?.alloc_updated_at ?? null,
           };
           return { ...old, allocByLh: { ...old.allocByLh, [lh]: next } };
         });
@@ -3169,6 +3191,17 @@ function RowDetailModal({
         setDupConfirm({
           mensagem: e instanceof Error ? e.message : "",
           run: () => saveSystemCargo.mutate({ ...(variables ?? {}), confirmDuplicate: true }),
+        });
+        return;
+      }
+      if (isAllocationChangedError(e)) {
+        setStaleConfirm({
+          mensagem: e instanceof Error ? e.message : "",
+          run: () => saveSystemCargo.mutate({
+            ...(variables ?? {}),
+            confirmOverwrite: true,
+            expectedAllocUpdatedAt: allocationChangedBaseline(e),
+          }),
         });
         return;
       }
@@ -3334,6 +3367,10 @@ function RowDetailModal({
       lh: row.lh,
       // Fonte da planilha da linha: o backend resolve a carga por (LH, fonte).
       source: row.sheetSource ?? null,
+      // Concorrência otimista: o carimbo que ESTA tela viu. Se outra pessoa gravou no
+      // meio, o backend recusa com 409 acionável em vez de deixar sobrescrever às
+      // cegas (incidente do ping-pong de 05/08). Ver lib/allocationConflict.ts.
+      expectedAllocUpdatedAt: alloc?.alloc_updated_at ?? null,
       ...(allocStatusDirty ? { status: allocForm.status } : {}),
       tipo: allocForm.tipo, // tipo é livre (não trava por pinned/status)
       // Vínculo (col H): sempre enviado (prefilled com o valor efetivo) — o
@@ -3384,6 +3421,8 @@ function RowDetailModal({
     // com `row.status` dava falso-positivo quando o overlay do SPX mudava sozinho).
     saveSystemCargo.mutate({
       cargoId: row.cargoId,
+      // Concorrência otimista — mesma razão do caminho por LH.
+      expectedAllocUpdatedAt: alloc?.alloc_updated_at ?? null,
       lh: cargoForm.lh.trim(),
       ...(cargoStatusDirty ? { status: cargoForm.status.trim() } : {}),
       tipo: cargoForm.tipo.trim(),
@@ -4038,6 +4077,15 @@ function RowDetailModal({
       description={`${dupConfirm?.mensagem ?? ""} Confirmar mesmo assim?`}
       onConfirm={() => { const c = dupConfirm; setDupConfirm(null); c?.run(); }}
       onCancel={() => setDupConfirm(null)}
+    />
+
+    {/* Edição simultânea — outra pessoa mexeu nesta carga enquanto o operador editava. */}
+    <ConfirmDialog
+      open={staleConfirm !== null}
+      title="Esta carga foi alterada por outra pessoa"
+      description={`${staleConfirm?.mensagem ?? ""} Quer sobrescrever com o que você preencheu?`}
+      onConfirm={() => { const c = staleConfirm; setStaleConfirm(null); c?.run(); }}
+      onCancel={() => setStaleConfirm(null)}
     />
 
     {/* Guarda de alterações não salvas — ao tentar fechar o modal com edições pendentes. */}
