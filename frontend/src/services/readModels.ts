@@ -1401,6 +1401,9 @@ export async function updateMonitorAllocation(input: {
   tratativas?: string | null; // observação de checklist (tratativas)
   checklistCavalo?: string | null; // verdito do checklist do cavalo (Aprovado/Reprovado)
   checklistCarreta?: string | null; // verdito do checklist da carreta (Aprovado/Reprovado)
+  // O operador já viu o aviso de duplicidade (mesmo motorista/placa em outra carga do
+  // dia) e confirmou — ver lib/allocationConflict.ts.
+  confirmDuplicate?: boolean;
 }) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{
@@ -1677,6 +1680,8 @@ export interface MonitorCargoUpdate {
   tratativas?: string | null; // observação de checklist (tratativas)
   checklistCavalo?: string | null; // verdito do checklist do cavalo (Aprovado/Reprovado)
   checklistCarreta?: string | null; // verdito do checklist da carreta (Aprovado/Reprovado)
+  // O operador já viu o aviso de duplicidade e confirmou — ver lib/allocationConflict.ts.
+  confirmDuplicate?: boolean;
 }
 
 /**

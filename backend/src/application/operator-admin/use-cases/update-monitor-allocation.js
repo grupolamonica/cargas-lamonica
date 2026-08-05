@@ -1,7 +1,8 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { buildAuditChanges } from "../../../domain/operator-admin/audit-diff.js";
-import { NotFoundError } from "../../../domain/load-claims/errors.js";
+import { ConflictError, NotFoundError } from "../../../domain/load-claims/errors.js";
+import { describeConflicts, duplicateAllocWarnEnabled, findAllocationConflicts } from "./find-allocation-conflicts.js";
 import { writeAllocationsToSheet, formatSheetDateLabel } from "../../google-sheets/sheet-writeback.js";
 import { cancelLoadCascade } from "./cancel-load-cascade.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
@@ -60,7 +61,7 @@ export async function updateMonitorAllocation({ lh, source = null, operatorId, p
                 alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
                 alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta,
                 status, reserved_public_lead_id,
-                origem, destino, sheet_data_carregamento, sheet_data_descarga`,
+                origem, destino, data, lh_manual, sheet_data_carregamento, sheet_data_descarga`,
     });
 
     if (!sheetRow) {
@@ -162,6 +163,37 @@ export async function updateMonitorAllocation({ lh, source = null, operatorId, p
     // Verdito manual do checklist por veículo ("Aprovado"/"Reprovado"). Ausente preserva; ""=limpa.
     const finalChecklistCavalo = has("checklistCavalo") ? norm(payload.checklistCavalo) : (sheetRow.alloc_checklist_cavalo ?? null);
     const finalChecklistCarreta = has("checklistCarreta") ? norm(payload.checklistCarreta) : (sheetRow.alloc_checklist_carreta ?? null);
+
+    // AVISO de duplicidade: o motorista/placa que está ENTRANDO nesta carga já está em
+    // outra carga do MESMO dia? Só avisa (409 acionável) — o operador confirma e o
+    // reenvio com `confirmDuplicate` grava. Ver find-allocation-conflicts.js para o
+    // incidente que originou isto (mesmo motorista + mesmo cavalo em duas viagens).
+    //
+    // Só dispara quando o valor MUDA para algo não-vazio: o editor inline e o modal
+    // reenviam os campos pré-preenchidos com o valor efetivo, então re-salvar a mesma
+    // alocação (que acontece muito) não pode virar um aviso.
+    if (duplicateAllocWarnEnabled() && payload.confirmDuplicate !== true) {
+      const efetivoAntesMot = norm(sheetRow.alloc_motorista ?? sheetRow.sheet_motorista);
+      const efetivoAntesCav = norm(sheetRow.alloc_cavalo ?? sheetRow.sheet_cavalo);
+      const novoCav = explicit("cavalo") ? finalCavalo : (finalCavalo || sheetRow.sheet_cavalo);
+      const motMudou = effMotorista !== "" && effMotorista.toUpperCase() !== efetivoAntesMot.toUpperCase();
+      const cavMudou = norm(novoCav) !== "" && norm(novoCav).toUpperCase() !== efetivoAntesCav.toUpperCase();
+      if (motMudou || cavMudou) {
+        const conflitos = await findAllocationConflicts(client, {
+          cargoId,
+          lh: sheetRow.sheet_lh ?? sheetRow.lh_manual ?? lh,
+          data: sheetRow.data,
+          motorista: motMudou ? effMotorista : null,
+          cavalo: cavMudou ? novoCav : null,
+        });
+        if (conflitos.length > 0) {
+          throw new ConflictError(
+            describeConflicts(conflitos, { motorista: effMotorista, cavalo: novoCav }),
+            { code: "DUPLICATE_ALLOCATION", conflitos },
+          );
+        }
+      }
+    }
 
     await client.query(
       `

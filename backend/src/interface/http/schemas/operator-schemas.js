@@ -69,6 +69,10 @@ export const sheetMonitorAllocationBodySchema = z.object({
   // CheckList Cavalo / CheckList Carreta1 da planilha.
   checklistCavalo: checklistVerdictSchema,
   checklistCarreta: checklistVerdictSchema,
+  // O operador JÁ viu o aviso de duplicidade (mesmo motorista/placa em outra carga do
+  // dia) e confirmou. Reenvio do mesmo save com esta flag grava. Ver
+  // find-allocation-conflicts.js — o aviso nunca bloqueia, só exige a confirmação.
+  confirmDuplicate: z.boolean().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/reassign — reordenar a fila de
@@ -211,6 +215,9 @@ export const sheetMonitorCargoUpdateBodySchema = z.object({
   // Verdito manual do checklist por veículo → alloc_checklist_cavalo/carreta.
   checklistCavalo: checklistVerdictSchema,
   checklistCarreta: checklistVerdictSchema,
+  // O operador JÁ viu o aviso de duplicidade e confirmou — ver
+  // find-allocation-conflicts.js (mesma flag do caminho por LH).
+  confirmDuplicate: z.boolean().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/conformity-override — verdito manual de

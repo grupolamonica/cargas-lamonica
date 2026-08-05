@@ -55,6 +55,7 @@ import { allocEditPolicy, isSpxTrip } from "@/lib/monitorEditPolicy";
 import { routeCanonKey } from "@/lib/routeCanonical";
 import { computeSwapMoves } from "@/lib/monitorReorder";
 import { editableDriver, mergeAllocIntoRow, effectiveAllocField } from "@/lib/monitorAllocOverlay";
+import { isDuplicateAllocationError } from "@/lib/allocationConflict";
 import {
   assignAspxAllocations,
   createMonitorCargo,
@@ -2991,6 +2992,12 @@ function RowDetailModal({
   const [confirmChange, setConfirmChange] = useState(false);
   // Guarda de "alterações não salvas" ao tentar fechar o modal.
   const [confirmClose, setConfirmClose] = useState(false);
+  // Aviso de duplicidade: o motorista/placa já está em outra carga do MESMO dia. O
+  // backend recusa com 409 acionável (DUPLICATE_ALLOCATION) e a decisão volta pro
+  // operador — confirmar reenvia o MESMO save com `confirmDuplicate`. Nunca bloqueia:
+  // duas viagens no mesmo dia podem ser legítimas, mas não podem passar em silêncio
+  // (incidente de 05/08: mesmo motorista e mesmo cavalo em duas viagens).
+  const [dupConfirm, setDupConfirm] = useState<{ mensagem: string; run: () => void } | null>(null);
   // Fecha o modal DEPOIS de um save bem-sucedido — só quando o operador escolhe
   // "Salvar e sair" na guarda. Save normal (botão Salvar) mantém o modal ABERTO.
   const closeAfterSaveRef = useRef(false);
@@ -3102,8 +3109,18 @@ function RowDetailModal({
       // Mantém o modal ABERTO após salvar; só fecha quando o operador pediu "Salvar e sair".
       if (closeAfterSaveRef.current) { closeAfterSaveRef.current = false; onClose(); }
     },
-    onError: (err) => {
+    onError: (err, variables) => {
       closeAfterSaveRef.current = false;
+      // Duplicidade é PERGUNTA, não erro: abre a confirmação e, se o operador
+      // confirmar, reenvia o MESMO payload com a flag. Qualquer outro 409
+      // (código de viagem duplicado, carga unificada) segue como erro puro.
+      if (isDuplicateAllocationError(err)) {
+        setDupConfirm({
+          mensagem: err instanceof Error ? err.message : "",
+          run: () => saveAllocation.mutate({ ...(variables ?? {}), confirmDuplicate: true }),
+        });
+        return;
+      }
       toast.error(err instanceof Error ? err.message : "Não foi possível salvar a alocação.");
     },
   });
@@ -3146,7 +3163,17 @@ function RowDetailModal({
       setTimeout(() => void queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] }), 2000);
       if (closeAfterSaveRef.current) { closeAfterSaveRef.current = false; onClose(); }
     },
-    onError: (e) => { closeAfterSaveRef.current = false; toast.error(e instanceof Error ? e.message : "Não foi possível salvar a carga."); },
+    onError: (e, variables) => {
+      closeAfterSaveRef.current = false;
+      if (isDuplicateAllocationError(e)) {
+        setDupConfirm({
+          mensagem: e instanceof Error ? e.message : "",
+          run: () => saveSystemCargo.mutate({ ...(variables ?? {}), confirmDuplicate: true }),
+        });
+        return;
+      }
+      toast.error(e instanceof Error ? e.message : "Não foi possível salvar a carga.");
+    },
   });
 
   const pinMutation = useMutation({
@@ -4002,6 +4029,15 @@ function RowDetailModal({
       aspxWarning={allocEditable && aspxWarning}
       onConfirm={(reason) => { setConfirmChange(false); if (row.source === "sistema") buildAndMutateSystem(reason); else doSave(reason); }}
       onCancel={() => setConfirmChange(false)}
+    />
+
+    {/* Duplicidade de motorista/veículo no mesmo dia — avisa e deixa o operador decidir. */}
+    <ConfirmDialog
+      open={dupConfirm !== null}
+      title="Motorista ou veículo já alocado neste dia"
+      description={`${dupConfirm?.mensagem ?? ""} Confirmar mesmo assim?`}
+      onConfirm={() => { const c = dupConfirm; setDupConfirm(null); c?.run(); }}
+      onCancel={() => setDupConfirm(null)}
     />
 
     {/* Guarda de alterações não salvas — ao tentar fechar o modal com edições pendentes. */}
