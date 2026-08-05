@@ -31,7 +31,7 @@ from typing import Any
 
 from concurrent.futures import ThreadPoolExecutor
 
-from ..helpers import extrair_numeros, formatar_telefone, limpar_texto
+from ..helpers import extrair_numeros, limpar_texto, telefones_para_api
 from ..logger import log_alerta, log_erro, log_info
 from .client import AngellraAPIClient, get_shared_client
 from .precheck import verificar_motorista_via_api
@@ -101,23 +101,13 @@ def _detectar_ocr_suspeito(motorista: dict, cnh: dict) -> list[str]:
 
 
 def _phones_para_api(telefones: Any) -> list[dict]:
-    """['14997507525'] -> [{phone:'(14) 99750-7525', typeId:3}]."""
-    saida: list[dict] = []
-    if not telefones:
-        return saida
-    if not isinstance(telefones, list):
-        telefones = [telefones]
-    for tel in telefones:
-        if isinstance(tel, dict):
-            num = tel.get("phone") or tel.get("numero") or ""
-            tipo = tel.get("typeId") or tel.get("tipo") or PHONE_TYPE_CELULAR
-        else:
-            num = str(tel or "")
-            tipo = PHONE_TYPE_CELULAR
-        formatado = formatar_telefone(num)
-        if formatado:
-            saida.append({"phone": formatado, "typeId": int(tipo)})
-    return saida
+    """['14997507525'] -> [{phone:'(14) 99750-7525', typeId:3}] (deduplicado).
+
+    Delega ao helper central `telefones_para_api`, que colapsa telefones
+    repetidos — o Joi do AngelLira rejeita lista com duplicatas ("Validation
+    error"). Ver caso GLAUBERT (2026-08-05) em helpers.telefones_para_api.
+    """
+    return telefones_para_api(telefones, default_type_id=PHONE_TYPE_CELULAR)
 
 
 def _construir_payload_driver(
