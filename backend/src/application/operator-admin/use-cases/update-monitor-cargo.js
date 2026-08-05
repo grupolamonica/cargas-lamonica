@@ -6,6 +6,7 @@ import { syncedCarregamentoLabel } from "../../../domain/cargo-schedule.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
 import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
 import { writeAllocationsToSheet, formatSheetDateLabel } from "../../google-sheets/sheet-writeback.js";
+import { describeConflicts, duplicateAllocWarnEnabled, findAllocationConflicts } from "./find-allocation-conflicts.js";
 
 // pg devolve DATE como Date (UTC-midnight) e TIME como string. Normaliza pro
 // formato de parede 'YYYY-MM-DD' / 'HH:MM' (UTC, evita off-by-one).
@@ -170,6 +171,35 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     // motorista (que preferem esse rótulo) mostravam o horário antigo.
     const carregamento = syncedCarregamentoLabel(row.sheet_data_carregamento, data, horario);
 
+    // AVISO de duplicidade (mesma regra do caminho por LH — ver
+    // find-allocation-conflicts.js): motorista/placa entrando aqui já está em outra
+    // carga do MESMO dia? Avisa e deixa confirmar; nunca bloqueia de vez. Só dispara
+    // quando o valor MUDA para algo não-vazio, porque o modal reenvia os campos
+    // pré-preenchidos e re-salvar a mesma alocação não é uma decisão nova.
+    if (duplicateAllocWarnEnabled() && payload.confirmDuplicate !== true) {
+      const antesMot = (row.alloc_motorista ?? "").toString().trim();
+      const antesCav = (row.alloc_cavalo ?? "").toString().trim();
+      const novoMot = (allocMotorista ?? "").toString().trim();
+      const novoCav = (allocCavalo ?? "").toString().trim();
+      const motMudou = novoMot !== "" && novoMot.toUpperCase() !== antesMot.toUpperCase();
+      const cavMudou = novoCav !== "" && novoCav.toUpperCase() !== antesCav.toUpperCase();
+      if (motMudou || cavMudou) {
+        const conflitos = await findAllocationConflicts(client, {
+          cargoId,
+          lh: lhManual ?? row.lh_manual,
+          data,
+          motorista: motMudou ? novoMot : null,
+          cavalo: cavMudou ? novoCav : null,
+        });
+        if (conflitos.length > 0) {
+          throw new ConflictError(
+            describeConflicts(conflitos, { motorista: novoMot, cavalo: novoCav }),
+            { code: "DUPLICATE_ALLOCATION", conflitos },
+          );
+        }
+      }
+    }
+
     const touchesAlloc = has("motorista") || has("cavalo") || has("carreta") || has("status") || has("tipo");
 
     await client.query(
@@ -257,7 +287,9 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
         horario,
         pinned,
         reopened: reopening,
-        fields: Object.keys(payload).filter((k) => k !== "cargoId"),
+        // `confirmDuplicate` é decisão de UI (o operador confirmou o aviso), não um
+        // campo editado — fora da lista de campos tocados.
+        fields: Object.keys(payload).filter((k) => k !== "cargoId" && k !== "confirmDuplicate"),
         // DC-184: antes → depois. SEM cavalo/carreta (placas = sensível "plate"
         // no sanitizeLogPayload; chaves genéricas before/after não são redigidas
         // e vazariam no CSV do DC-186).
