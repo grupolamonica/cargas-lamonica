@@ -11,6 +11,7 @@ dossie AngelLira — sem nenhuma consulta ao portal.
 
 from __future__ import annotations
 
+import random
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -56,12 +57,15 @@ def _to_ddmmyyyy(value):
     return s
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+# Validade padrao das consultas do AngelLira: ~180 dias APOS o recebimento
+# (padrao observado no portal real — "Dias Vencimento" = 180). Antes o mock
+# usava 365, que nao corresponde ao AngelLira.
+VALIDADE_DIAS = 180
 
 
-def _plus_days_iso(days: int) -> str:
-    return (datetime.now(timezone.utc) + timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+def _iso(dt: datetime) -> str:
+    """datetime (UTC-aware) -> ISO no formato que a camada de render consome."""
+    return dt.strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
 
 # ── Deteccao ────────────────────────────────────────────────────────────────
@@ -181,12 +185,25 @@ def _company_history(company: dict) -> dict:
 
 
 def _meta(protocolo, status_desc: str) -> dict:
-    """Cabecalho de consulta comum (id, tipo, datas, status, usuario)."""
+    """Cabecalho de consulta comum (id, tipo, datas, status, usuario).
+
+    As datas espelham o comportamento do AngelLira real, em vez de repetir a
+    mesma data em todos os campos (como o mock fazia antes):
+      - a consulta e ENVIADA (sentDate);
+      - RECEBIDA alguns minutos depois — gap de processamento do portal, entao
+        receivingDate != sentDate;
+      - a VALIDADE vence ~180 dias APOS o recebimento (padrao real "Dias
+        Vencimento" = 180), com a hora acompanhando a do recebimento — nao a do
+        envio.
+    """
+    sent = datetime.now(timezone.utc)
+    received = sent + timedelta(seconds=random.randint(90, 240))  # ~1,5 a 4 min
+    limit = received + timedelta(days=VALIDADE_DIAS)
     return {
         'id': protocolo or '—',
-        'sentDate': _now_iso(),
-        'receivingDate': _now_iso(),
-        'limitDate': _plus_days_iso(365),
+        'sentDate': _iso(sent),
+        'receivingDate': _iso(received),
+        'limitDate': _iso(limit),
         'daysUntilDue': None,  # a render calcula a partir de limitDate
         'status': {'id': 1, 'description': status_desc},
         'user': {'login': 'mock.estudo'},
