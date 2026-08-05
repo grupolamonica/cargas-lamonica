@@ -17,7 +17,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from ..helpers import extrair_numeros, formatar_telefone, limpar_texto
+from ..helpers import extrair_numeros, limpar_texto, telefones_para_api
 from ..logger import log_alerta, log_erro, log_info
 from .client import AngellraAPIClient, get_shared_client
 from . import geo, owners, queries
@@ -87,20 +87,10 @@ def _phones_para_api(telefones: list, type_id: int = owners.PHONE_TYPE_FIXO) -> 
     POST /owners exige pelo menos 1 phone com typeId=2 (fixo). Se nao houver
     nenhum, retornamos lista vazia e o caller decide se garante 1 default.
     """
-    saida: list[dict] = []
-    if not telefones:
-        return saida
-    for tel in telefones:
-        if isinstance(tel, dict):
-            num = tel.get("phone") or tel.get("numero") or ""
-            tipo = tel.get("typeId") or tel.get("tipo") or type_id
-        else:
-            num = str(tel or "")
-            tipo = type_id
-        formatado = formatar_telefone(num)
-        if formatado:
-            saida.append({"phone": formatado, "typeId": int(tipo)})
-    return saida
+    # Delega ao helper central (dedup por numero): o Joi do AngelLira rejeita
+    # lista com telefones repetidos ("Validation error"). Mesma blindagem do
+    # _phones_para_api do motorista.
+    return telefones_para_api(telefones, default_type_id=type_id)
 
 
 def _to_int_or_none(valor: Any) -> int | None:

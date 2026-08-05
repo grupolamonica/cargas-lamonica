@@ -67,6 +67,36 @@ def formatar_telefone(telefone: str) -> str:
     return telefone
 
 
+def telefones_para_api(telefones, default_type_id: int) -> list[dict]:
+    """Converte telefones (strings ou dicts) -> [{phone, typeId}], DEDUPLICADO.
+
+    Dedup por numero formatado: o Joi do AngelLira (POST /drivers e /owners)
+    rejeita a lista com "Validation error" quando ha telefones REPETIDOS. Caso
+    GLAUBERT FRANCISCO DE LIMA (2026-08-05): o payload trazia
+    telefones=['62984674668','62984674668'] (mesmo numero 2x) e o cadastro do
+    motorista falhava com 422 mesmo com todo o resto valido. Colapsar duplicatas
+    para uma unica entrada resolve. Aceita item avulso (nao-lista) tambem.
+    """
+    saida: list[dict] = []
+    if not telefones:
+        return saida
+    if not isinstance(telefones, list):
+        telefones = [telefones]
+    vistos: set[str] = set()
+    for tel in telefones:
+        if isinstance(tel, dict):
+            num = tel.get("phone") or tel.get("numero") or ""
+            tipo = tel.get("typeId") or tel.get("tipo") or default_type_id
+        else:
+            num = str(tel or "")
+            tipo = default_type_id
+        formatado = formatar_telefone(num)
+        if formatado and formatado not in vistos:
+            vistos.add(formatado)
+            saida.append({"phone": formatado, "typeId": int(tipo)})
+    return saida
+
+
 def validar_telefone(telefone: str) -> bool:
     return len(extrair_numeros(telefone)) in [10, 11]
 
