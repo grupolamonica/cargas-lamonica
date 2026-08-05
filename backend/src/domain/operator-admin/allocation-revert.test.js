@@ -52,6 +52,26 @@ describe("allocation-revert domain", () => {
       expect(r.items[0].lh).toBe("LT-1");
       expect(r.items[0].before.motorista).toBe("ANTIGO");
       expect(r.items[0].after.status).toBe("DESCARREGADO");
+      // Evento ANTIGO (sem sheetSource no metadata) → null = Shopee, a fonte
+      // histórica. É o que preserva o revert dos eventos já gravados.
+      expect(r.items[0].sheetSource).toBeNull();
+    });
+
+    it("propaga a fonte da planilha (sheetSource) gravada no metadata", () => {
+      // Sem a fonte, o revert resolveria a carga no namespace da Shopee — e num
+      // cenário multi-planilha o LH sozinho não identifica a carga (sheet_lh é
+      // único só POR fonte).
+      const r = extractRevertItemsFromAuditEvent({
+        eventType: "operator.cargo.allocation_updated",
+        metadata: {
+          lh: "B101464733",
+          sheetSource: "nestle",
+          beforeAlloc: { motorista: "ANTIGO", cavalo: "", carreta: "", status: "" },
+          afterAlloc: { motorista: "NOVO", cavalo: "", carreta: "", status: "" },
+        },
+      });
+      expect(r.supported).toBe(true);
+      expect(r.items[0].sheetSource).toBe("nestle");
     });
 
     it("allocation_updated legado (sem beforeAlloc) → não suportado", () => {

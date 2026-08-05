@@ -99,7 +99,9 @@ export const NESTLE_HEADER_SCHEMA = {
   valor: SHEET_LOAD_VALUE_HEADERS,
 };
 
-const SHEET_SOURCE_SHOPEE = "shopee";
+// Exportada: a fonte HISTÓRICA. Quem resolve carga de planilha por LH precisa
+// distinguir "Shopee (namespace de id sem fonte)" das demais fontes.
+export const SHEET_SOURCE_SHOPEE = "shopee";
 const SHEET_SOURCE_NESTLE = "nestle";
 
 const NESTLE_DEFAULT_SHEET_URL =

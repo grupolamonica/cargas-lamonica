@@ -3292,6 +3292,8 @@ function RowDetailModal({
     // Omitir → o backend preserva o alloc_status atual (null = reflete a planilha).
     saveAllocation.mutate({
       lh: row.lh,
+      // Fonte da planilha da linha: o backend resolve a carga por (LH, fonte).
+      source: row.sheetSource ?? null,
       ...(allocStatusDirty ? { status: allocForm.status } : {}),
       tipo: allocForm.tipo, // tipo é livre (não trava por pinned/status)
       // Vínculo (col H): sempre enviado (prefilled com o valor efetivo) — o
@@ -3614,7 +3616,7 @@ function RowDetailModal({
                   </span>
                   <button
                     type="button"
-                    onClick={() => pinMutation.mutate({ lh: row.lh, pinned: !pinned })}
+                    onClick={() => pinMutation.mutate({ lh: row.lh, source: row.sheetSource ?? null, pinned: !pinned })}
                     disabled={pinMutation.isPending}
                     className={cn(
                       "inline-flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1 text-[0.7rem] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60",
@@ -4654,8 +4656,10 @@ export default function SheetMonitor() {
     // chave ausente faz o backend PRESERVAR o alloc_status atual.
     (rawPayload: { lh: string; motorista: string; cavalo: string; carreta: string; status?: string; tipo: string }) => {
       // DC-310 — limpa o sufixo `(***NNN)` do dropdown de homônimos antes de comparar/gravar.
-      const payload = { ...rawPayload, motorista: stripDriverCpfSuffix(rawPayload.motorista) };
-      const target = itemsRef.current.find((r) => r.lh === payload.lh);
+      const target0 = itemsRef.current.find((r) => r.lh === rawPayload.lh);
+      // `source` = fonte da planilha da linha (o backend resolve a carga por (LH, fonte)).
+      const payload = { ...rawPayload, source: target0?.sheetSource ?? null, motorista: stripDriverCpfSuffix(rawPayload.motorista) };
+      const target = target0;
       const mvChanged =
         !target ||
         payload.motorista !== (target.motoristas ?? "") ||
@@ -4712,7 +4716,11 @@ export default function SheetMonitor() {
   });
   const handleReassign = useCallback(
     (moves: Array<{ lh?: string; cargoId?: string; motorista: string; cavalo: string; carreta: string }>) => {
-      const run = () => mutateReassign(moves);
+      // Cada move leva a fonte da planilha da sua linha (resolução por (LH, fonte)).
+      const movesComFonte = moves.map((m) =>
+        m.lh ? { ...m, source: itemsRef.current.find((x) => x.lh === m.lh)?.sheetSource ?? null } : m,
+      );
+      const run = () => mutateReassign(movesComFonte);
       const aspxCount = moves.filter((m) => {
         const r = m.lh ? itemsRef.current.find((x) => x.lh === m.lh) : itemsRef.current.find((x) => x.cargoId === m.cargoId);
         return r && allocEditPolicy(r).aspxWarning;
@@ -4788,9 +4796,10 @@ export default function SheetMonitor() {
   });
   const handleAssignReserva = useCallback(
     (input: { reservaId: string; targetLh: string }) => {
-      const run = () => mutateAssignReserva(input);
       // Se a carga de destino está "aguardando chegar no cliente", confirma antes.
       const target = itemsRef.current.find((x) => x.lh === input.targetLh);
+      // Fonte da planilha da carga de destino (resolução por (LH, fonte)).
+      const run = () => mutateAssignReserva({ ...input, source: target?.sheetSource ?? null });
       if (target && allocEditPolicy(target).aspxWarning) setAspxConfirm({ count: 1, run });
       else run();
     },
@@ -4817,7 +4826,8 @@ export default function SheetMonitor() {
   });
   const pinningLh = pinPending ? (pinVars?.lh ?? null) : null;
   const handleTogglePin = useCallback(
-    (lh: string, pinned: boolean) => mutatePin({ lh, pinned }),
+    (lh: string, pinned: boolean) =>
+      mutatePin({ lh, source: itemsRef.current.find((r) => r.lh === lh)?.sheetSource ?? null, pinned }),
     [mutatePin],
   );
 
@@ -5193,7 +5203,15 @@ export default function SheetMonitor() {
       // Angellira/ASPX. freshData já traz o enriquecimento salvo (enrichedByLh/
       // ByCargoId) do backend, então os selos NÃO somem. A verificação é feita
       // uma vez (ao abrir o Monitor) e persistida no banco.
-      queryClient.setQueryData([...SHEET_MONITOR_QUERY_KEY], freshData);
+      //
+      // Resposta marcada como INCOMPLETA (o backend não conseguiu ler alguma fonte
+      // de planilha): NÃO substitui o cache — seria trocar a tela completa por uma
+      // sem aquelas linhas. Refaz a leitura normal, que monta todas as fontes.
+      if (freshData?.meta?.sourcesIncomplete) {
+        queryClient.invalidateQueries({ queryKey: [...SHEET_MONITOR_QUERY_KEY] });
+      } else {
+        queryClient.setQueryData([...SHEET_MONITOR_QUERY_KEY], freshData);
+      }
       // Fila operacional usa status da planilha — invalidar para refletir status novo apos sync.
       queryClient.invalidateQueries({ queryKey: ["operator", "public-load-leads"] });
     },

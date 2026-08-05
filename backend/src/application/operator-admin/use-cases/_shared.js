@@ -6,7 +6,7 @@
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 import { ConflictError, ForbiddenError, NotFoundError } from "../../../domain/load-claims/errors.js";
-import { createSheetLoadId } from "../../google-sheets/google-sheet-loads.js";
+import { createSheetLoadId, SHEET_SOURCE_SHOPEE } from "../../google-sheets/google-sheet-loads.js";
 import { mergeLaunchedTwinAlloc, twinMergeMode } from "./merge-launched-twin.js";
 import { getRouteInfo } from "../../../infrastructure/geoapify/index.js";
 import {
@@ -766,14 +766,33 @@ export async function findClientIdByName(client, name) {
  * quando precisar decidir write-back, `sheet_lh` (sistema = sheet_lh NULL). Retorna
  * a linha ou null.
  *
+ * MULTI-FONTE (`source`): o id da carga da planilha é namespaced por fonte —
+ * `sheet-load:<LH>` na Shopee (histórico) e `sheet-load:<source>:<LH>` nas demais
+ * (createSheetLoadId). Sem receber a fonte, esta função derivava SEMPRE o id da
+ * Shopee, então o ramo `id = $1` era falso para qualquer linha Nestlé e toda
+ * escrita do Monitor nela devolvia 404 "Carga da planilha não encontrada".
+ * `source` vem do payload (a linha do Monitor carrega `sheetSource`); ausente =
+ * Shopee, byte-idêntico ao comportamento anterior.
+ *
+ * NÃO existe ramo por `sheet_lh` de propósito: `sheet_lh` é único apenas POR FONTE
+ * (idx_cargas_source_sheet_lh) e há LH repetido entre planilhas em produção. Um
+ * ramo `sheet_lh = $lh` casaria as duas cargas e o 1º termo do ORDER BY
+ * (`alloc_updated_at`) poderia entregar a carga da OUTRA fonte — pior que o 404,
+ * porque a escrita e o write-back iriam silenciosamente para a planilha errada.
+ * A fonte no id é o que desambigua.
+ *
  * @param {import("pg").PoolClient} client
  * @param {string} lh
- * @param {{ columns?: string, forUpdate?: boolean }} [opts]
+ * @param {{ columns?: string, forUpdate?: boolean, source?: string|null }} [opts]
  */
-export async function resolveMonitorCargoByLh(client, lh, { columns = "id, sheet_lh", forUpdate = true } = {}) {
+export async function resolveMonitorCargoByLh(client, lh, { columns = "id, sheet_lh", forUpdate = true, source = null } = {}) {
   const lhTrim = String(lh ?? "").trim();
-  if (twinMergeMode() !== "off") return resolveCanonicalCargoByLh(client, lhTrim, { columns, forUpdate });
-  const sheetCargoId = createSheetLoadId(lhTrim);
+  // A resolução CANÔNICA (gate TWIN_MERGE) também recebe a fonte: ela casa pela
+  // COLUNA sheet_lh, que é única só POR fonte, e sem a fonte trata LH presente em
+  // duas planilhas como ambiguidade (ConflictError). Quando o chamador SABE a fonte
+  // não há ambiguidade nenhuma — repassar evita recusar uma edição legítima.
+  if (twinMergeMode() !== "off") return resolveCanonicalCargoByLh(client, lhTrim, { columns, forUpdate, source });
+  const sheetCargoId = createSheetLoadId(lhTrim, source ?? undefined);
   const { rows } = await client.query(
     `SELECT ${columns}
        FROM public.cargas
@@ -805,20 +824,29 @@ export async function resolveMonitorCargoByLh(client, lh, { columns = "id, sheet
  * por ciclo de vida quebraria o Monitor para viagem histórica. O discriminador é a
  * IDENTIDADE (existe canônica) + o marcador de merge.
  *
- * LH em DUAS fontes (existe em shopee e nestle) é ambiguidade real: lança
+ * LH em DUAS fontes (existe em shopee e nestle) é ambiguidade real — mas só quando
+ * NÃO sabemos a fonte. Com `source` informado (a linha do Monitor carrega
+ * `sheetSource` e as escritas o devolvem), a canônica é filtrada por fonte e a
+ * ambiguidade deixa de existir: recusar aí seria barrar uma edição legítima. Sem a
+ * fonte (cliente antigo, ou revert de evento gravado antes do multi-fonte), mantém o
  * ConflictError em vez de escolher por heurística e gravar na planilha errada.
  */
-async function resolveCanonicalCargoByLh(client, lhTrim, { columns, forUpdate }) {
+async function resolveCanonicalCargoByLh(client, lhTrim, { columns, forUpdate, source = null }) {
+  const fonte = (source ?? "").toString().trim() || null;
+  // O filtro por fonte vale só para a CANÔNICA (linha da planilha). O ramo da carga
+  // LANÇADA (lh_manual, sheet_lh NULL) nunca é filtrado: o lançamento só passou a
+  // gravar `sheet_source` agora, então as antigas estão todas com a coluna NULL.
   const { rows } = await client.query(
     `SELECT ${columns}, sheet_lh AS __canonica, sheet_source AS __fonte
        FROM public.cargas
-      WHERE sheet_lh = $1 OR (lh_manual = $1 AND sheet_lh IS NULL)
+      WHERE (sheet_lh = $1 AND ($2::text IS NULL OR COALESCE(sheet_source, '') = $2))
+         OR (lh_manual = $1 AND sheet_lh IS NULL)
       ORDER BY (sheet_lh IS NOT NULL) DESC,
                (alloc_merged_into_cargo_id IS NULL AND retired_reason IS NULL) DESC,
                (alloc_updated_at IS NOT NULL) DESC,
                created_at ASC, id ASC
       ${forUpdate ? "FOR UPDATE" : ""}`,
-    [lhTrim],
+    [lhTrim, fonte],
   );
   if (rows.length === 0) return null;
   const canonicas = rows.filter((r) => r.__canonica != null);
@@ -908,12 +936,22 @@ export async function resolveCargoFollowingMerge(client, cargoId, { columns = "*
  * `sheet_status` com esse valor arma `sweepCancelledCascades` (que não tem janela de
  * data e roda no fim do mesmo ciclo de sync) sem nenhuma decisão do operador por trás.
  *
+ * SÓ MATERIALIZA PARA A SHOPEE. Para outras fontes (Nestlé) a resolução funciona
+ * (id namespaced), mas quando não existe carga devolvemos null — 404 honesto — em
+ * vez de inventar uma. Materializar fora da Shopee produziria carga malformada que
+ * NENHUM sync conserta depois: este INSERT crava perfil='CARRETA' e não grava
+ * valor/bônus/distância/duração, e o sync pula LH que já é carga
+ * (`existingLoadsBySheetLh`), então a carga ficaria para sempre sem preço e com
+ * perfil errado — além do risco de nascer OPEN+PUBLIC e virar carga fantasma no
+ * portal do motorista. Em produção as 122 cargas Nestlé de planilha JÁ existem
+ * (o sync da Nestlé importa a planilha inteira), então não há o que materializar.
+ *
  * @param {import("pg").PoolClient} client
  * @param {string} lh
- * @param {{ columns?: string, forUpdate?: boolean, correlationId?: string|null }} [opts]
+ * @param {{ columns?: string, forUpdate?: boolean, correlationId?: string|null, source?: string|null }} [opts]
  */
-export async function ensureMonitorSheetCargo(client, lh, { columns = "id, sheet_lh", forUpdate = true, correlationId = null } = {}) {
-  const existing = await resolveMonitorCargoByLh(client, lh, { columns, forUpdate });
+export async function ensureMonitorSheetCargo(client, lh, { columns = "id, sheet_lh", forUpdate = true, correlationId = null, source = null } = {}) {
+  const existing = await resolveMonitorCargoByLh(client, lh, { columns, forUpdate, source });
   if (existing) return withLazyTwinMerge(client, lh, existing, { columns, forUpdate, correlationId });
 
   const lhTrim = String(lh ?? "").trim();
@@ -971,6 +1009,16 @@ export async function ensureMonitorSheetCargo(client, lh, { columns = "id, sheet
     const { rows: jaExisteRows } = await client.query(`SELECT ${columns} FROM public.cargas WHERE id = $1`, [dup[0].id]);
     return withLazyTwinMerge(client, lh, jaExisteRows[0] ?? null, { columns, forUpdate, correlationId, materialized: true });
   }
+
+  // FONTE != SHOPEE: até aqui tudo bem — devolver carga que EXISTE é sempre certo, e o
+  // pré-check acima acabou de cobrir isso (ele casa por (fonte, LH), independente do
+  // id, e por isso acha até a canônica com id no namespace errado). O que NAO fazemos
+  // fora da Shopee é o INSERT ad-hoc abaixo: ele crava perfil='CARRETA' literal e não
+  // grava valor/bônus/distância/duração, e nenhum sync conserta depois (a passada
+  // "puxar tudo" pula LH que já é carga), então a carga ficaria para sempre sem preço
+  // e com perfil errado. A canônica bem-formada nasce em promote-launched-twins.js.
+  // 404 honesto é melhor que carga malformada.
+  if (source && source !== SHEET_SOURCE_SHOPEE) return null;
 
   await client.query(
     `INSERT INTO public.cargas

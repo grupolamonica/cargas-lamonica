@@ -100,6 +100,7 @@ import { reconcileMonitorDuplicates } from "../../../application/operator-admin/
 import { readSheetSnapshotLhSet } from "../../../application/operator-admin/use-cases/read-sheet-snapshot-lhs.js";
 import { applyPlanilhaAvailabilityStatus } from "../../../application/operator-admin/use-cases/planilha-availability.js";
 import { applySystemReservationStatus } from "../../../application/operator-admin/use-cases/system-reservation-status.js";
+import { collectNonShopeeSnapshotRows, isShopeeSnapshot, mergeSnapshotRows, SHEET_SNAPSHOT_SHOPEE } from "../../../application/operator-admin/use-cases/monitor-snapshot-merge.js";
 import { releaseStaleAllocStatusOverrides } from "../../../application/operator-admin/use-cases/monitor-stale-alloc-status.js";
 import {
   fetchSpxScheduleIndex,
@@ -1281,9 +1282,45 @@ export async function resolveSheetMonitorResponse(request) {
             void enrichAllPendingMonitorRows(createSupabaseAdminClient(), correlationId, { onlyMissing: true }).catch(() => {});
           }
 
-          // Return the freshly-parsed rows immediately — no extra DB read needed.
+          // As linhas da Shopee vão FRESCAS, direto da memória — nunca relidas do
+          // banco: é o que preserva o dado novo na tela mesmo quando o upsert do
+          // snapshot falhou (persisted=false + banner "não foi salva no banco"), e
+          // evita baixar de novo o rows_json da Shopee, que é a maior parte de uma
+          // resposta multi-MB.
+          //
+          // As demais fontes (Nestlé) NÃO são buscadas neste caminho — o refresh só
+          // atualiza a planilha da Shopee. Antes elas simplesmente não vinham na
+          // resposta, e como o cliente substitui o cache pelo que voltou, toda linha
+          // Nestlé desaparecia do Monitor até o poll seguinte. Agora o snapshot delas
+          // (pequeno) é somado ao conjunto. Best-effort: se essa leitura falhar,
+          // responde só com a Shopee e AVISA em meta.sourcesIncomplete — degradação
+          // explícita, para o cliente não sobrescrever o cache com uma tela incompleta.
+          let secondaryRows = [];
+          let sourcesIncomplete = false;
+          try {
+            const { data: secondarySnaps, error: secondaryError } = await supabaseClient
+              .from("sheet_monitor_snapshot")
+              .select("rows_json, summary_json, synced_at, source")
+              .neq("source", SHEET_SNAPSHOT_SHOPEE)
+              .order("id", { ascending: true });
+            if (secondaryError) throw secondaryError;
+            secondaryRows = collectNonShopeeSnapshotRows(secondarySnaps);
+          } catch (secondaryErr) {
+            sourcesIncomplete = true;
+            logStructuredEvent("warn", "sheet-monitor.refresh-secondary-snapshot-failed", {
+              correlationId,
+              message: secondaryErr instanceof Error ? secondaryErr.message : String(secondaryErr),
+            });
+          }
+
+          // Summary: sem fonte secundária → byte-idêntico ao de antes (o summary da
+          // Shopee recém-parseado). Com fonte secundária → recomputa sobre o conjunto,
+          // mesma regra do caminho READ multi-fonte.
+          const refreshBaseRows = secondaryRows.length ? [...rows, ...secondaryRows] : rows;
+          const refreshSummary = secondaryRows.length ? buildSheetSummary(refreshBaseRows) : summary;
+
           // Inclui o enriquecimento JÁ salvo (senão o refresh "apaga" os selos).
-          const unified = buildUnifiedMonitor({ baseRows: rows, systemRows, reservaRows, baseSummary: summary, openLhSet, allocByLh, now, reservedByLh: reserved.byLh, reservedByCargoId: reserved.byCargoId, spxStatusByLh, spxScheduleByLh, nestleByLh, correlationId });
+          const unified = buildUnifiedMonitor({ baseRows: refreshBaseRows, systemRows, reservaRows, baseSummary: refreshSummary, openLhSet, allocByLh, now, reservedByLh: reserved.byLh, reservedByCargoId: reserved.byCargoId, spxStatusByLh, spxScheduleByLh, nestleByLh, correlationId });
           // attachRouteCodes/Registration tocam campos DIFERENTES de cada item
           // (routeCodigo vs routeRegistered) e cada um faz um scan próprio → paraleliza.
           const [, , { enrichedByLh, enrichedByCargoId }] = await Promise.all([
@@ -1308,6 +1345,9 @@ export async function resolveSheetMonitorResponse(request) {
                 ...(persistError
                   ? { snapshotSaveError: persistError.message }
                   : {}),
+                // Resposta INCOMPLETA (faltou alguma fonte de planilha): o cliente
+                // não deve substituir o cache com ela — ver onSuccess do refresh.
+                ...(sourcesIncomplete ? { sourcesIncomplete: true } : {}),
               },
             },
           };
@@ -1364,34 +1404,13 @@ export async function resolveSheetMonitorResponse(request) {
       // sem rótulo — o buildUnifiedMonitor aplica getSheetClientName() (byte-idêntico
       // ao comportamento antigo). Fontes != shopee rotulam cada linha com o cliente
       // (clientName gravado no summary_json) e ganham rowKey namespaced pra não
-      // colidir com um LH da Shopee.
-      const baseRows = [];
-      let latestSyncedAt = null;
-      let onlyShopee = true;
-      for (const snap of snapshotRows) {
-        const rows = snap.rows_json ?? [];
-        const isShopeeSnap = !snap.source || snap.source === "shopee";
-        if (isShopeeSnap) {
-          baseRows.push(...rows);
-        } else {
-          onlyShopee = false;
-          const label = snap.summary_json?.clientName || snap.source;
-          for (const r of rows) {
-            baseRows.push(
-              r.rowKey
-                ? r
-                : { ...r, cliente: r.cliente ?? label, rowKey: `sheet:${snap.source}:${r.lh}`, source: "planilha" },
-            );
-          }
-        }
-        if (snap.synced_at && (!latestSyncedAt || snap.synced_at > latestSyncedAt)) {
-          latestSyncedAt = snap.synced_at;
-        }
-      }
+      // colidir com um LH da Shopee. Mesma montagem usada pelo caminho REFRESH
+      // (monitor-snapshot-merge.js) — era a divergência que sumia com a Nestlé lá.
+      const { baseRows, latestSyncedAt, onlyShopee } = mergeSnapshotRows(snapshotRows);
 
       // Summary: Shopee-only → byte-idêntico (summary_json da Shopee). Multi-fonte
       // → recomputa sobre as linhas mescladas.
-      const shopeeSnap = snapshotRows.find((s) => !s.source || s.source === "shopee");
+      const shopeeSnap = snapshotRows.find((s) => isShopeeSnapshot(s));
       const baseSummary = onlyShopee ? (shopeeSnap?.summary_json ?? emptySummary) : buildSheetSummary(baseRows);
 
       const unified = buildUnifiedMonitor({
@@ -1471,8 +1490,10 @@ export async function resolveUpdateMonitorAllocationResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-      const { lh, ...allocation } = sheetMonitorAllocationBodySchema.parse(await parseJsonBody(request));
-      const result = await updateMonitorAllocation({ lh, operatorId, payload: allocation, requestIp, correlationId });
+      // `source` sai do payload de alocação de propósito: é a fonte da PLANILHA da
+      // linha (p/ resolver a carga no namespace de id certo), não um campo alloc_*.
+      const { lh, source, ...allocation } = sheetMonitorAllocationBodySchema.parse(await parseJsonBody(request));
+      const result = await updateMonitorAllocation({ lh, source, operatorId, payload: allocation, requestIp, correlationId });
       // Re-enriquece a linha editada + o fan-out da cascata de cancelamento com o
       // motorista/placa EFETIVO, p/ o selo não ficar "não consultado". Fire-and-
       // forget (não bloqueia o save; o front faz refetch atrasado). Nunca lança.
@@ -1617,8 +1638,8 @@ export async function resolveAssignReservaResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-      const { reservaId, targetLh } = sheetMonitorAssignReservaBodySchema.parse(await parseJsonBody(request));
-      const result = await assignReservaToCarga({ reservaId, targetLh, operatorId, requestIp, correlationId });
+      const { reservaId, targetLh, source } = sheetMonitorAssignReservaBodySchema.parse(await parseJsonBody(request));
+      const result = await assignReservaToCarga({ reservaId, targetLh, source, operatorId, requestIp, correlationId });
       // Re-enriquece a carga de destino (motorista/placa mudaram) p/ o selo
       // Angellira/ASPX refletir o standby puxado. Fire-and-forget, nunca lança.
       const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");
@@ -1726,8 +1747,8 @@ export async function resolveSetMonitorAllocationPinResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-      const { lh, pinned } = sheetMonitorPinBodySchema.parse(await parseJsonBody(request));
-      return setMonitorAllocationPin({ lh, pinned, operatorId, requestIp, correlationId });
+      const { lh, source, pinned } = sheetMonitorPinBodySchema.parse(await parseJsonBody(request));
+      return setMonitorAllocationPin({ lh, source, pinned, operatorId, requestIp, correlationId });
     },
   );
 }

@@ -97,7 +97,10 @@ export function extractRevertItemsFromAuditEvent({ eventType, metadata }) {
       ...base,
       supported: true,
       touchesStatus: true,
-      items: [{ lh: str(meta.lh), cargoId: null, before, after }],
+      // `sheetSource` = fonte da planilha da carga, gravada no audit a partir do
+      // fix multi-fonte. Evento ANTIGO não tem o campo → null = Shopee (a fonte
+      // histórica, e a de 100% dos eventos antigos que resolvem hoje).
+      items: [{ lh: str(meta.lh), sheetSource: str(meta.sheetSource), cargoId: null, before, after }],
     };
   }
 
@@ -123,6 +126,7 @@ export function extractRevertItemsFromAuditEvent({ eventType, metadata }) {
     if (!b) continue; // sem par "antes" → não reverte esta linha
     items.push({
       lh: str(a.lh ?? b.lh ?? null),
+      sheetSource: str(a.sheetSource ?? b.sheetSource ?? null),
       cargoId: str(a.cargoId ?? b.cargoId ?? null),
       before: pickAlloc(b),
       after: pickAlloc(a),
