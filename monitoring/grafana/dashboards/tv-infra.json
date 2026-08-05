@@ -330,7 +330,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"lamonica-.*|traefik|blackbox-exporter\",name!~\"lamonica-watchtower.*\"}[5m]))",
+          "expr": "100 * sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"lamonica-.*|traefik|blackbox-exporter\"}[5m]))",
           "legendFormat": "{{name}}"
         }
       ],
@@ -377,7 +377,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "container_memory_working_set_bytes{name=~\"lamonica-.*|traefik|blackbox-exporter\",name!~\"lamonica-watchtower.*\"}",
+          "expr": "container_memory_working_set_bytes{name=~\"lamonica-.*|traefik|blackbox-exporter\"}",
           "legendFormat": "{{name}}"
         }
       ],
@@ -718,7 +718,7 @@
       "id": 40,
       "type": "timeseries",
       "title": "Erros nos logs (por serviço)",
-      "description": "Linhas com error/exception/fatal nos logs dos containers Lamonica (watchtower filtrado - crash-loop conhecido).",
+      "description": "Linhas com error/exception/fatal nos logs dos containers Lamonica.",
       "gridPos": {
         "h": 5,
         "w": 6,
@@ -733,7 +733,7 @@
         {
           "refId": "A",
           "queryType": "range",
-          "expr": "sum by (compose_service) (count_over_time({compose_project=\"lamonica\", compose_service!~\"watchtower\"} |~ \"(?i)(error|exception|fatal)\" [5m]))",
+          "expr": "sum by (compose_service) (count_over_time({compose_project=\"lamonica\"} |~ \"(?i)(error|exception|fatal)\" [5m]))",
           "legendFormat": "{{compose_service}}"
         }
       ],
