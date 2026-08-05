@@ -65,7 +65,10 @@ export async function updateMonitorAllocation({ lh, source = null, operatorId, p
     });
 
     if (!sheetRow) {
-      throw new NotFoundError("Carga da planilha não encontrada para este LH.");
+      // Alcançável quando a viagem saiu da planilha (ou está cancelada nela) e a única
+      // carga do LH é uma lápide — que deixou de ser aceita como alvo de escrita. É um
+      // 404 HONESTO: antes esse mesmo caso gravava na lápide e devolvia 200 OK.
+      throw new NotFoundError("Não encontramos a linha desta viagem na planilha. Ela pode ter saído da planilha ou estar cancelada.");
     }
 
     // Id REAL da carga resolvida (planilha OU sistema) — usado em todas as

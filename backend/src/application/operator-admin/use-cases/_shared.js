@@ -916,13 +916,27 @@ export async function resolveCargoFollowingMerge(client, cargoId, { columns = "*
  * Se o LH não está em NENHUM snapshot, devolve null (LH genuinamente desconhecido →
  * o chamador lança NotFound).
  *
- * ATENÇÃO — por que NÃO herda campos de uma gêmea lançada aqui: esta função só
- * chega a materializar quando `resolveMonitorCargoByLh` (a checagem `existing` logo
- * abaixo) devolve null — e essa checagem casa `lh_manual = $1 AND sheet_lh IS NULL`
- * incondicionalmente. Ou seja: SE existe uma carga lançada para este LH, `existing`
+ * EXCEÇÃO (gate TWIN_MERGE ligado): a LÁPIDE — gêmea lançada já aposentada
+ * (`retired_reason`) ou já mergeada (`alloc_merged_into_cargo_id`) — NÃO conta como
+ * carga existente. Sem essa exceção, `existing` devolvia a lápide, `withLazyTwinMerge`
+ * fazia no-op (só a canônica é destino de merge) e a materialização abaixo NUNCA
+ * rodava: a escrita ia **200 OK numa linha morta**, com o write-back pulado
+ * (`isSystemCargo`), e o operador achava que tinha salvo. Medido em produção — na manhã
+ * de 05/08 TODAS as edições de duas cargas (5 saves de duas operadoras) caíram na
+ * lápide. Tratando a lápide como "não existe", a canônica nasce do snapshot e herda a
+ * decisão dela na MESMA transação (`mergeLaunchedTwinAlloc` aceita lápide como doadora).
+ *
+ * `revert-allocation-changes.js` chama `resolveMonitorCargoByLh` DIRETO, não esta
+ * função — histórico e "reverter" devem continuar alcançando a lápide, e continuam.
+ *
+ * ATENÇÃO — por que NÃO herda campos de uma gêmea lançada aqui: fora do caso da
+ * lápide, esta função só chega a materializar quando `resolveMonitorCargoByLh` (a
+ * checagem `existing` logo abaixo) devolve null — e essa checagem casa
+ * `lh_manual = $1 AND sheet_lh IS NULL`. Ou seja: SE existe uma carga lançada VIVA para
+ * este LH, `existing`
  * SEMPRE a encontra primeiro e a função devolve ELA (via withLazyTwinMerge, que só
  * mergeia quando a linha resolvida já é a canônica) — o ramo de materialização
- * abaixo só é alcançado quando NÃO há absolutamente nenhuma carga para o LH (nem
+ * abaixo só é alcançado quando NÃO há absolutamente nenhuma carga VIVA para o LH (nem
  * planilha, nem lançada), que é o cenário ORIGINAL desta função: viagem que entrou
  * na planilha já atribuída, sem o operador ter lançado nada na Programação. Herdar
  * perfil/valor/status de uma "gêmea" nesse ramo é dead code por construção — não
@@ -952,7 +966,9 @@ export async function resolveCargoFollowingMerge(client, cargoId, { columns = "*
  */
 export async function ensureMonitorSheetCargo(client, lh, { columns = "id, sheet_lh", forUpdate = true, correlationId = null, source = null } = {}) {
   const existing = await resolveMonitorCargoByLh(client, lh, { columns, forUpdate, source });
-  if (existing) return withLazyTwinMerge(client, lh, existing, { columns, forUpdate, correlationId });
+  if (existing && !(await ehLapide(client, existing))) {
+    return withLazyTwinMerge(client, lh, existing, { columns, forUpdate, correlationId });
+  }
 
   const lhTrim = String(lh ?? "").trim();
   if (!lhTrim) return null;
@@ -1053,6 +1069,34 @@ export async function ensureMonitorSheetCargo(client, lh, { columns = "id, sheet
   // null mesmo tendo acabado de criar a linha.
   const { rows: criadaRows } = await client.query(`SELECT ${columns} FROM public.cargas WHERE id = $1`, [cargoId]);
   return withLazyTwinMerge(client, lh, criadaRows[0] ?? null, { columns, forUpdate, correlationId, materialized: true });
+}
+
+/**
+ * A linha resolvida é uma LÁPIDE — gêmea lançada já aposentada pelo sync
+ * (`retired_reason`) ou já mergeada na canônica (`alloc_merged_into_cargo_id`)?
+ *
+ * Lápide não é alvo de escrita: gravar nela é 200 OK sem efeito visível (ver o bloco
+ * "EXCEÇÃO" na doc de `ensureMonitorSheetCargo`). Só vale com o gate LIGADO — com
+ * TWIN_MERGE=off nada aposenta/mergeia por este caminho e o comportamento fica
+ * byte-idêntico ao anterior.
+ *
+ * Faz uma consulta PRÓPRIA (2 colunas, por id) em vez de exigir as colunas de ciclo de
+ * vida em `columns`: os 4 chamadores passam listas diferentes e alterar todas para
+ * carregar colunas que só esta checagem usa espalharia o acoplamento.
+ */
+async function ehLapide(client, row) {
+  if (twinMergeMode() === "off") return false;
+  // Sem `id` na projeção não há como checar; sem `sheet_lh` não há como saber se é
+  // linha lançada. Nos dois casos, preserva o comportamento anterior.
+  if (!row?.id || !("sheet_lh" in row)) return false;
+  // Canônica (tem sheet_lh) nunca é lápide neste sentido.
+  if (row.sheet_lh != null && String(row.sheet_lh).trim() !== "") return false;
+  const { rows } = await client.query(
+    "SELECT retired_reason, alloc_merged_into_cargo_id FROM public.cargas WHERE id = $1",
+    [row.id],
+  );
+  const v = rows[0];
+  return Boolean(v && (v.retired_reason != null || v.alloc_merged_into_cargo_id != null));
 }
 
 /**
