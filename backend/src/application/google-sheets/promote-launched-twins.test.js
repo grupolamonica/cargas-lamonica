@@ -91,6 +91,65 @@ describe("promoteLaunchedTwinsBeforeRetirement", () => {
     expect(doador.rows[0].alloc_merged_into_cargo_id).toBe(winnerId);
   });
 
+  it("on: LÁPIDE órfã (aposentada, sem canônica) é doadora e volta a ser recuperada pelo ciclo", async () => {
+    // Antes o doador exigia retired_reason IS NULL, o que tornava DEFINITIVO qualquer
+    // pulo desta passada: o CTE de aposentadoria roda em bloco separado e incondicional,
+    // então depois de aposentada este LH devolvia "sem_gemea" para sempre e a canônica
+    // nunca mais nascia (porta de mão única — o passivo medido em produção).
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-PROMOTE-LAPIDE";
+    const doadorId = await seedDoador(lh, {
+      alloc_motorista: "SILON",
+      alloc_updated_at: new Date("2026-08-01").toISOString(),
+      status: "EXPIRED",
+    });
+    await query(`UPDATE public.cargas SET retired_reason = 'twin_taken' WHERE id = $1`, [doadorId]);
+
+    const r = await promoteLaunchedTwinsBeforeRetirement(
+      baseArgs({ takenSheetLhs: [lh], allSheetRowsByLh: new Map([[lh, sheetRow(lh)]]) }),
+    );
+
+    expect(r).toMatchObject({ mode: "on", candidatos: 1, materializados: 1, mergeados: 1, bloqueados: 0 });
+    const winnerId = createSheetLoadId(lh, source);
+    const cargo = await query(
+      `SELECT sheet_lh, sheet_source, alloc_motorista FROM public.cargas WHERE id = $1`,
+      [winnerId],
+    );
+    expect(cargo.rows[0]).toMatchObject({ sheet_lh: lh, sheet_source: source, alloc_motorista: "SILON" });
+    // A lápide continua lápide (nunca é alvo) e agora aponta para a canônica.
+    const doador = await query(
+      `SELECT alloc_merged_into_cargo_id, retired_reason, alloc_motorista FROM public.cargas WHERE id = $1`,
+      [doadorId],
+    );
+    expect(doador.rows[0]).toMatchObject({ alloc_merged_into_cargo_id: winnerId, retired_reason: "twin_taken" });
+    expect(doador.rows[0].alloc_motorista).toBe("SILON"); // alloc_* da perdedora nunca é zerado
+  });
+
+  it("on: com gêmea VIVA e lápide no mesmo LH, a VIVA é preferida como doadora", async () => {
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-PROMOTE-DUAS";
+    const lapideId = await seedDoador(lh, {
+      alloc_motorista: "ANTIGO",
+      alloc_updated_at: new Date("2026-07-01").toISOString(),
+      status: "EXPIRED",
+    });
+    await query(`UPDATE public.cargas SET retired_reason = 'twin_taken' WHERE id = $1`, [lapideId]);
+    const vivaId = await seedDoador(lh, {
+      alloc_motorista: "ATUAL",
+      alloc_updated_at: new Date("2026-08-02").toISOString(),
+    });
+
+    await promoteLaunchedTwinsBeforeRetirement(
+      baseArgs({ takenSheetLhs: [lh], allSheetRowsByLh: new Map([[lh, sheetRow(lh)]]) }),
+    );
+
+    const winnerId = createSheetLoadId(lh, source);
+    const cargo = await query(`SELECT alloc_motorista FROM public.cargas WHERE id = $1`, [winnerId]);
+    expect(cargo.rows[0].alloc_motorista).toBe("ATUAL");
+    const viva = await query(`SELECT alloc_merged_into_cargo_id FROM public.cargas WHERE id = $1`, [vivaId]);
+    expect(viva.rows[0].alloc_merged_into_cargo_id).toBe(winnerId);
+  });
+
   it("dry SEM canônica existente: só CONTA (materializaria), não insere nada", async () => {
     process.env.TWIN_MERGE = "dry";
     const lh = "LT-PROMOTE-DRY";

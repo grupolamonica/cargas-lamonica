@@ -20,8 +20,9 @@
 // nunca é devolvida como alvo — e sem canônica não sobra NADA para editar).
 //
 // Roda ANTES do CTE de aposentadoria (mesmo ciclo, mesma leitura de `takenSheetLhs`):
-// para cada LH tomado que ainda NÃO tem canônica, se existe uma gêmea lançada VIVA
-// (não aposentada, não já mergeada), materializa a canônica herdando dela (via
+// para cada LH tomado que ainda NÃO tem canônica, se existe uma gêmea lançada ainda não
+// mergeada — VIVA ou LÁPIDE (a aposentada é doadora legítima; ver o SELECT do doador
+// abaixo) —, materializa a canônica herdando dela (via
 // `buildAllocatedSheetLoadPayload`, a MESMA derivação de perfil/valor/bonus/distância
 // usada para "puxar tudo da planilha") e chama `mergeLaunchedTwinAlloc` na MESMA
 // transação — identidade e dado nascem juntos, sem janela de estado misto.
@@ -139,10 +140,25 @@ export async function promoteLaunchedTwinsBeforeRetirement({
         // (o operador editando essa MESMA gêmea no exato instante do ciclo do
         // sync) — o lote é pequeno (≤50 LHs/ciclo) e cada LH é sua própria
         // transação, então esperar não trava o restante do lote.
+        // A LÁPIDE (gêmea já aposentada) é doadora LEGÍTIMA — nunca alvo. É a mesma
+        // regra que `mergeLaunchedTwinAlloc` e `scripts/twin-merge-backfill.mjs` já
+        // assumem, e sem ela qualquer pulo desta passada era DEFINITIVO: o CTE de
+        // aposentadoria roda em bloco separado e incondicional, então depois que ele
+        // grava retired_reason + status='EXPIRED', exigir doador VIVO fazia este LH
+        // devolver "sem_gemea" para sempre (e `c.status NOT IN ('EXPIRED', ...)` impede
+        // o CTE revisitar). Porta de mão única: a canônica nunca mais nascia pelo sync
+        // — para a Shopee não há outro criador (o upsert só cria linha DISPONÍVEL e a
+        // importação de linhas alocadas é só pullAllRows/Nestlé).
+        //
+        // Com esta linha, a lápide órfã volta a ser materializada + mergeada pelo
+        // próprio ciclo do sync, sem script manual, desde que o LH ainda apareça no
+        // snapshot. A ordenação de `mergeLaunchedTwinAlloc` continua preferindo a gêmea
+        // VIVA quando as duas existem.
         const { rows: doadorRows } = await client.query(
           `SELECT id FROM public.cargas
             WHERE lh_manual = $1 AND sheet_lh IS NULL
-              AND alloc_merged_into_cargo_id IS NULL AND retired_reason IS NULL
+              AND alloc_merged_into_cargo_id IS NULL
+            ORDER BY (retired_reason IS NULL) DESC, alloc_updated_at DESC NULLS LAST
             LIMIT 1 FOR UPDATE`,
           [lh],
         );
