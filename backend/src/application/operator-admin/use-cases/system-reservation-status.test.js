@@ -39,6 +39,21 @@ describe("applySystemReservationStatus", () => {
     expect(r.carreta).toBe("XYZ9877");
   });
 
+  // Os modais do Monitor pre-preenchem o campo de motorista com `row.motoristas` e o
+  // save SEMPRE reenvia o campo. Sem marcar o valor como view-only, o rotulo era
+  // PERSISTIDO como motorista real quando o operador salvava outra coisa na carga.
+  it("marca o motorista injetado como VIEW-ONLY (não é alocação gravada)", () => {
+    const r = applySystemReservationStatus(systemRow(), { reservedByCargoId: reservaSemNome });
+    expect(r.motoristaViewOnly).toBe(true);
+  });
+
+  it("linha que já tinha alocação de verdade NÃO recebe a marca", () => {
+    const r = applySystemReservationStatus(systemRow({ motoristas: "MOTORISTA REAL", hasDriver: true }), {
+      reservedByCargoId: reservaComNome,
+    });
+    expect(r.motoristaViewOnly).toBeUndefined();
+  });
+
   it("sem nome resolvido, usa o rótulo de telefone (a carga NÃO fica vazia)", () => {
     const r = applySystemReservationStatus(systemRow(), { reservedByCargoId: reservaSemNome });
     expect(r.motoristas).toBe("Reservado (fila) · 71982430000");

@@ -1255,6 +1255,11 @@ export interface SheetMonitorRow {
   standbyAt?: string | null;
   /** Telefone do motorista (motoristas_historico), resolvido por nome. Opcional. */
   telefone?: string | null;
+  // O motorista da linha e VIEW-ONLY: nao veio da alocacao gravada, e sim da
+  // reserva da Fila (rotulo "Reservado (fila) - <telefone>" ou o nome do lead).
+  // Quem pre-preenche campo editavel com `motoristas` DEVE tratar como vazio,
+  // senao o rotulo e persistido como motorista real no primeiro save.
+  motoristaViewOnly?: boolean;
   // ── Visão unificada (planilha ∪ sistema) ──
   // Identidade estável da linha: 'sheet:<lh>' | 'cargo:<uuid>' | 'reserva:<id>'.
   rowKey?: string;

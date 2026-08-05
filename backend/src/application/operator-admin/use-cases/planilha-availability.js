@@ -58,6 +58,12 @@ export function applyPlanilhaAvailabilityStatus(row, { openLhSet, allocByLh = {}
       carreta: row.carreta || rsv.carreta || "",
       hasDriver: true,
       isAvailable: false,
+      // View-only: descreve quem reservou, não é alocação gravada. Sem a flag, os
+      // modais pré-preenchem o campo de motorista com este rótulo e o save reenvia
+      // o campo — o "Reservado (fila) · <telefone>" acabava PERSISTIDO como
+      // motorista real ao salvar qualquer outra coisa na carga. Mesma flag da rede
+      // das linhas do sistema (system-reservation-status.js).
+      motoristaViewOnly: true,
     };
   }
   // Sem motorista + status vazio: SÓ é "Disponível" se estiver aberta pro motorista.

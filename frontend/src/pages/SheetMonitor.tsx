@@ -54,7 +54,7 @@ import { cn } from "@/lib/utils";
 import { allocEditPolicy, isSpxTrip } from "@/lib/monitorEditPolicy";
 import { routeCanonKey } from "@/lib/routeCanonical";
 import { computeSwapMoves } from "@/lib/monitorReorder";
-import { mergeAllocIntoRow, effectiveAllocField } from "@/lib/monitorAllocOverlay";
+import { editableDriver, mergeAllocIntoRow, effectiveAllocField } from "@/lib/monitorAllocOverlay";
 import {
   assignAspxAllocations,
   createMonitorCargo,
@@ -1425,7 +1425,7 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
         destino: row.destino ?? "",
         carregamento: row.cargaAt ?? (row.data ? `${row.data}T${(row.horario ?? "00:00").slice(0, 5)}` : ""),
         descarga: row.descargaAt ?? "",
-        motorista: row.motoristas ?? "",
+        motorista: editableDriver(row),
         cavalo: row.cavalo ?? "",
         carreta: row.carreta ?? "",
         vinculo: row.vinculo ?? "",
@@ -1448,7 +1448,7 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
 
   // Trocou motorista/veículo? (comparado ao que veio na linha) → exige o motivo.
   const mvChanged =
-    motoristaClean !== (row?.motoristas ?? "").trim() ||
+    motoristaClean !== editableDriver(row).trim() ||
     form.cavalo.trim() !== (row?.cavalo ?? "").trim() ||
     form.carreta.trim() !== (row?.carreta ?? "").trim();
 
@@ -1763,7 +1763,7 @@ function AllocCell({ row, enriched, aspxAssigned, cavaloChecklist, carretaCheckl
     // (COALESCE(alloc_*, sheet_*) devolve "", não cai para a planilha).
     return (
       <InlineAllocEditor
-        initial={{ motorista: row.motoristas ?? "", cavalo: row.cavalo ?? "", carreta: row.carreta ?? "", tipo: row.tipo ?? "" }}
+        initial={{ motorista: editableDriver(row), cavalo: row.cavalo ?? "", carreta: row.carreta ?? "", tipo: row.tipo ?? "" }}
         saving={saving}
         onSave={(v) => onSaveInline({ lh: row.lh, ...v })}
         onCancel={onCancelEdit}
@@ -3042,7 +3042,7 @@ function RowDetailModal({
       destino: row.destino ?? "",
       carregamento: row.cargaAt ?? (row.data ? `${row.data}T${(row.horario ?? "00:00").slice(0, 5)}` : ""),
       descarga: row.descargaAt ?? "",
-      motorista: row.motoristas ?? "",
+      motorista: editableDriver(row),
       cavalo: row.cavalo ?? "",
       carreta: row.carreta ?? "",
       vinculo: row.vinculo ?? "",
@@ -3201,7 +3201,7 @@ function RowDetailModal({
       return enrichSheetMonitorRow(
         row.source === "sistema" && row.cargoId
           ? { cargoId: row.cargoId }
-          : { lh: row.lh, motorista: row.motoristas ?? "", cavalo: row.cavalo ?? "", carreta: row.carreta ?? "" },
+          : { lh: row.lh, motorista: editableDriver(row), cavalo: row.cavalo ?? "", carreta: row.carreta ?? "" },
       );
     },
     onSuccess: () => {
@@ -3323,7 +3323,7 @@ function RowDetailModal({
   // ── Carga do SISTEMA: troca de m/v + build (espelha o antigo editor de carga do
   // sistema; grava por cargoId via updateMonitorCargo). Só usado quando source='sistema'.
   const mvChangedSystem =
-    cargoForm.motorista.trim() !== (row.motoristas ?? "").trim() ||
+    cargoForm.motorista.trim() !== editableDriver(row).trim() ||
     cargoForm.cavalo.trim() !== (row.cavalo ?? "").trim() ||
     cargoForm.carreta.trim() !== (row.carreta ?? "").trim();
   const buildAndMutateSystem = (descricao = "") => {

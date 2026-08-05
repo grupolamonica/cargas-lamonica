@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { mergeAllocIntoRow, effectiveAllocField } from "@/lib/monitorAllocOverlay";
+import { mergeAllocIntoRow, effectiveAllocField, editableDriver } from "@/lib/monitorAllocOverlay";
 import type { SheetMonitorAllocation, SheetMonitorRow } from "@/services/readModels";
 
 const row = (over: Partial<SheetMonitorRow> = {}): SheetMonitorRow =>
@@ -160,5 +160,26 @@ describe("mergeAllocIntoRow — o SPX ao vivo só AVANÇA (não rebaixa o status
     expect(
       mergeAllocIntoRow(row({ status: "", spxStatus: "CARREGADO" }), alloc({ alloc_status: null })).status,
     ).toBe("CARREGADO");
+  });
+});
+
+// O Monitor injeta um motorista VIEW-ONLY na linha reservada pela Fila. Os modais
+// pre-preenchem o campo de motorista e o save SEMPRE reenvia o campo — sem a
+// distincao, o rotulo era PERSISTIDO como motorista real no primeiro save.
+describe("editableDriver — valor injetado nao vira alocacao", () => {
+  it("linha view-only devolve vazio (nao pre-preenche o campo com o rotulo)", () => {
+    expect(editableDriver({ motoristas: "Reservado (fila) · 71982430000", motoristaViewOnly: true })).toBe("");
+    expect(editableDriver({ motoristas: "EDNALDO TAVARES DE SOUSA", motoristaViewOnly: true })).toBe("");
+  });
+
+  it("alocacao de verdade passa intacta", () => {
+    expect(editableDriver({ motoristas: "EDNALDO TAVARES DE SOUSA" })).toBe("EDNALDO TAVARES DE SOUSA");
+    expect(editableDriver({ motoristas: "X", motoristaViewOnly: false })).toBe("X");
+  });
+
+  it("linha vazia/ausente devolve vazio", () => {
+    expect(editableDriver({})).toBe("");
+    expect(editableDriver(null)).toBe("");
+    expect(editableDriver(undefined)).toBe("");
   });
 });

@@ -57,5 +57,12 @@ export function applySystemReservationStatus(row, { reservedByCargoId = {} } = {
     carreta: String(row.carreta ?? "").trim() || String(rsv.carreta ?? "").trim(),
     hasDriver: true,
     isAvailable: false,
+    // O valor injetado DESCREVE quem reservou; não é uma alocação gravada. A flag
+    // impede que a UI o use como valor de partida de um campo editável: os modais
+    // pré-preenchem o campo de motorista com `row.motoristas` e o save SEMPRE
+    // reenvia esse campo, então o rótulo ("Reservado (fila) · <telefone>", ou até um
+    // nome que veio do lead e não da alocação) seria PERSISTIDO como motorista real
+    // ao salvar qualquer outra coisa na carga.
+    motoristaViewOnly: true,
   };
 }
