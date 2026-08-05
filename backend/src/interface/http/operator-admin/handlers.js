@@ -307,11 +307,12 @@ export async function resolveCargoHistoryResponse(request) {
   return withOperatorSession(request, "cargo-history", async ({ correlationId }) => {
     // `cargo_id` cobre a carga do SISTEMA sem LH (o Monitor a exibe, mas ela não
     // tem por onde ser identificada pelo LH).
-    const { lh, cargo_id: cargoId } = cargoHistoryQuerySchema.parse({
+    const { lh, cargo_id: cargoId, source } = cargoHistoryQuerySchema.parse({
       lh: getQueryParam(request, "lh") || undefined,
       cargo_id: getQueryParam(request, "cargo_id") || undefined,
+      source: getQueryParam(request, "source") || undefined,
     });
-    return fetchCargoHistoryByLh({ lh, cargoId, correlationId });
+    return fetchCargoHistoryByLh({ lh, cargoId, source, correlationId });
   });
 }
 
@@ -1565,8 +1566,8 @@ export async function resolveDescendQueueCascadeResponse(request) {
       forbiddenMessage: "Somente operadores com acesso intermediario ou avancado podem alterar cargas.",
     },
     async ({ correlationId, requestIp, operatorId }) => {
-      const { sourceLh, targetLh, orderedLhs } = sheetMonitorDescendBodySchema.parse(await parseJsonBody(request));
-      const result = await descendQueueCascade({ sourceLh, targetLh, orderedLhs, operatorId, requestIp, correlationId });
+      const { sourceLh, targetLh, orderedLhs, sourceByLh } = sheetMonitorDescendBodySchema.parse(await parseJsonBody(request));
+      const result = await descendQueueCascade({ sourceLh, targetLh, orderedLhs, sourceByLh, operatorId, requestIp, correlationId });
       // Re-enriquece TODAS as cargas remanejadas com o motorista/placa EFETIVO, p/
       // a fila descida não ficar "não consultado". Fire-and-forget (não bloqueia).
       const { enrichSheetRowsByLh } = await import("../../../application/operator-admin/sheet-monitor-enrichment.js");

@@ -69,7 +69,10 @@ export async function listOperatorAllocationChanges({ operatorId, query, correla
       if (!parsed.supported) continue;
       for (const it of parsed.items) {
         if (it.lh) {
-          sheetIdSet.add(createSheetLoadId(it.lh));
+          // `it.sheetSource` vem do metadata do audit: o id da carga de planilha é
+          // namespaced por fonte, então sem ela a linha Nestlé não era encontrada e
+          // o modal "Reverter últimas mudanças" mostrava a carga como inexistente.
+          sheetIdSet.add(createSheetLoadId(it.lh, it.sheetSource ?? undefined));
           lhSet.add(it.lh);
         } else if (it.cargoId) {
           cargoIdSet.add(it.cargoId);
@@ -126,7 +129,7 @@ export async function listOperatorAllocationChanges({ operatorId, query, correla
     }
 
     const currentAllocFor = (item) => {
-      if (item.lh) return byId.get(createSheetLoadId(item.lh)) || byLhManual.get(item.lh) || null;
+      if (item.lh) return byId.get(createSheetLoadId(item.lh, item.sheetSource ?? undefined)) || byLhManual.get(item.lh) || null;
       if (item.cargoId) return byId.get(item.cargoId) || null;
       return null;
     };

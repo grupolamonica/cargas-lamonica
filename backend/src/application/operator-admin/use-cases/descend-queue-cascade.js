@@ -33,10 +33,18 @@ function isEditableStatus(status) {
  * acima = subir/rotacionar sem reserva; soltar abaixo = descer, pode gerar reserva).
  * NÃO cancela nada e NÃO toca alloc_status.
  *
- * @param {{ sourceLh: string, targetLh: string, orderedLhs: string[], operatorId: string, requestIp?: string, correlationId?: string }} args
+ * MULTI-FONTE: `sourceByLh` mapeia cada LH da fila à fonte da SUA planilha. O id da
+ * carga de planilha é namespaced por fonte (createSheetLoadId), então derivar tudo no
+ * namespace da Shopee deixava as cargas Nestlé FORA da query travada: a descida dava
+ * 404 (origem Nestlé) ou pulava a carga em silêncio (miolo/destino Nestlé),
+ * embaralhando a cascata. Mapa por LH (não uma fonte só) porque a fila exibida é da
+ * ROTA e nada impede rota com cargas de planilhas diferentes. LH ausente do mapa =
+ * Shopee, então cliente antigo se comporta como antes.
+ *
+ * @param {{ sourceLh: string, targetLh: string, orderedLhs: string[], sourceByLh?: Record<string, string|null>, operatorId: string, requestIp?: string, correlationId?: string }} args
  * @returns {Promise<{ statusCode: number, payload: object, movedLhs: string[] }>}
  */
-export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, operatorId, requestIp, correlationId }) {
+export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, sourceByLh = null, operatorId, requestIp, correlationId }) {
   const source = (sourceLh ?? "").toString().trim();
   if (!source) throw new ValidationError("Carga de origem (sourceLh) obrigatória.");
   const target = (targetLh ?? "").toString().trim();
@@ -46,7 +54,13 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
   if (!order.includes(source)) throw new ValidationError("A carga de origem não está na ordem da fila enviada.");
   if (!order.includes(target)) throw new ValidationError("A carga de destino não está na ordem da fila enviada.");
 
-  const sheetIds = order.map((lh) => createSheetLoadId(lh));
+  // Um id por LH, no namespace da fonte DAQUELE LH (ausente = Shopee).
+  const fonteDoLh = (lh) => {
+    const v = sourceByLh && typeof sourceByLh === "object" ? sourceByLh[lh] : null;
+    const t = (v ?? "").toString().trim();
+    return t || undefined;
+  };
+  const sheetIds = order.map((lh) => createSheetLoadId(lh, fonteDoLh(lh)));
 
   const result = await withPgTransaction(async (client) => {
     // Trava TODAS as cargas da fila. A ordem de aquisição do lock DEVE bater com a
@@ -65,7 +79,7 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
     const idPlaceholders = sheetIds.map((_, i) => `$${i + 1}`).join(", ");
     const lhPlaceholders = order.map((_, i) => `$${sheetIds.length + i + 1}`).join(", ");
     const { rows } = await client.query(
-      `SELECT id, sheet_lh, lh_manual, origem, destino, alloc_pinned,
+      `SELECT id, sheet_lh, sheet_source, lh_manual, origem, destino, alloc_pinned,
               COALESCE(alloc_motorista, sheet_motorista, '') AS motorista,
               COALESCE(alloc_cavalo,    sheet_cavalo,    '') AS cavalo,
               COALESCE(alloc_carreta,   sheet_carreta,   '') AS carreta,
@@ -90,6 +104,13 @@ export async function descendQueueCascade({ sourceLh, targetLh, orderedLhs, oper
     for (const r of rows) {
       const key = r.sheet_lh ?? r.lh_manual;
       if (!key) continue;
+      // O ramo `sheet_lh IN (...)` do SELECT nao tem escopo de fonte, e `sheet_lh` e
+      // unico so POR fonte: um LH vivo nas DUAS planilhas traz as duas cargas aqui e
+      // a fila ficaria com a carga da planilha ERRADA. Quando o cliente declarou a
+      // fonte daquela linha, descarta o que nao e dela. Sem fonte declarada, mantem o
+      // comportamento de hoje (a primeira da ordenacao vence).
+      const fonteDeclarada = fonteDoLh(key);
+      if (fonteDeclarada && r.sheet_lh != null && (r.sheet_source ?? "") !== fonteDeclarada) continue;
       const existing = byLh.get(key);
       if (!existing || (existing.sheet_lh == null && r.sheet_lh != null)) byLh.set(key, r);
     }

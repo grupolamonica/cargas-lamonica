@@ -323,6 +323,9 @@ export async function updateMonitorAllocation({ lh, source = null, operatorId, p
       cargoId,
       isSystemCargo,
       viaTwinMerge,
+      // Fonte da planilha da carga resolvida — usada fora da transação para rotear
+      // a cascata de cancelamento (o id da carga é namespaced por fonte).
+      sheetSource: sheetRow.sheet_source ?? null,
       // Rota + agenda da carga — usados p/ CRIAR a linha da carga do sistema na
       // planilha (createIfMissing) quando ela ainda não existe (ver write-back).
       sheetRowExtras: {
@@ -412,7 +415,9 @@ export async function updateMonitorAllocation({ lh, source = null, operatorId, p
     // Best-effort: a edição de status já está commitada; se a cascata falhar, o
     // sweep do próximo sync recupera (cancelLoadCascade é idempotente).
     try {
-      const cascade = await cancelLoadCascade({ lh, operatorId, requestIp, correlationId });
+      // Fonte da carga RESOLVIDA: sem ela a cascata deriva o id no namespace da
+      // Shopee e nem acha a carga gatilho quando ela é de outra planilha.
+      const cascade = await cancelLoadCascade({ lh, sheetSource: result.sheetSource ?? null, operatorId, requestIp, correlationId });
       cascadeMovedLhs = cascade.movedLhs ?? [];
     } catch (cascadeErr) {
       console.warn(

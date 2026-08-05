@@ -98,6 +98,10 @@ export const sheetMonitorDescendBodySchema = z.object({
   sourceLh: z.string().trim().min(1).max(120),
   targetLh: z.string().trim().min(1).max(120),
   orderedLhs: z.array(z.string().trim().min(1).max(120)).min(1).max(3000),
+  // Fonte da planilha de CADA LH da fila (LH → 'nestle' | null). O id da carga de
+  // planilha é namespaced por fonte; sem o mapa, carga de outra planilha ficava fora
+  // da query travada e a cascata a pulava. Ausente = tudo Shopee (comportamento antigo).
+  sourceByLh: z.record(z.string().trim().max(120), z.string().trim().max(40).nullable()).optional(),
 }).strict();
 
 /** Query para GET /api/operator/allocation-changes — últimas mudanças de alocação

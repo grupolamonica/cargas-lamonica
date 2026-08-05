@@ -17,7 +17,7 @@ import { cancelLoadCascade } from "./use-cases/cancel-load-cascade.js";
 export async function sweepCancelledCascades({ operatorId = null, correlationId = null, limit = 500 } = {}) {
   const candidates = await withPgTransaction(async (client) => {
     const { rows } = await client.query(
-      `SELECT sheet_lh FROM public.cargas
+      `SELECT sheet_lh, sheet_source FROM public.cargas
        WHERE sheet_lh IS NOT NULL
          AND alloc_pinned = false
          AND lower(COALESCE(alloc_status, sheet_status, '')) LIKE '%cancel%'
@@ -31,7 +31,7 @@ export async function sweepCancelledCascades({ operatorId = null, correlationId 
   let cascaded = 0;
   for (const c of candidates) {
     try {
-      const res = await cancelLoadCascade({ lh: c.sheet_lh, operatorId, correlationId });
+      const res = await cancelLoadCascade({ lh: c.sheet_lh, sheetSource: c.sheet_source ?? null, operatorId, correlationId });
       if (res.payload?.cascaded) cascaded += 1;
     } catch (err) {
       console.warn(
