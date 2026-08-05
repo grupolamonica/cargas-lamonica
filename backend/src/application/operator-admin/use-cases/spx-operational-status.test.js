@@ -139,7 +139,7 @@ describe("fetchSpxStatusIndexFromSnapshot (status AO VIVO do SPX no Monitor)", (
       return {
         trips: [
           { trip_number: "LT-CARREGANDO", trip_status_name: "loading" },
-          { trip_number: "LT-DESCARGA", trip_status_name: "arrived" },
+          { trip_number: "LT-CHEGOU", trip_status_name: "arrived" },
           { trip_number: "LT-DESC", trip_status_name: "completed" },
           { trip_number: "", trip_status_name: "loading" }, // sem lh → ignora
           { trip_number: "LT-SEM-STATUS" }, // sem status → ignora
@@ -150,9 +150,10 @@ describe("fetchSpxStatusIndexFromSnapshot (status AO VIVO do SPX no Monitor)", (
     expect(seen.sort()).toEqual([1, 2]); // consulta AS DUAS abas
     // O motorista recém-atribuído (planejado, "Assigned") já entra no índice:
     expect(map.get("LT-ATRIBUIDO")).toBe("AGUARDANDO CHEGAR NO CLIENTE");
-    // arrived → AGUARDANDO DESCARGA (destino), loading → CARREGANDO (origem).
+    // `arrived` = chegou NO CLIENTE para CARREGAR — não no destino (chamado GLPI #40).
+    // Ver spx-trip-status.js para a evidencia medida em producao.
     expect(map.get("LT-CARREGANDO")).toBe("CARREGANDO");
-    expect(map.get("LT-DESCARGA")).toBe("AGUARDANDO DESCARGA");
+    expect(map.get("LT-CHEGOU")).toBe("AGUARDANDO CARREGAMENTO");
     expect(map.get("LT-DESC")).toBe("DESCARREGADO");
     expect(map.size).toBe(4);
   });
