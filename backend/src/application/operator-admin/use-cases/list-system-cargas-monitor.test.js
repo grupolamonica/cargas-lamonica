@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { mapSystemCargoToMonitorRow, listSystemCargasForMonitor } from "./list-system-cargas-monitor.js";
+import {
+  mapSystemCargoToMonitorRow,
+  listSystemCargasForMonitor,
+  isUnacceptedLaunchedShopeeCargo,
+  resolveNestleClientIds,
+  isHideUnacceptedLaunchedEnabled,
+} from "./list-system-cargas-monitor.js";
 import { applySpxOperationalStatus } from "./spx-operational-status.js";
 
 // Ponta que nenhum teste cobria: o que o operador VÊ na carga lançada depois que a
@@ -269,5 +275,199 @@ describe("listSystemCargasForMonitor", () => {
       range: async () => ({ data: null, error: new Error("timeout") }),
     };
     await expect(listSystemCargasForMonitor(api)).rejects.toThrow("timeout");
+  });
+});
+
+// A carga LANÇADA que ninguém aceitou entrava no Monitor por construção: `accepted`
+// governava só o write-back da planilha e nem o INSERT nem este read model o
+// enxergavam. Medido em prod (05/08/2026): 94 lançadas na tela, 93% da fonte SISTEMA,
+// 72 nunca aceitas.
+describe("isUnacceptedLaunchedShopeeCargo (guardas do filtro)", () => {
+  // Base = exatamente o caso que deve sumir: lançada, Shopee, OPEN, inerte.
+  const inerte = (over = {}) => ({
+    id: "c1", lh_manual: "LT-1", status: "OPEN",
+    alloc_motorista: null, alloc_status: null, sheet_status: null,
+    trip_accepted_at: null, sheet_source: null, cliente_id: "cli-shopee", ...over,
+  });
+  const nestleIds = new Set(["cli-nestle"]);
+  const hide = (c, ctx = {}) => isUnacceptedLaunchedShopeeCargo(c, { nestleClientIds: nestleIds, ...ctx });
+
+  it("esconde a lançada da Shopee sem nenhum sinal de vida", () => {
+    expect(hide(inerte())).toBe(true);
+  });
+
+  it("carga SEM lh_manual não é lançada — nunca entra no filtro", () => {
+    expect(hide(inerte({ lh_manual: null }))).toBe(false);
+    expect(hide(inerte({ lh_manual: "   " }))).toBe(false);
+  });
+
+  it("viagem ACEITA fica, mesmo sem motorista (frete comprometido com a agência)", () => {
+    expect(hide(inerte({ trip_accepted_at: "2026-08-05T12:00:00Z" }))).toBe(false);
+  });
+
+  it("ciclo diferente de OPEN fica (alguém já agiu na carga)", () => {
+    for (const status of ["RESERVED", "BOOKED", "CANCELLED"]) {
+      expect(hide(inerte({ status }))).toBe(false);
+    }
+  });
+
+  it("motorista alocado fica", () => {
+    expect(hide(inerte({ alloc_motorista: "ANA" }))).toBe(false);
+  });
+
+  it("status operacional fica — override do operador OU espelho do portal", () => {
+    expect(hide(inerte({ alloc_status: "CTE ENVIADO" }))).toBe(false);
+    expect(hide(inerte({ sheet_status: "CARREGADO" }))).toBe(false);
+    // Override VAZIO é "Disponível" explícito, não status: segue escondendo.
+    expect(hide(inerte({ alloc_status: "", sheet_status: "CARREGADO" }))).toBe(true);
+  });
+
+  it("lead vivo na fila fica (motorista pediu a carga)", () => {
+    expect(hide(inerte(), { cargoIdsWithLiveLead: new Set(["c1"]) })).toBe(false);
+  });
+
+  it("Nestlé está fora do escopo — pela fonte OU pelo cliente", () => {
+    expect(hide(inerte({ sheet_source: "nestle" }))).toBe(false);
+    // sheet_source só passou a ser gravado depois: a lançada Nestlé antiga tem NULL
+    // e só o cliente a identifica.
+    expect(hide(inerte({ sheet_source: null, cliente_id: "cli-nestle" }))).toBe(false);
+  });
+});
+
+describe("resolveNestleClientIds", () => {
+  it("casa o cliente Nestlé sem acento/caixa e ignora os demais", () => {
+    const ids = resolveNestleClientIds({
+      "cli-1": "Produtos Alimentícios",
+      "cli-2": "E-COMMERCE",
+      "cli-3": "nestle",
+    });
+    expect(ids).toEqual(new Set(["cli-1", "cli-3"]));
+  });
+});
+
+describe("listSystemCargasForMonitor: lançada não aceita sai do Monitor", () => {
+  const CLIENTES = [
+    { id: "cli-shopee", nome: "E-COMMERCE" },
+    { id: "cli-nestle", nome: "Produtos Alimentícios" },
+  ];
+
+  /** Fake do PostgREST com as duas tabelas que o read model toca. */
+  function fakeClient(cargas, { leadIds = [], leadError = null, cargasError = null } = {}) {
+    const calls = { leads: 0 };
+    const api = (table) => {
+      const q = {
+        _table: table, _served: false,
+        select: () => q,
+        is: () => q,
+        eq: () => q,
+        neq: () => q,
+        in: () => q,
+        order: () => q,
+        range: async () => {
+          if (cargasError) return { data: null, error: cargasError };
+          // 1ª página devolve tudo; 2ª encerra (batch < pageSize).
+          const first = !q._served;
+          q._served = true;
+          return { data: first ? cargas : [], error: null };
+        },
+        then: undefined,
+      };
+      if (table === "load_public_leads") {
+        calls.leads += 1;
+        q.select = () => q;
+        q.in = () => q;
+        // O read model faz `await query` direto (sem .range) nesta tabela.
+        q.then = (resolve) =>
+          resolve(leadError ? { data: null, error: leadError } : { data: leadIds.map((id) => ({ load_id: id })), error: null });
+      }
+      if (table === "clientes") {
+        q.then = (resolve) => resolve({ data: CLIENTES, error: null });
+      }
+      return q;
+    };
+    return { from: (t) => api(t), _calls: calls };
+  }
+
+  const carga = (over = {}) => ({
+    id: "x", origem: "A", destino: "B", data: "2026-08-10", horario: "08:00:00",
+    status: "OPEN", lh_manual: null, alloc_motorista: null, alloc_status: null,
+    sheet_status: null, trip_accepted_at: null, sheet_source: null, cliente_id: "cli-shopee", ...over,
+  });
+
+  const ids = (rows) => rows.map((r) => r.cargoId);
+
+  it("some a lançada Shopee inerte; ficam a aceita, a com motorista e a Nestlé", async () => {
+    const client = fakeClient([
+      carga({ id: "some", lh_manual: "LT-1" }),
+      carga({ id: "aceita", lh_manual: "LT-2", trip_accepted_at: "2026-08-05T10:00:00Z" }),
+      carga({ id: "com-motorista", lh_manual: "LT-3", alloc_motorista: "ANA" }),
+      carga({ id: "nestle", lh_manual: "B1-9", cliente_id: "cli-nestle" }),
+      carga({ id: "manual", lh_manual: null }), // carga do operador, sem LH: intocada
+    ]);
+    const rows = await listSystemCargasForMonitor(client, { pageSize: 50 });
+    expect(ids(rows)).toEqual(["aceita", "com-motorista", "nestle", "manual"]);
+  });
+
+  it("lead vivo na fila segura a carga na tela", async () => {
+    const client = fakeClient([carga({ id: "com-lead", lh_manual: "LT-1" })], { leadIds: ["com-lead"] });
+    expect(ids(await listSystemCargasForMonitor(client, { pageSize: 50 }))).toEqual(["com-lead"]);
+  });
+
+  it("consulta de leads falhando NÃO esconde ninguém (erro nunca some com carga)", async () => {
+    const client = fakeClient([carga({ id: "a", lh_manual: "LT-1" })], { leadError: new Error("boom") });
+    expect(ids(await listSystemCargasForMonitor(client, { pageSize: 50 }))).toEqual(["a"]);
+  });
+
+  it("sem candidato a sumir, nem consulta os leads", async () => {
+    const client = fakeClient([carga({ id: "a", lh_manual: null })]);
+    await listSystemCargasForMonitor(client, { pageSize: 50 });
+    expect(client._calls.leads).toBe(0);
+  });
+
+  it("MONITOR_HIDE_UNACCEPTED_LAUNCHED=false desliga o filtro", async () => {
+    const prev = process.env.MONITOR_HIDE_UNACCEPTED_LAUNCHED;
+    process.env.MONITOR_HIDE_UNACCEPTED_LAUNCHED = "false";
+    try {
+      expect(isHideUnacceptedLaunchedEnabled()).toBe(false);
+      const client = fakeClient([carga({ id: "a", lh_manual: "LT-1" })]);
+      expect(ids(await listSystemCargasForMonitor(client, { pageSize: 50 }))).toEqual(["a"]);
+    } finally {
+      if (prev === undefined) delete process.env.MONITOR_HIDE_UNACCEPTED_LAUNCHED;
+      else process.env.MONITOR_HIDE_UNACCEPTED_LAUNCHED = prev;
+    }
+  });
+
+  // Deploy antes da migration: a coluna não existe. Sem a coluna o aceite é
+  // undefined em TODAS as linhas — aplicar o filtro aí esvaziaria a fonte SISTEMA
+  // inteira. A degradação correta é não filtrar nada.
+  it("banco sem trip_accepted_at: relê sem a coluna e NÃO filtra (aceite desconhecido em todas)", async () => {
+    const selects = [];
+    let served = false;
+    const api = {
+      from: (t) => {
+        let cols = "";
+        const q = {
+          select: (c) => { cols = c; selects.push([t, c]); return q; },
+          is: () => q, eq: () => q, neq: () => q, in: () => q, order: () => q,
+          // O erro persiste enquanto o SELECT ainda pedir a coluna ausente — é assim
+          // que o PostgREST se comporta, e é o que exercita a cadeia de fallbacks
+          // (o de aspx_missing_since dispara antes por casar qualquer 42703).
+          range: async () => {
+            if (cols.includes("trip_accepted_at")) {
+              return { data: null, error: { code: "42703", message: 'column cargas.trip_accepted_at does not exist' } };
+            }
+            if (served) return { data: [], error: null };
+            served = true;
+            return { data: [{ id: "a", origem: "A", destino: "B", data: "2026-08-10", horario: "08:00:00", status: "OPEN", lh_manual: "LT-1" }], error: null };
+          },
+          then: t === "clientes" ? (resolve) => resolve({ data: CLIENTES, error: null }) : undefined,
+        };
+        return q;
+      },
+    };
+    const rows = await listSystemCargasForMonitor(api, { pageSize: 1, maxRows: 3 });
+    expect(rows.map((r) => r.cargoId)).toEqual(["a"]); // sobreviveu: sem coluna, sem filtro
+    expect(selects.some(([t, cols]) => t === "cargas" && cols.includes("trip_accepted_at"))).toBe(true);
+    expect(selects.some(([t, cols]) => t === "cargas" && !cols.includes("trip_accepted_at"))).toBe(true);
   });
 });
