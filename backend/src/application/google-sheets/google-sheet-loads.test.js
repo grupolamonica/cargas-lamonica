@@ -1100,6 +1100,48 @@ describe("google sheet loads sync", () => {
     expect(Array.isArray(reconcileCall.params[2])).toBe(true);
   });
 
+  it("caso (1) exige canônica para aposentar gêmea COM alocação (não cria lápide órfã)", async () => {
+    // O ramo (1) era o ÚNICO sem exigência de canônica: aposentava a gêmea só por
+    // "LH tomada na planilha". Quando a canônica ainda não existia, a decisão do
+    // operador (alloc_motorista) ficava numa lápide sem alvo — o operador recebia
+    // "edite pela alocação do Monitor" sem ter linha para editar (LT0Q8602CP761).
+    const supabaseClient = createSupabaseMock();
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(Buffer.from(SAMPLE_CSV)),
+      text: vi.fn().mockResolvedValue(SAMPLE_CSV),
+    });
+
+    await syncGoogleSheetLoads({
+      fetchImpl,
+      sheetUrl: "https://example.test/sheet.csv",
+      supabaseClient,
+      sheetClientId: SHEET_CLIENT_ID,
+    });
+
+    const reconcileCall = pgQueryCalls.find(
+      (c) => c.sql.includes("c.lh_manual = ANY($1::text[])") && c.sql.includes("public.load_public_leads"),
+    );
+    expect(reconcileCall).toBeTruthy();
+
+    // Gêmea SEM alocação segue fantasma puro (morre igual); COM alocação só morre se
+    // houver canônica da planilha para herdar a decisão.
+    const ramoTomada = reconcileCall.sql.slice(
+      reconcileCall.sql.indexOf("(1) viagem TOMADA"),
+      reconcileCall.sql.indexOf("(2) viagem DISPONÍVEL"),
+    );
+    expect(ramoTomada).toContain("COALESCE(c.alloc_motorista, '') = ''");
+    expect(ramoTomada).toContain("s.sheet_lh = c.lh_manual");
+    expect(ramoTomada).toContain("s.sheet_source IS NOT NULL");
+
+    // A exigência de canônica agora aparece nos TRÊS ramos (era só em (2) e (3)).
+    const ocorrencias = reconcileCall.sql.split("s.sheet_lh = c.lh_manual").length - 1;
+    // 3 ramos + a subquery `canonica_id` do rastro.
+    expect(ocorrencias).toBe(4);
+  });
+
   it("reconcilia gêmea OPEN duplicada (mesma viagem lançada + planilha) mesmo sem linha tomada", async () => {
     // Sem motorista em nenhuma linha: não há gêmea TOMADA, mas as viagens
     // disponíveis podem já ter sido lançadas (lh_manual) → gêmea OPEN duplicada

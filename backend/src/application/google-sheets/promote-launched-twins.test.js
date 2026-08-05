@@ -91,6 +91,106 @@ describe("promoteLaunchedTwinsBeforeRetirement", () => {
     expect(doador.rows[0].alloc_merged_into_cargo_id).toBe(winnerId);
   });
 
+  it("on: LÁPIDE órfã (aposentada, sem canônica) é doadora e volta a ser recuperada pelo ciclo", async () => {
+    // Antes o doador exigia retired_reason IS NULL, o que tornava DEFINITIVO qualquer
+    // pulo desta passada: o CTE de aposentadoria roda em bloco separado e incondicional,
+    // então depois de aposentada este LH devolvia "sem_gemea" para sempre e a canônica
+    // nunca mais nascia (porta de mão única — o passivo medido em produção).
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-PROMOTE-LAPIDE";
+    const doadorId = await seedDoador(lh, {
+      alloc_motorista: "SILON",
+      alloc_updated_at: new Date("2026-08-01").toISOString(),
+      status: "EXPIRED",
+    });
+    await query(`UPDATE public.cargas SET retired_reason = 'twin_taken' WHERE id = $1`, [doadorId]);
+
+    const r = await promoteLaunchedTwinsBeforeRetirement(
+      baseArgs({ takenSheetLhs: [lh], allSheetRowsByLh: new Map([[lh, sheetRow(lh)]]) }),
+    );
+
+    expect(r).toMatchObject({ mode: "on", candidatos: 1, materializados: 1, mergeados: 1, bloqueados: 0 });
+    const winnerId = createSheetLoadId(lh, source);
+    const cargo = await query(
+      `SELECT sheet_lh, sheet_source, alloc_motorista FROM public.cargas WHERE id = $1`,
+      [winnerId],
+    );
+    expect(cargo.rows[0]).toMatchObject({ sheet_lh: lh, sheet_source: source, alloc_motorista: "SILON" });
+    // A lápide continua lápide (nunca é alvo) e agora aponta para a canônica.
+    const doador = await query(
+      `SELECT alloc_merged_into_cargo_id, retired_reason, alloc_motorista FROM public.cargas WHERE id = $1`,
+      [doadorId],
+    );
+    expect(doador.rows[0]).toMatchObject({ alloc_merged_into_cargo_id: winnerId, retired_reason: "twin_taken" });
+    expect(doador.rows[0].alloc_motorista).toBe("SILON"); // alloc_* da perdedora nunca é zerado
+  });
+
+  it("on: com gêmea VIVA e lápide no mesmo LH, a VIVA é preferida como doadora", async () => {
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-PROMOTE-DUAS";
+    const lapideId = await seedDoador(lh, {
+      alloc_motorista: "ANTIGO",
+      alloc_updated_at: new Date("2026-07-01").toISOString(),
+      status: "EXPIRED",
+    });
+    await query(`UPDATE public.cargas SET retired_reason = 'twin_taken' WHERE id = $1`, [lapideId]);
+    const vivaId = await seedDoador(lh, {
+      alloc_motorista: "ATUAL",
+      alloc_updated_at: new Date("2026-08-02").toISOString(),
+    });
+
+    await promoteLaunchedTwinsBeforeRetirement(
+      baseArgs({ takenSheetLhs: [lh], allSheetRowsByLh: new Map([[lh, sheetRow(lh)]]) }),
+    );
+
+    const winnerId = createSheetLoadId(lh, source);
+    const cargo = await query(`SELECT alloc_motorista FROM public.cargas WHERE id = $1`, [winnerId]);
+    expect(cargo.rows[0].alloc_motorista).toBe("ATUAL");
+    const viva = await query(`SELECT alloc_merged_into_cargo_id FROM public.cargas WHERE id = $1`, [vivaId]);
+    expect(viva.rows[0].alloc_merged_into_cargo_id).toBe(winnerId);
+  });
+
+  it("on: linha da planilha SEM data herda a agenda da gêmea (não estoura 23502)", async () => {
+    // Reproduzido em produção: a Shopee publica algumas viagens sem data de
+    // carregamento. `buildAllocatedSheetLoadPayload` devolve data/horario NULL e
+    // `cargas.data` é NOT NULL → o INSERT estourava 23502, o catch por LH engolia e o
+    // CTE aposentava a gêmea de qualquer forma (LT0Q8302CP7K1, CLOVIS BRITO FILHO).
+    process.env.TWIN_MERGE = "on";
+    const lh = "LT-PROMOTE-SEM-DATA";
+    const doadorId = await seedDoador(lh, {
+      alloc_motorista: "CLOVIS",
+      alloc_updated_at: new Date("2026-08-01").toISOString(),
+      data: "2026-08-03",
+      horario: "14:00:00",
+    });
+
+    const r = await promoteLaunchedTwinsBeforeRetirement(
+      baseArgs({
+        takenSheetLhs: [lh],
+        allSheetRowsByLh: new Map([[lh, sheetRow(lh, { data: null, horario: null, carregamentoLabel: null })]]),
+      }),
+    );
+
+    expect(r).toMatchObject({ mode: "on", materializados: 1, mergeados: 1, ignoradosSemAgenda: 0 });
+    const winnerId = createSheetLoadId(lh, source);
+    const cargo = await query(
+      `SELECT data, horario, alloc_motorista FROM public.cargas WHERE id = $1`,
+      [winnerId],
+    );
+    expect(cargo.rows[0]).toBeTruthy();
+    // Agenda herdada da gêmea — a única data existente para essa viagem.
+    // pg devolve DATE como Date em UTC-midnight: comparar via ISO (String(Date)
+    // renderiza no fuso local e daria off-by-one em BRT).
+    const dataIso = cargo.rows[0].data instanceof Date
+      ? cargo.rows[0].data.toISOString().slice(0, 10)
+      : String(cargo.rows[0].data).slice(0, 10);
+    expect(dataIso).toBe("2026-08-03");
+    expect(String(cargo.rows[0].horario)).toContain("14:00");
+    expect(cargo.rows[0].alloc_motorista).toBe("CLOVIS");
+    const doador = await query(`SELECT alloc_merged_into_cargo_id FROM public.cargas WHERE id = $1`, [doadorId]);
+    expect(doador.rows[0].alloc_merged_into_cargo_id).toBe(winnerId);
+  });
+
   it("dry SEM canônica existente: só CONTA (materializaria), não insere nada", async () => {
     process.env.TWIN_MERGE = "dry";
     const lh = "LT-PROMOTE-DRY";

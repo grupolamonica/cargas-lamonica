@@ -20,8 +20,9 @@
 // nunca é devolvida como alvo — e sem canônica não sobra NADA para editar).
 //
 // Roda ANTES do CTE de aposentadoria (mesmo ciclo, mesma leitura de `takenSheetLhs`):
-// para cada LH tomado que ainda NÃO tem canônica, se existe uma gêmea lançada VIVA
-// (não aposentada, não já mergeada), materializa a canônica herdando dela (via
+// para cada LH tomado que ainda NÃO tem canônica, se existe uma gêmea lançada ainda não
+// mergeada — VIVA ou LÁPIDE (a aposentada é doadora legítima; ver o SELECT do doador
+// abaixo) —, materializa a canônica herdando dela (via
 // `buildAllocatedSheetLoadPayload`, a MESMA derivação de perfil/valor/bonus/distância
 // usada para "puxar tudo da planilha") e chama `mergeLaunchedTwinAlloc` na MESMA
 // transação — identidade e dado nascem juntos, sem janela de estado misto.
@@ -62,6 +63,7 @@ const ZERO_RESULT = Object.freeze({
   mergeados: 0,
   bloqueados: 0,
   ignoradosCancelamento: 0,
+  ignoradosSemAgenda: 0,
   promovidos: [],
 });
 
@@ -117,6 +119,7 @@ export async function promoteLaunchedTwinsBeforeRetirement({
   let mergeados = 0;
   let bloqueados = 0;
   let ignoradosCancelamento = 0;
+  let ignoradosSemAgenda = 0;
   const promovidos = [];
   const truncado = candidatos.length > limit;
 
@@ -131,7 +134,7 @@ export async function promoteLaunchedTwinsBeforeRetirement({
     let resultado;
     try {
       resultado = await run(async (client) => {
-        // Doador: gêmea LANÇADA viva (nunca aposentada nem já mergeada). Lock
+        // Doador: gêmea LANÇADA ainda não mergeada (VIVA ou lápide — ver abaixo). Lock
         // WAIT padrão (sem NOWAIT) — mesma decisão já tomada em atomic-claim.js
         // (F-2) e pelo mesmo motivo: NOWAIT exigiria capturar/remapear 55P03 do
         // Postgres (que o harness pg-mem dos testes nem consegue PARSEAR — "AST
@@ -139,14 +142,30 @@ export async function promoteLaunchedTwinsBeforeRetirement({
         // (o operador editando essa MESMA gêmea no exato instante do ciclo do
         // sync) — o lote é pequeno (≤50 LHs/ciclo) e cada LH é sua própria
         // transação, então esperar não trava o restante do lote.
+        // A LÁPIDE (gêmea já aposentada) é doadora LEGÍTIMA — nunca alvo. É a mesma
+        // regra que `mergeLaunchedTwinAlloc` e `scripts/twin-merge-backfill.mjs` já
+        // assumem, e sem ela qualquer pulo desta passada era DEFINITIVO: o CTE de
+        // aposentadoria roda em bloco separado e incondicional, então depois que ele
+        // grava retired_reason + status='EXPIRED', exigir doador VIVO fazia este LH
+        // devolver "sem_gemea" para sempre (e `c.status NOT IN ('EXPIRED', ...)` impede
+        // o CTE revisitar). Porta de mão única: a canônica nunca mais nascia pelo sync
+        // — para a Shopee não há outro criador (o upsert só cria linha DISPONÍVEL e a
+        // importação de linhas alocadas é só pullAllRows/Nestlé).
+        //
+        // Com esta linha, a lápide órfã volta a ser materializada + mergeada pelo
+        // próprio ciclo do sync, sem script manual, desde que o LH ainda apareça no
+        // snapshot. A ordenação de `mergeLaunchedTwinAlloc` continua preferindo a gêmea
+        // VIVA quando as duas existem.
         const { rows: doadorRows } = await client.query(
-          `SELECT id FROM public.cargas
+          `SELECT id, data, horario, agenda_a_confirmar FROM public.cargas
             WHERE lh_manual = $1 AND sheet_lh IS NULL
-              AND alloc_merged_into_cargo_id IS NULL AND retired_reason IS NULL
+              AND alloc_merged_into_cargo_id IS NULL
+            ORDER BY (retired_reason IS NULL) DESC, alloc_updated_at DESC NULLS LAST
             LIMIT 1 FOR UPDATE`,
           [lh],
         );
         if (doadorRows.length === 0) return { skipped: "sem_gemea" };
+        const doador = doadorRows[0];
 
         // Pré-check por (fonte, LH): corrida concorrente (dois ciclos de sync, ou
         // a materialização lazy de ensureMonitorSheetCargo) pode ter criado a
@@ -180,6 +199,28 @@ export async function promoteLaunchedTwinsBeforeRetirement({
           syncedAt,
           source,
         });
+        // `cargas.data`/`horario` são NOT NULL, e a linha da planilha pode não ter agenda
+        // (medido em produção: 3 linhas Shopee sem data, 2 delas com motorista). O
+        // consumidor original de buildAllocatedSheetLoadPayload PULA essas linhas
+        // (google-sheet-loads.js, `allocatedSkippedNoDate`); aqui pular seria PIOR que
+        // inútil: o INSERT estourava 23502, o catch por LH engolia, e o CTE aposentava a
+        // gêmea de qualquer forma — a decisão do operador ficava presa numa lápide
+        // (LT0Q8302CP7K1, motorista CLOVIS BRITO FILHO).
+        //
+        // Herdar do doador é melhor que pular: a gêmea LANÇADA sempre tem agenda (NOT
+        // NULL) e é justamente a agenda que o operador já vê no Monitor — quando a
+        // planilha não datou a viagem, essa é a ÚNICA data existente. `agenda_a_confirmar`
+        // vai junto para não promover um placeholder a agenda confirmada.
+        if (payload.data == null) {
+          payload.data = doador.data;
+          payload.horario = payload.horario ?? doador.horario;
+          if (doador.agenda_a_confirmar === true) payload.agenda_a_confirmar = true;
+        }
+        if (payload.data == null || payload.horario == null) {
+          // Defensivo: inalcançável enquanto cargas.data/horario forem NOT NULL na
+          // gêmea. Conta e segue — nunca deixa o INSERT estourar 23502.
+          return { skipped: "sem_agenda" };
+        }
         const cols = Object.keys(payload);
         const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
         await client.query(
@@ -199,6 +240,10 @@ export async function promoteLaunchedTwinsBeforeRetirement({
       continue;
     }
 
+    if (resultado.skipped === "sem_agenda") {
+      ignoradosSemAgenda += 1;
+      continue;
+    }
     if (resultado.skipped) continue;
     materializados += 1;
     promovidos.push(lh);
@@ -217,8 +262,8 @@ export async function promoteLaunchedTwinsBeforeRetirement({
     }
   }
 
-  const stats = { mode, candidatos: candidatos.length, materializados, mergeados, bloqueados, ignoradosCancelamento, promovidos, truncado };
-  if (materializados > 0 || ignoradosCancelamento > 0 || truncado) {
+  const stats = { mode, candidatos: candidatos.length, materializados, mergeados, bloqueados, ignoradosCancelamento, ignoradosSemAgenda, promovidos, truncado };
+  if (materializados > 0 || ignoradosCancelamento > 0 || ignoradosSemAgenda > 0 || truncado) {
     logStructuredEvent(mode === "dry" ? "warn" : "info", `promote-launched-twins.${mode === "dry" ? "dry-run" : "aplicado"}`, {
       correlationId,
       source,

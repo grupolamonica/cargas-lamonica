@@ -1907,7 +1907,38 @@ export async function syncGoogleSheetLoads({
                  AND c.data >= (now() AT TIME ZONE 'America/Sao_Paulo')::date
                  AND (
                    -- (1) viagem TOMADA na planilha → aposenta a gêmea (fantasma).
-                   c.lh_manual = ANY($1::text[])
+                   --
+                   -- Gêmea que CARREGA a decisão do operador (alloc_motorista) só é
+                   -- aposentada quando existe canônica para HERDAR essa decisão. Sem esta
+                   -- guarda a decisão ficava numa lápide sem alvo e o operador recebia
+                   -- "edite pela alocação do Monitor" sem ter linha nenhuma para editar
+                   -- (incidente LT0Q8602CP761: retired_reason='twin_taken',
+                   -- alloc_merged_into_cargo_id NULL e ZERO canônica).
+                   --
+                   -- É guarda de ESTADO, não de fluxo: vale mesmo quando a passada de
+                   -- promoção (promote-launched-twins.js) pulou o LH — teto de lote
+                   -- (DEFAULT_BATCH_LIMIT), status de cancelamento, falha/lock por LH,
+                   -- modo "dry" ou linha da planilha sem data. Cobre os cinco casos sem
+                   -- criar contrato novo entre os dois módulos, e é a MESMA exigência que
+                   -- os ramos (2) e (3) já fazem — o ramo (1) era a única assimetria.
+                   --
+                   -- Manter essa gêmea VIVA é seguro: com alloc_motorista ela já está
+                   -- RESERVED (reconcile-monitor-load-status.js) e o portal só oferta
+                   -- OPEN + sem motorista efetivo, então não volta card candidatável — o
+                   -- dano que este ramo existe para cortar. No Monitor, dedupe-monitor-rows.js
+                   -- já esconde a linha "sistema" quando a linha da planilha tem motorista.
+                   -- Sem alocação a gêmea é fantasma puro e continua morrendo aqui.
+                   (
+                     c.lh_manual = ANY($1::text[])
+                     AND (
+                       COALESCE(c.alloc_motorista, '') = ''
+                       OR EXISTS (
+                         SELECT 1 FROM public.cargas s
+                          WHERE s.sheet_lh = c.lh_manual
+                            AND s.sheet_source IS NOT NULL
+                       )
+                     )
+                   )
                    -- (2) viagem DISPONÍVEL na planilha e já lançada → gêmea OPEN
                    -- duplicada no portal. Só aposenta quando a lançada NÃO tem
                    -- reserva/candidatura ativa e quando a linha da planilha existe
@@ -1958,6 +1989,13 @@ export async function syncGoogleSheetLoads({
             cancelled_leads AS (
               -- Só gêmeas TOMADAS têm candidatura fantasma a cancelar; as gêmeas OPEN
               -- entram no CTE twins apenas quando NAO tem candidatura ativa (guarda acima).
+              -- Consequência da guarda de canônica no ramo (1): a gêmea TOMADA que carrega
+              -- alocação e ainda não tem canônica não entra no CTE twins, então o
+              -- cancelamento da candidatura fantasma dela ESCORREGA para o ciclo em que a
+              -- canônica existir. Não é regressão silenciosa: gêmea com motorista + lead
+              -- ativo já é bloqueada no merge (merge-launched-twin.js, motivo
+              -- reserva_de_lead_na_perdedora) e não aparece no portal (só OPEN + sem
+              -- motorista efetivo é ofertado).
               UPDATE public.load_public_leads l
                  SET status = 'CANCELLED', updated_at = now()
                WHERE l.load_id IN (SELECT id FROM twins WHERE is_taken)

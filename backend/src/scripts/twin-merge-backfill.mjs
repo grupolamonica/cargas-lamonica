@@ -81,8 +81,8 @@ export function classifyMergeResult({ merge }) {
  *  dos testes (mesma limitação documentada em promote-launched-twins.js). */
 async function loadCandidateTwins(client) {
   const { rows } = await client.query(`
-    SELECT c.id, c.lh_manual, c.status, c.retired_reason, c.data,
-           c.alloc_motorista, c.alloc_updated_at
+    SELECT c.id, c.lh_manual, c.status, c.retired_reason, c.data, c.horario,
+           c.agenda_a_confirmar, c.alloc_motorista, c.alloc_updated_at
       FROM public.cargas c
      WHERE c.sheet_lh IS NULL
        AND c.lh_manual IS NOT NULL
@@ -174,6 +174,19 @@ async function processOne({ doador, snapshotIndex, clientIdBySource, routeCatalo
       syncedAt: new Date().toISOString(),
       source: snap.source,
     });
+    // `cargas.data`/`horario` são NOT NULL e a linha da planilha pode não ter agenda —
+    // o INSERT estourava 23502 e o LH caía na classe ERRO (visto ao rodar em produção:
+    // LT0Q8302CP7K1 e LT0Q8602CPLC1). Herda a agenda do doador, que sempre tem
+    // (mesma regra de promote-launched-twins.js).
+    if (payload.data == null) {
+      payload.data = doador.data;
+      payload.horario = payload.horario ?? doador.horario;
+      if (doador.agenda_a_confirmar === true) payload.agenda_a_confirmar = true;
+    }
+    if (payload.data == null || payload.horario == null) {
+      // Defensivo: inalcançável enquanto cargas.data/horario forem NOT NULL no doador.
+      return { winnerId: null, canonicaExiste: false, merge: null, semAgenda: true };
+    }
     const cols = Object.keys(payload);
     await client.query(
       `INSERT INTO public.cargas (${cols.join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")}) ON CONFLICT (id) DO NOTHING`,
@@ -184,7 +197,7 @@ async function processOne({ doador, snapshotIndex, clientIdBySource, routeCatalo
   });
 
   linha.winnerId = resultado.winnerId;
-  linha.classe = classifyMergeResult(resultado);
+  linha.classe = resultado.semAgenda ? "SEM_AGENDA" : classifyMergeResult(resultado);
   linha.campos = resultado.merge?.copiedFields ?? [];
   linha.naoMigrado = resultado.merge?.naoMigrado ?? {};
   return linha;
