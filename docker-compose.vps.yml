@@ -21,32 +21,23 @@ services:
         VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
         VITE_API_BASE_URL: ""
     # No ports: Traefik handles edge traffic on port 80/443
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
 
   backend:
     env_file:
       - backend.env
     # No ports exposed directly: Traefik routes /api/* here
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
 
-  # ── Watchtower: auto-pull GHCR images and restart on new :latest pushes ──────
-  # CI pushes ghcr.io/…:latest → Watchtower polls every 60s → rolling restart.
-  # Eliminates SSH as a hard deploy requirement for future releases.
-  # Auth: mounts /root/.docker/config.json with GHCR credentials (run once:
-  #   echo TOKEN | docker login ghcr.io -u antoniocesar-dev --password-stdin
-  # where TOKEN is a GitHub PAT with read:packages scope).
-  watchtower:
-    image: containrrr/watchtower:latest
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /root/.docker/config.json:/config.json:ro
-    environment:
-      WATCHTOWER_POLL_INTERVAL: "60"
-      WATCHTOWER_CLEANUP: "true"
-      WATCHTOWER_INCLUDE_RESTARTING: "true"
-      WATCHTOWER_LABEL_ENABLE: "true"
-    networks:
-      - lamonica-net
+  # ── Watchtower REMOVIDO ─────────────────────────────────────────────
+  # Existiu aqui de 11/05 a 05/08/2026 e NUNCA completou um ciclo: `containrrr/
+  # watchtower:latest` resolve para a imagem de 11/11/2023 (última release; projeto
+  # arquivado), que fala Docker API 1.25, enquanto o daemon da VPS exige ≥ 1.40
+  # ("client version 1.25 is too old"). Ficou em restart-loop — 35.297 restarts.
+  #
+  # E, mesmo consertando a imagem, seria no-op: ele observa a tag com que o
+  # container nasceu, e o deploy fixa `:sha-<commit>` (deploy.yml), tag imutável que
+  # nunca recebe update. A premissa do serviço ("polls :latest") não combina com o
+  # pinning por SHA que o projeto adotou.
+  #
+  # Se um dia o objetivo original voltar à mesa (deploy sem depender de SSH), são
+  # DUAS mudanças, não uma: usar um fork mantido (ex.: nickfedor/watchtower) E
+  # publicar também uma tag móvel além da SHA.

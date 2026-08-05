@@ -88,10 +88,12 @@ jobs:
             #     cadastro-ocr 8 — TODOS os routers `websecure`/letsencrypt e o
             #     redirect HTTP→HTTPS. Sobram só os routers de IP (entrypoint `web`),
             #     ou seja: HTTPS no domínio morre e o site cai para o usuário.
-            #   - sem docker-compose.vps.yml: o serviço `watchtower` (definido só lá)
-            #     vira órfão e o --remove-orphans o apaga. Os sidecars (spx-bot,
-            #     angelira-bot, aspx-renewal, cadastro-ocr, galileu-bot,
-            #     gerador-mock-angellira) estão no arquivo base e NÃO corriam risco.
+            #   - sem docker-compose.vps.yml: hoje NENHUM serviço vira órfão — o
+            #     `watchtower`, que era o único definido só lá, foi removido (crash-loop
+            #     desde 11/05/2026 + no-op por construção; ver docker-compose.vps.yml).
+            #     Os sidecars (spx-bot, angelira-bot, aspx-renewal, cadastro-ocr,
+            #     galileu-bot, gerador-mock-angellira) estão no arquivo base e NÃO
+            #     corriam risco. O arquivo segue obrigatório pelos build args e env_file.
             #   - `--profile production` não ativava nada: o único serviço com esse
             #     profile é o reverse-proxy do docker-compose.override.yml, que é de
             #     dev e nem é carregado aqui. Flag morta, removida.

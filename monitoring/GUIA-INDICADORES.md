@@ -85,7 +85,7 @@ Para quem acompanha a TV: o que cada painel significa, o que é normal e **que a
 | **VPS — rede** | Tráfego de rede do servidor | Pico anormal fora de hora = investigar |
 | **Supabase — disco (IOPS)** | Atividade de leitura/escrita do banco | Picos em sync/ETL são normais; alto o tempo todo = queries pesadas → TI |
 | **Supabase — CPU e RAM** | O servidor do banco em si | >80% sustentado = plano do Supabase ficando pequeno → TI + gestão (upgrade) |
-| **Erros nos logs (por serviço)** | Quantas linhas de erro cada peça está escrevendo nos logs | Serviço com barras **contínuas** = investigar → TI. (Watchtower está filtrado — problema conhecido) |
+| **Erros nos logs (por serviço)** | Quantas linhas de erro cada peça está escrevendo nos logs | Serviço com barras **contínuas** = investigar → TI. |
 
 ---
 
