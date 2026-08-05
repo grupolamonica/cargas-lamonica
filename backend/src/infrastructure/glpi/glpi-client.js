@@ -303,6 +303,21 @@ export async function getGlpiTicket(sessionToken, ticketId, { correlationId } = 
 }
 
 /**
+ * Lê os sub-itens já registrados num chamado (acompanhamentos ou soluções).
+ *
+ * É o que torna a automação IDEMPOTENTE: antes de responder, procuramos nossa
+ * própria marca no histórico. Sem isso, cada reexecução do worker responderia o
+ * mesmo chamado outra vez e quem abriu receberia a mesma notificação em série.
+ *
+ * @param {"ITILFollowup"|"ITILSolution"} itemtype
+ * @returns {Promise<Array<object>>}
+ */
+export async function getGlpiTicketSubItems(sessionToken, ticketId, itemtype, { correlationId } = {}) {
+  const result = await glpiRequest(sessionToken, `/Ticket/${Number(ticketId)}/${itemtype}`, { correlationId });
+  return Array.isArray(result) ? result : [];
+}
+
+/**
  * Publica um acompanhamento (comentário visível para quem abriu o chamado).
  * `isPrivate` true = só o time de TI vê. O padrão é PÚBLICO — a resposta ao
  * operador é o ponto de todo o fluxo.

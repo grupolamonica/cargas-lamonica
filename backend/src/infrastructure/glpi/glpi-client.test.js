@@ -6,6 +6,7 @@ import {
   addGlpiFollowup,
   addGlpiSolution,
   getGlpiTicket,
+  getGlpiTicketSubItems,
   initGlpiSession,
   isGlpiConfigured,
   searchGlpiTicketsByStatus,
@@ -144,6 +145,24 @@ describe("glpi-client", () => {
       // como sucesso, a automação acharia que respondeu o chamado e não respondeu.
       globalThis.fetch.mockResolvedValue(jsonResponse(["ERROR_RIGHT_MISSING", "sem permissão"], 200));
       await expect(getGlpiTicket("sess-1", 40)).rejects.toThrow("GLPI_API_ERROR:ERROR_RIGHT_MISSING");
+    });
+  });
+
+  describe("getGlpiTicketSubItems", () => {
+    it("lê os acompanhamentos já registrados no chamado", async () => {
+      globalThis.fetch.mockResolvedValue(jsonResponse([{ id: 1, content: "olá" }]));
+
+      const itens = await getGlpiTicketSubItems("sess-1", 40, "ITILFollowup");
+
+      expect(itens).toEqual([{ id: 1, content: "olá" }]);
+      expect(lastCall()[0]).toBe(`${BASE}/Ticket/40/ITILFollowup`);
+    });
+
+    it("chamado sem histórico devolve lista vazia", async () => {
+      // O GLPI responde `{}` (não um array) quando não há sub-item nenhum. Devolver
+      // isso cru quebraria o `.some()` de quem checa idempotência.
+      globalThis.fetch.mockResolvedValue(jsonResponse({}));
+      await expect(getGlpiTicketSubItems("sess-1", 40, "ITILSolution")).resolves.toEqual([]);
     });
   });
 
