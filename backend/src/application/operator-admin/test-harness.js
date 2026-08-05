@@ -114,6 +114,9 @@ const schemaSql = `
     recurrence_interval_days integer,
     recurrence_parent_id uuid,
     lh_manual text,
+    -- Aceite da VIAGEM na carga lançada (migration 20260805170000). NULL = nunca
+    -- aceita / desconhecido; é o que tira a lançada não-aceita do Monitor.
+    trip_accepted_at timestamptz,
     superseded_by_cargo_id uuid,
     retired_reason text,
     -- Marcador de MERGE da gêmea (migration 20260804140000). Distinto de

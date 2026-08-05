@@ -8,12 +8,22 @@
 // canônicas da carga. lh = lh_manual (editável no grid).
 
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
+import { nestleClientNameCandidates, normalizeClientName } from "./_shared.js";
 
 const SELECT_COLS =
-  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, sheet_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta, alloc_pinned, status, driver_visibility, lh_manual, agenda_a_confirmar, cliente_id";
+  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, sheet_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta, alloc_pinned, status, driver_visibility, lh_manual, agenda_a_confirmar, cliente_id, sheet_source, trip_accepted_at";
 // Mesmo SELECT sem `agenda_a_confirmar` — usado no fallback de banco sem a coluna
 // (migration 20260717210000): a fonte "sistema" do Monitor não pode cair só por isso.
 const SELECT_COLS_SEM_AGENDA = SELECT_COLS.replace(" agenda_a_confirmar,", "");
+// Idem para `trip_accepted_at` (migration 20260805170000). Sem a coluna, o filtro de
+// "lançada não aceita" é DESLIGADO por inteiro — nunca aplicado com aceite undefined,
+// que esconderia tudo. Degradação = comportamento anterior, não perda de linha.
+const SELECT_COLS_SEM_ACEITE = SELECT_COLS.replace(", trip_accepted_at", "");
+const SELECT_COLS_SEM_AGENDA_SEM_ACEITE = SELECT_COLS_SEM_AGENDA.replace(", trip_accepted_at", "");
+
+// Leads que ainda podem virar reserva. Carga com um deles é carga que um motorista
+// pediu — nunca some da tela do operador, aceite ou não.
+const LIVE_LEAD_STATUSES = ["QUEUED", "APPROVED"];
 
 /** DATE do Postgres pode chegar como '2026-06-25' ou ISO '2026-06-25T00:00:00.000Z'.
  *  Fatiar os 10 primeiros chars dá a data de parede correta (igual ao fix do
@@ -145,6 +155,87 @@ export function mapSystemCargoToMonitorRow(c, clientesById = {}, now = null) {
   };
 }
 
+/** Kill-switch do filtro "lançada não aceita" (default LIGADO). Só
+ *  MONITOR_HIDE_UNACCEPTED_LAUNCHED=false desliga — qualquer outro valor mantém
+ *  ligado, para o desligamento ser um ato explícito. */
+export function isHideUnacceptedLaunchedEnabled() {
+  return String(process.env.MONITOR_HIDE_UNACCEPTED_LAUNCHED ?? "").trim().toLowerCase() !== "false";
+}
+
+/** Ids dos clientes Nestlé no mapa id→nome do Monitor. A comparação é por nome
+ *  normalizado (sem acento/caixa) contra os candidatos do env + históricos — NUNCA
+ *  por literal cravado: o operador renomeia o cliente na tela (em 30/07 "Nestlé"
+ *  virou "Produtos Alimentícios") e um literal quebraria o escopo em silêncio. */
+export function resolveNestleClientIds(clientesById = {}) {
+  const alvos = new Set(nestleClientNameCandidates().map((n) => normalizeClientName(String(n))));
+  const ids = new Set();
+  for (const [id, nome] of Object.entries(clientesById)) {
+    if (alvos.has(normalizeClientName(String(nome ?? "")))) ids.add(id);
+  }
+  return ids;
+}
+
+/** Carga da fonte Nestlé: pela fonte gravada no lançamento OU pelo cliente. As duas
+ *  são necessárias — `sheet_source` só passou a ser gravado depois, então a maioria
+ *  das lançadas antigas tem NULL (que `normSource` trata como shopee). */
+function isNestleCargo(c, nestleClientIds) {
+  if (String(c.sheet_source ?? "").trim().toLowerCase() === "nestle") return true;
+  return c.cliente_id != null && nestleClientIds.has(c.cliente_id);
+}
+
+/**
+ * Carga LANÇADA (Programação/auto-lançamento) da SHOPEE que ninguém aceitou —
+ * sai do Monitor. Continua em /cargas (nada é apagado nem expirado por isto).
+ *
+ * O `accepted` do lançamento sempre governou só o write-back da planilha; o
+ * INSERT e este read model o ignoravam, então toda lançada não-aceita entrava no
+ * Monitor por construção (94 linhas em 05/08/2026, 93% da fonte SISTEMA).
+ *
+ * Guardas — some SÓ o que está inerte. Qualquer sinal de vida mantém a linha:
+ *   1. sem `lh_manual` → não é carga lançada (carga manual/recorrente do operador);
+ *   2. `trip_accepted_at` → viagem aceita: frete comprometido, fica mesmo sem motorista;
+ *   3. ciclo ≠ OPEN → alguém já agiu (RESERVED/BOOKED/CANCELLED);
+ *   4. motorista alocado;
+ *   5. status operacional (override do operador ou espelho do portal) preenchido;
+ *   6. lead vivo na fila (QUEUED/APPROVED) — motorista pediu a carga;
+ *   7. Nestlé → fora do escopo (só Shopee, por decisão do operador).
+ *
+ * Puro/testável.
+ *
+ * @param {object} c linha crua de `cargas`
+ * @param {{ nestleClientIds?: Set<string>, cargoIdsWithLiveLead?: Set<string> }} ctx
+ */
+export function isUnacceptedLaunchedShopeeCargo(c, { nestleClientIds = new Set(), cargoIdsWithLiveLead = new Set() } = {}) {
+  if (!String(c.lh_manual ?? "").trim()) return false;
+  if (c.trip_accepted_at) return false;
+  if (String(c.status ?? "").trim().toUpperCase() !== "OPEN") return false;
+  if (String(c.alloc_motorista ?? "").trim()) return false;
+  if (String(c.alloc_status ?? c.sheet_status ?? "").trim()) return false;
+  if (cargoIdsWithLiveLead.has(c.id)) return false;
+  if (isNestleCargo(c, nestleClientIds)) return false;
+  return true;
+}
+
+/**
+ * Ids das cargas com lead VIVO (QUEUED/APPROVED) entre os candidatos a sumir.
+ * Só consulta quando há candidato. Falha → devolve TODOS os candidatos como "tem
+ * lead": na dúvida a linha fica visível (o erro nunca esconde carga).
+ */
+async function fetchCargoIdsWithLiveLead(supabaseClient, candidateIds) {
+  if (candidateIds.length === 0) return new Set();
+  try {
+    const { data, error } = await supabaseClient
+      .from("load_public_leads")
+      .select("load_id")
+      .in("load_id", candidateIds)
+      .in("status", LIVE_LEAD_STATUSES);
+    if (error) throw error;
+    return new Set((data || []).map((l) => l.load_id));
+  } catch {
+    return new Set(candidateIds);
+  }
+}
+
 /**
  * Lê TODAS as cargas do sistema (sheet_lh nulo, não-template, não-expiradas,
  * não-rascunho) paginando com .range para furar o cap de 1000 linhas do
@@ -181,10 +272,17 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
   // Idem para agenda_a_confirmar: sem a coluna, relê sem ela (o mapper trata
   // undefined como false) em vez de derrubar a fonte "sistema".
   let selectAgendaAConfirmar = true;
+  // Idem para trip_accepted_at (migration 20260805170000). Sem a coluna o filtro de
+  // "lançada não aceita" fica DESLIGADO — aceite undefined esconderia toda lançada.
+  let selectTripAccepted = true;
+  const selectCols = () =>
+    selectAgendaAConfirmar
+      ? (selectTripAccepted ? SELECT_COLS : SELECT_COLS_SEM_ACEITE)
+      : (selectTripAccepted ? SELECT_COLS_SEM_AGENDA : SELECT_COLS_SEM_AGENDA_SEM_ACEITE);
   const page = (from) => {
     let q = supabaseClient
       .from("cargas")
-      .select(selectAgendaAConfirmar ? SELECT_COLS : SELECT_COLS_SEM_AGENDA)
+      .select(selectCols())
       .is("sheet_lh", null)
       .eq("is_template", false)
       .neq("status", "EXPIRED")
@@ -199,7 +297,7 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
     return q.order("data", { ascending: false }).range(from, from + pageSize - 1);
   };
 
-  const out = [];
+  const raw = [];
   for (let from = 0; from < maxRows; from += pageSize) {
     let { data, error } = await page(from);
     if (error && filterAspxMissing && isMissingAspxColumnError(error)) {
@@ -210,12 +308,39 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
       selectAgendaAConfirmar = false;
       ({ data, error } = await page(from));
     }
+    if (error && selectTripAccepted && isMissingTripAcceptedColumn(error)) {
+      selectTripAccepted = false;
+      ({ data, error } = await page(from));
+    }
     if (error) throw error;
     const batch = data || [];
-    for (const c of batch) out.push(mapSystemCargoToMonitorRow(c, clientesById, now));
+    for (const c of batch) raw.push(c);
     if (batch.length < pageSize) break;
   }
-  return out;
+
+  // Carga LANÇADA da Shopee que ninguém aceitou sai do Monitor (segue em /cargas).
+  // Só roda com a coluna de aceite disponível: sem ela, aceite é desconhecido em
+  // TODA linha e o filtro esconderia a fonte inteira. O lead vivo é consultado só
+  // para os candidatos já filtrados pelas guardas baratas (hoje ~50 de ~100 linhas).
+  let hidden = raw;
+  if (selectTripAccepted && isHideUnacceptedLaunchedEnabled()) {
+    const nestleClientIds = resolveNestleClientIds(clientesById);
+    const candidates = raw.filter((c) => isUnacceptedLaunchedShopeeCargo(c, { nestleClientIds }));
+    if (candidates.length > 0) {
+      const cargoIdsWithLiveLead = await fetchCargoIdsWithLiveLead(
+        supabaseClient,
+        candidates.map((c) => c.id),
+      );
+      const drop = new Set(
+        candidates
+          .filter((c) => isUnacceptedLaunchedShopeeCargo(c, { nestleClientIds, cargoIdsWithLiveLead }))
+          .map((c) => c.id),
+      );
+      hidden = raw.filter((c) => !drop.has(c.id));
+    }
+  }
+
+  return hidden.map((c) => mapSystemCargoToMonitorRow(c, clientesById, now));
 }
 
 /** Coluna aspx_missing_since ausente (migration ainda não aplicada) — PostgREST
@@ -224,6 +349,12 @@ function isMissingAspxColumnError(error) {
   if (!error) return false;
   if (error.code === "42703") return true;
   return /aspx_missing_since/i.test(String(error.message ?? ""));
+}
+
+/** Coluna trip_accepted_at ausente (migration 20260805170000 não aplicada). */
+function isMissingTripAcceptedColumn(error) {
+  if (!error) return false;
+  return /trip_accepted_at/i.test(String(error.message ?? ""));
 }
 
 /** Coluna agenda_a_confirmar ausente (migration 20260717210000 não aplicada). */

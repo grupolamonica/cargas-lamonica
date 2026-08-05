@@ -163,6 +163,12 @@ export async function launchCargoFromTrip({
         // a ordenação do Monitor — apontavam para o passado, tirando a carga do portal
         // no mesmo movimento em que `agenda_a_confirmar` virava false (a flag era a
         // única coisa que mantinha o placeholder visível).
+        //
+        // `trip_accepted_at` marca o ACEITE da viagem e é de mão única: só é
+        // GRAVADO (quando este lançamento vem aceito), nunca limpo. Cobre o
+        // "lançou não-aceito, relançou aceito" e impede que relançar uma viagem
+        // já aceita — a Programação relança quando a agenda muda — desfaça o
+        // aceite e derrube a carga do Monitor.
         await client.query(
           `UPDATE public.cargas
               SET origem = $1, destino = $2,
@@ -175,9 +181,10 @@ export async function launchCargoFromTrip({
                   sheet_data_carregamento = CASE WHEN $6::boolean THEN sheet_data_carregamento ELSE $3 END,
                   sheet_data_descarga = COALESCE($4, sheet_data_descarga),
                   agenda_a_confirmar = CASE WHEN $6::boolean THEN agenda_a_confirmar ELSE false END,
+                  trip_accepted_at = CASE WHEN $13::boolean THEN COALESCE(trip_accepted_at, now()) ELSE trip_accepted_at END,
                   updated_at = now()
             WHERE id = $5`,
-          [origemTrim, destinoTrim, carregamentoLabel, descargaValue, ex.id, aConfirmar, valorValue, bonusValue, distanciaValue, duracaoValue, dataValue, horarioValue],
+          [origemTrim, destinoTrim, carregamentoLabel, descargaValue, ex.id, aConfirmar, valorValue, bonusValue, distanciaValue, duracaoValue, dataValue, horarioValue, Boolean(accepted)],
         );
         updated = true;
       }
@@ -222,14 +229,23 @@ export async function launchCargoFromTrip({
     // (há LH repetido entre as duas em produção) e teria motorista/placas
     // sobrescritos. Gravando a fonte, o write-back de uma fonte sem URL configurada
     // (Nestlé) vira no-op — o comportamento desejado — e a Shopee segue igual.
+    //
+    // `trip_accepted_at` PERSISTE o aceite da viagem. Antes, `accepted` só
+    // governava o write-back da linha-casca lá embaixo e morria aqui: nada no
+    // banco distinguia "ninguém aceitou" de "aceita, esperando motorista", e o
+    // Monitor exibia as duas igual (94 lançadas na tela em 05/08/2026, 72 nunca
+    // aceitas). É a coluna que o read model usa para tirar a não-aceita da tela
+    // sem levar junto o frete já comprometido com a agência.
     const { rows } = await client.query(
       `INSERT INTO public.cargas
          (cliente_id, data, horario, origem, destino, perfil, status, is_template,
           driver_visibility, lh_manual, sheet_data_carregamento, sheet_data_descarga,
-          agenda_a_confirmar, created_by, valor, bonus, distancia_km, duracao_horas, sheet_source)
-       VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', false, 'PUBLIC', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          agenda_a_confirmar, created_by, valor, bonus, distancia_km, duracao_horas, sheet_source,
+          trip_accepted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', false, 'PUBLIC', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+               CASE WHEN $17::boolean THEN now() END)
        RETURNING id`,
-      [clienteId, dataValue, horarioValue, origemTrim, destinoTrim, perfilValue, lhTrim, carregamentoLabel, descargaValue, aConfirmar, operatorId, valorValue, bonusValue, distanciaValue, duracaoValue, source ?? null],
+      [clienteId, dataValue, horarioValue, origemTrim, destinoTrim, perfilValue, lhTrim, carregamentoLabel, descargaValue, aConfirmar, operatorId, valorValue, bonusValue, distanciaValue, duracaoValue, source ?? null, Boolean(accepted)],
     );
 
     return {

@@ -76,6 +76,44 @@ describe("launchCargoFromTrip", () => {
     expect(rows[0].sheet_source).toBe("shopee");
   });
 
+  // `accepted` governava SÓ o write-back da linha-casca e morria aqui: nada no banco
+  // distinguia "ninguém aceitou" de "aceita, esperando motorista", e o Monitor exibia
+  // as duas igual. `trip_accepted_at` é o que permite tirar a não-aceita da tela sem
+  // levar junto o frete já comprometido com a agência.
+  it("persiste o ACEITE da viagem em trip_accepted_at (e deixa NULL quando não aceita)", async () => {
+    await seedCliente({ nome: "Shopee" });
+
+    const naoAceita = await launchCargoFromTrip({ ...validTrip, correlationId: "c-acc-0", deps });
+    const aceita = await launchCargoFromTrip({ ...validTrip, lh: "LT1XYZ", accepted: true, correlationId: "c-acc-1", deps });
+
+    // pg-mem devolve coluna nula como undefined (o Postgres real devolve null).
+    const read = async (id) =>
+      (await query("SELECT trip_accepted_at FROM public.cargas WHERE id = $1", [id])).rows[0].trip_accepted_at ?? null;
+    expect(await read(naoAceita.payload.id)).toBeNull();
+    expect(await read(aceita.payload.id)).toBeInstanceOf(Date);
+  });
+
+  it("aceite é de mão única: relançar aceito MARCA, relançar não-aceito não desmarca", async () => {
+    await seedCliente({ nome: "Shopee" });
+    // pg-mem devolve coluna nula como undefined (o Postgres real devolve null).
+    const read = async (id) =>
+      (await query("SELECT trip_accepted_at FROM public.cargas WHERE id = $1", [id])).rows[0].trip_accepted_at ?? null;
+
+    // Lançou o spot não-aceito…
+    const first = await launchCargoFromTrip({ ...validTrip, correlationId: "c-acc-2", deps });
+    expect(await read(first.payload.id)).toBeNull();
+
+    // …aceitou e relançou: marca.
+    await launchCargoFromTrip({ ...validTrip, accepted: true, correlationId: "c-acc-3", deps });
+    const marcado = await read(first.payload.id);
+    expect(marcado).toBeInstanceOf(Date);
+
+    // A Programação relança quando a agenda muda; isso NÃO pode desfazer o aceite
+    // (desfazer = a carga sumir do Monitor com o frete já comprometido).
+    await launchCargoFromTrip({ ...validTrip, data: "2026-07-25", horario: "09:00", correlationId: "c-acc-4", deps });
+    expect(await read(first.payload.id)).toEqual(marcado);
+  });
+
   it("idempotente: carga da planilha (sheet_lh) com o mesmo LH → devolve a existente", async () => {
     await seedCliente({ nome: "Shopee" });
     const existing = await seedCargo({ sheet_lh: "LT1ABC", status: "OPEN", origem: "X", destino: "Y" });

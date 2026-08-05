@@ -111,13 +111,39 @@ export async function acceptAspxTrips({
     error: results.filter((r) => r.state === "error").length,
   };
 
-  // Linha-casca na planilha: uma viagem ACEITA agora que JÁ foi lançada como carga do
-  // sistema (lh_manual) deve aparecer na planilha — fecha o caso DC-201 "lançou spot
-  // não-aceito, aceitou depois" (o auto-lançamento não relança o já-lançado). `createOnly`
-  // cria a linha se o LH não existir e NÃO toca a existente (não apaga motorista). Best-
-  // effort: o aceite não falha por causa da planilha; só corre quando houve aceite REAL
-  // (dry_run não entra). key só é LH nos itens resolvidos por LH (isAspxLinehaul filtra).
+  // Repercussões locais do aceite REAL (dry_run não entra). `key` só é LH nos itens
+  // resolvidos por LH (isAspxLinehaul filtra).
   const acceptedLhs = results.filter((r) => r.state === "accepted" && isAspxLinehaul(r.key)).map((r) => r.key);
+
+  // 1) Marcador de ACEITE na carga lançada. Sem ele, o caso DC-201 "lançou spot
+  // não-aceito, aceitou depois" ficaria com trip_accepted_at NULL para sempre (o
+  // auto-lançamento não relança o já-lançado) e o Monitor esconderia uma viagem que a
+  // agência já considera nossa. Mão única (`trip_accepted_at IS NULL`) e sem filtro de
+  // merge — a canônica herda os alloc_*, mas o aceite é fato da VIAGEM e vale p/ as duas.
+  // Bloco PRÓPRIO: a linha-casca (2) é best-effort na planilha e não pode levar o
+  // marcador junto quando falhar.
+  let acceptanceMarked = 0;
+  if (acceptedLhs.length > 0) {
+    try {
+      const runPg = deps.withPgClient || withPgClient;
+      const { rowCount } = await runPg((client) =>
+        client.query(
+          `UPDATE public.cargas
+              SET trip_accepted_at = now(), updated_at = now()
+            WHERE lh_manual = ANY($1) AND sheet_lh IS NULL AND trip_accepted_at IS NULL`,
+          [acceptedLhs],
+        ),
+      );
+      acceptanceMarked = rowCount ?? 0;
+    } catch {
+      /* best-effort: aceite no ASPX não falha por causa do marcador local */
+    }
+  }
+
+  // 2) Linha-casca na planilha: uma viagem ACEITA agora que JÁ foi lançada como carga do
+  // sistema (lh_manual) deve aparecer na planilha — mesmo caso DC-201 acima. `createOnly`
+  // cria a linha se o LH não existir e NÃO toca a existente (não apaga motorista).
+  // Best-effort: o aceite não falha por causa da planilha.
   if (acceptedLhs.length > 0) {
     try {
       const runPg = deps.withPgClient || withPgClient;
@@ -159,7 +185,7 @@ export async function acceptAspxTrips({
     outcome: "success",
     requestIp,
     correlationId,
-    metadata: { tripIds: ids.length, lhs: lhList.length, writeEnabled, dryRun: effectiveDryRun, summary },
+    metadata: { tripIds: ids.length, lhs: lhList.length, writeEnabled, dryRun: effectiveDryRun, summary, acceptanceMarked },
   });
 
   return {
