@@ -7,6 +7,7 @@ import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
 import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
 import { writeAllocationsToSheet, formatSheetDateLabel } from "../../google-sheets/sheet-writeback.js";
 import { describeConflicts, duplicateAllocWarnEnabled, findAllocationConflicts } from "./find-allocation-conflicts.js";
+import { alocacaoDesatualizada, concurrentEditWarnEnabled, descreverAlteracaoConcorrente } from "./check-allocation-freshness.js";
 
 // pg devolve DATE como Date (UTC-midnight) e TIME como string. Normaliza pro
 // formato de parede 'YYYY-MM-DD' / 'HH:MM' (UTC, evita off-by-one).
@@ -52,6 +53,8 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     const t = (v ?? "").toString().trim();
     return t === "" ? null : t;
   };
+  // Carimbo pós-gravação, devolvido ao front como baseline da próxima edição.
+  let allocUpdatedAt = null;
 
   const result = await withPgTransaction(async (client) => {
     const { rows } = await client.query(
@@ -59,7 +62,8 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
               alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas,
               alloc_checklist_cavalo, alloc_checklist_carreta,
               origem, destino, data, horario, lh_manual, sheet_data_carregamento, sheet_data_descarga,
-              status, reserved_public_lead_id, alloc_merged_into_cargo_id, retired_reason
+              status, reserved_public_lead_id, alloc_merged_into_cargo_id, retired_reason,
+              alloc_updated_at, alloc_updated_by
        FROM public.cargas WHERE id = $1 FOR UPDATE`,
       [cargoId],
     );
@@ -85,6 +89,29 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
         "Esta carga foi unificada com a linha da planilha; edite pela alocação do Monitor (LH).",
         { code: "CARGO_MERGED_OR_RETIRED" },
       );
+    }
+
+    // AVISO de edição SIMULTÂNEA (mesma regra do caminho por LH — ver
+    // check-allocation-freshness.js): outra pessoa gravou aqui entre a leitura da tela
+    // e agora? Checado antes de decidir campos, porque os valores pré-preenchidos no
+    // formulário já são de um estado que deixou de existir.
+    if (
+      concurrentEditWarnEnabled() &&
+      payload.confirmOverwrite !== true &&
+      has("expectedAllocUpdatedAt") &&
+      alocacaoDesatualizada({
+        atualUpdatedAt: row.alloc_updated_at,
+        esperadoUpdatedAt: payload.expectedAllocUpdatedAt,
+      })
+    ) {
+      const info = await descreverAlteracaoConcorrente({ row });
+      throw new ConflictError(info.mensagem, {
+        code: "ALLOCATION_CHANGED",
+        alteradoPor: info.alteradoPor,
+        alteradoEm: info.alteradoEm,
+        atual: info.atual,
+        allocUpdatedAt: info.alteradoEm,
+      });
     }
 
     const pinned = row.alloc_pinned === true;
@@ -227,9 +254,14 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
             alloc_updated_by = CASE WHEN $11 THEN $12 ELSE alloc_updated_by END,
             updated_at = now()
         WHERE id = $1
+        RETURNING alloc_updated_at
       `,
       [cargoId, allocMotorista, allocCavalo, allocCarreta, allocStatus, origem, destino, data, horario, lhManual, touchesAlloc, operatorId, descarga, allocTipo, carregamento, allocDescricao, allocVinculo, allocTratativas, allocChecklistCavalo, allocChecklistCarreta],
-    );
+    ).then((r) => {
+      // Carimbo REAL do banco → baseline da próxima edição no front (ver
+      // check-allocation-freshness.js: usar timestamp do cliente geraria falso aviso).
+      allocUpdatedAt = r.rows[0]?.alloc_updated_at ?? null;
+    });
 
     // Reabrir a carga NÃO-reservada: "Disponível" sem motorista → força status=OPEN
     // (volta pro painel do motorista: mesmo gate do portal — OPEN + pública +
@@ -289,7 +321,9 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
         reopened: reopening,
         // `confirmDuplicate` é decisão de UI (o operador confirmou o aviso), não um
         // campo editado — fora da lista de campos tocados.
-        fields: Object.keys(payload).filter((k) => k !== "cargoId" && k !== "confirmDuplicate"),
+        fields: Object.keys(payload).filter(
+          (k) => !["cargoId", "confirmDuplicate", "confirmOverwrite", "expectedAllocUpdatedAt"].includes(k),
+        ),
         // DC-184: antes → depois. SEM cavalo/carreta (placas = sensível "plate"
         // no sanitizeLogPayload; chaves genéricas before/after não são redigidas
         // e vazariam no CSV do DC-186).
@@ -346,6 +380,8 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
         ok: true,
         cargoId,
         rowKey: `cargo:${cargoId}`,
+        // Baseline para a PRÓXIMA edição desta carga (concorrência otimista).
+        allocUpdatedAt: allocUpdatedAt instanceof Date ? allocUpdatedAt.toISOString() : (allocUpdatedAt ?? null),
         cargo: {
           lh: lhManual ?? "",
           motorista: allocMotorista ?? "",

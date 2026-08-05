@@ -34,3 +34,24 @@ export function duplicateAllocationConflicts(e: unknown): AllocationConflict[] {
   const raw = (e as { details?: { conflitos?: unknown } } | null)?.details?.conflitos;
   return Array.isArray(raw) ? (raw as AllocationConflict[]) : [];
 }
+
+// ── Edição simultânea ────────────────────────────────────────────────────────
+
+export const ALLOCATION_CHANGED_CODE = "ALLOCATION_CHANGED";
+
+/**
+ * Outra pessoa alterou esta carga entre o carregamento da tela e o save?
+ * Também confirmável — mesma razão de casar por CÓDIGO e não por status 409.
+ */
+export function isAllocationChangedError(e: unknown): boolean {
+  return (e as { details?: { code?: string } } | null)?.details?.code === ALLOCATION_CHANGED_CODE;
+}
+
+/**
+ * Carimbo que o backend manda no erro para servir de baseline ao reenviar. Sem usá-lo,
+ * confirmar a sobrescrita cairia no MESMO aviso, em loop.
+ */
+export function allocationChangedBaseline(e: unknown): string | null {
+  const raw = (e as { details?: { allocUpdatedAt?: unknown } } | null)?.details?.allocUpdatedAt;
+  return typeof raw === "string" ? raw : null;
+}

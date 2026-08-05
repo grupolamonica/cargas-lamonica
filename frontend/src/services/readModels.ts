@@ -1404,6 +1404,10 @@ export async function updateMonitorAllocation(input: {
   // O operador já viu o aviso de duplicidade (mesmo motorista/placa em outra carga do
   // dia) e confirmou — ver lib/allocationConflict.ts.
   confirmDuplicate?: boolean;
+  /** Carimbo de alloc_updated_at que a TELA viu (concorrência otimista). */
+  expectedAllocUpdatedAt?: string | null;
+  /** O operador viu o aviso de edição simultânea e escolheu sobrescrever. */
+  confirmOverwrite?: boolean;
 }) {
   const accessToken = await getOperatorAccessToken();
   return requestJson<{
@@ -1416,6 +1420,8 @@ export async function updateMonitorAllocation(input: {
       status: string | null;
       source: string;
     };
+    /** Carimbo REAL do banco — baseline da próxima edição desta linha. */
+    allocUpdatedAt: string | null;
     meta: { correlationId: string };
   }>("/api/operator/sheet-monitor", { accessToken, method: "PATCH", body: input });
 }
@@ -1682,6 +1688,10 @@ export interface MonitorCargoUpdate {
   checklistCarreta?: string | null; // verdito do checklist da carreta (Aprovado/Reprovado)
   // O operador já viu o aviso de duplicidade e confirmou — ver lib/allocationConflict.ts.
   confirmDuplicate?: boolean;
+  /** Carimbo de alloc_updated_at que a TELA viu (concorrência otimista). */
+  expectedAllocUpdatedAt?: string | null;
+  /** O operador viu o aviso de edição simultânea e escolheu sobrescrever. */
+  confirmOverwrite?: boolean;
 }
 
 /**
@@ -1695,6 +1705,8 @@ export async function updateMonitorCargo(input: MonitorCargoUpdate) {
     ok: boolean;
     cargoId: string;
     rowKey: string;
+    /** Carimbo REAL do banco — baseline da próxima edição desta carga. */
+    allocUpdatedAt: string | null;
     cargo: {
       lh: string; motorista: string; cavalo: string; carreta: string;
       status: string; origem: string; destino: string;

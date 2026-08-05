@@ -73,6 +73,12 @@ export const sheetMonitorAllocationBodySchema = z.object({
   // dia) e confirmou. Reenvio do mesmo save com esta flag grava. Ver
   // find-allocation-conflicts.js — o aviso nunca bloqueia, só exige a confirmação.
   confirmDuplicate: z.boolean().optional(),
+  // Concorrência otimista: carimbo de `alloc_updated_at` que a TELA viu. Se o do banco
+  // divergir, outra pessoa gravou no meio → 409 acionável. Ausente = sem baseline
+  // (editor inline, aba antiga) → checagem pulada. Ver check-allocation-freshness.js.
+  expectedAllocUpdatedAt: z.string().nullable().optional(),
+  // O operador JÁ viu o aviso de edição simultânea e escolheu sobrescrever.
+  confirmOverwrite: z.boolean().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/reassign — reordenar a fila de
@@ -218,6 +224,12 @@ export const sheetMonitorCargoUpdateBodySchema = z.object({
   // O operador JÁ viu o aviso de duplicidade e confirmou — ver
   // find-allocation-conflicts.js (mesma flag do caminho por LH).
   confirmDuplicate: z.boolean().optional(),
+  // Concorrência otimista: carimbo de `alloc_updated_at` que a TELA viu. Se o do banco
+  // divergir, outra pessoa gravou no meio → 409 acionável. Ausente = sem baseline
+  // (editor inline, aba antiga) → checagem pulada. Ver check-allocation-freshness.js.
+  expectedAllocUpdatedAt: z.string().nullable().optional(),
+  // O operador JÁ viu o aviso de edição simultânea e escolheu sobrescrever.
+  confirmOverwrite: z.boolean().optional(),
 }).strict();
 
 /** Body for POST /api/operator/sheet-monitor/conformity-override — verdito manual de

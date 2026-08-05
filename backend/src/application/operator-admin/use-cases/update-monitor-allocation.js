@@ -3,6 +3,7 @@ import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit
 import { buildAuditChanges } from "../../../domain/operator-admin/audit-diff.js";
 import { ConflictError, NotFoundError } from "../../../domain/load-claims/errors.js";
 import { describeConflicts, duplicateAllocWarnEnabled, findAllocationConflicts } from "./find-allocation-conflicts.js";
+import { alocacaoDesatualizada, concurrentEditWarnEnabled, descreverAlteracaoConcorrente } from "./check-allocation-freshness.js";
 import { writeAllocationsToSheet, formatSheetDateLabel } from "../../google-sheets/sheet-writeback.js";
 import { cancelLoadCascade } from "./cancel-load-cascade.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
@@ -44,6 +45,8 @@ export async function updateMonitorAllocation({ lh, source = null, operatorId, p
   // motorista/veículo precisam sobreviver p/ a cascata poder relocá-los.
   const has = (k) => Object.prototype.hasOwnProperty.call(payload, k);
   const norm = (value) => (value ?? "").toString().trim();
+  // Carimbo pós-gravação, devolvido ao front como baseline da próxima edição.
+  let allocUpdatedAt = null;
 
   const result = await withPgTransaction(async (client) => {
     // Resolve a carga por id da PLANILHA OU por lh_manual (carga do SISTEMA lançada
@@ -61,7 +64,8 @@ export async function updateMonitorAllocation({ lh, source = null, operatorId, p
                 alloc_pinned, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, alloc_tipo,
                 alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta,
                 status, reserved_public_lead_id,
-                origem, destino, data, lh_manual, sheet_data_carregamento, sheet_data_descarga`,
+                origem, destino, data, lh_manual, sheet_data_carregamento, sheet_data_descarga,
+                alloc_updated_at, alloc_updated_by`,
     });
 
     if (!sheetRow) {
@@ -69,6 +73,31 @@ export async function updateMonitorAllocation({ lh, source = null, operatorId, p
       // carga do LH é uma lápide — que deixou de ser aceita como alvo de escrita. É um
       // 404 HONESTO: antes esse mesmo caso gravava na lápide e devolvia 200 OK.
       throw new NotFoundError("Não encontramos a linha desta viagem na planilha. Ela pode ter saído da planilha ou estar cancelada.");
+    }
+
+    // AVISO de edição SIMULTÂNEA: outra pessoa gravou nesta carga entre o momento em
+    // que a tela leu os dados e agora? Checado ANTES de qualquer decisão de campo —
+    // se a linha mudou, os valores pré-preenchidos no formulário do operador já são
+    // de um estado que não existe mais. Ver check-allocation-freshness.js.
+    if (
+      concurrentEditWarnEnabled() &&
+      payload.confirmOverwrite !== true &&
+      Object.prototype.hasOwnProperty.call(payload, "expectedAllocUpdatedAt") &&
+      alocacaoDesatualizada({
+        atualUpdatedAt: sheetRow.alloc_updated_at,
+        esperadoUpdatedAt: payload.expectedAllocUpdatedAt,
+      })
+    ) {
+      const info = await descreverAlteracaoConcorrente({ row: sheetRow });
+      throw new ConflictError(info.mensagem, {
+        code: "ALLOCATION_CHANGED",
+        alteradoPor: info.alteradoPor,
+        alteradoEm: info.alteradoEm,
+        atual: info.atual,
+        // A tela reenvia com este carimbo como baseline ao confirmar — sem isso o
+        // segundo save cairia no MESMO aviso, num loop.
+        allocUpdatedAt: info.alteradoEm,
+      });
     }
 
     // Id REAL da carga resolvida (planilha OU sistema) — usado em todas as
@@ -216,9 +245,15 @@ export async function updateMonitorAllocation({ lh, source = null, operatorId, p
             alloc_updated_by = $6,
             updated_at = now()
         WHERE id = $1
+        RETURNING alloc_updated_at
       `,
       [cargoId, finalMotorista, finalCavalo, finalCarreta, finalStatus, operatorId, finalTipo, finalDescricao, finalVinculo, finalTratativas, finalChecklistCavalo, finalChecklistCarreta],
-    );
+    ).then((r) => {
+      // Carimbo REAL do banco devolvido ao front, que passa a usá-lo como baseline da
+      // próxima edição. Sem isto o front usaria um timestamp gerado no CLIENTE e o
+      // segundo save do mesmo modal sempre acusaria edição simultânea inexistente.
+      allocUpdatedAt = r.rows[0]?.alloc_updated_at ?? null;
+    });
 
     await insertSecurityAuditEvent(client, {
       eventType: "operator.cargo.allocation_updated",
@@ -349,6 +384,8 @@ export async function updateMonitorAllocation({ lh, source = null, operatorId, p
         ok: true,
         lh,
         allocation: { motorista: finalMotorista, cavalo: finalCavalo, carreta: finalCarreta, status: finalStatus, source: "operator" },
+        // Baseline para a PRÓXIMA edição desta linha (concorrência otimista).
+        allocUpdatedAt: allocUpdatedAt instanceof Date ? allocUpdatedAt.toISOString() : (allocUpdatedAt ?? null),
         meta: { correlationId },
       },
       resolvedStatus: finalStatus,
