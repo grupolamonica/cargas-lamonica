@@ -56,7 +56,12 @@ export default defineConfig(({ mode }) => {
     port: 3000,
     allowedHosts: true,
     proxy: {
-      "/api": "http://localhost:3007",
+      // Porta do backend em desenvolvimento. Alinhada com as TRÊS fontes que a
+      // definem: `.claude/launch.json` (port: 3001), `backend/.env` e
+      // `backend/.env.dev` (PORT=3001). Antes apontava para 3007, onde NADA no
+      // repositório escuta — subir `npm run dev` + `npm run dev:clone` dava
+      // ECONNREFUSED em toda chamada /api e a aplicação local não funcionava.
+      "/api": "http://localhost:3001",
       "/ocr-api": {
         target: "http://localhost:8765",
         rewrite: (path) => path.replace(/^\/ocr-api/, ""),
@@ -65,7 +70,7 @@ export default defineConfig(({ mode }) => {
   },
   preview: {
     proxy: {
-      "/api": "http://localhost:3007",
+      "/api": "http://localhost:3001",
       "/ocr-api": {
         target: "http://localhost:8765",
         rewrite: (path) => path.replace(/^\/ocr-api/, ""),

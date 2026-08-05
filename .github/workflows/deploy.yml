@@ -21,6 +21,11 @@ jobs:
   test:
     name: Test + Lint
     runs-on: ubuntu-latest
+    # Sem isto o job herdava o limite PADRÃO do GitHub Actions (6 HORAS). O gate de
+    # teste do frontend já pendurou 20 min no ci.yml em 05/08 (processo do vitest não
+    # encerrando, não teste estourando limite) — aqui o mesmo travamento seguraria o
+    # DEPLOY, que é o caminho de produção, por até 6h antes de liberar o runner.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -50,6 +55,7 @@ jobs:
         working-directory: backend
 
       - name: Test frontend
+        timeout-minutes: 8
         run: npm run test -- --run
         working-directory: frontend
         env:
@@ -61,6 +67,7 @@ jobs:
           VITE_API_BASE_URL: https://ci.placeholder.invalid
 
       - name: Test backend
+        timeout-minutes: 8
         run: npm run test -- --run
         working-directory: backend
         env:

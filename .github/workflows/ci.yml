@@ -61,7 +61,19 @@ jobs:
         working-directory: backend
 
       # ── Test ─────────────────────────────────────────────────────────────
+      # timeout-minutes no PASSO, não só no job: em 05/08 este passo PENDUROU e
+      # consumiu os 20 min do job inteiro, então "Test backend", "Build frontend" e
+      # "Build backend" nem rodaram — o PR ficou vermelho sem informação sobre o
+      # resto. Não é teste estourando limite (vitest.config.ts já tem testTimeout de
+      # 15s, que falharia o teste individual): é o processo do vitest não encerrando.
+      # A mesma suíte passa em ~71s localmente (74 arquivos, 477 testes) e passou em
+      # 2m29s na re-execução, então o travamento é intermitente e não foi reproduzido
+      # fora do CI. Este limite não corrige a causa — corta o desperdício e deixa a
+      # falha atribuível ao passo certo. Se voltar a acontecer, o próximo passo é
+      # trocar o pool do vitest para `forks` (worker travado passa a ser matável) ou
+      # bissectar com --no-file-parallelism.
       - name: Test frontend
+        timeout-minutes: 8
         run: npm test --if-present
         working-directory: frontend
         env:
@@ -72,6 +84,7 @@ jobs:
           VITE_API_BASE_URL: https://ci.placeholder.invalid
 
       - name: Test backend
+        timeout-minutes: 8
         run: npm test --if-present
         working-directory: backend
         env:
