@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   mapSystemCargoToMonitorRow,
   listSystemCargasForMonitor,
@@ -693,5 +693,87 @@ describe("listSystemCargasForMonitor: lançada não aceita sai do Monitor", () =
     await expect(listSystemCargasForMonitor(api, { pageSize: 1, maxRows: 2 })).rejects.toMatchObject({ code: "42703" });
     // 1 tentativa inicial + 4 opcionais desligadas uma a uma = 5, e para.
     expect(api._attempts.filter((a) => a.table === "cargas").length).toBe(5);
+  });
+
+  // O cenário do DEPLOY REAL, e o único que faltava: as DUAS opcionais de aceite
+  // ausentes na mesma leitura. Produção hoje não tem `trip_acceptance_checked_at`
+  // (20260806150000) e um banco um pouco mais atrasado também não tem
+  // `trip_accepted_at` (20260805170000) — as duas caem, uma por tentativa, e nada
+  // além delas pode cair junto (a cadeia de fallbacks já derrubou o filtro errado uma
+  // vez; esta é a versão com duas quedas encadeadas).
+  it("banco sem AS DUAS colunas de aceite: derruba só elas e a lançada inerte VOLTA visível", async () => {
+    let served = false;
+    const err = (col) => ({ data: null, error: { code: "42703", message: `column cargas.${col} does not exist` } });
+    const api = recordingClient((at) => {
+      // "trip_acceptance_checked_at" NÃO contém "trip_accepted_at": o prefixo comum
+      // não confunde nem o fake nem o `blamedOptionalColumn`.
+      if (at.cols.includes("trip_accepted_at")) return err("trip_accepted_at");
+      if (at.cols.includes("trip_acceptance_checked_at")) return err("trip_acceptance_checked_at");
+      if (served) return { data: [], error: null };
+      served = true;
+      // Fixture HOSTIL de propósito: lançada Shopee OPEN, inerte e com evidência
+      // FRESCA de não-aceite. Com o filtro ligado ela sumiria — é ela que prova que
+      // faltando as colunas o filtro fica desligado por INTEIRO.
+      return {
+        data: [{
+          id: "a", origem: "A", destino: "B", data: "2026-08-10", horario: "08:00:00",
+          status: "OPEN", lh_manual: "LT-1", cliente_id: "cli-shopee",
+          trip_accepted_at: null, trip_acceptance_checked_at: horasAtras(1),
+        }],
+        error: null,
+      };
+    });
+
+    const rows = await listSystemCargasForMonitor(api, { pageSize: 1, maxRows: 3 });
+    expect(rows.map((r) => r.cargoId)).toEqual(["a"]); // dado ausente não esconde linha
+
+    const cargas = api._attempts.filter((a) => a.table === "cargas");
+    const final = cargas.at(-1);
+    // Só as duas NOMEADAS saíram do SELECT...
+    expect(final.cols).not.toContain("trip_accepted_at");
+    expect(final.cols).not.toContain("trip_acceptance_checked_at");
+    // ...`agenda_a_confirmar` seguiu pedida (duas quedas não viram efeito dominó)...
+    expect(final.cols).toContain("agenda_a_confirmar");
+    // ...e o filtro do "fora do ASPX" continuou aplicado em TODAS as tentativas.
+    for (const a of cargas) expect(a.isCalls).toContainEqual(["aspx_missing_since", null]);
+  });
+
+  // A degradação era 100% SILENCIOSA: um banco sem a migration ficava indistinguível
+  // de um banco saudável, e o Monitor podia rodar semanas com o filtro de aceite
+  // desligado sem ninguém notar. O aviso é o que transforma "some do log" em
+  // "alguém roda o migrate".
+  it("coluna faltando EMITE aviso: UMA vez na leitura inteira, com nome e efeito", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      let pagina = 0;
+      const api = recordingClient((at) => {
+        if (at.cols.includes("trip_acceptance_checked_at")) {
+          return { data: null, error: { code: "42703", message: "column cargas.trip_acceptance_checked_at does not exist" } };
+        }
+        pagina += 1;
+        // Duas páginas cheias antes de esgotar: se o aviso saísse por página (e não
+        // por leitura), viriam três — `optional` é compartilhado justamente p/ isso.
+        return {
+          data: pagina <= 2
+            ? [{ id: `p${pagina}`, origem: "A", destino: "B", data: "2026-08-10", horario: "08:00:00" }]
+            : [],
+          error: null,
+        };
+      });
+
+      const rows = await listSystemCargasForMonitor(api, { pageSize: 1, maxRows: 5 });
+      expect(rows.map((r) => r.cargoId)).toEqual(["p1", "p2"]);
+      expect(api._attempts.filter((a) => a.table === "cargas").length).toBe(4); // 1 falha + 3 páginas
+
+      const avisos = warn.mock.calls.filter(([msg]) =>
+        String(msg).includes("list-system-cargas-monitor.optional-column-missing"),
+      );
+      expect(avisos).toHaveLength(1);
+      expect(avisos[0][1]).toMatchObject({ coluna: "trip_acceptance_checked_at", atribuicao: "nome" });
+      // O efeito NA TELA vai no log — quem lê o alerta não deve precisar do código.
+      expect(avisos[0][1].efeito).toContain("filtro de aceite desligado");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

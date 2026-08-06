@@ -8,6 +8,7 @@
 // canônicas da carga. lh = lh_manual (editável no grid).
 
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
+import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 import { nestleClientNameCandidates, normalizeClientName } from "./_shared.js";
 
 // Colunas que existem em qualquer banco onde este read model roda.
@@ -328,9 +329,15 @@ async function fetchCargoIdsWithLiveLead(supabaseClient, candidateIds) {
  * (o read do Monitor trata como não-fatal).
  *
  * @param {object} supabaseClient
- * @param {{ pageSize?: number, maxRows?: number }} [opts]
+ * @param {{ pageSize?: number, maxRows?: number, correlationId?: string|null }} [opts]
+ *   `correlationId` é OPCIONAL e só viaja para o log de degradação (nenhum chamador
+ *   atual o passa — handlers.js e sheet-monitor-enrichment.js chamam com o client
+ *   sozinho; o parâmetro existe para quem quiser costurar o rastro depois).
  */
-export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 1000, maxRows = 10000 } = {}) {
+export async function listSystemCargasForMonitor(
+  supabaseClient,
+  { pageSize = 1000, maxRows = 10000, correlationId = null } = {},
+) {
   // Mapa cliente_id→nome (tabela pequena) p/ exibir o cliente de cada carga.
   // Best-effort: sem clientes, o cliente da linha fica null.
   const clientesById = {};
@@ -394,8 +401,8 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
     // Cada tentativa desliga NO MÁXIMO uma coluna opcional — a que o erro acusa — e
     // repete. O laço termina porque só desliga o que ainda estava ligado (4 no pior
     // caso) e `optional` é compartilhado entre as páginas: a degradação acontece uma
-    // vez só na leitura inteira.
-    while (error && disableBlamedOptionalColumn(error, optional)) {
+    // vez só na leitura inteira (e por isso o aviso também sai uma vez por coluna).
+    while (error && disableBlamedOptionalColumn(error, optional, correlationId)) {
       ({ data, error } = await page(from));
     }
     if (error) throw error;
@@ -445,9 +452,23 @@ const OPTIONAL_COLUMNS = [
   "trip_acceptance_checked_at",
 ];
 
+/** O que MUDA NA TELA quando cada opcional é desligada. Vai junto no aviso porque
+ *  quem lê o log às 3h da manhã precisa do efeito, não do nome da migration: o texto
+ *  é a diferença entre "coluna ausente" (ruído) e "o Monitor está sem o filtro de
+ *  aceite" (ação). */
+const OPTIONAL_COLUMN_EFFECT = {
+  aspx_missing_since: "filtro 'fora do ASPX' desligado: viagem que saiu do ASPX volta ao Monitor",
+  agenda_a_confirmar: "agenda 'A confirmar' deixa de ser exceção: volta o corte puro por data/hora",
+  trip_accepted_at: "filtro de aceite desligado: lançada Shopee não aceita continua no Monitor",
+  trip_acceptance_checked_at: "filtro de aceite desligado: lançada Shopee não aceita continua no Monitor",
+};
+
 /**
  * Qual coluna OPCIONAL (ainda ligada) este erro acusa como ausente — ou null se o
- * erro não é "coluna opcional faltando" e deve subir.
+ * erro não é "coluna opcional faltando" e deve subir. Retorna `{ column, atribuicao }`:
+ * `atribuicao` distingue o diagnóstico FIRME (o PostgREST nomeou a coluna) do palpite
+ * pela ordem, e essa diferença vai para o log — degradar por palpite merece outro
+ * grau de suspeita de quem lê.
  *
  * O desenho anterior tinha um atalho por CÓDIGO: `aspx_missing_since` casava qualquer
  * 42703, e por ser o primeiro elo da cadeia engolia a falta das OUTRAS opcionais. No
@@ -468,15 +489,35 @@ function blamedOptionalColumn(error, optional) {
   if (!error) return null;
   const msg = String(error.message ?? "").toLowerCase();
   const named = OPTIONAL_COLUMNS.find((col) => optional[col] && msg.includes(col));
-  if (named) return named;
+  if (named) return { column: named, atribuicao: "nome" };
   if (String(error.code ?? "") !== "42703") return null;
-  return OPTIONAL_COLUMNS.find((col) => optional[col]) ?? null;
+  const porOrdem = OPTIONAL_COLUMNS.find((col) => optional[col]);
+  return porOrdem ? { column: porOrdem, atribuicao: "ordem" } : null;
 }
 
-/** Desliga a opcional acusada pelo erro. `true` = vale repetir a query. */
-function disableBlamedOptionalColumn(error, optional) {
-  const col = blamedOptionalColumn(error, optional);
-  if (!col) return false;
-  optional[col] = false;
+/**
+ * Desliga a opcional acusada pelo erro e AVISA. `true` = vale repetir a query.
+ *
+ * O aviso é o ponto todo: até aqui a degradação era 100% silenciosa, e um banco sem a
+ * migration ficava indistinguível de um banco saudável — o Monitor rodava semanas com o
+ * filtro de aceite desligado e ninguém tinha como saber. O caso não é hipotético:
+ * `trip_acceptance_checked_at` NÃO existe em produção hoje (migration é manual, deploy
+ * é automático no merge), então este evento sai na primeira leitura pós-deploy e é ele
+ * que lembra de rodar o migrate.
+ *
+ * Um evento POR COLUNA POR LEITURA, nunca por página: `optional` é compartilhado entre
+ * as páginas e só se desliga o que ainda estava ligado, então a contagem é estrutural —
+ * no pior caso 4 linhas de log por leitura, não 4 por página.
+ */
+function disableBlamedOptionalColumn(error, optional, correlationId = null) {
+  const blamed = blamedOptionalColumn(error, optional);
+  if (!blamed) return false;
+  optional[blamed.column] = false;
+  logStructuredEvent("warn", "list-system-cargas-monitor.optional-column-missing", {
+    correlationId,
+    coluna: blamed.column,
+    atribuicao: blamed.atribuicao,
+    efeito: OPTIONAL_COLUMN_EFFECT[blamed.column] ?? "leitura degradada",
+  });
   return true;
 }
