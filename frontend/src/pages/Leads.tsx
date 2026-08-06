@@ -1,7 +1,7 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { AlertTriangle, Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Download, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User, UserPlus } from "lucide-react";
+import { AlertTriangle, Ban, BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Clock, Download, Loader2, MessageCircle, Phone, Route, Search, ShieldCheck, Truck, User, UserPlus, Users, UserX } from "lucide-react";
 import { differenceInDays, format } from "date-fns";
 import { toast } from "sonner";
 
@@ -78,6 +78,31 @@ function LoadStatusBadge({ status }: { status: string }) {
 
 interface LeadsProps {
   historicoMode?: boolean;
+}
+
+/**
+ * Casa um lead contra tokens de busca — mesma base de campos usada na lista.
+ * Extraído para ser compartilhado entre o filtro da lista e os contadores
+ * Com/Sem fila (DC-289), evitando duas cópias que poderiam divergir.
+ */
+function leadMatchesSearchTokens(lead: OperatorLeadGroup["leads"][number], tokens: string[]): boolean {
+  if (!tokens.length) return true;
+  const leadText = [
+    lead.id,
+    lead.status,
+    lead.phone,
+    lead.cpf,
+    lead.horsePlate,
+    lead.trailerPlate,
+    lead.trailerPlate2,
+    lead.vehicleType,
+    lead.validation?.overallStatus,
+    ...(lead.validation?.warnings || []),
+  ]
+    .filter((value) => value != null)
+    .join(" ")
+    .toLowerCase();
+  return tokens.some((token) => leadText.includes(token));
 }
 
 const LEADS_QUERY_KEY = ["operator", "public-load-leads"];
@@ -358,88 +383,65 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
       return next.length === prev.length ? prev : next;
     });
   }, [routeOptions]);
+  // Busca casa QUALQUER token separado por vírgula — usado pelo deep-link do alerta
+  // da fila (setSearch com N carga_ids) p/ mostrar TODAS as cargas do alerta.
+  // Digitação normal (sem vírgula) = 1 token = comportamento anterior.
+  const searchTokens = useMemo(
+    () => (deferredSearch ? deferredSearch.split(",").map((t) => t.trim()).filter(Boolean) : []),
+    [deferredSearch],
+  );
+
+  // DC-289: predicado de nível-carga — tudo que NÃO depende de candidatura, do
+  // status do lead, nem da regra de esconder cargas vazias. Compartilhado pela
+  // lista (filteredGroups) e pelos contadores Com/Sem fila (filaCounts) para os
+  // dois nunca divergirem. Retorna também se a busca casou no texto da carga.
+  const passesLoadFilters = useCallback(
+    (group: OperatorLeadGroup): { included: boolean; loadMatchesSearch: boolean } => {
+      const miss = { included: false, loadMatchesSearch: false };
+      const isTerminal = TERMINAL_LOAD_STATUSES.includes(group.load.status);
+      // Fila ativa oculta cargas terminais; Historico mostra so elas (por padrao).
+      if (!historicoMode && isTerminal) return miss;
+      if (historicoMode && !isTerminal && loadStatusFilter === "todos") return miss;
+
+      const sheetAllocForFilter = group.load.sheetLh ? sheetAllocationByLh.get(group.load.sheetLh) : undefined;
+      const effectiveStatusForFilter = sheetAllocForFilter?.status || group.load.sheetStatus || group.load.status;
+      if (loadStatusFilter !== "todos" && effectiveStatusForFilter !== loadStatusFilter) return miss;
+
+      // Filtro por rota (multi-seleção, igual ao Monitor).
+      if (routeFilter.length && !routeFilter.includes(routeKeyOf(group.load))) return miss;
+
+      // Faixas de data (carregamento/descarga). buildLoadingDateTime normaliza a
+      // data da carga (cargas.data chega como ISO com Z do container UTC) e cai
+      // p/ o rótulo da planilha — mesmo caminho da tela de Links.
+      const carregamentoValue = buildLoadingDateTime(group.load.sheetDataCarregamento, group.load.data, group.load.horario);
+      if (!matchesCargoDateRange(carregamentoValue, group.load.sheetDataDescarga, dateRange)) return miss;
+
+      const loadText = [group.load.id, group.load.sheetLh, group.load.origem, group.load.destino, group.load.perfil, group.load.status]
+        .join(" ")
+        .toLowerCase();
+      const loadMatchesSearch = !searchTokens.length || searchTokens.some((t) => loadText.includes(t));
+      return { included: true, loadMatchesSearch };
+    },
+    [historicoMode, loadStatusFilter, sheetAllocationByLh, routeFilter, dateRange, searchTokens],
+  );
+
   const filteredGroups = useMemo(() => {
-    // Busca casa QUALQUER token separado por vírgula — usado pelo deep-link do alerta da
-    // fila (setSearch com N carga_ids) p/ mostrar TODAS as cargas do alerta. Digitação
-    // normal (sem vírgula) = 1 token = comportamento anterior.
-    const searchTokens = deferredSearch ? deferredSearch.split(",").map((t) => t.trim()).filter(Boolean) : [];
     return groups
       .map((group) => {
-        const isTerminal = TERMINAL_LOAD_STATUSES.includes(group.load.status);
-        // Fila ativa oculta cargas terminais; Hist\u00f3rico mostra s\u00f3 elas (por padr\u00e3o).
-        if (!historicoMode && isTerminal) {
+        const { included, loadMatchesSearch } = passesLoadFilters(group);
+        if (!included) {
           return null;
         }
-        if (historicoMode && !isTerminal && loadStatusFilter === "todos") {
-          return null;
-        }
-
-        const sheetAllocForFilter = group.load.sheetLh ? sheetAllocationByLh.get(group.load.sheetLh) : undefined;
-        const effectiveStatusForFilter = sheetAllocForFilter?.status || group.load.sheetStatus || group.load.status;
-        const matchesLoadStatus = loadStatusFilter === "todos" || effectiveStatusForFilter === loadStatusFilter;
-
-        if (!matchesLoadStatus) {
-          return null;
-        }
-
-        // Filtro por rota (multi-seleção, igual ao Monitor).
-        if (routeFilter.length && !routeFilter.includes(routeKeyOf(group.load))) {
-          return null;
-        }
-
-        // Faixas de data (carregamento/descarga). buildLoadingDateTime normaliza a
-        // data da carga (cargas.data chega como ISO com Z do container UTC) e cai
-        // p/ o rótulo da planilha — mesmo caminho da tela de Links.
-        const carregamentoValue = buildLoadingDateTime(
-          group.load.sheetDataCarregamento,
-          group.load.data,
-          group.load.horario,
-        );
-        if (!matchesCargoDateRange(carregamentoValue, group.load.sheetDataDescarga, dateRange)) {
-          return null;
-        }
-
-        const loadText = [
-          group.load.id,
-          group.load.sheetLh,
-          group.load.origem,
-          group.load.destino,
-          group.load.perfil,
-          group.load.status,
-        ]
-          .join(" ")
-          .toLowerCase();
-
-        const loadMatchesSearch = !searchTokens.length || searchTokens.some((t) => loadText.includes(t));
 
         const leads = group.leads.filter((lead) => {
           const matchesLeadStatus = leadStatusFilter === "todos" || lead.status === leadStatusFilter;
-
           if (!matchesLeadStatus) {
             return false;
           }
-
-          if (!searchTokens.length || loadMatchesSearch) {
+          if (loadMatchesSearch) {
             return true;
           }
-
-          const leadText = [
-            lead.id,
-            lead.status,
-            lead.phone,
-            lead.cpf,
-            lead.horsePlate,
-            lead.trailerPlate,
-            lead.trailerPlate2,
-            lead.vehicleType,
-            lead.validation?.overallStatus,
-            ...(lead.validation?.warnings || []),
-          ]
-            .filter((v) => v != null)
-            .join(" ")
-            .toLowerCase();
-
-          return searchTokens.some((t) => leadText.includes(t));
+          return leadMatchesSearchTokens(lead, searchTokens);
         });
 
         // Cargas SEM candidatura: por padrão escondidas. Exceção DC-257 — carga
@@ -461,7 +463,16 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
             !isMultiStopPacote &&
             // DC-272: "só com candidatura" esconde as cargas OPEN vazias.
             candidaturaFilter !== "com";
-          if (!showEmptyOpen) {
+          // DC-289: "Só sem candidatura" revela TODAS as cargas vazias do escopo
+          // (inclusive não-OPEN, ex.: reservadas sem lead), para casar com o
+          // contador "Sem fila" — que conta o escopo inteiro, não só as OPEN.
+          const showEmptySemFilter =
+            candidaturaFilter === "sem" &&
+            !historicoMode &&
+            leadStatusFilter === "todos" &&
+            loadMatchesSearch &&
+            !isMultiStopPacote;
+          if (!showEmptyOpen && !showEmptySemFilter) {
             return null;
           }
           return { ...group, leads: [], queueCount: 0, totalLeads: 0 };
@@ -486,7 +497,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
         };
       })
       .filter((group): group is OperatorLeadGroup => Boolean(group));
-  }, [groups, deferredSearch, loadStatusFilter, leadStatusFilter, candidaturaFilter, historicoMode, sheetAllocationByLh, routeFilter, dateRange]);
+  }, [groups, passesLoadFilters, searchTokens, leadStatusFilter, candidaturaFilter, historicoMode]);
 
   const filteredByCliente = useMemo(() =>
     clienteFilter
@@ -728,6 +739,37 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
     );
   }, [filteredByCliente]);
 
+  // DC-289: contagem de cargas COM candidatura vs SEM, no mesmo escopo/filtros da
+  // lista, EXCETO o próprio filtro de candidatura (senão clicar "Com" zeraria
+  // "Sem"). "com" = a carga tem ≥1 candidatura (leads crus, mesma base do dropdown
+  // DC-272); "sem" = 0. Conta o escopo inteiro — inclusive cargas vazias não-OPEN
+  // (por isso clicar em "Sem fila" as revela). Pernas vazias de viagem casada não
+  // são cards avulsos, logo não entram. Invariante: com + sem = total do escopo.
+  const filaCounts = useMemo(() => {
+    let com = 0;
+    let sem = 0;
+    for (const group of groups) {
+      if (clienteFilter && group.load.clienteId !== clienteFilter) continue;
+      const { included, loadMatchesSearch } = passesLoadFilters(group);
+      if (!included) continue;
+      if (group.leads.length > 0) {
+        // Com fila: a carga entra se a busca casar no texto da carga OU em algum lead
+        // (mesma regra de inclusão da lista para cargas com candidatura).
+        const matchesSearch =
+          loadMatchesSearch || group.leads.some((lead) => leadMatchesSearchTokens(lead, searchTokens));
+        if (!matchesSearch) continue;
+        com += 1;
+      } else {
+        const isMultiStopPacote =
+          Boolean(group.load.viagemId) && (group.load.pacoteMeta?.totalCargas ?? 1) > 1;
+        if (isMultiStopPacote) continue;
+        if (!loadMatchesSearch) continue;
+        sem += 1;
+      }
+    }
+    return { com, sem, total: com + sem };
+  }, [groups, clienteFilter, passesLoadFilters, searchTokens]);
+
   const handleApprove = async (loadId: string, leadId: string, validation?: PublicLeadValidationSummary | null) => {
     const ovs = validation?.overallStatus;
     const WARN_STATUSES = ["INVALID", "NOT_FOUND", "PLATE_MISMATCH", "INCOMPLETE"];
@@ -941,7 +983,7 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
               </p>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-5">
               <div className="admin-soft-panel flex items-center gap-3 px-4 py-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/10 text-primary">
                   <Route className="h-4 w-4" />
@@ -971,6 +1013,51 @@ const Leads = ({ historicoMode = false }: LeadsProps = {}) => {
                   <p className="text-sm font-semibold text-foreground">{summary.approved}</p>
                 </div>
               </div>
+
+              {/* DC-289 — indicadores clicáveis Com/Sem fila (só na Fila ativa). O
+                  clique alterna o filtro de candidatura (todas ↔ com/sem), reusando
+                  o mesmo estado do dropdown "Com/Só com/Só sem candidatura". */}
+              {!historicoMode ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setCandidaturaFilter((prev) => (prev === "com" ? "todas" : "com"))}
+                    aria-pressed={candidaturaFilter === "com"}
+                    title="Cargas com ao menos 1 candidatura na fila — clique para filtrar"
+                    className={cn(
+                      "admin-soft-panel flex items-center gap-3 px-4 py-3 text-left transition-all duration-200 hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
+                      candidaturaFilter === "com" && "outline outline-2 -outline-offset-1 outline-sky-500/60 ring-2 ring-sky-500/15",
+                    )}
+                  >
+                    <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sky-500/12 text-sky-700 dark:text-sky-300">
+                      <Users className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Com fila</p>
+                      <p className="text-sm font-semibold text-foreground">{filaCounts.com}</p>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setCandidaturaFilter((prev) => (prev === "sem" ? "todas" : "sem"))}
+                    aria-pressed={candidaturaFilter === "sem"}
+                    title="Cargas sem nenhuma candidatura na fila — clique para filtrar"
+                    className={cn(
+                      "admin-soft-panel flex items-center gap-3 px-4 py-3 text-left transition-all duration-200 hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
+                      candidaturaFilter === "sem" && "outline outline-2 -outline-offset-1 outline-amber-500/60 ring-2 ring-amber-500/15",
+                    )}
+                  >
+                    <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/12 text-amber-700 dark:text-amber-300">
+                      <UserX className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">Sem fila</p>
+                      <p className="text-sm font-semibold text-foreground">{filaCounts.sem}</p>
+                    </div>
+                  </button>
+                </>
+              ) : null}
             </div>
           </div>
 
