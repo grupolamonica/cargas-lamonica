@@ -10,16 +10,27 @@
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 import { nestleClientNameCandidates, normalizeClientName } from "./_shared.js";
 
-const SELECT_COLS =
-  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, sheet_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta, alloc_pinned, status, driver_visibility, lh_manual, agenda_a_confirmar, cliente_id, sheet_source, trip_accepted_at";
-// Mesmo SELECT sem `agenda_a_confirmar` — usado no fallback de banco sem a coluna
-// (migration 20260717210000): a fonte "sistema" do Monitor não pode cair só por isso.
-const SELECT_COLS_SEM_AGENDA = SELECT_COLS.replace(" agenda_a_confirmar,", "");
-// Idem para `trip_accepted_at` (migration 20260805170000). Sem a coluna, o filtro de
-// "lançada não aceita" é DESLIGADO por inteiro — nunca aplicado com aceite undefined,
-// que esconderia tudo. Degradação = comportamento anterior, não perda de linha.
-const SELECT_COLS_SEM_ACEITE = SELECT_COLS.replace(", trip_accepted_at", "");
-const SELECT_COLS_SEM_AGENDA_SEM_ACEITE = SELECT_COLS_SEM_AGENDA.replace(", trip_accepted_at", "");
+// Colunas que existem em qualquer banco onde este read model roda.
+const SELECT_COLS_BASE =
+  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, sheet_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta, alloc_pinned, status, driver_visibility, lh_manual, cliente_id, sheet_source";
+
+/** Monta o SELECT com as colunas OPCIONAIS que o banco tiver — cada uma depende de
+ *  uma migration que pode ainda não ter sido aplicada (deploy antes do migrate):
+ *  `agenda_a_confirmar` (20260717210000), `trip_accepted_at` (20260805170000) e
+ *  `trip_acceptance_checked_at` (20260806150000).
+ *
+ *  Compor a lista em vez de derivar constantes por `.replace()` encadeado: com três
+ *  opcionais seriam 8 constantes, e a substituição de `", trip_accepted_at"` passa a
+ *  conviver com o token `", trip_acceptance_checked_at"` — o tipo de acoplamento
+ *  frágil que quebra em silêncio (e aqui "quebrar em silêncio" significa esconder
+ *  carga do operador). */
+function buildSelectCols({ agendaAConfirmar, tripAccepted, acceptanceChecked }) {
+  const cols = [SELECT_COLS_BASE];
+  if (agendaAConfirmar) cols.push("agenda_a_confirmar");
+  if (tripAccepted) cols.push("trip_accepted_at");
+  if (acceptanceChecked) cols.push("trip_acceptance_checked_at");
+  return cols.join(", ");
+}
 
 // Leads que ainda podem virar reserva. Carga com um deles é carga que um motorista
 // pediu — nunca some da tela do operador, aceite ou não.
@@ -162,6 +173,44 @@ export function isHideUnacceptedLaunchedEnabled() {
   return String(process.env.MONITOR_HIDE_UNACCEPTED_LAUNCHED ?? "").trim().toLowerCase() !== "false";
 }
 
+// Validade da EVIDÊNCIA de aceite, em horas. Observação velha não é observação: vira
+// desconhecido e a linha volta a aparecer.
+const DEFAULT_ACCEPTANCE_EVIDENCE_TTL_HOURS = 24;
+
+/** TTL da evidência (MONITOR_ACCEPTANCE_EVIDENCE_TTL_HOURS, default 24h). Valor não
+ *  numérico, zero ou negativo cai no default — env mal preenchido não pode virar
+ *  "esconde para sempre" nem "nunca esconde". Padrão da casa (ver routeStepConfig em
+ *  detect-aspx-missing-trips.js). */
+export function acceptanceEvidenceTtlHours() {
+  const n = Number(process.env.MONITOR_ACCEPTANCE_EVIDENCE_TTL_HOURS);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_ACCEPTANCE_EVIDENCE_TTL_HOURS;
+}
+
+/**
+ * A evidência de não-aceite ainda vale? `trip_acceptance_checked_at` é a ÚLTIMA
+ * observação conclusiva, e o job só a regrava quando ela passa de 60 min (para não
+ * abrir tempestade de UPDATE/realtime — o codebase tem cicatriz disso). Logo, carga
+ * ativamente observada tem evidência de no máximo ~1h e o TTL de 24h nunca a alcança.
+ *
+ * Quem o TTL alcança é a carga que SAIU do recorte do job. Caso real levantado na
+ * revisão: LT com carregamento hoje às 10:00, observada "não aceita" às 09:50 (Monitor
+ * esconde), fora do recorte às 10:01, e o motorista aceita direto no portal SPX às
+ * 10:30. Sem TTL essa carga fica aceita, viva e PERMANENTEMENTE invisível para o
+ * operador — no dia em que mais importa. Com TTL, a evidência expira e a linha volta.
+ *
+ * Data ilegível conta como sem evidência: dado duvidoso nunca esconde linha.
+ * Fronteira: exatamente TTL de idade ainda vale; mais velho que isso, não.
+ */
+export function isAcceptanceEvidenceFresh(
+  checkedAt,
+  { nowMs = Date.now(), ttlHours = acceptanceEvidenceTtlHours() } = {},
+) {
+  if (!checkedAt) return false;
+  const t = checkedAt instanceof Date ? checkedAt.getTime() : Date.parse(String(checkedAt));
+  if (!Number.isFinite(t)) return false;
+  return nowMs - t <= ttlHours * 3600_000;
+}
+
 /** Ids dos clientes Nestlé no mapa id→nome do Monitor. A comparação é por nome
  *  normalizado (sem acento/caixa) contra os candidatos do env + históricos — NUNCA
  *  por literal cravado: o operador renomeia o cliente na tela (em 30/07 "Nestlé"
@@ -191,23 +240,57 @@ function isNestleCargo(c, nestleClientIds) {
  * INSERT e este read model o ignoravam, então toda lançada não-aceita entrava no
  * Monitor por construção (94 linhas em 05/08/2026, 93% da fonte SISTEMA).
  *
- * Guardas — some SÓ o que está inerte. Qualquer sinal de vida mantém a linha:
+ * O primeiro desenho (PR #457) leu `trip_accepted_at IS NULL` como "ninguém
+ * aceitou" — e isso foi um erro caro, medido em 06/08/2026: das 92 lançadas vivas,
+ * 82 tinham a coluna NULL e 79 haviam sido CRIADAS antes de a coluna existir. O
+ * silêncio virou veredito e sumiram 39-50 linhas da fonte SISTEMA, 26 delas ABERTAS
+ * no portal /motorista — o motorista podia aceitar uma carga que o operador já não
+ * enxergava. Some-se que o aceite feito direto no portal SPX nunca chega ao banco
+ * (0 cargas "LT…" marcadas, 0 eventos de aceite desde 05/08): o marcador sozinho é
+ * estruturalmente perdedor.
+ *
+ * Hoje o aceite é FATO OBSERVADO, em duas colunas: `trip_accepted_at` (vimos aceita)
+ * e `trip_acceptance_checked_at` (ÚLTIMA vez que olhamos o SPX ao vivo por este LH com
+ * resposta conclusiva — migration 20260806150000). Só há EVIDÊNCIA de não-aceite quando
+ * checamos RECENTEMENTE e não achamos aceite; nunca checado é DESCONHECIDO, evidência
+ * mais velha que o TTL volta a ser DESCONHECIDO, e desconhecido não esconde. Isso
+ * dispensa corte por data (a lançada antiga nunca foi checada, então fica) e deixa o
+ * sinal se auto-curar a cada passada do job.
+ *
+ * Guardas — some SÓ o que está inerte E com evidência. Qualquer sinal de vida (ou de
+ * dúvida) mantém a linha:
  *   1. sem `lh_manual` → não é carga lançada (carga manual/recorrente do operador);
  *   2. `trip_accepted_at` → viagem aceita: frete comprometido, fica mesmo sem motorista;
- *   3. ciclo ≠ OPEN → alguém já agiu (RESERVED/BOOKED/CANCELLED);
- *   4. motorista alocado;
- *   5. status operacional (override do operador ou espelho do portal) preenchido;
- *   6. lead vivo na fila (QUEUED/APPROVED) — motorista pediu a carga;
- *   7. Nestlé → fora do escopo (só Shopee, por decisão do operador).
+ *   3. `trip_acceptance_checked_at` ausente OU mais VELHO que o TTL → aceite
+ *      DESCONHECIDO (nunca observamos este LH, ou a última observação já não vale), fica;
+ *   4. ciclo ≠ OPEN → alguém já agiu (RESERVED/BOOKED/CANCELLED);
+ *   5. motorista alocado;
+ *   6. status operacional (override do operador ou espelho do portal) preenchido;
+ *   7. lead vivo na fila (QUEUED/APPROVED) — motorista pediu a carga;
+ *   8. Nestlé → fora do escopo (só Shopee, por decisão do operador).
  *
  * Puro/testável.
  *
  * @param {object} c linha crua de `cargas`
- * @param {{ nestleClientIds?: Set<string>, cargoIdsWithLiveLead?: Set<string> }} ctx
+ * @param {{ nestleClientIds?: Set<string>, cargoIdsWithLiveLead?: Set<string>,
+ *          nowMs?: number, ttlHours?: number }} ctx
  */
-export function isUnacceptedLaunchedShopeeCargo(c, { nestleClientIds = new Set(), cargoIdsWithLiveLead = new Set() } = {}) {
+export function isUnacceptedLaunchedShopeeCargo(
+  c,
+  {
+    nestleClientIds = new Set(),
+    cargoIdsWithLiveLead = new Set(),
+    nowMs = Date.now(),
+    ttlHours = acceptanceEvidenceTtlHours(),
+  } = {},
+) {
   if (!String(c.lh_manual ?? "").trim()) return false;
   if (c.trip_accepted_at) return false;
+  // Sem observação conclusiva RECENTE não há evidência de não-aceite — e dado ausente,
+  // duvidoso ou VELHO nunca esconde linha. Cobre de uma vez a lançada antiga (anterior
+  // às colunas), a que o job ainda não visitou, a que o SPX respondeu inconclusivo e a
+  // que saiu do recorte do job depois de uma única observação (ver isAcceptanceEvidenceFresh).
+  if (!isAcceptanceEvidenceFresh(c.trip_acceptance_checked_at, { nowMs, ttlHours })) return false;
   if (String(c.status ?? "").trim().toUpperCase() !== "OPEN") return false;
   if (String(c.alloc_motorista ?? "").trim()) return false;
   if (String(c.alloc_status ?? c.sheet_status ?? "").trim()) return false;
@@ -263,22 +346,30 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
   const { dateIso, timeIso } = getSaoPauloWallClock();
   const now = { todayIso: dateIso, nowTimeIso: timeIso };
 
-  // Carga cuja VIAGEM SAIU DO ASPX (aspx_missing_since preenchido pelo job
-  // detect-aspx-missing-trips) não é mais operável: sai do Monitor mas CONTINUA na
-  // tela de Cargas (com o selo "Fora do ASPX"). Nunca é apagada — política do
-  // operador. Tolerante a banco sem a coluna (migration não aplicada): repete a
-  // leitura sem o filtro em vez de derrubar a fonte "sistema" do Monitor.
-  let filterAspxMissing = true;
-  // Idem para agenda_a_confirmar: sem a coluna, relê sem ela (o mapper trata
-  // undefined como false) em vez de derrubar a fonte "sistema".
-  let selectAgendaAConfirmar = true;
-  // Idem para trip_accepted_at (migration 20260805170000). Sem a coluna o filtro de
-  // "lançada não aceita" fica DESLIGADO — aceite undefined esconderia toda lançada.
-  let selectTripAccepted = true;
+  // Estado das colunas OPCIONAIS nesta leitura: começam todas LIGADAS e cada uma é
+  // desligada só quando o banco acusar a falta DELA (ver `blamedOptionalColumn`).
+  //   * aspx_missing_since — carga cuja VIAGEM SAIU DO ASPX (marcada pelo job
+  //     detect-aspx-missing-trips) não é mais operável: sai do Monitor mas CONTINUA
+  //     na tela de Cargas com o selo "Fora do ASPX". Nunca é apagada — política do
+  //     operador. Sem a coluna, relê sem o filtro em vez de derrubar a fonte "sistema".
+  //   * agenda_a_confirmar — sem a coluna o mapper trata undefined como false.
+  //   * trip_accepted_at (20260805170000) e trip_acceptance_checked_at (20260806150000)
+  //     — faltando QUALQUER uma, o filtro de "lançada não aceita" fica desligado por
+  //     inteiro: são elas que distinguem "observamos que não está aceita" de "nunca
+  //     olhamos", e sem essa distinção voltaríamos ao incidente de 06/08/2026 (39-50
+  //     linhas escondidas por dado ausente).
+  const optional = {
+    aspx_missing_since: true,
+    agenda_a_confirmar: true,
+    trip_accepted_at: true,
+    trip_acceptance_checked_at: true,
+  };
   const selectCols = () =>
-    selectAgendaAConfirmar
-      ? (selectTripAccepted ? SELECT_COLS : SELECT_COLS_SEM_ACEITE)
-      : (selectTripAccepted ? SELECT_COLS_SEM_AGENDA : SELECT_COLS_SEM_AGENDA_SEM_ACEITE);
+    buildSelectCols({
+      agendaAConfirmar: optional.agenda_a_confirmar,
+      tripAccepted: optional.trip_accepted_at,
+      acceptanceChecked: optional.trip_acceptance_checked_at,
+    });
   const page = (from) => {
     let q = supabaseClient
       .from("cargas")
@@ -293,23 +384,18 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
       // da PLANILHA (o dedup por LH em dedupe-monitor-rows.js só cobre o caso
       // "sistema OPEN", não este).
       .is("alloc_merged_into_cargo_id", null);
-    if (filterAspxMissing) q = q.is("aspx_missing_since", null);
+    if (optional.aspx_missing_since) q = q.is("aspx_missing_since", null);
     return q.order("data", { ascending: false }).range(from, from + pageSize - 1);
   };
 
   const raw = [];
   for (let from = 0; from < maxRows; from += pageSize) {
     let { data, error } = await page(from);
-    if (error && filterAspxMissing && isMissingAspxColumnError(error)) {
-      filterAspxMissing = false;
-      ({ data, error } = await page(from));
-    }
-    if (error && selectAgendaAConfirmar && isMissingAgendaAConfirmarColumn(error)) {
-      selectAgendaAConfirmar = false;
-      ({ data, error } = await page(from));
-    }
-    if (error && selectTripAccepted && isMissingTripAcceptedColumn(error)) {
-      selectTripAccepted = false;
+    // Cada tentativa desliga NO MÁXIMO uma coluna opcional — a que o erro acusa — e
+    // repete. O laço termina porque só desliga o que ainda estava ligado (4 no pior
+    // caso) e `optional` é compartilhado entre as páginas: a degradação acontece uma
+    // vez só na leitura inteira.
+    while (error && disableBlamedOptionalColumn(error, optional)) {
       ({ data, error } = await page(from));
     }
     if (error) throw error;
@@ -318,14 +404,19 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
     if (batch.length < pageSize) break;
   }
 
-  // Carga LANÇADA da Shopee que ninguém aceitou sai do Monitor (segue em /cargas).
-  // Só roda com a coluna de aceite disponível: sem ela, aceite é desconhecido em
-  // TODA linha e o filtro esconderia a fonte inteira. O lead vivo é consultado só
-  // para os candidatos já filtrados pelas guardas baratas (hoje ~50 de ~100 linhas).
+  // Carga LANÇADA da Shopee com EVIDÊNCIA de não-aceite sai do Monitor (segue em
+  // /cargas). Só roda com as DUAS colunas de aceite disponíveis: falta qualquer uma
+  // e o aceite é desconhecido em toda linha — filtrar aí esconderia a fonte inteira
+  // por dado ausente, que é justamente o incidente que este desenho corrige. O lead
+  // vivo é consultado só para os candidatos já filtrados pelas guardas baratas.
   let hidden = raw;
-  if (selectTripAccepted && isHideUnacceptedLaunchedEnabled()) {
+  if (optional.trip_accepted_at && optional.trip_acceptance_checked_at && isHideUnacceptedLaunchedEnabled()) {
     const nestleClientIds = resolveNestleClientIds(clientesById);
-    const candidates = raw.filter((c) => isUnacceptedLaunchedShopeeCargo(c, { nestleClientIds }));
+    // Relógio e TTL resolvidos UMA vez para a leitura inteira: a linha não pode
+    // envelhecer no meio da varredura (duas cargas com a mesma evidência têm de ter
+    // o mesmo veredito).
+    const ttl = { nowMs: Date.now(), ttlHours: acceptanceEvidenceTtlHours() };
+    const candidates = raw.filter((c) => isUnacceptedLaunchedShopeeCargo(c, { nestleClientIds, ...ttl }));
     if (candidates.length > 0) {
       const cargoIdsWithLiveLead = await fetchCargoIdsWithLiveLead(
         supabaseClient,
@@ -333,7 +424,7 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
       );
       const drop = new Set(
         candidates
-          .filter((c) => isUnacceptedLaunchedShopeeCargo(c, { nestleClientIds, cargoIdsWithLiveLead }))
+          .filter((c) => isUnacceptedLaunchedShopeeCargo(c, { nestleClientIds, cargoIdsWithLiveLead, ...ttl }))
           .map((c) => c.id),
       );
       hidden = raw.filter((c) => !drop.has(c.id));
@@ -343,22 +434,49 @@ export async function listSystemCargasForMonitor(supabaseClient, { pageSize = 10
   return hidden.map((c) => mapSystemCargoToMonitorRow(c, clientesById, now));
 }
 
-/** Coluna aspx_missing_since ausente (migration ainda não aplicada) — PostgREST
- *  devolve 42703/"column ... does not exist". Qualquer outro erro sobe. */
-function isMissingAspxColumnError(error) {
-  if (!error) return false;
-  if (error.code === "42703") return true;
-  return /aspx_missing_since/i.test(String(error.message ?? ""));
+/** Ordem em que as opcionais são desligadas quando o erro NÃO diz qual falta (ver
+ *  abaixo). Da menos custosa para a mais: soltar o filtro do ASPX só devolve linha à
+ *  tela; soltar as colunas de aceite desliga o filtro de "lançada não aceita" — nas
+ *  duas pontas a degradação MOSTRA carga a mais, nunca a menos. */
+const OPTIONAL_COLUMNS = [
+  "aspx_missing_since",
+  "agenda_a_confirmar",
+  "trip_accepted_at",
+  "trip_acceptance_checked_at",
+];
+
+/**
+ * Qual coluna OPCIONAL (ainda ligada) este erro acusa como ausente — ou null se o
+ * erro não é "coluna opcional faltando" e deve subir.
+ *
+ * O desenho anterior tinha um atalho por CÓDIGO: `aspx_missing_since` casava qualquer
+ * 42703, e por ser o primeiro elo da cadeia engolia a falta das OUTRAS opcionais. No
+ * deploy de 06/08/2026 isso seria um bug silencioso e caro: o banco de produção ainda
+ * não tem `trip_acceptance_checked_at` (migration é manual, deploy é automático no
+ * merge), então o 42703 daquela coluna desligaria o filtro do ASPX — e ninguém o
+ * religaria na leitura inteira. As 15 cargas marcadas "Fora do ASPX" voltariam ao
+ * Monitor sem que nada aparecesse no log.
+ *
+ * Regra, à prova das opcionais que virão: a atribuição é sempre PELO NOME da coluna na
+ * mensagem (o PostgREST manda 'column cargas.X does not exist'). O código 42703 sozinho
+ * só vale como último recurso — quando a mensagem não nomeia NENHUMA opcional conhecida
+ * — e aí desligamos uma por vez, na ordem acima, até a query passar ou acabarem as
+ * candidatas (quando o erro sobe). Nomes com prefixo comum não se confundem:
+ * "trip_acceptance_checked_at" não contém "trip_accepted_at".
+ */
+function blamedOptionalColumn(error, optional) {
+  if (!error) return null;
+  const msg = String(error.message ?? "").toLowerCase();
+  const named = OPTIONAL_COLUMNS.find((col) => optional[col] && msg.includes(col));
+  if (named) return named;
+  if (String(error.code ?? "") !== "42703") return null;
+  return OPTIONAL_COLUMNS.find((col) => optional[col]) ?? null;
 }
 
-/** Coluna trip_accepted_at ausente (migration 20260805170000 não aplicada). */
-function isMissingTripAcceptedColumn(error) {
-  if (!error) return false;
-  return /trip_accepted_at/i.test(String(error.message ?? ""));
-}
-
-/** Coluna agenda_a_confirmar ausente (migration 20260717210000 não aplicada). */
-function isMissingAgendaAConfirmarColumn(error) {
-  if (!error) return false;
-  return /agenda_a_confirmar/i.test(String(error.message ?? ""));
+/** Desliga a opcional acusada pelo erro. `true` = vale repetir a query. */
+function disableBlamedOptionalColumn(error, optional) {
+  const col = blamedOptionalColumn(error, optional);
+  if (!col) return false;
+  optional[col] = false;
+  return true;
 }
