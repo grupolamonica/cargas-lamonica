@@ -103,6 +103,10 @@ export const SUBMIT_PATH_LABEL_MAP = {
   "motorista.cpf": "Motorista — CPF",
   "motorista.telefones": "Motorista — Telefones",
   "motorista.telefone_primario": "Motorista — Telefone principal",
+  // Label do objeto `endereco` INTEIRO (path ["motorista","endereco"]): quando o
+  // bloco vem ausente, o zod aponta para cá, nao para um sub-campo. Sem esta
+  // chave o erro vazava o path cru "motorista.endereco" (visto no GLPI #55).
+  "motorista.endereco": "Motorista — Endereço",
   "motorista.endereco.cep": "Motorista — CEP",
   "motorista.endereco.numero": "Motorista — Numero (endereco)",
   "motorista.endereco.logradouro": "Motorista — Logradouro",
@@ -331,6 +335,18 @@ const motoristaSchema = z
   })
   .strict();
 
+// GLPI #55 — motorista REFERÊNCIA (cadastro "somente veículos"). Quando o Step A
+// é pulado (motorista JÁ cadastrado — o pre-check o encontrou no Angellira/ASPX,
+// base externa), o wizard NÃO coleta nome/telefones/endereço e envia apenas
+// `{ cpf }` (buildSubmitDados "DC-125"). O handler tenta hidratar o motorista
+// persistido (getExistingMotorista); quando NÃO há snapshot local (motorista só
+// na base externa), o `{ cpf }` precisa passar como REFERÊNCIA ao motorista
+// existente — sem exigir os campos que o fluxo nem pediu. O operador vincula o
+// motorista na aprovação (dispatch por CPF). `.strict()` é a trava anti-bypass:
+// SÓ `{ cpf }` casa aqui; qualquer campo extra recai no `motoristaSchema`
+// completo (Step A de verdade), preservando 100% a validação do cadastro NOVO.
+const motoristaReferenceSchema = z.object({ cpf: cpfSchema }).strict();
+
 const ownerDocTypeEnum = z.enum(["cpf", "cnpj"]);
 
 const veiculoCoreSchema = {
@@ -501,7 +517,12 @@ const dadosSchema = z
     // validacao (mergeMotorista/getExistingMotorista). Aceitamos motorista
     // ausente aqui para nao bloquear esse fluxo legitimo; o handler garante
     // que o objeto final esteja completo.
-    motorista: motoristaSchema.optional(),
+    // GLPI #55 — union: motorista COMPLETO (Step A preenchido) OU REFERÊNCIA
+    // `{ cpf }` (Step A pulado, motorista já cadastrado no Angellira/ASPX). O
+    // `.strict()` do motoristaReferenceSchema garante que SÓ `{ cpf }` toma o
+    // ramo de referência — um cadastro novo incompleto (ex.: `{ cpf, nome }`)
+    // não casa nenhum ramo e segue sendo rejeitado.
+    motorista: z.union([motoristaSchema, motoristaReferenceSchema]).optional(),
     // Cadastro PARCIAL: quando o pre-check indica que só o motorista é pendência
     // (cavalo/carreta já vigentes nas bases externas), o wizard pula os steps B/D
     // e o submit não traz cavalo/carretas. Antes o schema os EXIGIA → submit 422 →

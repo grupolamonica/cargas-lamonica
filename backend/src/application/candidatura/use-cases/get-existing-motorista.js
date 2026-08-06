@@ -11,7 +11,10 @@
 // payload do submit ANTES da validacao zod.
 //
 // Fonte de dados: `public.pending_driver_registrations` — versao_cadastro='v2'
-// preferida; se nao houver v2 cai para v1 (status IN ('aprovado','pendente')).
+// preferida; se nao houver v2 cai para v1 (status IN ('pendente','aprovado',
+// 'concluido')). GLPI #55 — 'concluido' incluido: motorista JA cadastrado que
+// concluiu o fluxo (mesmo conjunto que attach-selfie.js usa para "ja registrado")
+// tinha a linha ignorada pelo lookup e caia no 422 de "campos do motorista".
 //
 // Sem PII em logs. Devolve null se nada encontrado.
 
@@ -50,7 +53,7 @@ export async function getExistingMotorista({ driverUserId = null, driverCpf = nu
           FROM public.pending_driver_registrations
           WHERE driver_user_id = $1
             AND dados ? 'motorista'
-            AND status IN ('pendente', 'aprovado')
+            AND status IN ('pendente', 'aprovado', 'concluido')
           ORDER BY
             CASE WHEN versao_cadastro = 'v2' THEN 0 ELSE 1 END,
             updated_at DESC
@@ -67,7 +70,7 @@ export async function getExistingMotorista({ driverUserId = null, driverCpf = nu
           FROM public.pending_driver_registrations
           WHERE dados ? 'motorista'
             AND regexp_replace(coalesce(dados->'motorista'->>'cpf',''), '\\D', '', 'g') = $1
-            AND status IN ('pendente', 'aprovado')
+            AND status IN ('pendente', 'aprovado', 'concluido')
           ORDER BY
             CASE WHEN versao_cadastro = 'v2' THEN 0 ELSE 1 END,
             updated_at DESC

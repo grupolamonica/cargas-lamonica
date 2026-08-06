@@ -59,6 +59,17 @@ const fakeClient = {
       };
     }
 
+    // GLPI #55 — getExistingMotorista (hidratação do motorista já cadastrado).
+    // Retorna vazio: simula motorista SÓ na base externa (Angellira/ASPX), sem
+    // snapshot local. Nesse caso o { cpf } de referência precisa passar sozinho.
+    if (
+      /SELECT dados\s+FROM public\.pending_driver_registrations\s+WHERE driver_user_id = \$1\s+AND dados \? 'motorista'/i.test(
+        norm,
+      )
+    ) {
+      return { rows: [], rowCount: 0 };
+    }
+
     // Conflito de carga aprovada.
     if (
       /SELECT id\s+FROM public\.pending_driver_registrations\s+WHERE carga_id = \$1\s+AND status = 'aprovado'/i.test(
@@ -649,5 +660,39 @@ describe("integration — /api/candidatura/* (Plan 07-14)", () => {
 
     expect(response.statusCode).toBe(422);
     expect(response.payload).toMatchObject({ error: "ValidationError" });
+  });
+
+  // GLPI #55 — cadastro "somente veículos": motorista JÁ cadastrado (Step A
+  // pulado) → wizard envia motorista: { cpf }. Antes o submit dava 422
+  // ("Campos obrigatorios faltando: Motorista — Nome / Telefones / ...").
+  // getExistingMotorista mockado retorna vazio (motorista só na base externa),
+  // então o { cpf } precisa passar como referência e o submit concluir.
+  it("POST /api/candidatura/submit — GLPI #55: motorista referência { cpf } (Step A pulado) retorna 201 sem exigir dados do motorista", async () => {
+    const driverUserId = "44444444-4444-4444-4444-444444444444";
+    mockRequireDriverSession.mockResolvedValue({
+      accessToken: "tok",
+      user: { id: driverUserId },
+    });
+    // CPF válido (DV) — submit-final valida o dígito verificador do motorista.cpf.
+    mockGetDriverProfileByUserId.mockResolvedValue({
+      statusCode: 200,
+      payload: { profile: { document_number: "39053344705", phone: "71999999999" } },
+    });
+
+    // Cavalo/proprietário completos (com anexos); motorista só { cpf }.
+    const dados = basePayload({ motorista: { cpf: "39053344705" } });
+
+    const response = await resolveCandidaturaSubmitResponse(
+      buildRequest({
+        body: { cargaId: "L-455", dados },
+        headers: { "idempotency-key": "key-glpi55-refonly", "x-correlation-id": "corr-glpi55" },
+      }),
+    );
+
+    expect(response.statusCode).toBe(201);
+    expect(response.payload.protocolo).toMatch(/^\d{4}-\d{5}$/);
+    expect(fakeDb.rows).toHaveLength(1);
+    // motorista persistido como referência — cpf preservado para o vínculo na aprovação.
+    expect(fakeDb.rows[0].dados.motorista).toEqual({ cpf: "39053344705" });
   });
 });
