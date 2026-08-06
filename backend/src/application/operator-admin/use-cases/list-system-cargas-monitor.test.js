@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   mapSystemCargoToMonitorRow,
   listSystemCargasForMonitor,
   isUnacceptedLaunchedShopeeCargo,
   resolveNestleClientIds,
   isHideUnacceptedLaunchedEnabled,
+  acceptanceEvidenceTtlHours,
+  isAcceptanceEvidenceFresh,
 } from "./list-system-cargas-monitor.js";
 import { applySpxOperationalStatus } from "./spx-operational-status.js";
 
@@ -282,18 +284,70 @@ describe("listSystemCargasForMonitor", () => {
 // governava só o write-back da planilha e nem o INSERT nem este read model o
 // enxergavam. Medido em prod (05/08/2026): 94 lançadas na tela, 93% da fonte SISTEMA,
 // 72 nunca aceitas.
+//
+// O primeiro desenho (PR #457) leu `trip_accepted_at IS NULL` como "ninguém aceitou".
+// Medido em 06/08/2026: das 92 lançadas vivas, 82 tinham NULL e 79 haviam sido criadas
+// ANTES de a coluna existir — o silêncio virou veredito e sumiram 39-50 linhas da
+// fonte SISTEMA, 26 delas ABERTAS no portal /motorista. Hoje o filtro exige EVIDÊNCIA:
+// `trip_acceptance_checked_at` preenchido (olhamos o SPX ao vivo, resposta conclusiva)
+// E `trip_accepted_at` nulo. Nunca checado = DESCONHECIDO = a linha fica.
+const HOUR_MS = 3600_000;
+/** Evidência de N horas atrás. RELATIVA ao relógio de propósito: com a data cravada,
+ *  a suíte inteira passaria a esconder/mostrar conforme o dia em que rodasse assim que
+ *  o TTL entrou em cena. */
+const horasAtras = (h) => new Date(Date.now() - h * HOUR_MS).toISOString();
+
 describe("isUnacceptedLaunchedShopeeCargo (guardas do filtro)", () => {
-  // Base = exatamente o caso que deve sumir: lançada, Shopee, OPEN, inerte.
+  // Base = exatamente o caso que deve sumir: lançada, Shopee, OPEN, inerte e com
+  // EVIDÊNCIA observada de não-aceite RECENTE (checada há 1h, sem aceite).
   const inerte = (over = {}) => ({
     id: "c1", lh_manual: "LT-1", status: "OPEN",
     alloc_motorista: null, alloc_status: null, sheet_status: null,
-    trip_accepted_at: null, sheet_source: null, cliente_id: "cli-shopee", ...over,
+    trip_accepted_at: null, trip_acceptance_checked_at: horasAtras(1),
+    sheet_source: null, cliente_id: "cli-shopee", ...over,
   });
   const nestleIds = new Set(["cli-nestle"]);
   const hide = (c, ctx = {}) => isUnacceptedLaunchedShopeeCargo(c, { nestleClientIds: nestleIds, ...ctx });
 
-  it("esconde a lançada da Shopee sem nenhum sinal de vida", () => {
+  it("esconde a lançada da Shopee checada, sem aceite e sem nenhum sinal de vida", () => {
     expect(hide(inerte())).toBe(true);
+  });
+
+  // A regressão que originou o redesenho: 79 das 82 lançadas com aceite NULL nunca
+  // tiveram chance de ser marcadas (nasceram antes da coluna). Silêncio não é veredito.
+  it("NUNCA CHECADA fica: aceite desconhecido não é evidência de não-aceite", () => {
+    expect(hide(inerte({ trip_acceptance_checked_at: null }))).toBe(false);
+    expect(hide(inerte({ trip_acceptance_checked_at: undefined }))).toBe(false);
+  });
+
+  // Caso levantado na revisão: LT com carregamento hoje 10:00, observada "não aceita"
+  // às 09:50 (Monitor esconde), fora do recorte do job às 10:01, aceita direto no portal
+  // SPX às 10:30. Sem prazo de validade, essa carga fica aceita, viva e PERMANENTEMENTE
+  // invisível para o operador — no dia em que mais importa.
+  it("evidência VELHA (> TTL) volta a ser desconhecida: a linha reaparece", () => {
+    expect(hide(inerte({ trip_acceptance_checked_at: horasAtras(1) }))).toBe(true);   // fresca
+    expect(hide(inerte({ trip_acceptance_checked_at: horasAtras(48) }))).toBe(false); // expirada
+  });
+
+  it("fronteira do TTL: exatamente o limite ainda vale; 1 ms além, não", () => {
+    const nowMs = Date.parse("2026-08-06T12:00:00Z");
+    const emPonto = new Date(nowMs - 24 * HOUR_MS).toISOString();
+    expect(hide(inerte({ trip_acceptance_checked_at: emPonto }), { nowMs })).toBe(true);
+    const umMsAlem = new Date(nowMs - 24 * HOUR_MS - 1).toISOString();
+    expect(hide(inerte({ trip_acceptance_checked_at: umMsAlem }), { nowMs })).toBe(false);
+    // TTL menor via ctx: a mesma evidência de 12h já não vale.
+    const doze = new Date(nowMs - 12 * HOUR_MS).toISOString();
+    expect(hide(inerte({ trip_acceptance_checked_at: doze }), { nowMs })).toBe(true);
+    expect(hide(inerte({ trip_acceptance_checked_at: doze }), { nowMs, ttlHours: 6 })).toBe(false);
+  });
+
+  it("checked_at ilegível conta como desconhecido (dado duvidoso nunca esconde)", () => {
+    expect(hide(inerte({ trip_acceptance_checked_at: "ontem de manhã" }))).toBe(false);
+  });
+
+  it("aceita como objeto Date (o driver pg entrega timestamptz assim)", () => {
+    expect(hide(inerte({ trip_acceptance_checked_at: new Date(Date.now() - HOUR_MS) }))).toBe(true);
+    expect(hide(inerte({ trip_acceptance_checked_at: new Date(Date.now() - 48 * HOUR_MS) }))).toBe(false);
   });
 
   it("carga SEM lh_manual não é lançada — nunca entra no filtro", () => {
@@ -302,7 +356,13 @@ describe("isUnacceptedLaunchedShopeeCargo (guardas do filtro)", () => {
   });
 
   it("viagem ACEITA fica, mesmo sem motorista (frete comprometido com a agência)", () => {
+    // Checada E aceita: observamos o aceite, a carga fica.
     expect(hide(inerte({ trip_accepted_at: "2026-08-05T12:00:00Z" }))).toBe(false);
+    // Aceita sem nunca ter sido checada (aceite gravado no lançamento, antes de
+    // qualquer passada do job) — o aceite positivo basta, não depende da observação.
+    expect(
+      hide(inerte({ trip_accepted_at: "2026-08-05T12:00:00Z", trip_acceptance_checked_at: null })),
+    ).toBe(false);
   });
 
   it("ciclo diferente de OPEN fica (alguém já agiu na carga)", () => {
@@ -331,6 +391,45 @@ describe("isUnacceptedLaunchedShopeeCargo (guardas do filtro)", () => {
     // sheet_source só passou a ser gravado depois: a lançada Nestlé antiga tem NULL
     // e só o cliente a identifica.
     expect(hide(inerte({ sheet_source: null, cliente_id: "cli-nestle" }))).toBe(false);
+  });
+});
+
+describe("acceptanceEvidenceTtlHours (TTL da evidência, env override)", () => {
+  const comEnv = (v, fn) => {
+    const prev = process.env.MONITOR_ACCEPTANCE_EVIDENCE_TTL_HOURS;
+    if (v === undefined) delete process.env.MONITOR_ACCEPTANCE_EVIDENCE_TTL_HOURS;
+    else process.env.MONITOR_ACCEPTANCE_EVIDENCE_TTL_HOURS = v;
+    try { fn(); } finally {
+      if (prev === undefined) delete process.env.MONITOR_ACCEPTANCE_EVIDENCE_TTL_HOURS;
+      else process.env.MONITOR_ACCEPTANCE_EVIDENCE_TTL_HOURS = prev;
+    }
+  };
+
+  it("default 24h — folgadamente maior que o intervalo de regravação (60 min) do job", () => {
+    comEnv(undefined, () => expect(acceptanceEvidenceTtlHours()).toBe(24));
+  });
+
+  it("env válido manda", () => {
+    comEnv("6", () => expect(acceptanceEvidenceTtlHours()).toBe(6));
+    comEnv("0.5", () => expect(acceptanceEvidenceTtlHours()).toBe(0.5));
+  });
+
+  // Env mal preenchido não pode virar "esconde para sempre" (TTL gigante por NaN→0?) nem
+  // "nunca esconde" (TTL zero): cai no default e o comportamento segue previsível.
+  it("valor inválido, vazio, zero ou negativo cai no default", () => {
+    for (const v of ["", "  ", "abc", "0", "-3", "NaN"]) {
+      comEnv(v, () => expect(acceptanceEvidenceTtlHours()).toBe(24));
+    }
+  });
+
+  it("isAcceptanceEvidenceFresh respeita o env", () => {
+    const nowMs = Date.parse("2026-08-06T12:00:00Z");
+    const oitoHoras = new Date(nowMs - 8 * HOUR_MS).toISOString();
+    comEnv(undefined, () => expect(isAcceptanceEvidenceFresh(oitoHoras, { nowMs })).toBe(true));
+    comEnv("4", () => expect(isAcceptanceEvidenceFresh(oitoHoras, { nowMs })).toBe(false));
+    // Sem evidência nenhuma nunca é "fresca".
+    expect(isAcceptanceEvidenceFresh(null, { nowMs })).toBe(false);
+    expect(isAcceptanceEvidenceFresh(undefined, { nowMs })).toBe(false);
   });
 });
 
@@ -388,24 +487,34 @@ describe("listSystemCargasForMonitor: lançada não aceita sai do Monitor", () =
     return { from: (t) => api(t), _calls: calls };
   }
 
+  // Base já CHECADA HÁ POUCO (evidência RECENTE de não-aceite) — é o único estado em
+  // que o filtro pode agir. Quem quiser "nunca checado" sobrescreve com null; quem
+  // quiser evidência expirada usa horasAtras(48).
   const carga = (over = {}) => ({
     id: "x", origem: "A", destino: "B", data: "2026-08-10", horario: "08:00:00",
     status: "OPEN", lh_manual: null, alloc_motorista: null, alloc_status: null,
-    sheet_status: null, trip_accepted_at: null, sheet_source: null, cliente_id: "cli-shopee", ...over,
+    sheet_status: null, trip_accepted_at: null, trip_acceptance_checked_at: horasAtras(1),
+    sheet_source: null, cliente_id: "cli-shopee", ...over,
   });
 
   const ids = (rows) => rows.map((r) => r.cargoId);
 
-  it("some a lançada Shopee inerte; ficam a aceita, a com motorista e a Nestlé", async () => {
+  it("some a lançada Shopee checada e não aceita; ficam a aceita, a com motorista, a Nestlé e a NUNCA CHECADA", async () => {
     const client = fakeClient([
       carga({ id: "some", lh_manual: "LT-1" }),
       carga({ id: "aceita", lh_manual: "LT-2", trip_accepted_at: "2026-08-05T10:00:00Z" }),
       carga({ id: "com-motorista", lh_manual: "LT-3", alloc_motorista: "ANA" }),
       carga({ id: "nestle", lh_manual: "B1-9", cliente_id: "cli-nestle" }),
+      // As 79 lançadas de produção criadas antes de a coluna existir: nunca foram
+      // observadas, então o aceite é DESCONHECIDO e a linha não pode sumir.
+      carga({ id: "nunca-checada", lh_manual: "LT-4", trip_acceptance_checked_at: null }),
+      // Observada uma vez, saiu do recorte do job e nunca mais: a evidência venceu
+      // (TTL 24h) e o aceite volta a ser desconhecido.
+      carga({ id: "evidencia-velha", lh_manual: "LT-5", trip_acceptance_checked_at: horasAtras(48) }),
       carga({ id: "manual", lh_manual: null }), // carga do operador, sem LH: intocada
     ]);
     const rows = await listSystemCargasForMonitor(client, { pageSize: 50 });
-    expect(ids(rows)).toEqual(["aceita", "com-motorista", "nestle", "manual"]);
+    expect(ids(rows)).toEqual(["aceita", "com-motorista", "nestle", "nunca-checada", "evidencia-velha", "manual"]);
   });
 
   it("lead vivo na fila segura a carga na tela", async () => {
@@ -421,6 +530,12 @@ describe("listSystemCargasForMonitor: lançada não aceita sai do Monitor", () =
   it("sem candidato a sumir, nem consulta os leads", async () => {
     const client = fakeClient([carga({ id: "a", lh_manual: null })]);
     await listSystemCargasForMonitor(client, { pageSize: 50 });
+    expect(client._calls.leads).toBe(0);
+  });
+
+  it("lançada nunca checada não é nem candidata — não gasta consulta de leads", async () => {
+    const client = fakeClient([carga({ id: "a", lh_manual: "LT-1", trip_acceptance_checked_at: null })]);
+    expect(ids(await listSystemCargasForMonitor(client, { pageSize: 50 }))).toEqual(["a"]);
     expect(client._calls.leads).toBe(0);
   });
 
@@ -469,5 +584,196 @@ describe("listSystemCargasForMonitor: lançada não aceita sai do Monitor", () =
     expect(rows.map((r) => r.cargoId)).toEqual(["a"]); // sobreviveu: sem coluna, sem filtro
     expect(selects.some(([t, cols]) => t === "cargas" && cols.includes("trip_accepted_at"))).toBe(true);
     expect(selects.some(([t, cols]) => t === "cargas" && !cols.includes("trip_accepted_at"))).toBe(true);
+  });
+
+  // Mesmo raciocínio para a coluna de OBSERVAÇÃO (migration 20260806150000): sem ela
+  // não dá para distinguir "checamos e não está aceita" de "nunca olhamos" — e é
+  // exatamente essa confusão que escondeu 39-50 linhas em 06/08/2026. Sem a coluna, o
+  // filtro inteiro fica desligado: NENHUMA linha some, nem a lançada inerte.
+  it("banco sem trip_acceptance_checked_at: relê sem a coluna e NÃO filtra (nem a lançada inerte some)", async () => {
+    const selects = [];
+    let served = false;
+    const api = {
+      from: (t) => {
+        let cols = "";
+        const q = {
+          select: (c) => { cols = c; selects.push([t, c]); return q; },
+          is: () => q, eq: () => q, neq: () => q, in: () => q, order: () => q,
+          range: async () => {
+            if (cols.includes("trip_acceptance_checked_at")) {
+              return { data: null, error: { code: "42703", message: 'column cargas.trip_acceptance_checked_at does not exist' } };
+            }
+            if (served) return { data: [], error: null };
+            served = true;
+            // Lançada Shopee OPEN, sem aceite e sem sinal de vida: sumiria se o
+            // filtro estivesse ligado.
+            return { data: [{ id: "a", origem: "A", destino: "B", data: "2026-08-10", horario: "08:00:00", status: "OPEN", lh_manual: "LT-1", trip_accepted_at: null, cliente_id: "cli-shopee" }], error: null };
+          },
+          then: t === "clientes" ? (resolve) => resolve({ data: CLIENTES, error: null }) : undefined,
+        };
+        return q;
+      },
+    };
+    const rows = await listSystemCargasForMonitor(api, { pageSize: 1, maxRows: 3 });
+    expect(rows.map((r) => r.cargoId)).toEqual(["a"]);
+    // O fallback derrubou SÓ a coluna nova — `trip_accepted_at` continua no SELECT.
+    const ultimo = selects.filter(([t]) => t === "cargas").at(-1)[1];
+    expect(ultimo).not.toContain("trip_acceptance_checked_at");
+    expect(ultimo).toContain("trip_accepted_at");
+  });
+
+  /** Fake que registra, POR TENTATIVA, o SELECT e os `.is()` aplicados. O fake antigo
+   *  tinha `is: () => q` — o liga/desliga do filtro era invisível, e por isso a cadeia
+   *  de fallbacks podia soltar o filtro do ASPX sem nenhum teste reclamar. */
+  function recordingClient(onRange) {
+    const attempts = [];
+    const api = {
+      _attempts: attempts,
+      from: (t) => {
+        const at = { table: t, cols: "", isCalls: [] };
+        const q = {
+          select: (c) => { at.cols = c; return q; },
+          is: (col, val) => { at.isCalls.push([col, val]); return q; },
+          eq: () => q, neq: () => q, in: () => q, order: () => q,
+          range: async () => { attempts.push(at); return onRange(at); },
+          then: t === "clientes" ? (resolve) => resolve({ data: CLIENTES, error: null }) : undefined,
+        };
+        return q;
+      },
+    };
+    return api;
+  }
+
+  // REGRESSÃO (bloqueador da revisão): o matcher de `aspx_missing_since` casava
+  // QUALQUER 42703 e era o primeiro elo da cadeia. Em produção a coluna
+  // `trip_acceptance_checked_at` ainda não existe (migration é manual, deploy é
+  // automático no merge), então o 42703 DELA soltava o filtro do ASPX e ninguém o
+  // religava: as 15 cargas marcadas "Fora do ASPX" voltariam ao Monitor em silêncio.
+  it("42703 da coluna nova NÃO desliga o filtro aspx_missing_since (cada erro solta só a SUA coluna)", async () => {
+    let served = false;
+    const api = recordingClient((at) => {
+      if (at.cols.includes("trip_acceptance_checked_at")) {
+        return { data: null, error: { code: "42703", message: "column cargas.trip_acceptance_checked_at does not exist" } };
+      }
+      if (served) return { data: [], error: null };
+      served = true;
+      return { data: [{ id: "a", origem: "A", destino: "B", data: "2026-08-10", horario: "08:00:00", status: "OPEN", lh_manual: "LT-1" }], error: null };
+    });
+
+    const rows = await listSystemCargasForMonitor(api, { pageSize: 1, maxRows: 3 });
+    expect(rows.map((r) => r.cargoId)).toEqual(["a"]);
+
+    const cargas = api._attempts.filter((a) => a.table === "cargas");
+    // A query FINAL (a que passou) segue filtrando a viagem fora do ASPX...
+    expect(cargas.at(-1).isCalls).toContainEqual(["aspx_missing_since", null]);
+    // ...e TODAS as tentativas também: o fallback da coluna nova não encostou no filtro.
+    for (const a of cargas) expect(a.isCalls).toContainEqual(["aspx_missing_since", null]);
+  });
+
+  // Último recurso: 42703 cuja mensagem não nomeia opcional nenhuma. Aí não dá para
+  // atribuir, então degradamos UMA por vez, na ordem — sempre na direção de MOSTRAR
+  // carga a mais. Se nem assim passar, o erro sobe (não engolimos falha real).
+  it("42703 sem nome de coluna: degrada uma opcional por vez, do filtro do ASPX em diante", async () => {
+    const api = recordingClient((at) =>
+      at.isCalls.some(([c]) => c === "aspx_missing_since")
+        ? { data: null, error: { code: "42703", message: "column does not exist" } }
+        : { data: [], error: null },
+    );
+    const rows = await listSystemCargasForMonitor(api, { pageSize: 1, maxRows: 2 });
+    expect(rows).toEqual([]);
+    const cargas = api._attempts.filter((a) => a.table === "cargas");
+    // 1ª com o filtro (erro), 2ª sem ele (passou) — e o SELECT ficou intacto.
+    expect(cargas[0].isCalls).toContainEqual(["aspx_missing_since", null]);
+    expect(cargas[1].isCalls).not.toContainEqual(["aspx_missing_since", null]);
+    expect(cargas[1].cols).toContain("trip_acceptance_checked_at");
+  });
+
+  it("42703 que nenhuma opcional explica sobe depois de esgotar as candidatas", async () => {
+    const api = recordingClient(() => ({ data: null, error: { code: "42703", message: "column does not exist" } }));
+    await expect(listSystemCargasForMonitor(api, { pageSize: 1, maxRows: 2 })).rejects.toMatchObject({ code: "42703" });
+    // 1 tentativa inicial + 4 opcionais desligadas uma a uma = 5, e para.
+    expect(api._attempts.filter((a) => a.table === "cargas").length).toBe(5);
+  });
+
+  // O cenário do DEPLOY REAL, e o único que faltava: as DUAS opcionais de aceite
+  // ausentes na mesma leitura. Produção hoje não tem `trip_acceptance_checked_at`
+  // (20260806150000) e um banco um pouco mais atrasado também não tem
+  // `trip_accepted_at` (20260805170000) — as duas caem, uma por tentativa, e nada
+  // além delas pode cair junto (a cadeia de fallbacks já derrubou o filtro errado uma
+  // vez; esta é a versão com duas quedas encadeadas).
+  it("banco sem AS DUAS colunas de aceite: derruba só elas e a lançada inerte VOLTA visível", async () => {
+    let served = false;
+    const err = (col) => ({ data: null, error: { code: "42703", message: `column cargas.${col} does not exist` } });
+    const api = recordingClient((at) => {
+      // "trip_acceptance_checked_at" NÃO contém "trip_accepted_at": o prefixo comum
+      // não confunde nem o fake nem o `blamedOptionalColumn`.
+      if (at.cols.includes("trip_accepted_at")) return err("trip_accepted_at");
+      if (at.cols.includes("trip_acceptance_checked_at")) return err("trip_acceptance_checked_at");
+      if (served) return { data: [], error: null };
+      served = true;
+      // Fixture HOSTIL de propósito: lançada Shopee OPEN, inerte e com evidência
+      // FRESCA de não-aceite. Com o filtro ligado ela sumiria — é ela que prova que
+      // faltando as colunas o filtro fica desligado por INTEIRO.
+      return {
+        data: [{
+          id: "a", origem: "A", destino: "B", data: "2026-08-10", horario: "08:00:00",
+          status: "OPEN", lh_manual: "LT-1", cliente_id: "cli-shopee",
+          trip_accepted_at: null, trip_acceptance_checked_at: horasAtras(1),
+        }],
+        error: null,
+      };
+    });
+
+    const rows = await listSystemCargasForMonitor(api, { pageSize: 1, maxRows: 3 });
+    expect(rows.map((r) => r.cargoId)).toEqual(["a"]); // dado ausente não esconde linha
+
+    const cargas = api._attempts.filter((a) => a.table === "cargas");
+    const final = cargas.at(-1);
+    // Só as duas NOMEADAS saíram do SELECT...
+    expect(final.cols).not.toContain("trip_accepted_at");
+    expect(final.cols).not.toContain("trip_acceptance_checked_at");
+    // ...`agenda_a_confirmar` seguiu pedida (duas quedas não viram efeito dominó)...
+    expect(final.cols).toContain("agenda_a_confirmar");
+    // ...e o filtro do "fora do ASPX" continuou aplicado em TODAS as tentativas.
+    for (const a of cargas) expect(a.isCalls).toContainEqual(["aspx_missing_since", null]);
+  });
+
+  // A degradação era 100% SILENCIOSA: um banco sem a migration ficava indistinguível
+  // de um banco saudável, e o Monitor podia rodar semanas com o filtro de aceite
+  // desligado sem ninguém notar. O aviso é o que transforma "some do log" em
+  // "alguém roda o migrate".
+  it("coluna faltando EMITE aviso: UMA vez na leitura inteira, com nome e efeito", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      let pagina = 0;
+      const api = recordingClient((at) => {
+        if (at.cols.includes("trip_acceptance_checked_at")) {
+          return { data: null, error: { code: "42703", message: "column cargas.trip_acceptance_checked_at does not exist" } };
+        }
+        pagina += 1;
+        // Duas páginas cheias antes de esgotar: se o aviso saísse por página (e não
+        // por leitura), viriam três — `optional` é compartilhado justamente p/ isso.
+        return {
+          data: pagina <= 2
+            ? [{ id: `p${pagina}`, origem: "A", destino: "B", data: "2026-08-10", horario: "08:00:00" }]
+            : [],
+          error: null,
+        };
+      });
+
+      const rows = await listSystemCargasForMonitor(api, { pageSize: 1, maxRows: 5 });
+      expect(rows.map((r) => r.cargoId)).toEqual(["p1", "p2"]);
+      expect(api._attempts.filter((a) => a.table === "cargas").length).toBe(4); // 1 falha + 3 páginas
+
+      const avisos = warn.mock.calls.filter(([msg]) =>
+        String(msg).includes("list-system-cargas-monitor.optional-column-missing"),
+      );
+      expect(avisos).toHaveLength(1);
+      expect(avisos[0][1]).toMatchObject({ coluna: "trip_acceptance_checked_at", atribuicao: "nome" });
+      // O efeito NA TELA vai no log — quem lê o alerta não deve precisar do código.
+      expect(avisos[0][1].efeito).toContain("filtro de aceite desligado");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

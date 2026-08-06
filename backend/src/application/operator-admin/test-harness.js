@@ -117,6 +117,10 @@ const schemaSql = `
     -- Aceite da VIAGEM na carga lançada (migration 20260805170000). NULL = nunca
     -- aceita / desconhecido; é o que tira a lançada não-aceita do Monitor.
     trip_accepted_at timestamptz,
+    -- Quando o aceite foi OBSERVADO no SPX ao vivo com resposta conclusiva
+    -- (migration 20260806150000). NULL = nunca checado = DESCONHECIDO. O Monitor só
+    -- esconde com evidência: checked_at preenchido E trip_accepted_at nulo.
+    trip_acceptance_checked_at timestamptz,
     superseded_by_cargo_id uuid,
     retired_reason text,
     -- Marcador de MERGE da gêmea (migration 20260804140000). Distinto de
