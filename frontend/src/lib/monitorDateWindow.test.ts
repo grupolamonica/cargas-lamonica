@@ -8,6 +8,7 @@ import {
   monitorLocalDateKey,
   resolveLoadWindow,
   revealFutureWindow,
+  selectHiddenFuture,
   tallyHiddenFuture,
 } from "./monitorDateWindow";
 
@@ -119,30 +120,92 @@ describe("isFutureLoadDate", () => {
 
 describe("tallyHiddenFuture", () => {
   const hoje = "2026-08-06";
+  // Atalho: a maioria dos casos só se importa com a data, não com o status.
+  const semStatus = (datas: ReadonlyArray<string | null | undefined>) =>
+    datas.map((data) => ({ data, statusKey: "Sem status" }));
 
   it("ignora o histórico e devolve a última futura", () => {
     // Recorte fiel ao medido: um punhado de futuras afogado em histórico.
-    const escondidas = [
+    const escondidas = semStatus([
       "2026-07-01", "2026-07-02", "2026-08-05", // histórico
       "2026-08-07", "2026-08-07", "2026-08-08", "2026-08-10", // futuras
       null, "", // sem data
-    ];
-    expect(tallyHiddenFuture(escondidas, hoje)).toEqual({ count: 4, maxDate: "2026-08-10" });
+    ]);
+    expect(tallyHiddenFuture(escondidas, hoje).total).toEqual({ count: 4, maxDate: "2026-08-10" });
   });
 
   it("só histórico → contador zerado (é o caso que faria o operador ignorar o número)", () => {
-    expect(tallyHiddenFuture(["2026-01-01", "2026-08-05", null], hoje)).toEqual({ count: 0, maxDate: null });
+    const t = tallyHiddenFuture(semStatus(["2026-01-01", "2026-08-05", null]), hoje);
+    expect(t.total).toEqual({ count: 0, maxDate: null });
+    // Histórico não cria balde: um status só aparece se escondeu alguma futura.
+    expect(t.byStatus).toEqual({});
   });
 
   it("nada escondido → zero", () => {
-    expect(tallyHiddenFuture([], hoje)).toEqual({ count: 0, maxDate: null });
+    expect(tallyHiddenFuture([], hoje)).toEqual({ total: { count: 0, maxDate: null }, byStatus: {} });
   });
 
   it("maxDate não regride quando as datas chegam fora de ordem", () => {
     const t = createHiddenFutureTally(hoje);
-    t.add("2026-08-10");
-    t.add("2026-08-07");
-    expect(t.result()).toEqual({ count: 2, maxDate: "2026-08-10" });
+    t.add("2026-08-10", "PENDENTE");
+    t.add("2026-08-07", "PENDENTE");
+    expect(t.result().total).toEqual({ count: 2, maxDate: "2026-08-10" });
+    expect(t.result().byStatus.PENDENTE).toEqual({ count: 2, maxDate: "2026-08-10" });
+  });
+
+  it("cada status ganha o próprio balde, com o próprio maxDate", () => {
+    const t = tallyHiddenFuture([
+      { data: "2026-08-07", statusKey: "PENDENTE" },
+      { data: "2026-08-12", statusKey: "PENDENTE" },
+      { data: "2026-08-09", statusKey: "CANCELADA" },
+      { data: "2026-08-05", statusKey: "PENDENTE" },  // histórico: não entra em balde nenhum
+      { data: null, statusKey: "CANCELADA" },          // sem data: idem
+      { data: "2026-08-08", statusKey: "Sem status" },
+    ], hoje);
+    expect(t.total).toEqual({ count: 4, maxDate: "2026-08-12" });
+    expect(t.byStatus).toEqual({
+      PENDENTE: { count: 2, maxDate: "2026-08-12" },
+      CANCELADA: { count: 1, maxDate: "2026-08-09" },
+      "Sem status": { count: 1, maxDate: "2026-08-08" },
+    });
+  });
+});
+
+// O contador é um BOTÃO: o número tem de ser o que o clique entrega. Contando só
+// pré-status, o operador com o chip "PENDENTE" ligado lia "+4" e ganhava 2.
+describe("selectHiddenFuture", () => {
+  const t = tallyHiddenFuture([
+    { data: "2026-08-07", statusKey: "PENDENTE" },
+    { data: "2026-08-12", statusKey: "PENDENTE" },
+    { data: "2026-08-09", statusKey: "CANCELADA" },
+    { data: "2026-08-08", statusKey: "Sem status" },
+  ], "2026-08-06");
+
+  it("sem chip ligado → o total, sem recorte (o caso comum)", () => {
+    expect(selectHiddenFuture(t, [])).toEqual({ count: 4, maxDate: "2026-08-12" });
+    // Mesma referência do total: nada é realocado quando não há o que recortar.
+    expect(selectHiddenFuture(t, [])).toBe(t.total);
+  });
+
+  it("um chip ligado → só aquele status, e o maxDate é o DELE", () => {
+    expect(selectHiddenFuture(t, ["CANCELADA"])).toEqual({ count: 1, maxDate: "2026-08-09" });
+  });
+
+  it("vários chips (OR) somam os baldes e pegam a maior data entre eles", () => {
+    expect(selectHiddenFuture(t, ["CANCELADA", "Sem status"])).toEqual({ count: 2, maxDate: "2026-08-09" });
+    expect(selectHiddenFuture(t, ["PENDENTE", "CANCELADA"])).toEqual({ count: 3, maxDate: "2026-08-12" });
+  });
+
+  it("chip cujo status não escondeu nada → 0, e o botão nem aparece", () => {
+    expect(selectHiddenFuture(t, ["EM VIAGEM"])).toEqual({ count: 0, maxDate: null });
+    expect(selectHiddenFuture(t, ["EM VIAGEM", "CANCELADA"])).toEqual({ count: 1, maxDate: "2026-08-09" });
+  });
+
+  it("não confunde 'Sem status' com um status herdado de Object.prototype", () => {
+    // byStatus é um objeto literal: uma chave como "constructor" não pode devolver
+    // a função do protótipo e explodir a soma.
+    expect(selectHiddenFuture(t, ["constructor"])).toEqual({ count: 0, maxDate: null });
+    expect(selectHiddenFuture(t, ["toString"])).toEqual({ count: 0, maxDate: null });
   });
 });
 

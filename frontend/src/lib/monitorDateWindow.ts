@@ -30,8 +30,11 @@ export type MonitorLoadWindow = { from: string; to: string };
  *            montagem a partir de agora. É isto que torna um valor de ontem no
  *            localStorage logicamente impossível de sobreviver a um F5 — sem
  *            useEffect de correção (que causaria render duplo e o flash da
- *            janela velha antes do reclamp).
- * 'manual' = o operador escolheu um recorte; respeitamos o que ele salvou.
+ *            janela velha antes do reclamp). O modo também é o que autoriza a
+ *            tela a reconferir a data no meio da sessão (aba de painel de TV
+ *            que passa dias sem reload — ver SheetMonitor).
+ * 'manual' = o operador escolheu um recorte; respeitamos o que ele salvou, e
+ *            NADA pode sobrescrevê-lo enquanto ele não voltar ao repouso.
  */
 export type MonitorDateWindowMode = "auto" | "manual";
 
@@ -85,6 +88,38 @@ export type HiddenFutureTally = {
 };
 
 /**
+ * A contagem quebrada por chave de status, porque o contador é um BOTÃO e um botão
+ * tem de entregar o que promete.
+ *
+ * O filtro de data é o último passo de `preStatusRows`; o de status vem DEPOIS, em
+ * `filteredRows`. Contando só ali, o operador com o chip "PENDENTE" ligado lia
+ * "+5 futuras fora da janela", clicava e ganhava 2 — o número era honesto quanto à
+ * data e mentiroso quanto à promessa.
+ *
+ * Não dá para resolver metendo `statusFilter` nas dependências de `preStatusRows`:
+ * cada clique num chip refaria a passada de ~6,3k linhas e trocaria a identidade de
+ * `preStatusRows`, invalidando `statusFacets`, `filteredRows` e `routeQueue` — que
+ * existem exatamente para NÃO depender do status. Então a passada única guarda um
+ * balde por status (dezena de chaves, não milhares de linhas) e o recorte por status
+ * vira uma soma de baldes: O(chips selecionados), não O(linhas).
+ */
+export type HiddenFutureByStatus = {
+  /** Sem filtro de status ligado — o total. */
+  total: HiddenFutureTally;
+  /**
+   * Um balde por chave de status; MESMA chave dos chips (status || "Sem status").
+   * SEM protótipo (`Object.create(null)`): a chave vem de dado da planilha, e num
+   * objeto literal um status chamado "constructor" ou "toString" devolveria a
+   * função herdada em vez de `undefined` — a soma viraria NaN e o contador
+   * mostraria "+NaN futuras". Não é hipótese elegante: o status é texto livre.
+   */
+  byStatus: Record<string, HiddenFutureTally>;
+};
+
+/** Uma linha escondida, na forma mínima que a contagem precisa. */
+export type HiddenLoadSample = { data: string | null | undefined; statusKey: string };
+
+/**
  * A linha escondida é FUTURA? Compara só a DATA, nunca o horário — mesma
  * convenção do `routeQueue`: uma carga de hoje cujo horário já passou continua
  * acionável (ainda dá para alocar/descer a fila), então não é "histórico".
@@ -100,32 +135,68 @@ export function isFutureLoadDate(data: string | null | undefined, todayKey: stri
  * Acumulador de uma passada só. Existe porque a contagem tem de acontecer DENTRO
  * do mesmo `for` que aplica o filtro de data em `preStatusRows` (~6,3k linhas por
  * tecla digitada na busca) — uma segunda passada só para contar seria desperdício
- * puro. Sem alocação por linha: dois contadores fechados no escopo.
+ * puro. A única alocação é o balde de status, e só na PRIMEIRA linha escondida de
+ * cada status (~10 objetos no pior caso, contra as ~74 futuras medidas).
  */
 export function createHiddenFutureTally(todayKey: string) {
   let count = 0;
   let maxDate: string | null = null;
+  const byStatus: Record<string, HiddenFutureTally> = Object.create(null);
   return {
-    add(data: string | null | undefined) {
+    add(data: string | null | undefined, statusKey: string) {
       if (!isFutureLoadDate(data, todayKey)) return;
-      count += 1;
       const d = String(data).slice(0, 10);
+      count += 1;
       if (maxDate === null || d > maxDate) maxDate = d;
+      const bucket = byStatus[statusKey];
+      if (bucket === undefined) byStatus[statusKey] = { count: 1, maxDate: d };
+      else {
+        bucket.count += 1;
+        if (bucket.maxDate === null || d > bucket.maxDate) bucket.maxDate = d;
+      }
     },
-    result(): HiddenFutureTally {
-      return { count, maxDate };
+    result(): HiddenFutureByStatus {
+      return { total: { count, maxDate }, byStatus };
     },
   };
 }
 
 /** Versão declarativa do acumulador — usada nos testes e em chamadas frias. */
 export function tallyHiddenFuture(
-  hiddenDates: ReadonlyArray<string | null | undefined>,
+  hidden: ReadonlyArray<HiddenLoadSample>,
   todayKey: string,
-): HiddenFutureTally {
+): HiddenFutureByStatus {
   const tally = createHiddenFutureTally(todayKey);
-  for (const d of hiddenDates) tally.add(d);
+  for (const h of hidden) tally.add(h.data, h.statusKey);
   return tally.result();
+}
+
+/**
+ * O número que o contador mostra: o que o clique REALMENTE vai entregar sob os
+ * filtros ligados agora.
+ *
+ * Sem chip de status ligado (o caso comum) devolve o total — mesma resposta de
+ * antes, sem custo nenhum. Com chips ligados soma só os baldes escolhidos, e o
+ * `maxDate` acompanha: a janela estica exatamente até a última futura que o
+ * operador vai de fato ver, não até a de um status que ele filtrou fora.
+ *
+ * Chave desconhecida (status que sumiu do dataset) simplesmente não soma — 0 é a
+ * resposta honesta, e o botão nem aparece.
+ */
+export function selectHiddenFuture(
+  tally: HiddenFutureByStatus,
+  statusFilter: readonly string[],
+): HiddenFutureTally {
+  if (statusFilter.length === 0) return tally.total;
+  let count = 0;
+  let maxDate: string | null = null;
+  for (const key of statusFilter) {
+    const bucket = tally.byStatus[key];
+    if (bucket === undefined) continue;
+    count += bucket.count;
+    if (bucket.maxDate !== null && (maxDate === null || bucket.maxDate > maxDate)) maxDate = bucket.maxDate;
+  }
+  return { count, maxDate };
 }
 
 /**

@@ -56,7 +56,7 @@ import { routeCanonKey } from "@/lib/routeCanonical";
 import { computeSwapMoves } from "@/lib/monitorReorder";
 import { editableDriver, mergeAllocIntoRow, effectiveAllocField } from "@/lib/monitorAllocOverlay";
 import {
-  createHiddenFutureTally, defaultLoadWindow, resolveLoadWindow, revealFutureWindow,
+  createHiddenFutureTally, defaultLoadWindow, resolveLoadWindow, revealFutureWindow, selectHiddenFuture,
   type MonitorDateWindowMode,
 } from "@/lib/monitorDateWindow";
 import { allocationChangedBaseline, isAllocationChangedError, isDuplicateAllocationError } from "@/lib/allocationConflict";
@@ -4596,7 +4596,7 @@ export default function SheetMonitor() {
   const [editingLh, setEditingLh] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
 
-  const { data: monitorData, error: queryError, isFetching, isLoading } = useQuery({
+  const { data: monitorData, dataUpdatedAt, error: queryError, isFetching, isLoading } = useQuery({
     queryKey: [...SHEET_MONITOR_QUERY_KEY],
     queryFn: fetchSheetMonitor,
     ...SHEET_MONITOR_QUERY_OPTIONS,
@@ -4606,6 +4606,36 @@ export default function SheetMonitor() {
     refetchInterval: editingLh ? false : MONITOR_STATUS_POLL_MS,
     refetchIntervalInBackground: false,
   });
+
+  // A janela 'auto' precisa VIRAR A MEIA-NOITE numa aba que ninguém recarrega.
+  //
+  // O reclamp do initializer (acima) resolve o F5. Mas este produto roda em PAINEL
+  // DE TV: a aba fica aberta dias. Sem reload, depois de N dias a janela 'auto' está
+  // N dias atrasada e volta a esconder cargas abertas ao motorista — o mesmo bug que
+  // este PR conserta, reentrando pela porta dos fundos.
+  //
+  // Amarrado ao ciclo que JÁ existe em vez de um relógio novo: a query repolla a
+  // cada 2 min (MONITOR_STATUS_POLL_MS) e cada resposta bumpa `dataUpdatedAt`. Logo
+  // a virada se corrige sozinha em ≤2 min, e de graça — herdando as pausas que já
+  // decidimos serem os momentos de NÃO mexer na tela (`refetchInterval: false`
+  // durante edição inline; `refetchIntervalInBackground: false` com a aba oculta).
+  //
+  // Três guardas:
+  //  - só em 'auto'. Recorte 'manual' é escolha do operador e é intocável;
+  //  - `editingLh` bloqueia: uma invalidação disparada por mutação também bumpa
+  //    `dataUpdatedAt`, e trocar a janela sob um rascunho aberto poderia tirar da
+  //    lista a própria linha que ele está editando;
+  //  - se a janela recalculada for IDÊNTICA à atual — o caso de 99,9% dos ticks,
+  //    porque só muda uma vez por dia — não há setState. Sem re-render, sem loop; e
+  //    a `queryKey` é constante (não depende dos filtros), então nem em modo de
+  //    virada existe refetch em cascata.
+  useEffect(() => {
+    if (dateWindowMode !== "auto" || editingLh) return;
+    const w = defaultLoadWindow();
+    if (w.from === dateFromFilter && w.to === dateToFilter) return;
+    setDateFromFilter(w.from);
+    setDateToFilter(w.to);
+  }, [dataUpdatedAt, dateWindowMode, editingLh, dateFromFilter, dateToFilter]);
 
   const rawItems = monitorData?.items ?? EMPTY_ROWS;
   const enrichedByLh = monitorData?.enrichedByLh ?? EMPTY_ENRICHED;
@@ -5110,6 +5140,9 @@ export default function SheetMonitor() {
   // de data é o ÚLTIMO passo do pipeline, o "escondido por data" é exatamente o
   // delta desse passo — contado dentro da mesma passada (são ~6,3k linhas por
   // tecla digitada na busca; uma segunda passada só para contar seria desperdício).
+  // A contagem sai quebrada POR STATUS para que o número exibido possa respeitar o
+  // chip de status ligado sem que `statusFilter` entre nas deps deste memo (ver
+  // `selectHiddenFuture` logo abaixo e o comentário em monitorDateWindow.ts).
   const preStatusResult = useMemo(() => {
     // Linhas de RESERVA (standby) não entram mais na tabela — só poluíam a lista.
     // Continuam disponíveis via `items` para o painel de reserva e o botão
@@ -5171,7 +5204,9 @@ export default function SheetMonitor() {
       const kept: SheetMonitorRowType[] = [];
       for (const row of result) {
         if (rowMatchesDateRanges(row, ranges)) kept.push(row);
-        else tally.add(row.data);
+        // Mesma chave dos chips/facetas (status || "Sem status") — é ela que o
+        // recorte por status lá embaixo vai procurar nos baldes.
+        else tally.add(row.data, row.status || "Sem status");
       }
       result = kept;
     }
@@ -5179,7 +5214,16 @@ export default function SheetMonitor() {
     return { rows: result, hiddenFuture: tally.result() };
   }, [items, deferredSearch, tipoFilter, vinculoFilter, clienteFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter, descargaFromFilter, descargaToFilter]);
   const preStatusRows = preStatusResult.rows;
-  const hiddenFuture = preStatusResult.hiddenFuture;
+  // O número que vai para a tela: soma só os baldes dos status ligados, porque o
+  // contador é um BOTÃO e o clique tem de entregar exatamente o que ele promete.
+  // Antes contava pré-status: com o chip "PENDENTE" ligado a tela dizia "+5" e o
+  // clique trazia 2. Custo do recorte: uma soma sobre os chips selecionados
+  // (unidades), não uma segunda passada sobre as ~6,3k linhas — e `preStatusRows`
+  // mantém a identidade estável (statusFacets/filteredRows/routeQueue não caem).
+  const hiddenFuture = useMemo(
+    () => selectHiddenFuture(preStatusResult.hiddenFuture, statusFilter),
+    [preStatusResult.hiddenFuture, statusFilter],
+  );
 
   // Contagem por status para os chips clicáveis do "Status na planilha" (mesma
   // chave do resumo: status || "Sem status"). Reserva é linha sintética — não conta.
@@ -5320,6 +5364,9 @@ export default function SheetMonitor() {
   // nunca pode encolher o recorte. Sem isso, quem estivesse num recorte manual à
   // frente (10/08..12/08) via a janela virar hoje..maxDate e PERDIA o que estava
   // olhando.
+  // `hiddenFuture.maxDate` já vem recortado pelos chips de status ligados: a janela
+  // estica até a última futura que o operador VAI ver, não até a de um status que
+  // ele filtrou fora (esticar além só arrastaria linhas invisíveis para o payload).
   const handleRevealHiddenFuture = useCallback(() => {
     const w = revealFutureWindow(monitorNowKeySaoPaulo().slice(0, 10), hiddenFuture.maxDate, {
       from: dateFromFilter,
