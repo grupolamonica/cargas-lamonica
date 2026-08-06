@@ -94,15 +94,24 @@ const TRIP_STATUS_COMPLETED = 90;
  * uma viagem CANCELADA (trip_status 100) sem nunca ter sido aceita virava
  * `trip_accepted_at` — num campo que, por desenho, NUNCA é limpo (o rollback é UPDATE
  * manual). É o mesmo erro das 270 marcas fabricadas que a migration 20260806150000
- * documenta. Agora: o `acceptance_status` explícito manda (é o que o portal afirma);
- * na falta dele, só CONCLUSÃO REAL (Completed) prova que em algum momento foi aceita.
- * Cancelada sem sinal explícito volta DESCONHECIDA — nunca `true`.
+ * documenta. Agora: só CONCLUSÃO REAL (Completed) ou sinal explícito de aceite provam
+ * o aceite; cancelada sem sinal explícito volta DESCONHECIDA — nunca `true`.
+ *
+ * A ordem entre "Completed" e "acceptance_status = 0" não é arbitrária: uma viagem que
+ * CONCLUIU foi, por definição, aceita em algum momento — não se carrega, sela, viaja e
+ * descarrega uma viagem que a agência recusou. O 0 que o /trip/history/list devolve
+ * junto com trip_status 90 é o campo do portal já sem valor de verdade no histórico, e
+ * lê-lo como "não aceita" seria justamente o oposto do que os fatos dizem — e, pior,
+ * uma classificação CONCLUSIVA (o observador carimba `checked_at` e o Monitor esconde a
+ * linha). Por isso Completed vence o 0. Cancelled (100) NÃO ganha esse benefício: a
+ * viagem pode ter sido cancelada antes de qualquer aceite, e nesse caso o 0 continua
+ * sendo a melhor leitura disponível.
  */
 function acceptanceFromTab(queryType, acceptanceStatus, tripStatus) {
   if (queryType === 2) return true;
   if (acceptanceStatus === 1) return true;
+  if (tripStatus === TRIP_STATUS_COMPLETED) return true;
   if (acceptanceStatus === 0) return false;
-  if (queryType === 3) return tripStatus === TRIP_STATUS_COMPLETED ? true : null;
   return null;
 }
 

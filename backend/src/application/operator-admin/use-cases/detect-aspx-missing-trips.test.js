@@ -466,6 +466,33 @@ describe("detectAspxMissingTrips", () => {
       expect((await aceiteDe(velha.id)).trip_acceptance_checked_at).not.toBeNull();
     });
 
+    it("horizonte com env VAZIA/inválida cai no default de 7 dias, não em zero", async () => {
+      // `Number("")` é 0 e passa em `Number.isFinite`. Com o piso em 0, uma linha
+      // `SPX_ACCEPTANCE_OBSERVE_PAST_DAYS=` deixada em branco no .env (o jeito mais
+      // comum de "não configurar") encolhia a observação para "de hoje em diante" — e
+      // some justamente a lançada que já carregou, que é a que mais importa aqui.
+      const ontem = await seedLaunched({ clienteId, lh: "LT-ONTEM-VAZIA", data: ONTEM });
+
+      for (const valor of ["", "   ", "abc", "-3"]) {
+        process.env.SPX_ACCEPTANCE_OBSERVE_PAST_DAYS = valor;
+        await query("UPDATE public.cargas SET trip_acceptance_checked_at = NULL WHERE id = $1", [ontem.id]);
+
+        const r = await detectAspxMissingTrips({
+          deps: { withPgClient, fetchTripIndex: indexAceite({ "LT-ONTEM-VAZIA": false, [ISCA]: null }) },
+        });
+
+        expect(r.acceptance.conclusivas, `valor ${JSON.stringify(valor)}`).toBe(1);
+        expect((await aceiteDe(ontem.id)).trip_acceptance_checked_at).not.toBeNull();
+      }
+
+      // Quem quer mesmo "só de hoje em diante" escreve 0 — a intenção explícita vale.
+      process.env.SPX_ACCEPTANCE_OBSERVE_PAST_DAYS = "0";
+      const zero = await detectAspxMissingTrips({
+        deps: { withPgClient, fetchTripIndex: indexAceite({ "LT-ONTEM-VAZIA": false, [ISCA]: null }) },
+      });
+      expect(zero.acceptance.conclusivas).toBe(0);
+    });
+
     it("ignora lançada mergeada na gêmea (o Monitor também não a mostra)", async () => {
       const mergeada = await seedLaunched({ clienteId, lh: "LT-MERGEADA" });
       await query(

@@ -84,6 +84,31 @@ describe("fetchTripIndex — aceite observado por aba", () => {
     expect(byNumber.get("LT-CANCELADA-ACEITA").accepted).toBe(true);
   });
 
+  it("Concluído(3): viagem COMPLETED vence o acceptance_status 0 — CANCELLED não", async () => {
+    // O /trip/history/list devolve `acceptance_status: 0` para boa parte do histórico: o
+    // campo perde valor de verdade depois que a viagem sai do fluxo de aceite. Enquanto
+    // o 0 era avaliado ANTES do ramo do Concluído, uma viagem que CARREGOU, VIAJOU e
+    // DESCARREGOU (trip_status 90) era classificada CONCLUSIVAMENTE como não aceita — e
+    // conclusiva aqui quer dizer `checked_at` carimbado e linha escondida do Monitor.
+    // Uma viagem que concluiu foi aceita em algum momento; é fato físico, não inferência.
+    const { byNumber } = await index(
+      {
+        1: [],
+        2: [],
+        3: [
+          viagem("LT-CONCLUIDA-ZERO", { trip_status: 90, acceptance_status: 0 }),
+          viagem("LT-CANCELADA-ZERO", { trip_status: 100, acceptance_status: 0 }),
+        ],
+      },
+      { includeConcluido: true },
+    );
+
+    expect(byNumber.get("LT-CONCLUIDA-ZERO").accepted).toBe(true);
+    // Cancelada não ganha o mesmo benefício: pode ter sido cancelada ANTES de qualquer
+    // aceite, e aí o 0 é a melhor leitura disponível.
+    expect(byNumber.get("LT-CANCELADA-ZERO").accepted).toBe(false);
+  });
+
   it("promoção MONOTÔNICA: Planejado(0) + Aceito promove p/ aceita (a 1ª aba não nega a 2ª)", async () => {
     // O dedup faz a primeira aba vencer, e a Planejado vem ANTES da Aceito. Sem a
     // promoção, esta viagem ficaria accepted=false — negando a prova da aba Aceito.
