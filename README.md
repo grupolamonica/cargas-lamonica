@@ -157,6 +157,13 @@ bash scripts/smoke-test.sh http://76.13.169.177
 
 > **Finding the SHA:** In GitHub Actions, each run shows the full commit SHA. Use the SHA from the last known-good deploy run.
 
+> **Rollback nem sempre é de código.** Feature nova + migration aplicada = voltar a imagem
+> antiga pode ser PIOR que ficar onde está (o código velho não conhece as colunas novas e
+> reinterpreta o dado já gravado). Antes de rodar o `rollback.yml`, confira se a feature tem
+> runbook próprio com caminho de volta por env — ex.:
+> [`docs/runbooks/monitor-aceite-observado.md`](docs/runbooks/monitor-aceite-observado.md)
+> (Monitor / aceite da viagem), onde o rollback de código é **explicitamente desaconselhado**.
+
 ## Ativar TLS (HTTPS) para um Domínio
 
 **Pré-requisito:** DNS do domínio apontando para `76.13.169.177`.
