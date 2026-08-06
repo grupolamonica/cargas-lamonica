@@ -916,4 +916,72 @@ describe("Leads", () => {
       recente.compareDocumentPosition(antiga) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
+
+  it("DC-289: indicadores Com/Sem fila contam o escopo (com+sem=total) e o clique filtra", () => {
+    mockUseQuery.mockReturnValue({
+      data: {
+        groups: [
+          {
+            // COM fila (OPEN com 1 candidatura).
+            load: {
+              id: "com-1", status: "OPEN", origem: "Aracaju / SE", destino: "Maceio / AL",
+              perfil: "CARRETA", data: "2026-04-07", horario: "08:00:00", reservedPublicLeadId: null,
+            },
+            queueCount: 1, totalLeads: 1,
+            leads: [
+              {
+                id: "lead-com", status: "QUEUED", cpf: "11122233344", phone: "79988887777",
+                horsePlate: "AAA1A11", trailerPlate: "BBB2B22", trailerPlate2: "", vehicleType: "CARRETA",
+                preRegisteredAt: "2026-04-07T10:00:00.000Z", queuedAt: "2026-04-07T10:01:00.000Z",
+                whatsappClickedAt: null, approvedAt: null, approvedBy: null, queuePosition: 1,
+                validation: null, whatsappUrl: "https://wa.me/5579988887777",
+              },
+            ],
+          },
+          {
+            // SEM fila, OPEN vazia — já aparece hoje (DC-257).
+            load: {
+              id: "sem-open", status: "OPEN", origem: "Manaus / AM", destino: "Belem / PA",
+              perfil: "CARRETA", data: "2026-04-08", horario: "09:00:00", reservedPublicLeadId: null,
+            },
+            queueCount: 0, totalLeads: 0, leads: [],
+          },
+          {
+            // SEM fila, NÃO-OPEN vazia — só aparece ao clicar "Sem fila" (DC-289).
+            load: {
+              id: "sem-reserved", status: "RESERVED", origem: "Recife / PE", destino: "Natal / RN",
+              perfil: "CARRETA", data: "2026-04-09", horario: "10:00:00", reservedPublicLeadId: null,
+            },
+            queueCount: 0, totalLeads: 0, leads: [],
+          },
+        ],
+      },
+      isLoading: false, isFetching: false,
+    });
+
+    render(<MemoryRouter><Leads /></MemoryRouter>);
+
+    // Contagem do escopo: 1 com fila, 2 sem fila (soma = 3 cargas). Cada indicador
+    // é um botão localizável pelo title.
+    const comCard = screen.getByTitle(/com ao menos 1 candidatura/i);
+    const semCard = screen.getByTitle(/sem nenhuma candidatura/i);
+    expect(within(comCard).getByText("1")).toBeInTheDocument();
+    expect(within(semCard).getByText("2")).toBeInTheDocument();
+
+    // View padrão: a OPEN vazia aparece; a RESERVED vazia (não-OPEN) ainda não.
+    expect(screen.getByText("Carga sem-open")).toBeInTheDocument();
+    expect(screen.queryByText("Carga sem-reserved")).not.toBeInTheDocument();
+
+    // Clica "Sem fila": revela TODAS as vazias (inclusive a RESERVED) e some a com fila.
+    fireEvent.click(semCard);
+    expect(screen.getByText("Carga sem-open")).toBeInTheDocument();
+    expect(screen.getByText("Carga sem-reserved")).toBeInTheDocument();
+    expect(screen.queryByText("Carga com-1")).not.toBeInTheDocument();
+
+    // Clica "Com fila": mostra só a carga com candidatura.
+    fireEvent.click(comCard);
+    expect(screen.getByText("Carga com-1")).toBeInTheDocument();
+    expect(screen.queryByText("Carga sem-open")).not.toBeInTheDocument();
+    expect(screen.queryByText("Carga sem-reserved")).not.toBeInTheDocument();
+  });
 });
