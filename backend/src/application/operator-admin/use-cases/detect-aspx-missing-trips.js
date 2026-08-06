@@ -128,8 +128,17 @@ function acceptanceObserveEnabled() {
 
 // Janela e ritmo da carona do aceite.
 function acceptanceObserveConfig() {
+  // Variação do `num` do routeStepConfig com uma guarda a mais: env VAZIA cai no
+  // DEFAULT, não em zero. `Number("")` é 0 e passa em `Number.isFinite`, então com
+  // `min: 0` um `SPX_ACCEPTANCE_OBSERVE_PAST_DAYS=` no .env (linha declarada e deixada
+  // em branco — o jeito mais comum de "não configurar") encolheria silenciosamente a
+  // observação de 7 dias para "de hoje em diante". Não é hipótese acadêmica: em prod as
+  // lançadas que mais importam são exatamente as que já carregaram e continuam vivas na
+  // tela. Env em branco significa "não opinei"; quem quer zero escreve 0.
   const num = (env, def, { min = 0 } = {}) => {
-    const n = Number(process.env[env]);
+    const raw = String(process.env[env] ?? "").trim();
+    if (!raw) return def;
+    const n = Number(raw);
     return Number.isFinite(n) && n >= min ? n : def;
   };
   return {
