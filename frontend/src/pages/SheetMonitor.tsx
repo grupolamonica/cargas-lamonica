@@ -305,7 +305,10 @@ function StatusBreakdown({
           </button>
         )}
       </div>
-      <div className="flex flex-wrap gap-2">
+      {/* DC-293: grid de cards de dimensoes iguais (largura via grid, altura via
+          min-h) no lugar das pilulas rounded-full de largura variavel. Comportamento
+          preservado: contagem, clique-filtra, ordem estavel, esmaecido, cores. */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
         {entries.map(([status, count]) => {
           const cfg = resolveSheetStatusStyle(status === "Sem status" ? "" : status);
           const isActive = selected.includes(status);
@@ -320,7 +323,9 @@ function StatusBreakdown({
               onClick={() => onToggle(status)}
               title={isActive ? "Clique para remover do filtro" : `Filtrar por ${cfg.label} (soma vários)`}
               className={cn(
-                "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold transition-all",
+                // Card compacto de dimensao uniforme: largura pelo grid, altura pelo
+                // min-h; o grid alinha todos. rounded-[10px] (nao rounded-full) = card.
+                "flex min-h-[44px] items-center gap-2 rounded-[10px] px-2.5 py-1.5 text-left text-xs font-semibold transition-all",
                 cfg.bg,
                 isActive
                   ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
@@ -329,9 +334,10 @@ function StatusBreakdown({
                     : "hover:opacity-80",
               )}
             >
-              <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", cfg.dot)} />
-              <span className="uppercase tracking-[0.08em]">{cfg.label}</span>
-              <span className="rounded-full bg-black/10 px-1.5 py-0.5 text-[0.68rem] font-bold text-current dark:bg-white/15">{count}</span>
+              <span className={cn("h-2 w-2 shrink-0 rounded-full", cfg.dot)} />
+              {/* Rotulo longo quebra em 2 linhas (nao estica a largura); texto completo no title. */}
+              <span className="line-clamp-2 min-w-0 flex-1 uppercase leading-tight tracking-[0.04em] text-[0.62rem]">{cfg.label}</span>
+              <span className="shrink-0 text-sm font-bold tabular-nums text-current">{count}</span>
             </button>
           );
         })}
