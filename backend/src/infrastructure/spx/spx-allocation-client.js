@@ -76,6 +76,36 @@ export async function fetchAssignableDrivers(opts = {}) {
   return Array.isArray(data?.drivers) ? data.drivers : [];
 }
 
+// Enum tt_trip_status do portal (espelha TRIP_STATUS em bots/spx/backend/spx_robo/
+// trips.py). Só estes dois interessam aqui: a aba Concluído é o /trip/history/list e
+// devolve os DOIS — viagem que rodou (90) e viagem CANCELADA (100).
+const TRIP_STATUS_COMPLETED = 90;
+
+/**
+ * Aceite da viagem a partir da ABA em que ela apareceu (`query_type`) + o
+ * `acceptance_status` cru. Três estados, e o terceiro é o que importa: null =
+ * DESCONHECIDO. Quem grava a observação (detect-aspx-missing-trips) só carimba
+ * "checado" com resposta conclusiva — desconhecido não é evidência de nada.
+ *   aba 1 (Planejado) — 1 = aceita, 0 = não aceita, ausente/outro = desconhecido;
+ *   aba 2 (Aceito)    — estar nela É o aceite (a aba só existe para viagem aceita);
+ *   aba 3 (Concluído) — histórico: Completed E Cancelled no MESMO endpoint.
+ *
+ * O "aba 3 ⇒ aceita" incondicional que existia aqui era um gerador de marca falsa:
+ * uma viagem CANCELADA (trip_status 100) sem nunca ter sido aceita virava
+ * `trip_accepted_at` — num campo que, por desenho, NUNCA é limpo (o rollback é UPDATE
+ * manual). É o mesmo erro das 270 marcas fabricadas que a migration 20260806150000
+ * documenta. Agora: o `acceptance_status` explícito manda (é o que o portal afirma);
+ * na falta dele, só CONCLUSÃO REAL (Completed) prova que em algum momento foi aceita.
+ * Cancelada sem sinal explícito volta DESCONHECIDA — nunca `true`.
+ */
+function acceptanceFromTab(queryType, acceptanceStatus, tripStatus) {
+  if (queryType === 2) return true;
+  if (acceptanceStatus === 1) return true;
+  if (acceptanceStatus === 0) return false;
+  if (queryType === 3) return tripStatus === TRIP_STATUS_COMPLETED ? true : null;
+  return null;
+}
+
 /**
  * Índice do ESTADO REAL das viagens por trip_number — base do check positivo de
  * "já atribuída no ASPX" (em vez de inferir por ausência da lista assignable).
@@ -89,7 +119,16 @@ export async function fetchAssignableDrivers(opts = {}) {
  * falharem, propaga o erro; o use-case captura e marca warning "index_unavailable"
  * (os não-atribuíveis caem em "unknown" — degradação granular, não simulação).
  *
- * @returns {Promise<{ byNumber: Map<string,{status:number,statusName:string,driver:string}>, truncated:boolean, partial:boolean }>}
+ * Cada entrada carrega também o ACEITE observado (`accepted`), em três estados:
+ * true / false / null (desconhecido). O sidecar já devolve `acceptance_status` em
+ * _norm_trip e nós descartávamos — sem isso o único caminho que gravava aceite era
+ * o nosso próprio botão "Aceitar", e o aceite feito DIRETO no portal SPX nunca
+ * chegava ao banco (medido em 06/08/2026: 0 cargas "LT…" marcadas, 0 eventos de
+ * aceite desde 05/08). Ver acceptanceFromTab p/ a semântica por aba.
+ *
+ * @returns {Promise<{
+ *   byNumber: Map<string,{tripId:number|null,status:number|null,statusName:string,driver:string,accepted:boolean|null}>,
+ *   byRoute: Map<string,number>, truncated:boolean, partial:boolean }>}
  */
 export async function fetchTripIndex(
   { daysBack = 45, daysForward = 30, includeConcluido = false, concluidoDaysBack = 20 } = {},
@@ -116,9 +155,11 @@ export async function fetchTripIndex(
       const qs = `query_type=${qt}&station_id=${station}&com_veiculo=0&max_pages=30${db ? `&days_back=${db}` : ""}${df ? `&days_forward=${df}` : ""}`;
       try {
         const data = await sidecarFetch(`/spx/trips/snapshot?${qs}`, { method: "GET" }, { ...opts, timeoutMs: 9000 });
-        return { ok: true, data };
+        // `qt` viaja junto com a resposta: o aceite depende da ABA de origem e o
+        // `settled` sozinho já perdeu essa informação.
+        return { qt, ok: true, data };
       } catch (err) {
-        return { ok: false, err };
+        return { qt, ok: false, err };
       }
     }),
   );
@@ -132,7 +173,8 @@ export async function fetchTripIndex(
   let okCount = 0;
   let lastErr = null;
 
-  // Itera na ordem de `tabs` (Planejado antes de Aceito) → primeira aba vence o dedup.
+  // Itera na ordem de `tabs` (Planejado antes de Aceito) → primeira aba vence o dedup
+  // (exceto o aceite, que só sobe — ver a promoção monotônica abaixo).
   for (const r of settled) {
     if (!r.ok) {
       lastErr = r.err;
@@ -142,12 +184,28 @@ export async function fetchTripIndex(
     if (r.data?.truncated) truncated = true;
     for (const t of Array.isArray(r.data?.trips) ? r.data.trips : []) {
       const num = String(t.trip_number ?? "").trim();
-      if (!num || byNumber.has(num)) continue;
+      if (!num) continue;
+      const tripStatus = typeof t.trip_status === "number" ? t.trip_status : null;
+      const accepted = acceptanceFromTab(
+        r.qt,
+        typeof t.acceptance_status === "number" ? t.acceptance_status : null,
+        tripStatus,
+      );
+      const jaIndexada = byNumber.get(num);
+      if (jaIndexada) {
+        // Dedup: a primeira aba vence o resto do registro (status/motorista da mais
+        // "fresca"). Mas o ACEITE é MONOTÔNICO — a Planejado vem ANTES da Aceito, e
+        // sem esta promoção uma viagem presente nas duas ficaria com o accepted=false
+        // da Planejado, NEGANDO a prova que a aba Aceito acabou de dar.
+        if (accepted === true && jaIndexada.accepted !== true) jaIndexada.accepted = true;
+        continue;
+      }
       byNumber.set(num, {
         tripId: typeof t.trip_id === "number" ? t.trip_id : (t.trip_id ? Number(t.trip_id) : null),
-        status: typeof t.trip_status === "number" ? t.trip_status : null,
+        status: tripStatus,
         statusName: t.trip_status_name ?? "",
         driver: (t.driver_name ?? "").trim(),
+        accepted,
       });
       const rota = routeKeyFromLabels(parseStation(t.origem).cityUf, parseStation(t.destino).cityUf);
       if (rota) byRoute.set(rota, (byRoute.get(rota) ?? 0) + 1);
