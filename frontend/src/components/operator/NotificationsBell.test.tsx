@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -150,5 +150,57 @@ describe("NotificationsBell — alarme de spot (DC-279)", () => {
     setData({ unseenCount: 0, items: [notif({ id: "fc", seen: true, metadata: { lh: "LT-FC", is_forecast: true, origem: "A", destino: "B" } })] });
     rerender(freshTree());
     await waitFor(() => expect(spotAlert.stopSpeakingLoop).toHaveBeenCalled());
+  });
+});
+
+// O disjuntor do aceite SPX só serve se o operador entender o aviso. Kind sem rótulo cai
+// no fallback `n.kind` e chega como slug cru; sem tint cai no cinza de ruído. Este teste
+// trava as duas pontas — é exatamente o que faltava quando o job foi ao ar.
+describe("NotificationsBell — disjuntor de ocultação em massa (spx_acceptance_mass_hide)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseQueryClient.mockReturnValue({ invalidateQueries: vi.fn() });
+    sonner.custom.mockReturnValue("toast-id");
+    readModels.markOperatorNotificationsSeen.mockResolvedValue({ ok: true, updated: 1 });
+  });
+
+  const massHide = notif({
+    id: "mh",
+    kind: "spx_acceptance_mass_hide",
+    title: "37 cargas lançadas apareceriam como NÃO aceitas — nada foi alterado",
+    body: "O portal respondeu 'não aceita' para muitas viagens de uma vez.",
+    metadata: { bulk: true, ocultacoes: 37 },
+  });
+
+  it("mostra rótulo em PT-BR (e não o slug) com o ponto vermelho de aviso grave", async () => {
+    setData({ unseenCount: 1, items: [massHide] });
+    renderBell();
+    fireEvent.click(screen.getByRole("button", { name: "Notificações" }));
+
+    const label = await screen.findByText("Muitas lançadas sem aceite — confira o portal");
+    expect(screen.queryByText("spx_acceptance_mass_hide")).toBeNull();
+
+    // Ponto de severidade: mesmo peso de `aspx_route_missing`, nunca o cinza do fallback.
+    const item = label.closest("li")!;
+    const dot = item.querySelector("span.rounded-full")!;
+    expect(dot.className).toContain("bg-red-700");
+    expect(dot.className).not.toContain("bg-slate-400");
+
+    // Aviso agregado não navega: o lugar de conferir é o portal SPX, fora do sistema.
+    expect(item.getAttribute("role")).not.toBe("button");
+  });
+
+  it("não dispara alarme sonoro (o disjuntor avisa, não acorda a operação)", async () => {
+    setData({ unseenCount: 0, items: [] });
+    const { rerender } = renderBell();
+    setData({ unseenCount: 1, items: [massHide] });
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter><NotificationsBell /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(mockUseQuery).toHaveBeenCalled());
+    expect(spotAlert.startSpeakingLoop).not.toHaveBeenCalled();
+    expect(spotAlert.playSpotBeep).not.toHaveBeenCalled();
   });
 });
