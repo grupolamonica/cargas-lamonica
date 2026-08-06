@@ -380,3 +380,84 @@ describe("candidatura-schemas — rastreador id opcional + endereco sem logradou
     expect(result.success).toBe(true);
   });
 });
+
+// ── GLPI #55 — cadastro "somente veículos": motorista REFERÊNCIA { cpf } ─────
+// Step A pulado (motorista já cadastrado no Angellira/ASPX) → o wizard envia
+// apenas { cpf } (buildSubmitDados "DC-125"). Antes o motoristaSchema strict
+// exigia nome/telefones/telefone_primario/endereco e o submit dava 422
+// ("Campos obrigatorios faltando: Motorista — Nome / Telefones / ...").
+describe("candidatura-schemas — motorista referência { cpf } (GLPI #55)", () => {
+  it("aceita motorista { cpf } quando o Step A é pulado (cavalo completo)", () => {
+    const payload = {
+      cargaId: "carga-1",
+      dados: {
+        motorista: { cpf: "12345678901" },
+        cavalo: BASE_CAVALO,
+        carretas: [],
+      },
+    };
+    const result = candidaturaSubmitSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // cpf preservado (digits) para o lookup/hidratação e persistência.
+      expect(result.data.dados.motorista).toEqual({ cpf: "12345678901" });
+    }
+  });
+
+  it("normaliza cpf mascarado no motorista referência", () => {
+    const payload = {
+      cargaId: "carga-1",
+      dados: {
+        motorista: { cpf: "123.456.789-01" },
+        cavalo: BASE_CAVALO,
+        carretas: [],
+      },
+    };
+    const result = candidaturaSubmitSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.dados.motorista.cpf).toBe("12345678901");
+    }
+  });
+
+  it("REJEITA motorista parcial que NÃO é referência pura ({ cpf, nome } sem telefones/endereco)", () => {
+    // Cadastro NOVO incompleto: não casa o ramo completo (faltam campos) nem o
+    // de referência (.strict rejeita o `nome` extra) → segue barrado.
+    const payload = {
+      cargaId: "carga-1",
+      dados: {
+        motorista: { cpf: "12345678901", nome: "Joao da Silva" },
+        cavalo: BASE_CAVALO,
+        carretas: [],
+      },
+    };
+    const result = candidaturaSubmitSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+  });
+
+  it("REJEITA referência com campo extra além de cpf (.strict anti-bypass)", () => {
+    const payload = {
+      cargaId: "carga-1",
+      dados: {
+        motorista: { cpf: "12345678901", telefones: ["11999990000"] },
+        cavalo: BASE_CAVALO,
+        carretas: [],
+      },
+    };
+    const result = candidaturaSubmitSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+  });
+
+  it("motorista COMPLETO (Step A preenchido) continua válido com a union", () => {
+    const payload = {
+      cargaId: "carga-1",
+      dados: {
+        motorista: BASE_MOTORISTA,
+        cavalo: BASE_CAVALO,
+        carretas: [],
+      },
+    };
+    const result = candidaturaSubmitSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+  });
+});
