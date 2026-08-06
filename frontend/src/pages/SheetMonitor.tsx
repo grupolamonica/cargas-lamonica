@@ -55,6 +55,10 @@ import { allocEditPolicy, isSpxTrip } from "@/lib/monitorEditPolicy";
 import { routeCanonKey } from "@/lib/routeCanonical";
 import { computeSwapMoves } from "@/lib/monitorReorder";
 import { editableDriver, mergeAllocIntoRow, effectiveAllocField } from "@/lib/monitorAllocOverlay";
+import {
+  createHiddenFutureTally, defaultLoadWindow, resolveLoadWindow, revealFutureWindow,
+  type MonitorDateWindowMode,
+} from "@/lib/monitorDateWindow";
 import { allocationChangedBaseline, isAllocationChangedError, isDuplicateAllocationError } from "@/lib/allocationConflict";
 import {
   assignAspxAllocations,
@@ -1402,11 +1406,9 @@ function dateFilterWithMidnight(prev: string, next: string): string {
   return nd !== pd ? `${nd}T00:00` : next;
 }
 
-// Data de HOJE no fuso local do operador (BRT), no formato do <input datetime-local>.
-function todayLocalDate(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
+// "Data de HOJE no fuso local do operador" mudou de casa: virou
+// `monitorLocalDateKey` em @/lib/monitorDateWindow, junto com a janela padrão de
+// carregamento e o contador de futuras escondidas (regra pura, com testes).
 
 function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
   row: SheetMonitorRowType | null;
@@ -4470,10 +4472,25 @@ function ReservaPanelModal({ open, carga, reservas, onPull, onClose }: {
 // DC-275: persiste os filtros da tela de Monitor no localStorage — o operador
 // reencontra o último recorte após F5 / reabrir a página. Versão no key para
 // invalidar com segurança caso a forma dos filtros mude no futuro.
-const MONITOR_FILTERS_KEY = "lamonica-monitor-filters-v1";
+// v2: entrou o discriminador `dateWindowMode` ('auto' = janela recalculada a cada
+// montagem | 'manual' = recorte do operador). Sem ele, um payload v1 salvo com a
+// janela de UM DIA (o padrão antigo) seria restaurado como se fosse escolha do
+// operador e continuaria escondendo tudo — por isso a chave sobe de versão em vez
+// de tentar adivinhar a intenção do que já está gravado.
+const MONITOR_FILTERS_KEY = "lamonica-monitor-filters-v2";
+
+// Recorte salvo pela v1 (default "só hoje", que escondia 100% das cargas abertas
+// no /motorista). A v2 mudou a forma do objeto, então a v1 nunca mais é lida —
+// removê-la evita deixar lixo permanente no localStorage de todo operador.
+const MONITOR_FILTERS_KEY_LEGACY = "lamonica-monitor-filters-v1";
 
 function loadMonitorFilters(): Record<string, unknown> {
   if (typeof window === "undefined") return {};
+  try {
+    window.localStorage.removeItem(MONITOR_FILTERS_KEY_LEGACY);
+  } catch {
+    /* localStorage indisponível — seguir sem a limpeza */
+  }
   try {
     const raw = window.localStorage.getItem(MONITOR_FILTERS_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
@@ -4501,11 +4518,20 @@ export default function SheetMonitor() {
   const [routeFilter, setRouteFilter] = useState<string[]>(() => persistedStrArray(persistedFilters.routeFilter));
   const [editFilter, setEditFilter] = useState<string[]>(() => persistedStrArray(persistedFilters.editFilter));
   const [clienteFilter, setClienteFilter] = useState<string[]>(() => persistedStrArray(persistedFilters.clienteFilter));
-  // Filtro de carregamento começa em HOJE (dia único: 00:00–23:59) na primeira
-  // visita — mostra só a agenda do dia. DC-275: se o operador já tinha um
-  // intervalo salvo, restaura o dele em vez do padrão.
-  const [dateFromFilter, setDateFromFilter] = useState(() => persistedStr(persistedFilters.dateFromFilter, `${todayLocalDate()}T00:00`));
-  const [dateToFilter, setDateToFilter] = useState(() => persistedStr(persistedFilters.dateToFilter, `${todayLocalDate()}T23:59`));
+  // Filtro de carregamento: JANELA OPERACIONAL (hoje .. hoje+7), não "hoje".
+  // Medido em 06/08/2026: das 104 cargas de sistema no recorte, só 12 eram de hoje
+  // e nenhuma delas ainda estava aberta no /motorista; as 44 abertas estavam em
+  // 07/08..10/08. O padrão de UM DIA escondia 100% do acionável.
+  //
+  // O reclamp acontece AQUI, no initializer, e não num useEffect: em 'auto' a
+  // janela é recalculada de `new Date()` a cada montagem, então um valor salvo
+  // ontem é logicamente impossível de sobreviver ao F5 — e não há render duplo nem
+  // o flash da janela velha que um efeito de correção causaria. Só 'manual'
+  // (o operador mexeu nos inputs) restaura o que estava no localStorage.
+  const [initialDateWindow] = useState(() => resolveLoadWindow(persistedFilters));
+  const [dateWindowMode, setDateWindowMode] = useState<MonitorDateWindowMode>(initialDateWindow.mode);
+  const [dateFromFilter, setDateFromFilter] = useState(initialDateWindow.from);
+  const [dateToFilter, setDateToFilter] = useState(initialDateWindow.to);
   const [descargaFromFilter, setDescargaFromFilter] = useState(() => persistedStr(persistedFilters.descargaFromFilter, ""));
   const [descargaToFilter, setDescargaToFilter] = useState(() => persistedStr(persistedFilters.descargaToFilter, ""));
   // DC-275: salva o recorte atual a cada mudança — sobrevive a F5 / reabrir.
@@ -4522,6 +4548,7 @@ export default function SheetMonitor() {
           routeFilter,
           editFilter,
           clienteFilter,
+          dateWindowMode,
           dateFromFilter,
           dateToFilter,
           descargaFromFilter,
@@ -4540,6 +4567,7 @@ export default function SheetMonitor() {
     routeFilter,
     editFilter,
     clienteFilter,
+    dateWindowMode,
     dateFromFilter,
     dateToFilter,
     descargaFromFilter,
@@ -5077,7 +5105,12 @@ export default function SheetMonitor() {
   // Linhas após TODOS os filtros MENOS o de status. Base para (a) as contagens
   // clicáveis do "Status na planilha" (facetas) e (b) o filtro de status por cima
   // — assim os chips mostram quantas linhas cada status tem sob os demais filtros.
-  const preStatusRows = useMemo(() => {
+  //
+  // Devolve TAMBÉM o que a janela de data escondeu (`hiddenFuture`): como o filtro
+  // de data é o ÚLTIMO passo do pipeline, o "escondido por data" é exatamente o
+  // delta desse passo — contado dentro da mesma passada (são ~6,3k linhas por
+  // tecla digitada na busca; uma segunda passada só para contar seria desperdício).
+  const preStatusResult = useMemo(() => {
     // Linhas de RESERVA (standby) não entram mais na tabela — só poluíam a lista.
     // Continuam disponíveis via `items` para o painel de reserva e o botão
     // "puxar standby" (standbysByRoute), que seguem enxergando todos os standbys.
@@ -5128,11 +5161,25 @@ export default function SheetMonitor() {
     const carTo = dateToFilter ? new Date(dateToFilter).getTime() : null;
     const desFrom = descargaFromFilter ? new Date(descargaFromFilter).getTime() : null;
     const desTo = descargaToFilter ? new Date(descargaToFilter).getTime() : null;
-    if (carFrom !== null || carTo !== null || desFrom !== null || desTo !== null)
-      result = result.filter((row) => rowMatchesDateRanges(row, { carFrom, carTo, desFrom, desTo }));
+    // Conta só as FUTURAS que ficaram de fora, nunca o total: com a janela de um
+    // dia o filtro escondia 6246 linhas, mas 6171 eram histórico da planilha e só
+    // ~74 eram futuras. Um contador de "6246 escondidas" é ruído — o operador
+    // aprende a ignorar e o número deixa de proteger contra o recorte cego.
+    const tally = createHiddenFutureTally(monitorNowKeySaoPaulo().slice(0, 10));
+    if (carFrom !== null || carTo !== null || desFrom !== null || desTo !== null) {
+      const ranges = { carFrom, carTo, desFrom, desTo };
+      const kept: SheetMonitorRowType[] = [];
+      for (const row of result) {
+        if (rowMatchesDateRanges(row, ranges)) kept.push(row);
+        else tally.add(row.data);
+      }
+      result = kept;
+    }
 
-    return result;
+    return { rows: result, hiddenFuture: tally.result() };
   }, [items, deferredSearch, tipoFilter, vinculoFilter, clienteFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter, descargaFromFilter, descargaToFilter]);
+  const preStatusRows = preStatusResult.rows;
+  const hiddenFuture = preStatusResult.hiddenFuture;
 
   // Contagem por status para os chips clicáveis do "Status na planilha" (mesma
   // chave do resumo: status || "Sem status"). Reserva é linha sintética — não conta.
@@ -5245,10 +5292,45 @@ export default function SheetMonitor() {
   );
   const handleClearStatus = useCallback(() => setStatusFilter([]), []);
 
+  // A janela em 'auto' é o ESTADO DE REPOUSO da tela, não um filtro — se contasse
+  // como ativo, "Limpar" ficaria eternamente habilitado sem nada para limpar (era
+  // o caso antes, com o padrão "hoje"). Só o recorte 'manual' conta.
   const hasActiveFilters =
     deferredSearch.trim().length > 0 || statusFilter.length > 0 || tipoFilter.length > 0 || vinculoFilter.length > 0 || clienteFilter.length > 0 ||
-    routeFilter.length > 0 || assignmentFilter.length > 0 || editFilter.length > 0 || dateFromFilter.length > 0 || dateToFilter.length > 0 ||
+    routeFilter.length > 0 || assignmentFilter.length > 0 || editFilter.length > 0 || dateWindowMode === "manual" ||
     descargaFromFilter.length > 0 || descargaToFilter.length > 0;
+
+  // Volta a tela ao repouso: janela operacional recalculada de agora + 'auto'
+  // (assim o próximo F5 continua acompanhando a data corrente).
+  const resetDateWindow = useCallback(() => {
+    const w = defaultLoadWindow();
+    setDateWindowMode("auto");
+    setDateFromFilter(w.from);
+    setDateToFilter(w.to);
+    setDescargaFromFilter("");
+    setDescargaToFilter("");
+  }, []);
+
+  // Clique no contador de futuras escondidas: estica a janela até a última futura
+  // (e solta o filtro de descarga, que também pode estar escondendo alguma delas)
+  // — revela EXATAMENTE o que o contador prometeu. Não limpa o filtro de data: isso
+  // traria as 6171 linhas de histórico junto (126 páginas) e enterraria o que o
+  // operador acabou de pedir para ver.
+  // UNIÃO com a janela atual: o contador promete SOMAR N linhas, então o clique
+  // nunca pode encolher o recorte. Sem isso, quem estivesse num recorte manual à
+  // frente (10/08..12/08) via a janela virar hoje..maxDate e PERDIA o que estava
+  // olhando.
+  const handleRevealHiddenFuture = useCallback(() => {
+    const w = revealFutureWindow(monitorNowKeySaoPaulo().slice(0, 10), hiddenFuture.maxDate, {
+      from: dateFromFilter,
+      to: dateToFilter,
+    });
+    setDateWindowMode("manual");
+    setDateFromFilter(w.from);
+    setDateToFilter(w.to);
+    setDescargaFromFilter("");
+    setDescargaToFilter("");
+  }, [hiddenFuture.maxDate, dateFromFilter, dateToFilter]);
 
   useEffect(() => { setPage(0); }, [deferredSearch, statusFilter, tipoFilter, vinculoFilter, routeFilter, assignmentFilter, editFilter, dateFromFilter, dateToFilter, descargaFromFilter, descargaToFilter]);
 
@@ -5446,10 +5528,15 @@ export default function SheetMonitor() {
 
               <div className="flex items-center gap-1">
                 <span className="text-[0.6rem] font-semibold uppercase text-muted-foreground/70">Carreg.</span>
-                <input type="datetime-local" value={dateFromFilter} onChange={(e) => setDateFromFilter((prev) => dateFilterWithMidnight(prev, e.target.value))}
+                {/* Mexer em qualquer um dos dois inputs marca a janela como 'manual':
+                    a partir daí ela é escolha do operador e para de ser recalculada
+                    na montagem. "Limpar" devolve para 'auto'. */}
+                <input type="datetime-local" value={dateFromFilter}
+                  onChange={(e) => { setDateWindowMode("manual"); setDateFromFilter((prev) => dateFilterWithMidnight(prev, e.target.value)); }}
                   className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
                   title="Carregamento a partir de (horário padrão 00:00 — edite se quiser)" aria-label="Carregamento a partir de" />
-                <input type="datetime-local" value={dateToFilter} onChange={(e) => setDateToFilter((prev) => dateFilterWithMidnight(prev, e.target.value))} min={dateFromFilter || undefined}
+                <input type="datetime-local" value={dateToFilter}
+                  onChange={(e) => { setDateWindowMode("manual"); setDateToFilter((prev) => dateFilterWithMidnight(prev, e.target.value)); }} min={dateFromFilter || undefined}
                   className="rounded-xl border border-border/80 bg-white/92 px-3 py-2.5 text-sm outline-none focus:border-primary/30 focus:ring-4 focus:ring-primary/10 dark:bg-muted/40"
                   title="Carregamento até (horário padrão 00:00 — edite se quiser)" aria-label="Carregamento até" />
               </div>
@@ -5465,9 +5552,12 @@ export default function SheetMonitor() {
 
               {/* "Limpar" sempre presente (desabilitado sem filtro): ocupa slot fixo
                   no fim da linha de filtros, então nada reflui quando um filtro é
-                  aplicado/limpo. A busca é flex-1 e absorve a variação de largura. */}
+                  aplicado/limpo. A busca é flex-1 e absorve a variação de largura.
+                  Ele RESTAURA a janela operacional em vez de esvaziar as datas:
+                  esvaziar jogava o operador de ~39 para 6285 linhas (126 páginas de
+                  histórico da planilha), que é o oposto de "limpar a tela". */}
               <button type="button" disabled={!hasActiveFilters}
-                onClick={() => { setSearch(""); setStatusFilter([]); setTipoFilter([]); setVinculoFilter([]); setClienteFilter([]); setRouteFilter([]); setAssignmentFilter([]); setEditFilter([]); setDateFromFilter(""); setDateToFilter(""); setDescargaFromFilter(""); setDescargaToFilter(""); }}
+                onClick={() => { setSearch(""); setStatusFilter([]); setTipoFilter([]); setVinculoFilter([]); setClienteFilter([]); setRouteFilter([]); setAssignmentFilter([]); setEditFilter([]); resetDateWindow(); }}
                 className="inline-flex items-center gap-1 rounded-xl border border-border/80 bg-white px-3 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 dark:bg-muted/40">
                 <X className="h-3.5 w-3.5" />Limpar
               </button>
@@ -5512,10 +5602,23 @@ export default function SheetMonitor() {
             )}
 
             {/* Sempre renderizado (mostra o total quando não há filtro) para a linha
-                não aparecer/sumir e deslocar a tabela verticalmente. */}
+                não aparecer/sumir e deslocar a tabela verticalmente. O contador de
+                futuras escondidas mora DENTRO deste mesmo <p> pelo mesmo motivo:
+                uma linha própria apareceria/sumiria conforme a janela e traria de
+                volta o salto vertical que este parágrafo existe para evitar. */}
             <p className="mt-3 text-xs text-muted-foreground">
               Mostrando <span className="font-bold text-foreground">{filteredRows.length}</span> de{" "}
               <span className="font-bold text-foreground">{items.length}</span> linhas
+              {hiddenFuture.count > 0 && (
+                <>
+                  {" · "}
+                  <button type="button" onClick={handleRevealHiddenFuture}
+                    className="font-semibold text-amber-700 underline decoration-dotted underline-offset-2 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300"
+                    title={`Ampliar a janela de carregamento até ${hiddenFuture.maxDate ?? "a última carga"} (e soltar o filtro de descarga) para ver estas cargas`}>
+                    +{hiddenFuture.count} futura{hiddenFuture.count === 1 ? "" : "s"} fora da janela
+                  </button>
+                </>
+              )}
             </p>
           </section>
         )}
