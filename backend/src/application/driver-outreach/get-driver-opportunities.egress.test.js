@@ -26,6 +26,7 @@ import {
   seedSheetSnapshot,
   withPgClient as harnessWithPgClient,
 } from "../operator-admin/test-harness.js";
+import { getSaoPauloWallClock } from "../../domain/sao-paulo-time.js";
 
 // ── instrumentação do client pg ───────────────────────────────────────────────
 const dbStats = { queries: 0, rows: 0, byTag: {}, snapshotElements: 0 };
@@ -93,8 +94,27 @@ const SNAPSHOT_ROWS = CANDIDATES * 3 + 120; // 60 motoristas × 3 cargas + ruíd
 const OPEN_FUTURE = 6;
 const OPEN_EXPIRED = 24; // passivo de cargas OPEN vencidas (o que sobrava na rede)
 
-const dayOffsetIso = (n) =>
-  new Date(Date.now() + n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+// Offsets ancorados no relógio de SÃO PAULO, não em UTC.
+//
+// `getDriverOpportunities` corta as cargas por `getSaoPauloWallClock()`, mas este
+// helper gerava as datas com `Date.now()` em UTC. Das 00:00Z às 03:00Z — ou seja,
+// das 21:00 à meia-noite BRT — as duas datas divergem: o "hoje" do teste vira o
+// amanhã do app e o "ontem" do teste vira o hoje do app. A asserção "carga de
+// ONTEM não entra" então falhava, porque a carga era legitimamente de hoje.
+//
+// Reproduzido em 06/08/2026 às 21:30 BRT: o gate de teste do deploy quebrou em
+// `expected [ …(2) ] to not include '<id de ontem>'`, com a árvore limpa e sem
+// nenhuma mudança em driver-outreach. Na prática era um blackout de deploy de
+// 3 horas por dia, justamente na janela de operação da noite.
+//
+// Meio-dia UTC como âncora: somar dias a partir do meio-dia nunca atravessa uma
+// fronteira de horário de verão, então o offset é exato em qualquer época do ano.
+const dayOffsetIso = (n) => {
+  const { dateIso } = getSaoPauloWallClock();
+  const d = new Date(`${dateIso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
 
 const cpfOf = (i) => String(90000000000 + i);
 const nameOf = (i) => `Motorista Rajada ${i}`;
