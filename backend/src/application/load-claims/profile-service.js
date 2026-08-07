@@ -14,6 +14,10 @@ export async function upsertDriverProfile({ userId, profile, correlationId }) {
     const oldCpf = String(existingRows[0]?.document_number || "").replace(/\D/g, "");
     const oldPhone = String(existingRows[0]?.phone || "").replace(/\D/g, "");
 
+    // Compliance flags are not listed here on purpose. They are the eligibility gates
+    // and only the operator may set them (update-driver-profile.js, audited). On INSERT
+    // the column defaults apply; on CONFLICT they are left untouched, so an
+    // operator-approved value survives the driver's next profile save.
     const { rows } = await client.query(
       `
         INSERT INTO public.driver_profiles (
@@ -23,27 +27,17 @@ export async function upsertDriverProfile({ userId, profile, correlationId }) {
           document_number,
           vehicle_profile,
           active,
-          documents_valid,
-          antt_valid,
-          tracking_enabled,
-          insurance_valid,
-          monitoring_capable,
           operational_blocked,
           allowed_regions,
           metadata
         )
-        VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9, $10, false, $11::text[], $12::jsonb)
+        VALUES ($1, $2, $3, $4, $5, true, false, $6::text[], $7::jsonb)
         ON CONFLICT (user_id)
         DO UPDATE SET
           full_name = EXCLUDED.full_name,
           phone = EXCLUDED.phone,
           document_number = EXCLUDED.document_number,
           vehicle_profile = EXCLUDED.vehicle_profile,
-          documents_valid = EXCLUDED.documents_valid,
-          antt_valid = EXCLUDED.antt_valid,
-          tracking_enabled = EXCLUDED.tracking_enabled,
-          insurance_valid = EXCLUDED.insurance_valid,
-          monitoring_capable = EXCLUDED.monitoring_capable,
           allowed_regions = EXCLUDED.allowed_regions,
           metadata = EXCLUDED.metadata,
           updated_at = now()
@@ -55,11 +49,6 @@ export async function upsertDriverProfile({ userId, profile, correlationId }) {
         profile.phone || null,
         profile.document_number || null,
         profile.vehicle_profile,
-        profile.documents_valid,
-        profile.antt_valid,
-        profile.tracking_enabled,
-        profile.insurance_valid,
-        profile.monitoring_capable,
         profile.allowed_regions,
         JSON.stringify(profile.metadata ?? {}),
       ],
