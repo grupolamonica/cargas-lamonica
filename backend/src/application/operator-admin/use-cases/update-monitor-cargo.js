@@ -5,6 +5,7 @@ import { ConflictError, NotFoundError, ValidationError } from "../../../domain/l
 import { syncedCarregamentoLabel } from "../../../domain/cargo-schedule.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
 import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
+import { markDriverVisibleWrite } from "./driver-loads-freshness.js";
 import { writeAllocationsToSheet, formatSheetDateLabel } from "../../google-sheets/sheet-writeback.js";
 import { describeConflicts, duplicateAllocWarnEnabled, findAllocationConflicts } from "./find-allocation-conflicts.js";
 import { alocacaoDesatualizada, concurrentEditWarnEnabled, descreverAlteracaoConcorrente } from "./check-allocation-freshness.js";
@@ -429,6 +430,11 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
       },
     };
   });
+
+  // Transação COMITADA acima — mesma razão do caminho gêmeo para carimbar só agora:
+  // invalidar o cache do read model do motorista antes do commit descartaria a entrada
+  // por uma escrita que ainda podia falhar (ver driver-loads-freshness.js).
+  markDriverVisibleWrite();
 
   // Write-back best-effort na planilha (espelho) — FORA da transação e SEM await.
   //

@@ -10,6 +10,7 @@ import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
 import { ensureMonitorSheetCargo } from "./_shared.js";
 import { isTwinCascadeOnMergedEnabled } from "./merge-launched-twin.js";
 import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
+import { markDriverVisibleWrite } from "./driver-loads-freshness.js";
 
 /**
  * Grava a ALOCAÇÃO editada no Monitor (motorista/cavalo/carreta/status operacional)
@@ -440,6 +441,12 @@ export async function updateMonitorAllocation({ lh, source = null, operatorId, p
       },
     };
   });
+
+  // Transação COMITADA acima. Carimba o frescor só agora — invalidar o cache do read
+  // model do motorista antes do commit descartaria a entrada por uma escrita que ainda
+  // podia falhar. Aqui a edição já é fato: a próxima busca do portal não pode servir uma
+  // entrada de cache anterior a ela (ver driver-loads-freshness.js).
+  markDriverVisibleWrite();
 
   // Cancelou no Monitor (status → CANCELADO) → dispara a cascata da rota: o
   // motorista desce a fila (Interpretação A) e o último sem carga vira reserva.
