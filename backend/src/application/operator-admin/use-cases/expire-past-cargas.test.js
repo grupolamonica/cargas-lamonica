@@ -6,6 +6,7 @@ import {
   resetTestDatabase,
   seedCargo,
   seedCliente,
+  seedPublicLead,
   withPgClient,
 } from "../test-harness.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
@@ -96,5 +97,73 @@ describe("expirePastCargas", () => {
     expect(await statusOf(draftFuture.id)).toBe("DRAFT");
     expect(await statusOf(draftRecurring.id)).toBe("DRAFT");
     expect(await statusOf(draftTemplate.id)).toBe("DRAFT");
+  });
+  // CAUSA RAIZ das "cargas mortas" reportadas pelo operador: o job varria só OPEN/DRAFT,
+  // então carga FECHADA (BOOKED/RESERVED) com data no passado nunca saía das telas e
+  // acumulava para sempre. Medido em produção 07/08/2026: 1.759 fechadas com data passada,
+  // 1.048 com mais de 30 dias.
+  describe("carga FECHADA com carregamento antigo", () => {
+    /** Data ISO deslocada em `dias` a partir de hoje (BRT). */
+    const diasAtras = (dias) => {
+      const d = new Date(`${getSaoPauloWallClock().dateIso}T12:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - dias);
+      return d.toISOString().slice(0, 10);
+    };
+
+    it("BOOKED ANTIGA (fora da graça) expira", async () => {
+      const { id } = await seedCargo({
+        cliente_id: clienteId, status: "BOOKED", data: diasAtras(30), sheet_lh: "LT-VELHA",
+      });
+      await expirePastCargas({ deps });
+      expect(await statusOf(id)).toBe("EXPIRED");
+    });
+
+    it("BOOKED RECENTE (dentro da graça) NÃO expira — o frete pode estar RODANDO", async () => {
+      // BA→PE são ~16h: carga carregada ontem pode estar em trânsito agora.
+      const { id } = await seedCargo({
+        cliente_id: clienteId, status: "BOOKED", data: diasAtras(1), sheet_lh: "LT-ONTEM",
+      });
+      await expirePastCargas({ deps });
+      expect(await statusOf(id)).toBe("BOOKED");
+    });
+
+    it("RESERVED antiga e limpa expira", async () => {
+      const { id } = await seedCargo({
+        cliente_id: clienteId, status: "RESERVED", data: diasAtras(30), sheet_lh: "LT-RESERVED",
+      });
+      await expirePastCargas({ deps });
+      expect(await statusOf(id)).toBe("EXPIRED");
+    });
+
+    it("NÃO expira quando há PONTEIRO DE RESERVA — trocar o status quebra o ciclo da reserva", async () => {
+      const { id } = await seedCargo({
+        cliente_id: clienteId, status: "BOOKED", data: diasAtras(30), sheet_lh: "LT-COM-RESERVA",
+      });
+      const lead = await seedPublicLead({ load_id: id, status: "APPROVED" });
+      await query("UPDATE public.cargas SET reserved_public_lead_id = $2 WHERE id = $1", [id, lead.id]);
+
+      await expirePastCargas({ deps });
+      expect(await statusOf(id)).toBe("BOOKED");
+    });
+
+    it("NÃO expira quando há CANDIDATURA VIVA — esconderia a carga que o motorista pediu", async () => {
+      const { id } = await seedCargo({
+        cliente_id: clienteId, status: "BOOKED", data: diasAtras(30), sheet_lh: "LT-COM-LEAD",
+      });
+      await seedPublicLead({ load_id: id, status: "QUEUED" });
+
+      await expirePastCargas({ deps });
+      expect(await statusOf(id)).toBe("BOOKED");
+    });
+
+    it("candidatura ENCERRADA não protege — a carga antiga expira normalmente", async () => {
+      const { id } = await seedCargo({
+        cliente_id: clienteId, status: "BOOKED", data: diasAtras(30), sheet_lh: "LT-LEAD-MORTO",
+      });
+      await seedPublicLead({ load_id: id, status: "CANCELLED" });
+
+      await expirePastCargas({ deps });
+      expect(await statusOf(id)).toBe("EXPIRED");
+    });
   });
 });
