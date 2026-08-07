@@ -61,7 +61,7 @@ describe.sequential("paridade: isOfferedToDriver × WHERE real do portal (pg-mem
   beforeAll(async () => {
     await resetTestDatabase();
     const clienteId = (await seedCliente({ nome: "Shopee" })).id;
-    const base = { cliente_id: clienteId, status: "OPEN", driver_visibility: "PUBLIC", data: futuro.dateIso, horario: "08:00:00" };
+    const base = { cliente_id: clienteId, status: "OPEN", driver_visibility: "PUBLIC", data: futuro.dateIso, horario: futuro.timeIso };
 
     const pacotePublicado = (await seedPacote({ status: "publicado" })).id;
     const pacoteEmAndamento = (await seedPacote({ status: "em_andamento" })).id;
