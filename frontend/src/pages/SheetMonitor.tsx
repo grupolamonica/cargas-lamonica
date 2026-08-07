@@ -1342,7 +1342,12 @@ function MonitorCargoFields({ form, setForm, statusOptions, onStatusTouched }: {
           value={form.status}
           onChange={(e) => { onStatusTouched?.(); set("status")(e); }}
         >
-          <option value="">(sem status)</option>
+          {/* NÃO é sinônimo de "Disponível". Esta opção só LIMPA o status; "Disponível"
+              é que reabre a carga para o motorista (força a carga a voltar ao portal).
+              O rótulo diz isso porque as duas eram lidas como a mesma coisa — a linha sem
+              status exibe o selo azul "Disponivel", então o operador escolhia aqui
+              esperando reabrir, e a carga não voltava para o painel do motorista. */}
+          <option value="">— Sem status (não reabre p/ motorista) —</option>
           {statusOptions.map((s) => (
             <option key={s} value={s}>{s === "Disponível" ? "Disponível (reabrir p/ motorista)" : s}</option>
           ))}
@@ -3778,7 +3783,10 @@ function RowDetailModal({
                     onChange={(e) => { setAllocStatusDirty(true); setAllocForm((f) => ({ ...f, status: e.target.value })); }}
                     className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
                   >
-                    <option value="">— sem status (usa a planilha) —</option>
+                    {/* Devolve a decisão do status para a planilha (solta o override do
+                        operador) e NÃO reabre a carga — diferente de "Disponível", que
+                        reabre e limpa a coluna STATUS da planilha. */}
+                    <option value="">— Seguir a planilha (não reabre) —</option>
                     {/* Preserva um valor já salvo que não esteja na lista canônica (ex.: legado). */}
                     {allocForm.status && !OPERATIONAL_STATUS_OPTIONS.includes(allocForm.status as (typeof OPERATIONAL_STATUS_OPTIONS)[number]) && (
                       <option value={allocForm.status}>{allocForm.status}</option>
