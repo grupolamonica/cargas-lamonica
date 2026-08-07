@@ -1,0 +1,42 @@
+# Configuração do gitleaks (varredura de segredos no CI).
+#
+# Estende o conjunto de regras padrão em vez de substituí-lo.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Falsos positivos conhecidos e o vazamento histórico já catalogado"
+
+paths = [
+  # Arquivos de exemplo mostram o FORMATO da variável; os valores são
+  # placeholders (`__set-a-strong-secret-via-openssl-rand-hex-32__`).
+  '''\.env\.example$''',
+
+  # Fixtures de teste usam tokens sintéticos (`sbp_super_secret_value_...`)
+  # justamente para provar que o sanitizador de log os redige.
+  '''.*\.test\.(js|ts|tsx)$''',
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # DÍVIDA CONHECIDA — REMOVER ESTA ENTRADA (achado CRIT-1, DC-283)
+  #
+  # A senha real do portal SPX/Agency foi commitada neste arquivo e está em
+  # TODO o histórico do git. O literal já saiu da versão atual (seed vazio),
+  # mas o histórico não pode ser reescrito num PR: exige git filter-repo e
+  # re-clone por todo mundo.
+  #
+  # Sem esta entrada, o gitleaks reprova todo PR por um segredo que ninguém
+  # consegue remover num PR — e varredura que trava tudo é desligada na
+  # primeira semana. Com ela, a varredura fica BLOQUEANTE para qualquer
+  # segredo NOVO, que é o que dá para impedir hoje.
+  #
+  # Allowlist por CAMINHO, de propósito: escrever o segredo aqui como regex
+  # apenas o recommitaria em outro arquivo.
+  #
+  # Ordem para apagar esta entrada:
+  #   1. rotacionar a credencial no portal (segue válida em cada clone);
+  #   2. purgar o histórico;
+  #   3. remover esta linha e conferir que o CI segue verde.
+  # Runbook: docs/security/rotacao-credencial-aspx.md
+  # ─────────────────────────────────────────────────────────────────────────
+  '''backend/supabase/migrations/20260420120000_create_aspx_drivers\.sql$''',
+]
