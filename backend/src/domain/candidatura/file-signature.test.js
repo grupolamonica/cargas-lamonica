@@ -49,6 +49,15 @@ describe("file-signature", () => {
     expect(fileSignatureMatchesDeclaredType(heifWithBrand("hevc"), "image/heic")).toBe(true);
   });
 
+  it("aceita marca ISO-BMFF desconhecida quando o motorista declara HEIC", () => {
+    // Decisao deliberada: marca de aparelho fora de uma lista fechada viraria 415
+    // e travaria o envio da CNH. O que importa e que nao ha conteudo ativo, e
+    // isso a caixa `ftyp` ja garante.
+    expect(fileSignatureMatchesDeclaredType(heifWithBrand("xyz9"), "image/heic")).toBe(true);
+    // E continua nao valendo como PNG/JPEG/PDF.
+    expect(fileSignatureMatchesDeclaredType(heifWithBrand("xyz9"), "image/png")).toBe(false);
+  });
+
   it("aceita o caminho feliz de cada tipo", () => {
     expect(fileSignatureMatchesDeclaredType(PNG, "image/png")).toBe(true);
     expect(fileSignatureMatchesDeclaredType(JPEG_EXIF, "image/jpeg")).toBe(true);

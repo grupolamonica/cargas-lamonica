@@ -14,9 +14,15 @@
 // então varremos o início do arquivo, como fazem os leitores de PDF.
 const PDF_HEADER_SEARCH_WINDOW = 1024;
 
-// Família HEIF: caixa ISO-BMFF `ftyp` no offset 4, marca no offset 8.
-// Prefixos cobrem heic/heix/hevc/hevx/heim/heis/hevm/hevs/mif1/msf1.
-const HEIF_BRAND_PREFIXES = ["hei", "hev", "mif", "msf"];
+// Família HEIF: caixa ISO-BMFF `ftyp` no offset 4.
+//
+// Aceitamos QUALQUER marca, não só heic/heix/hevc/mif1/msf1. A lista fechada
+// seria um pouco mais estrita, mas o custo de errar é assimétrico: uma marca de
+// aparelho fora da lista vira 415 e o motorista não consegue enviar a CNH — falha
+// no fluxo central do cadastro. O que se perde é a distinção entre HEIC e outro
+// container ISO-BMFF (um MP4, por exemplo), que não é o vetor do achado: o risco
+// é conteúdo ativo (HTML/SVG/script) servido pela signed URL, e esse continua
+// barrado, porque não tem caixa `ftyp` nenhuma.
 
 function startsWithBytes(buffer, bytes) {
   if (buffer.length < bytes.length) return false;
@@ -42,13 +48,10 @@ export function detectFileMimeType(buffer) {
     return "image/png";
   }
 
+  // heic e heif compartilham container; o slot aceita os dois, então devolvemos a
+  // marca genérica e a checagem trata como equivalentes.
   if (buffer.subarray(4, 8).toString("latin1") === "ftyp") {
-    const brand = buffer.subarray(8, 12).toString("latin1").toLowerCase();
-    if (HEIF_BRAND_PREFIXES.some((prefix) => brand.startsWith(prefix))) {
-      // heic e heif compartilham container; o slot aceita os dois, então
-      // devolvemos a marca genérica e a checagem trata como equivalentes.
-      return "image/heif";
-    }
+    return "image/heif";
   }
 
   if (buffer.subarray(0, PDF_HEADER_SEARCH_WINDOW).includes("%PDF-")) {
