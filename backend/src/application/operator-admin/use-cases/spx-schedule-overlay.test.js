@@ -7,6 +7,8 @@ import {
   fetchSpxScheduleIndex,
   fetchSpxScheduleIndexFromSidecar,
   mergeLiveIndexes,
+  peekSpxScheduleIndexFromTorre,
+  __resetSpxScheduleTorreCache,
 } from "./spx-schedule-overlay.js";
 import { SpxAspNotConfigured, SpxAspUnavailable } from "../../../infrastructure/torre/torre-spx-trips-client.js";
 
@@ -227,5 +229,55 @@ describe("mergeLiveIndexes", () => {
   it("ignora índices null/vazios; nada casando → null", () => {
     expect(mergeLiveIndexes(null, new Map())).toBeNull();
     expect(mergeLiveIndexes(null, new Map([["LT1", { carga: null, descarga: null }]])).size).toBe(1);
+  });
+});
+
+// A Torre é FALLBACK e não pode custar latência no caminho quente do Monitor.
+//
+// Medido em produção 07/08/2026: `spx-schedule-timeout:4000ms` 43x em 6 h, ZERO
+// sucessos — a Torre respondeu em 10.268 ms numa chamada direta, ou seja, é lenta e
+// nunca cabia no orçamento de 4 s. Como as duas fontes eram aguardadas juntas, a tela
+// pagava 4 s por carga para receber nada.
+describe("peekSpxScheduleIndexFromTorre — fallback que NÃO bloqueia a leitura", () => {
+  beforeEach(() => {
+    __resetSpxScheduleTorreCache();
+  });
+
+  it("cache FRIO → devolve null na hora, sem esperar a Torre", () => {
+    // Fetch que nunca resolve: se a função esperasse, o teste travaria.
+    const fetchIndex = vi.fn(() => new Promise(() => {}));
+    const out = peekSpxScheduleIndexFromTorre({ deps: { fetchIndex } });
+    expect(out).toBeNull();
+    expect(fetchIndex).toHaveBeenCalledTimes(1); // aqueceu em background
+  });
+
+  it("depois do aquecimento, devolve o índice sem tocar a rede de novo", async () => {
+    const mapa = new Map([["LT9", { carga: { at: "2026-08-09T07:00" }, descarga: null }]]);
+    let resolver;
+    const fetchIndex = vi.fn(() => new Promise((r) => { resolver = r; }));
+
+    expect(peekSpxScheduleIndexFromTorre({ deps: { fetchIndex } })).toBeNull();
+    resolver(mapa);
+    await new Promise((r) => setTimeout(r, 0)); // deixa o .then gravar o cache
+
+    expect(peekSpxScheduleIndexFromTorre({ deps: { fetchIndex } })).toBe(mapa);
+    expect(fetchIndex).toHaveBeenCalledTimes(1); // ninguém refez a chamada
+  });
+
+  it("chamadas concorrentes com cache frio aquecem UMA vez (dedupe)", () => {
+    const fetchIndex = vi.fn(() => new Promise(() => {}));
+    for (let i = 0; i < 5; i += 1) peekSpxScheduleIndexFromTorre({ deps: { fetchIndex } });
+    expect(fetchIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it("falha da Torre não martela: guarda o vazio por um tempo", async () => {
+    const fetchIndex = vi.fn(async () => {
+      throw new Error("torre fora");
+    });
+    expect(peekSpxScheduleIndexFromTorre({ deps: { fetchIndex } })).toBeNull();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(peekSpxScheduleIndexFromTorre({ deps: { fetchIndex } })).toBeNull();
+    expect(fetchIndex).toHaveBeenCalledTimes(1); // não tentou de novo na hora
   });
 });

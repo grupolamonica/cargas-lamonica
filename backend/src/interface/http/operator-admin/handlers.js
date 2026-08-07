@@ -103,8 +103,8 @@ import { applySystemReservationStatus } from "../../../application/operator-admi
 import { collectNonShopeeSnapshotRows, isShopeeSnapshot, mergeSnapshotRows, SHEET_SNAPSHOT_SHOPEE } from "../../../application/operator-admin/use-cases/monitor-snapshot-merge.js";
 import { releaseStaleAllocStatusOverrides } from "../../../application/operator-admin/use-cases/monitor-stale-alloc-status.js";
 import {
-  fetchSpxScheduleIndex,
   fetchSpxScheduleIndexFromSidecar,
+  peekSpxScheduleIndexFromTorre,
   mergeLiveIndexes,
   applySpxSchedule,
 } from "../../../application/operator-admin/use-cases/spx-schedule-overlay.js";
@@ -1213,10 +1213,13 @@ export async function resolveSheetMonitorResponse(request) {
       //    FALLBACK, cobrindo os LHs fora das abas Planejado/Aceito (viagens antigas).
       //    Best-effort nas duas pontas: ambas falhando → null → sem overlay.
       (async () => {
-        const [sidecar, torre] = await Promise.all([
-          fetchSpxScheduleIndexFromSidecar({ correlationId }).catch(() => null),
-          fetchSpxScheduleIndex({ correlationId }).catch(() => null),
-        ]);
+        // A Torre NÃO é aguardada aqui. Ela é lenta (medido: 10,3 s) e o orçamento de
+        // 4 s nunca a alcançava: 43 timeouts em 6 h, zero sucessos — e, por estar num
+        // `Promise.all` com a primária, a tela pagava esses 4 s em toda carga por um
+        // dado que nunca chegava. Agora é leitura de cache: quente entra no merge,
+        // frio devolve null e aquece em background (ver peekSpxScheduleIndexFromTorre).
+        const sidecar = await fetchSpxScheduleIndexFromSidecar({ correlationId }).catch(() => null);
+        const torre = peekSpxScheduleIndexFromTorre({ correlationId });
         return mergeLiveIndexes(sidecar, torre);
       })(),
 
