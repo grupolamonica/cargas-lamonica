@@ -18,6 +18,8 @@ function getSupabaseAdmin() {
   return supabaseAdminSingleton;
 }
 
+export const DEFAULT_CLEANUP_BATCH_SIZE = 50;
+
 /**
  * Apaga drafts v2 com updated_at < now() - 72h.
  *
@@ -25,25 +27,63 @@ function getSupabaseAdmin() {
  *   - submissoes finais (status='pendente'/'aprovado'/'rejeitado')
  *   - cadastros v1
  *
- * @returns {Promise<{ deletedCount: number, deletedIds: string[] }>}
+ * @param {object} [options]
+ * @param {number} [options.limit] Teto de linhas por ciclo. Sem teto, o primeiro
+ *   ciclo apaga TODO o acumulado de uma vez e dispara 2 chamadas de Storage por
+ *   linha — em 2026-08-07 havia 382 drafts elegiveis, ou seja ~764 chamadas num
+ *   unico tick. Com teto, o acumulado drena ao longo de varios ciclos.
+ * @param {boolean} [options.dryRun] So conta, nao apaga. Serve pra medir o
+ *   alcance antes de habilitar de verdade.
+ * @returns {Promise<{ deletedCount: number, deletedIds: string[], dryRun: boolean }>}
  */
-export async function cleanupExpiredDrafts() {
+export async function cleanupExpiredDrafts({ limit = DEFAULT_CLEANUP_BATCH_SIZE, dryRun = false } = {}) {
+  const effectiveLimit = Number.isFinite(limit) && limit > 0 ? limit : DEFAULT_CLEANUP_BATCH_SIZE;
+
   return withPgClient(async (client) => {
+    if (dryRun) {
+      const { rows } = await client.query(
+        `
+          SELECT COUNT(*)::int AS elegiveis
+          FROM public.pending_driver_registrations
+          WHERE status = 'draft'
+            AND versao_cadastro = 'v2'
+            AND updated_at < now() - interval '72 hours'
+        `,
+      );
+
+      return {
+        deletedCount: 0,
+        eligibleCount: rows[0]?.elegiveis || 0,
+        deletedIds: [],
+        deletedRows: [],
+        dryRun: true,
+      };
+    }
+
     const result = await client.query(
       `
         DELETE FROM public.pending_driver_registrations
-        WHERE status = 'draft'
-          AND versao_cadastro = 'v2'
-          AND updated_at < now() - interval '72 hours'
+        WHERE id IN (
+          SELECT id
+          FROM public.pending_driver_registrations
+          WHERE status = 'draft'
+            AND versao_cadastro = 'v2'
+            AND updated_at < now() - interval '72 hours'
+          ORDER BY updated_at ASC
+          LIMIT $1
+        )
         RETURNING id, driver_user_id, dados->>'__cpf' AS cpf, carga_id
       `,
+      [effectiveLimit],
     );
 
     const rows = result.rows || [];
     return {
       deletedCount: result.rowCount || 0,
+      eligibleCount: null,
       deletedIds: rows.map((r) => r.id),
       deletedRows: rows,
+      dryRun: false,
     };
   });
 }
@@ -101,6 +141,25 @@ export async function cleanupOrphanStorageFiles(expiredRows) {
   return { storageDeletedCount, storageErrors };
 }
 
+export const CLEANUP_MODES = ["off", "report", "on"];
+
+/**
+ * Resolve o modo do worker a partir de CANDIDATURA_DRAFT_CLEANUP_MODE.
+ *
+ * Default `report` — e nao `on` — porque este worker apaga de forma
+ * IRREVERSIVEL: alem da linha no PG, remove do Storage a CNH, a selfie e o CRLV
+ * enviados. Ele nunca rodou em producao, entao o primeiro ciclo enfrenta todo o
+ * acumulado historico. `report` mede o alcance no log sem apagar nada; virar
+ * `on` passa a ser decisao consciente, com o numero na mao.
+ *
+ * Isso inverte a convencao opt-out do resto do main.js (`!== "false"`), que e a
+ * certa pra job de leitura/sync e a errada pra um expurgo de estreia.
+ */
+export function resolveDraftCleanupMode(rawValue = process.env.CANDIDATURA_DRAFT_CLEANUP_MODE) {
+  const normalized = String(rawValue ?? "").trim().toLowerCase();
+  return CLEANUP_MODES.includes(normalized) ? normalized : "report";
+}
+
 /**
  * Bootstrap do worker periodico de cleanup. Roda imediatamente + a cada 1h.
  *
@@ -111,12 +170,35 @@ export async function cleanupOrphanStorageFiles(expiredRows) {
  *
  * setInterval(...).unref() para nao bloquear shutdown.
  *
- * @returns {ReturnType<typeof setInterval>} handle do interval (util para tests).
+ * @returns {ReturnType<typeof setInterval>|null} handle do interval, ou null se
+ *   o modo for "off" (util para tests).
  */
 export function startCandidaturaDraftCleanupWorker() {
+  const mode = resolveDraftCleanupMode();
+
+  if (mode === "off") {
+    console.info("[draft-cleanup] desabilitado (CANDIDATURA_DRAFT_CLEANUP_MODE=off)");
+    return null;
+  }
+
+  const batchSize = Number(process.env.CANDIDATURA_DRAFT_CLEANUP_BATCH || DEFAULT_CLEANUP_BATCH_SIZE);
+
   const runCleanup = async () => {
     try {
-      const pgResult = await cleanupExpiredDrafts();
+      const pgResult = await cleanupExpiredDrafts({ limit: batchSize, dryRun: mode === "report" });
+
+      if (pgResult.dryRun) {
+        console.info(
+          "[draft-cleanup] modo report — nada foi apagado",
+          JSON.stringify({
+            elegiveis: pgResult.eligibleCount,
+            apagaria_por_ciclo: Math.min(pgResult.eligibleCount, batchSize),
+            para_habilitar: "CANDIDATURA_DRAFT_CLEANUP_MODE=on",
+          }),
+        );
+        return;
+      }
+
       if (pgResult.deletedCount > 0) {
         const storageResult = await cleanupOrphanStorageFiles(pgResult.deletedRows);
         console.log(
