@@ -56,7 +56,7 @@ WITH CHECK (TRUE);
 -- SPX/Agency (achado CRIT-1 da auditoria LGPD, DC-283). Tirar daqui NAO
 -- desfaz o vazamento: o valor continua em todo o historico do git e em todo
 -- clone existente. A credencial tem de ser tratada como comprometida e
--- ROTACIONADA no portal — ver docs/security/rotacao-credencial-aspx.md.
+-- ROTACIONADA no portal — ver docs/security/credenciais-vazadas-no-historico.md.
 --
 -- Popular apos rotacionar:
 --   UPDATE public.aspx_credentials

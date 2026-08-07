@@ -1,4 +1,37 @@
-# Runbook — Rotação da credencial SPX/Agency vazada (DC-283 / CRIT-1)
+# Runbook — Credenciais vazadas no histórico do git (DC-283)
+
+Dois casos. O primeiro veio da auditoria; o segundo foi descoberto pelo gitleaks no primeiro run.
+
+---
+
+# Caso 2 — Chave `service_role` de produção em `.claude/settings.local.json`
+
+**Não estava no relatório da auditoria.** Apareceu no primeiro run da varredura de segredos: 38 achados (25 JWT + 13 header de autorização), todos neste arquivo.
+
+O mais grave é um JWT com `role: service_role` do projeto de produção (`lbpzkdecwraipbjbaajs`), emitido em março/2026 e com validade até **2036**. É a chave que ignora RLS por completo — leitura e escrita irrestritas no banco de produção.
+
+## Situação apurada
+
+| Pergunta | Resposta |
+|---|---|
+| O arquivo ainda está rastreado? | **Não.** Foi untrackado em `be38724c` e está no `.gitignore` |
+| O commit está na `main`? | **Não.** Não é alcançável por nenhuma branch, local ou remota |
+| Então por que o CI achou? | Sobrevive em `refs/pull/*` do GitHub, que **persiste mesmo depois de apagar a branch** |
+| A chave vazada ainda é a de produção? | **Não.** A impressão digital não bate com a que está no container hoje — já foi rotacionada |
+
+## O que falta fazer
+
+1. **Confirmar no painel do Supabase** que a chave antiga está *revogada*, e não apenas substituída. Impressões digitais diferentes provam que outra chave está em uso; não provam que a antiga morreu.
+2. Se ainda estiver válida, revogar.
+3. Não há como remover o commit de `refs/pull/*` por conta própria — apagar a branch não resolve. Removê-lo exige abrir chamado no suporte do GitHub. Com a chave revogada, o valor no histórico fica inerte e isso deixa de ser urgente.
+
+## Por que isso passou
+
+O `.claude/settings.local.json` guarda as permissões de ferramenta aprovadas, e cada entrada carrega o **comando inteiro** — incluindo `curl -H 'Authorization: Bearer <token>'`. Aprovar um comando com segredo embutido grava o segredo no arquivo. O arquivo hoje é gitignored, o que fecha a porta para frente.
+
+---
+
+# Caso 1 — Credencial do portal SPX/Agency (CRIT-1)
 
 **Severidade:** crítica. **Este runbook não é executável por PR** — exige ação no portal externo e uma reescrita de histórico coordenada.
 
