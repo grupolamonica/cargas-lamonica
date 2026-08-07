@@ -206,10 +206,9 @@ export function useDriverLoads() {
     }
   }, []);
 
-  // Polling foi substituido por: window focus + reconnect + digest poll de 5min.
-  // O digest abaixo verifica MAX(updated_at)+count em cargas OPEN/PUBLIC; se mudou,
-  // invalida o read-model. Quando a aba esta em background, o poll do digest
-  // tambem pausa (refetchIntervalInBackground: false).
+  // O read-model (query PESADA) não tem refetchInterval: quem detecta mudança é o digest
+  // logo abaixo — MAX(updated_at)+count das cargas OPEN/PUBLIC — e só então este é
+  // invalidado. Além do digest, revalida em foco de janela e reconexão.
   const {
     data: loadsResponse,
     error: loadsError,
@@ -254,14 +253,29 @@ export function useDriverLoads() {
     refetchOnReconnect: true,
   });
 
-  // 5min digest poll — pausa em background. Invalida o read-model quando muda.
+  // Sondagem do digest — a ÚNICA coisa que faz uma carga recém-liberada aparecer para
+  // quem já está com o portal aberto (o read-model não tem refetchInterval de propósito:
+  // é a query pesada).
+  //
+  // Era 5 min E `refetchIntervalInBackground: false`. Essa combinação é o motivo de o
+  // operador marcar "Disponível" e o motorista não ver: no celular, com o portal atrás de
+  // outro app, a sondagem PARAVA por completo — a carga só aparecia quando ele voltasse à
+  // aba. Agora 30 s e seguindo em background (o navegador já estrangula timers de aba
+  // oculta por conta própria; o que não podemos é desligar nós mesmos).
+  //
+  // O custo disso é contido no servidor, não aqui: o endpoint do digest ganhou janela de
+  // cache + single-flight, então sondagens concorrentes colapsam numa única query. Sem
+  // aquilo, 10x mais sondagens seriam 10x mais queries — e o read model do motorista já
+  // foi o maior consumidor de egress do pooler num incidente anterior.
   const lastLoadsDigestRef = useRef<string | null>(null);
   const loadsDigestQuery = useQuery({
     queryKey: ["driver", "loads-digest"] as const,
     queryFn: fetchDriverLoadsDigest,
-    staleTime: 5 * 60_000,
-    refetchInterval: 5 * 60_000,
-    refetchIntervalInBackground: false,
+    // Menor que o intervalo: assim foco de janela/reconexão também revalidam, em vez de
+    // servir um digest velho por 5 min.
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: true,
     refetchOnWindowFocus: true,
   });
 

@@ -322,7 +322,12 @@ describe("DriverPortal", () => {
     expect(screen.getAllByText(/Página 2 de 3/i).length).toBeGreaterThan(0);
   });
 
-  it("revalida as cargas do motorista ao voltar para a tela e via digest poll de 5min", () => {
+  // A sondagem do digest é a ÚNICA coisa que faz uma carga recém-liberada aparecer para
+  // quem já está com o portal aberto (o read-model não tem refetchInterval de propósito —
+  // é a query pesada). Era 5 min E pausada em background: no celular, com o portal atrás
+  // de outro app, a sondagem parava por completo e a carga só aparecia quando o motorista
+  // voltasse à aba. Este teste trava os dois números.
+  it("revalida as cargas do motorista ao voltar para a tela e via digest poll de 30s (inclusive em background)", () => {
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <MemoryRouter>
@@ -353,9 +358,13 @@ describe("DriverPortal", () => {
       refetchOnReconnect: true,
     });
     expect(digestQueryOptions).toMatchObject({
-      refetchInterval: 5 * 60_000,
-      refetchIntervalInBackground: false,
+      refetchInterval: 30_000,
+      // NÃO desligar em background: é o caso real do motorista (celular, portal atrás de
+      // outro app). O navegador já estrangula timers de aba oculta por conta própria.
+      refetchIntervalInBackground: true,
       refetchOnWindowFocus: true,
+      // Menor que o intervalo, senão foco/reconexão servem um digest velho.
+      staleTime: 10_000,
     });
   });
 });
