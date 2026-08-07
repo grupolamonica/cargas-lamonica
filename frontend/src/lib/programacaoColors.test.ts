@@ -14,7 +14,7 @@ function row(over: Partial<ProgramacaoRow>): ProgramacaoRow {
     placa: "", origem: "", destino: "", origemRaw: "", destinoRaw: "", origemCidadeUf: "", destinoCidadeUf: "",
     origemCodigo: "", destinoCodigo: "", data: null, horario: null, carregamentoTs: null, dataDescarga: null,
     horarioDescarga: null, tab: "planejado", cliente: "Shopee", isLinehaul: true, acceptanceStatus: 0,
-    podeAceitar: false, aguardandoMotorista: false, jaLancada: false, expirada: false, ...over,
+    podeAceitar: false, aguardandoMotorista: false, jaLancada: false, dataLancamento: null, expirada: false, ...over,
   };
 }
 

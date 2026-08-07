@@ -1908,6 +1908,8 @@ export interface ProgramacaoRow {
   /** Pode lançar no sistema pela tela: Planejado (SPX/Nestlé) ou Nestlé aceita sem motorista. */
   podeLancar?: boolean;
   jaLancada: boolean;
+  /** DC-292: data de lançamento da carga (cargas.created_at, ISO) — null quando ainda não lançada. */
+  dataLancamento: string | null;
   expirada: boolean;
 }
 
