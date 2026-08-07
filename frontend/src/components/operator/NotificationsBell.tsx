@@ -47,6 +47,12 @@ const KIND_LABEL: Record<string, string> = {
   aspx_route_missing: "Rota saiu do ASPX",
   sheet_writeback_broken: "Planilha não recebeu cargas",
   aspx_route_restored: "Rota voltou ao ASPX",
+  // Disjuntor do aceite SPX: o portal respondeu "não aceita" para uma pilha de viagens
+  // de uma vez, o job desconfiou e NÃO escondeu ninguém do Monitor. O rótulo precisa
+  // mandar o operador para o portal — é lá, e só lá, que se descobre se o aceite sumiu
+  // de verdade ou se foi a aba Planejado respondendo. Kind sem label vira slug cru no
+  // sino ("spx_acceptance_mass_hide"), e slug cru o operador ignora.
+  spx_acceptance_mass_hide: "Muitas lançadas sem aceite — confira o portal",
 };
 
 const KIND_TINT: Record<string, string> = {
@@ -70,6 +76,11 @@ const KIND_TINT: Record<string, string> = {
   aspx_route_missing: "bg-red-700",
   sheet_writeback_broken: "bg-orange-600",
   aspx_route_restored: "bg-emerald-500",
+  // Mesmo peso visual de `aspx_route_missing` (bg-red-700): é um aviso da mesma família
+  // — "o portal parou de bater com o que temos". Sem entrada aqui o ponto cai no
+  // `bg-slate-400` do fallback, cinza de ruído, e o aviso mais importante deste fluxo
+  // chegaria vestido de "pode ignorar".
+  spx_acceptance_mass_hide: "bg-red-700",
 };
 
 function fmtRelative(iso: string) {
@@ -545,6 +556,10 @@ export default function NotificationsBell() {
                 // spot → Programação (?lh=); novo motorista → Fila (?carga=).
                 const isQueue = n.kind === "new_queue_driver";
                 // Avisos de ASPX levam à tela de Cargas (a carga marcada vive lá).
+                // `spx_acceptance_mass_hide` NÃO entra aqui de propósito (e o prefixo
+                // "aspx_" não o pega): é um aviso agregado, sem LH, e o lugar de conferir
+                // é o portal SPX — fora do sistema. Levar a /cargas sem filtro seria
+                // prometer um destino que não responde a pergunta do operador.
                 const isAspx = n.kind.startsWith("aspx_");
                 const clickable = n.kind === "new_spot" || isQueue || isAspx;
                 const openRow = () => {
