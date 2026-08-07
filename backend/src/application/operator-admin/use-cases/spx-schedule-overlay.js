@@ -228,6 +228,81 @@ export async function fetchSpxScheduleIndexFromSidecar({ correlationId = null, f
   }
 }
 
+// ─── Fallback da Torre, agora SEM bloquear a leitura do Monitor ───────────────
+//
+// MEDIDO EM PRODUÇÃO 07/08/2026 — o arranjo anterior era o pior dos dois mundos:
+// 4 s de espera em TODA carga da tela e ZERO dado aproveitado.
+//
+//   * `spx-schedule-timeout:4000ms`: 43 ocorrências em 6 h, **nenhum** sucesso;
+//   * a Torre NÃO está quebrada — chamada direta respondeu em 10.268 ms com 964 linhas.
+//     Ela é só LENTA, e 10,3 s nunca couberam no orçamento de 4 s;
+//   * o cache do cliente da Torre dura 60 s, mas o Monitor é aberto a cada ~8 min
+//     (43 falhas / 6 h). O cache está SEMPRE frio quando a tela chama → fetch frio de
+//     10,3 s → timeout garantido, sempre;
+//   * e, como as duas fontes eram aguardadas juntas num `Promise.all`, a tela esperava
+//     a mais lenta: os 4 s do fallback, mesmo com a primária (sidecar) já respondida.
+//
+// Um FALLBACK não pode custar latência no caminho quente. Aqui ele passa a ser lido
+// SÓ DO CACHE: quente → devolve na hora; frio → dispara o preenchimento em BACKGROUND
+// e devolve null agora (o Monitor segue com o sidecar, que é a fonte primária).
+//
+// Cache PRÓPRIO deste módulo, não o do cliente da Torre: aquele é compartilhado com
+// `reconcile-aspx-status*` (jobs de 3 min) e alongar o TTL dele faria a reconciliação
+// de status agir sobre dado mais velho. Aqui o TTL é longo porque o dado é agenda
+// (ETA programado), que não muda de minuto em minuto — e a parte AO VIVO já vem do
+// sidecar, com 90 s.
+//
+// Ganho: −4 s em toda carga do Monitor, e o dado da Torre passa a ser efetivamente
+// usado (antes, nunca era) a partir do primeiro preenchimento.
+const TORRE_INDEX_TTL_MS = Math.max(
+  Number.parseInt(process.env.SPX_SCHEDULE_TORRE_TTL_MS || "", 10) || 10 * 60_000,
+  0,
+);
+let _torreIndexCache = null; // { value: Map|null, expiresAt: number }
+let _torreWarmInFlight = null;
+
+/** Zera o cache do fallback da Torre — só para os testes não vazarem estado.
+ *  Nome no mesmo padrão de `__resetSpxScheduleSidecarCache`. */
+export function __resetSpxScheduleTorreCache() {
+  _torreIndexCache = null;
+  _torreWarmInFlight = null;
+}
+
+/**
+ * Índice de agenda da Torre para o caminho de LEITURA: nunca espera a rede.
+ *
+ * @param {{ correlationId?: string|null, deps?: { fetchIndex?: typeof fetchSpxScheduleIndex } }} [args]
+ * @returns {Map|null} quente → o índice; frio → null (e aquece em background)
+ */
+export function peekSpxScheduleIndexFromTorre({ correlationId = null, deps = {} } = {}) {
+  if (_torreIndexCache && _torreIndexCache.expiresAt > Date.now()) {
+    return _torreIndexCache.value;
+  }
+  // Frio: aquece UMA vez (dedupe) sem prender ninguém. `timeoutMs` generoso porque
+  // aqui o tempo não é cobrado de request nenhuma — o teto existe só para a promise
+  // não vazar se a Torre pendurar.
+  if (!_torreWarmInFlight) {
+    const buscar = deps.fetchIndex || fetchSpxScheduleIndex;
+    _torreWarmInFlight = Promise.resolve(buscar({ timeoutMs: 30_000, correlationId }))
+      .then((map) => {
+        if (TORRE_INDEX_TTL_MS > 0) {
+          _torreIndexCache = { value: map, expiresAt: Date.now() + TORRE_INDEX_TTL_MS };
+        }
+        return map;
+      })
+      .catch(() => {
+        // Falhou: guarda o "sem dado" por pouco tempo, para não martelar a Torre a
+        // cada carga da tela, mas voltar a tentar logo.
+        _torreIndexCache = { value: null, expiresAt: Date.now() + 60_000 };
+        return null;
+      })
+      .finally(() => {
+        _torreWarmInFlight = null;
+      });
+  }
+  return null;
+}
+
 /**
  * Funde índices AO VIVO keyed por LH (agenda ou status) por precedência: o
  * PRIMEIRO que tiver a chave vence. Usado p/ "sidecar primeiro, Torre como
