@@ -87,9 +87,12 @@ export async function updateOperatorDriverProfile({ driverId, operatorId, payloa
       outcome: "success",
       requestIp,
       correlationId,
+      // Sem previousName: era uma cópia do nome carimbada na auditoria a CADA
+      // edição de perfil, mudasse o nome ou não. Quando o nome muda, o antes→depois
+      // já está em `changes` (DC-184); quando não muda, resourceId resolve o
+      // motorista ao vivo. A cópia só servia pra reter PII indefinidamente.
       metadata: {
         updatedFields: Object.keys(payload),
-        previousName: before.full_name,
         changes: buildAuditChanges(changeBefore, changeAfter, changeFields),
       },
     });
