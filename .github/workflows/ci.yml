@@ -221,7 +221,7 @@ jobs:
       # ── REPORTE: má configuração de container (superfície do MED-7) ────────
       - name: Trivy — má configuração de Dockerfile e compose
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: .
