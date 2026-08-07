@@ -114,17 +114,31 @@ export function mergeAllocIntoRow(
   // Exceção: um status terminal LOCAL do operador (cancelado/no-show/desistiu) é preservado
   // — decisão explícita que o SPX não reflete. Sem `spxStatus` (não-SPX, sem motorista, ou
   // sidecar fora do ar) → o override alloc_status volta a valer (comportamento antigo).
-  const allocStatus = (alloc.alloc_status || "").trim();
+  // `??`, não `||` — MESMA regra que motorista/cavalo/carreta já seguem via
+  // effectiveAllocField, e a mesma que o backend usa (COALESCE(alloc_status, sheet_status)).
+  //
+  // Com `||`, o "" que "Disponível" grava (vazio EXPLÍCITO = reabrir) é FALSY e caía para
+  // o status da planilha: o operador marcava Disponível e a linha continuava exibindo
+  // "AGUARDANDO CHEGAR NO CLIENTE". A reabertura acontecia no banco (status → OPEN, carga
+  // ofertada ao motorista) e a tela negava. Medido em produção 07/08/2026 no
+  // LT0Q8802CP6T1: 5 tentativas do operador em 18 min, todas gravando com sucesso e
+  // `changes: []`, porque a primeira já tinha reaberto — ele só não via.
+  //
+  // É a MESMA classe de bug que o #300 corrigiu para motorista/cavalo/carreta (arrastar
+  // esvaziava a origem e ela voltava a mostrar o motorista da planilha). O status ficou de
+  // fora na época; o comentário no topo deste arquivo já dizia "NUNCA `||`".
+  const allocStatusEfetivo = effectiveAllocField(alloc.alloc_status, row.status);
+  const allocStatus = (alloc.alloc_status ?? "").trim();
   const isLocalTerminal = /cancel|desist|no[\s-]*show/i.test(allocStatus);
   // O override só cede quando o SPX AVANÇA (mesma regra do backend). Antes o
   // `spxStatus` vencia SEMPRE, e como ele viaja na LINHA (não no overlay), o valor
   // do fetch ANTERIOR sobrevivia ao save otimista: o operador salvava
   // `CTE EM EMISSÃO` (que o SPX não conhece) e a linha voltava na hora pro rótulo
   // do SPX — `CARREGADO` —, exatamente o "reverteu sozinho" relatado.
-  const exibido = allocStatus || row.status;
+  const exibido = allocStatusEfetivo;
   const status = !isLocalTerminal && spxAdvancesOver(exibido, row.spxStatus)
     ? (row.spxStatus as string)
-    : (alloc.alloc_status || row.status);
+    : allocStatusEfetivo;
   return {
     ...row,
     motoristas,
