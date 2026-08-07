@@ -2,6 +2,10 @@ import { ForbiddenError } from "../../domain/load-claims/errors.js";
 
 export const OPERATOR_ACCESS_LEVELS = ["advanced", "intermediate"];
 
+// Nível aplicado quando o operador não tem access_level provisionado. Menor
+// privilégio da lista: um provisionamento incompleto não pode virar acesso total.
+export const OPERATOR_DEFAULT_ACCESS_LEVEL = "intermediate";
+
 const OPERATOR_PERMISSION_MATRIX = {
   advanced: new Set([
     "operator:read",
@@ -44,7 +48,10 @@ export function getOperatorAccessLevel(user) {
     return appAccessLevel;
   }
 
-  return "advanced";
+  // Falha FECHADO. Antes retornava "advanced": qualquer operador criado fora do
+  // registerOperatorUser (seed, convite manual, insert direto no Supabase) nascia
+  // com privilégio máximo — inclusive escrita de valores de carga e de clientes.
+  return OPERATOR_DEFAULT_ACCESS_LEVEL;
 }
 
 export function hasOperatorPermission(user, permission) {
