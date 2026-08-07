@@ -57,9 +57,25 @@ describe("mergeAllocIntoRow — overlay da alocação sobre a planilha", () => {
     expect(r.hasDriver).toBe(true);
   });
 
-  it("status/tipo vazios caem pro valor da linha (`||` — não entram no swap)", () => {
-    const r = mergeAllocIntoRow(row({ status: "CARREGANDO", tipo: "SISTEMA" }), alloc({ alloc_status: "", alloc_tipo: "" }));
-    expect(r.status).toBe("CARREGANDO"); // status vivo do SPX preservado
+  // REGRESSÃO (prod 07/08/2026, LT0Q8802CP6T1): "Disponível" grava alloc_status = ""
+  // (vazio EXPLÍCITO = reabrir). Com `||` esse "" era falsy e a linha voltava a exibir o
+  // status da planilha — o operador marcava Disponível, a carga reabria no banco e
+  // aparecia para o motorista, mas a tela seguia mostrando "AGUARDANDO CHEGAR NO CLIENTE".
+  // Ele tentou 5 vezes em 18 min, todas gravando com sucesso e `changes: []`.
+  it("status vazio EXPLÍCITO (Disponível) fica vazio — NÃO cai pro status da planilha", () => {
+    const r = mergeAllocIntoRow(row({ status: "AGUARDANDO CHEGAR NO CLIENTE" }), alloc({ alloc_status: "" }));
+    expect(r.status).toBe("");
+  });
+
+  it("status AUSENTE (null, sem override) segue refletindo a planilha", () => {
+    const r = mergeAllocIntoRow(row({ status: "CARREGANDO" }), alloc({ alloc_status: null }));
+    expect(r.status).toBe("CARREGANDO");
+  });
+
+  // `tipo` NÃO entra no swap: segue com `||` de propósito (vazio cai pro valor da linha,
+  // "SISTEMA" nas lançadas).
+  it("tipo vazio continua caindo pro valor da linha", () => {
+    const r = mergeAllocIntoRow(row({ tipo: "SISTEMA" }), alloc({ alloc_tipo: "" }));
     expect(r.tipo).toBe("SISTEMA");
   });
 
