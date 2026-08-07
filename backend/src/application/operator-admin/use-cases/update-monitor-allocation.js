@@ -11,6 +11,7 @@ import { ensureMonitorSheetCargo } from "./_shared.js";
 import { isTwinCascadeOnMergedEnabled } from "./merge-launched-twin.js";
 import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
 import { markDriverVisibleWrite } from "./driver-loads-freshness.js";
+import { isDerivedStatusLabel } from "../../../domain/operator-admin/monitor-status-labels.js";
 
 /**
  * Grava a ALOCAÇÃO editada no Monitor (motorista/cavalo/carreta/status operacional)
@@ -180,9 +181,23 @@ export async function updateMonitorAllocation({ lh, source = null, operatorId, p
     const statusEcho =
       has("status") && !wantsAvailable && !wantsClearOverride &&
       norm(payload.status).toUpperCase() === statusAtualEfetivo;
+    // RÓTULO DERIVADO ≠ status operacional. "Reservado", "Fechado", "Em aberto",
+    // "Rascunho" e "Expirada" são rótulos que a LEITURA deriva do CICLO DE VIDA da carga
+    // (ver monitor-status-labels.js), não valores do pipeline.
+    //
+    // O guard de eco acima NÃO os pega: ele compara com o status EFETIVO
+    // (alloc_status/sheet_status), e esses rótulos vêm do ciclo — então passavam limpos e
+    // viravam override. Medido em produção 07/08/2026: 18 cargas com
+    // `alloc_status = "Reservado"` mascarando um `sheet_status = "CANCELADO"` REAL; carga
+    // cancelada há semanas aparecia "Reservado" no Monitor, porque o efetivo é
+    // COALESCE(alloc_status, sheet_status) e o rótulo vencia.
+    //
+    // Tratado como campo AUSENTE (preserva o override atual): não grava o artefato e
+    // também não destrói uma decisão legítima que já esteja lá.
+    const statusRotuloDerivado = has("status") && isDerivedStatusLabel(payload.status);
     // `availableIgnorado` entra aqui junto com o eco: os dois significam "o operador
     // não decidiu status nenhum" → preserva o alloc_status atual.
-    const statusTouched = has("status") && !statusEcho && !availableIgnorado;
+    const statusTouched = has("status") && !statusEcho && !availableIgnorado && !statusRotuloDerivado;
     const finalStatus = statusTouched
       ? (wantsAvailable ? "" : (wantsClearOverride ? null : norm(payload.status)))
       : (sheetRow.alloc_status ?? null);

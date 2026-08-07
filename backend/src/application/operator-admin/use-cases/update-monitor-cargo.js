@@ -6,6 +6,7 @@ import { syncedCarregamentoLabel } from "../../../domain/cargo-schedule.js";
 import { cancelPublicLoadLead } from "../../load-claims/public-leads.js";
 import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
 import { markDriverVisibleWrite } from "./driver-loads-freshness.js";
+import { isDerivedStatusLabel } from "../../../domain/operator-admin/monitor-status-labels.js";
 import { writeAllocationsToSheet, formatSheetDateLabel } from "../../google-sheets/sheet-writeback.js";
 import { describeConflicts, duplicateAllocWarnEnabled, findAllocationConflicts } from "./find-allocation-conflicts.js";
 import { alocacaoDesatualizada, concurrentEditWarnEnabled, descreverAlteracaoConcorrente } from "./check-allocation-freshness.js";
@@ -135,7 +136,16 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
     // Motorista EFETIVO após esta edição (a carga do sistema não tem sheet_* por baixo).
     const wantsAvailable = wantsAvailableRequested && String(allocMotorista ?? "").trim() === "";
     const availableIgnorado = wantsAvailableRequested && !wantsAvailable;
-    const allocStatus = has("status") && !availableIgnorado
+    // RÓTULO DERIVADO ≠ status operacional. Na carga do SISTEMA o rótulo da linha vem do
+    // CICLO DE VIDA quando não há status operacional ("Reservado" p/ BOOKED/RESERVED,
+    // "Em aberto", "Rascunho", "Expirada" — ver SYSTEM_LIFECYCLE_LABEL em
+    // list-system-cargas-monitor.js). O modal pré-preenche o select com esse rótulo, e
+    // reenviá-lo gravava um override que ninguém escolheu — e que MASCARA o status real,
+    // porque o efetivo é COALESCE(alloc_status, sheet_status). Medido em produção
+    // 07/08/2026: 18 cargas com "Reservado" escondendo um "CANCELADO" verdadeiro.
+    // Tratado como campo AUSENTE: preserva o override atual (ver monitor-status-labels.js).
+    const statusRotuloDerivado = has("status") && isDerivedStatusLabel(payload.status);
+    const allocStatus = has("status") && !availableIgnorado && !statusRotuloDerivado
       ? (wantsAvailable ? null : normAlloc(payload.status))
       : row.alloc_status;
     const allocTipo = has("tipo") ? normAlloc(payload.tipo) : row.alloc_tipo;

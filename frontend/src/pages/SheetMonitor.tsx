@@ -54,7 +54,7 @@ import { cn } from "@/lib/utils";
 import { allocEditPolicy, isSpxTrip } from "@/lib/monitorEditPolicy";
 import { routeCanonKey } from "@/lib/routeCanonical";
 import { computeSwapMoves } from "@/lib/monitorReorder";
-import { editableDriver, mergeAllocIntoRow, effectiveAllocField } from "@/lib/monitorAllocOverlay";
+import { editableDriver, mergeAllocIntoRow, effectiveAllocField, editableStatus } from "@/lib/monitorAllocOverlay";
 import {
   createHiddenFutureTally, defaultLoadWindow, resolveLoadWindow, revealFutureWindow, selectHiddenFuture,
   type MonitorDateWindowMode,
@@ -1432,7 +1432,9 @@ function SystemCargoEditModal({ row, open, onClose, statusOptions }: {
       setStatusDirty(false);
       setForm({
         lh: row.lh ?? "",
-        status: row.status ?? "",
+        // Filtra rotulo derivado do ciclo (Reservado/Em aberto/Rascunho/Expirada):
+        // na carga do sistema `row.status` so e status operacional quando existe um.
+        status: editableStatus(row.status),
         // "SISTEMA" é o rótulo padrão (sem tipo) — não pré-preenche o campo com ele.
         tipo: row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "",
         origem: row.origem ?? "",
@@ -3041,7 +3043,10 @@ function RowDetailModal({
       motorista: effectiveAllocField(alloc?.alloc_motorista, row.motoristas),
       cavalo: effectiveAllocField(alloc?.alloc_cavalo, row.cavalo),
       carreta: effectiveAllocField(alloc?.alloc_carreta, row.carreta),
-      status: alloc?.alloc_status || row.status || "",
+      // `editableStatus` e SEM cair para `row.status`: o select escreve o OVERRIDE, e
+      // `row.status` pode ser rotulo derivado do ciclo de vida, ou o status ao vivo do
+      // SPX. Reenviar isso persistia decisao que ninguem tomou e mascarava o real.
+      status: editableStatus(alloc?.alloc_status),
       tipo: alloc?.alloc_tipo ?? (row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "") ?? "",
       vinculo: alloc?.alloc_vinculo ?? row.vinculo ?? "",
       // Observação de checklist (tratativas): planilha vem via allocByLh (alloc_tratativas),
@@ -3066,7 +3071,9 @@ function RowDetailModal({
     if (!open || !row || row.source !== "sistema") return;
     const cargoBase = {
       lh: row.lh ?? "",
-      status: row.status ?? "",
+      // Filtra rotulo derivado do ciclo (Reservado/Em aberto/Rascunho/Expirada):
+      // na carga do sistema `row.status` so e status operacional quando existe um.
+      status: editableStatus(row.status),
       tipo: row.tipo && row.tipo !== "SISTEMA" ? row.tipo : "",
       origem: row.origem ?? "",
       destino: row.destino ?? "",

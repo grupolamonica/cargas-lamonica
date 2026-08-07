@@ -37,6 +37,38 @@ export function editableDriver(
   return row.motoristas ?? "";
 }
 
+// Rótulos que a LEITURA deriva do CICLO DE VIDA da carga para EXIBIR — nunca status
+// operacional armazenável. ESPELHA `ROTULOS_DERIVADOS` de
+// backend/src/domain/operator-admin/monitor-status-labels.js (fonte única da regra) —
+// mudou lá, muda aqui.
+//
+// "CANCELADO" e "Disponível" ficam FORA de propósito: o primeiro é status real do
+// pipeline; o segundo é a AÇÃO de reabrir.
+const ROTULOS_DERIVADOS = new Set(["reservado", "fechado", "em aberto", "rascunho", "expirada"]);
+
+/**
+ * Status da linha para uso em campo EDITÁVEL (o select do modal).
+ *
+ * MESMO problema que `editableDriver` resolve, e a mesma solução. O select escreve
+ * `alloc_status`, mas era pré-preenchido com o status EXIBIDO — que pode ser um RÓTULO
+ * DERIVADO do ciclo de vida ("Reservado" para BOOKED/RESERVED, "Fechado", "Em aberto"…).
+ * O save reenvia o campo, e o rótulo era PERSISTIDO como decisão do operador.
+ *
+ * O dano é silencioso e duradouro: o efetivo é COALESCE(alloc_status, sheet_status), então
+ * o rótulo mascara o status VERDADEIRO para sempre. Medido em produção 07/08/2026: 18
+ * cargas com `alloc_status = "Reservado"` escondendo um `sheet_status = "CANCELADO"` real
+ * — carga cancelada há semanas aparecendo como reservada no Monitor. O operador tentou
+ * "corrigir" 5 vezes numa delas.
+ *
+ * Devolve "" para rótulo derivado: "" no select é a opção "— Seguir a planilha —", que é
+ * exatamente o estado correto quando não há override do operador.
+ */
+export function editableStatus(stored: string | null | undefined): string {
+  const v = String(stored ?? "").trim();
+  const semAcento = v.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  return ROTULOS_DERIVADOS.has(semAcento) ? "" : v;
+}
+
 // Ordem do pipeline operacional. ESPELHA `STATUS_PIPELINE` de
 // backend/src/domain/operator-admin/aspx-status-rules.js (fonte única da regra) —
 // mudou lá, muda aqui. Estados de EXCEÇÃO (CANCELADO/DEVOLVIDO/NO SHOW) ficam

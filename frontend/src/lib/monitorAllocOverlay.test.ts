@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { mergeAllocIntoRow, effectiveAllocField, editableDriver } from "@/lib/monitorAllocOverlay";
+import { mergeAllocIntoRow, effectiveAllocField, editableDriver, editableStatus } from "@/lib/monitorAllocOverlay";
 import type { SheetMonitorAllocation, SheetMonitorRow } from "@/services/readModels";
 
 const row = (over: Partial<SheetMonitorRow> = {}): SheetMonitorRow =>
@@ -197,5 +197,46 @@ describe("editableDriver — valor injetado nao vira alocacao", () => {
     expect(editableDriver({})).toBe("");
     expect(editableDriver(null)).toBe("");
     expect(editableDriver(undefined)).toBe("");
+  });
+});
+
+// REGRESSÃO (prod 07/08/2026): 18 cargas ficaram com `alloc_status = "Reservado"`.
+// "Reservado" não é status do pipeline — é o rótulo que a LEITURA deriva do ciclo de vida
+// (BOOKED/RESERVED). Ele era pré-preenchido no select do modal, o save reenviava o campo,
+// e o rótulo virava override. Como o efetivo é COALESCE(alloc_status, sheet_status), isso
+// mascarava um `sheet_status = "CANCELADO"` REAL: carga cancelada há semanas aparecia
+// reservada. Mesma classe de defeito que `editableDriver` já resolve para o motorista.
+describe("editableStatus — rótulo derivado nunca vira override", () => {
+  it("rótulos derivados do ciclo de vida viram vazio (= seguir a planilha)", () => {
+    for (const rotulo of ["Reservado", "Fechado", "Em aberto", "Rascunho", "Expirada"]) {
+      expect(editableStatus(rotulo)).toBe("");
+    }
+  });
+
+  it("ignora caixa, acento e espaços ao reconhecer o rótulo", () => {
+    expect(editableStatus("RESERVADO")).toBe("");
+    expect(editableStatus(" reservado ")).toBe("");
+    expect(editableStatus("Expirada")).toBe("");
+  });
+
+  it("status REAL do pipeline passa intacto", () => {
+    for (const real of ["CARREGADO", "AGUARDANDO CARREGAMENTO", "CTE ENVIADO", "DESCARREGADO"]) {
+      expect(editableStatus(real)).toBe(real);
+    }
+  });
+
+  it("CANCELADO passa — é status real, não rótulo derivado", () => {
+    expect(editableStatus("CANCELADO")).toBe("CANCELADO");
+    expect(editableStatus("Cancelado")).toBe("Cancelado");
+  });
+
+  it('"Disponível" passa — é a AÇÃO de reabrir, e barrá-la quebraria a reabertura', () => {
+    expect(editableStatus("Disponível")).toBe("Disponível");
+  });
+
+  it("null/undefined/vazio → vazio (nunca undefined, evita input descontrolado)", () => {
+    expect(editableStatus(null)).toBe("");
+    expect(editableStatus(undefined)).toBe("");
+    expect(editableStatus("")).toBe("");
   });
 });

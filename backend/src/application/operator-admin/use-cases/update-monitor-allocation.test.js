@@ -142,6 +142,51 @@ describe("updateMonitorAllocation", () => {
     expect(writeSpy.mock.calls[0][0][0].status).toBeUndefined(); // col L intocada
   });
 
+  // REGRESSÃO MEDIDA EM PRODUÇÃO (07/08/2026): 18 cargas ficaram com
+  // `alloc_status = "Reservado"`. Nenhum código grava isso — "Reservado" é o RÓTULO que a
+  // leitura deriva do CICLO DE VIDA (BOOKED/RESERVED). Ele era pré-preenchido no select do
+  // modal e o save reenviava o campo, persistindo o rótulo como decisão do operador.
+  //
+  // O guard de ECO não pegava: ele compara com o status EFETIVO (alloc/sheet), e o rótulo
+  // vem do ciclo. E o dano é duradouro — o efetivo é COALESCE(alloc_status, sheet_status),
+  // então o rótulo MASCARAVA um `sheet_status = "CANCELADO"` verdadeiro: carga cancelada há
+  // semanas aparecendo "Reservado" no Monitor.
+  it("RÓTULO DERIVADO do ciclo ('Reservado') NÃO vira override e não mascara a planilha", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-rotulo@teste.local" });
+    // A planilha diz a verdade: a viagem foi cancelada.
+    await query(`UPDATE public.cargas SET sheet_status = 'CANCELADO', sheet_motorista = NULL WHERE id = $1`, [id]);
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { status: "Reservado" },
+      correlationId: "corr-monitor-rotulo",
+    });
+
+    const row = await getAlloc(id);
+    // Tratado como campo AUSENTE: não gravou o artefato...
+    expect(row.alloc_status).toBeNull();
+    // ...e o status REAL da planilha continua visível pelo COALESCE.
+    expect(row.sheet_status).toBe("CANCELADO");
+  });
+
+  it("rótulo derivado NÃO destrói um override legítimo que já estava gravado", async () => {
+    const id = await seedSheetCargo();
+    const operator = await seedUser({ email: "op-monitor-rotulo2@teste.local" });
+    await query(`UPDATE public.cargas SET alloc_status = 'CTE ENVIADO' WHERE id = $1`, [id]);
+
+    await updateMonitorAllocation({
+      lh: LH,
+      operatorId: operator.id,
+      payload: { status: "Em aberto" },
+      correlationId: "corr-monitor-rotulo3",
+    });
+
+    // Degrada para "ausente" — preserva, em vez de apagar a decisão real.
+    expect((await getAlloc(id)).alloc_status).toBe("CTE ENVIADO");
+  });
+
   it("'Disponível' continua gravando vazio EXPLÍCITO e espelhando na planilha", async () => {
     // Distinção deliberada: "Disponível" é reabrir (zera o status na tela e na col L);
     // "sem status" é devolver a decisão para a planilha.
