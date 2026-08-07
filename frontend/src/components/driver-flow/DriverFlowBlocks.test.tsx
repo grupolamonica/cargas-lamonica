@@ -7,13 +7,14 @@ vi.mock("@/integrations/supabase/client", () => ({
   supabase: { auth: { getSession: vi.fn(), signInWithPassword: vi.fn(), signOut: vi.fn() } },
 }));
 
-import { AcessosCard } from "./DriverFlowBlocks";
+import { AcessosCard, AlocacaoPorDiaCard } from "./DriverFlowBlocks";
 import type { DriverFlowMetricsResponse } from "@/services/readModels";
 
 // Janela default de 7 dias (14→21/07), timezone BRT (03:00Z = meia-noite BRT).
 function makeData(
   portalVisits: DriverFlowMetricsResponse["portalVisits"],
   windowOverride?: Partial<DriverFlowMetricsResponse["window"]>,
+  loadAllocationOverride?: Partial<DriverFlowMetricsResponse["loadAllocation"]>,
 ): DriverFlowMetricsResponse {
   return {
     window: { from: "2026-07-14T03:00:00.000Z", toExclusive: "2026-07-21T03:00:00.000Z", ...windowOverride },
@@ -43,6 +44,14 @@ function makeData(
     portalVisits,
     cadastros: { realizados: 0, pendentes: 0 },
     portalAvailability: { total: 0 },
+    loadAllocation: {
+      from: "2026-07-14",
+      toExclusive: "2026-07-21",
+      forwardDays: 7,
+      totals: { total: 0, com: 0, sem: 0 },
+      dias: [],
+      ...loadAllocationOverride,
+    },
     meta: { correlationId: null },
   };
 }
@@ -77,6 +86,39 @@ describe("AcessosCard (DC-242)", () => {
     expect(screen.getByText("—")).toBeInTheDocument();
     expect(screen.getByText("sem dados")).toBeInTheDocument();
     expect(screen.getByText("acessos ao portal no intervalo escolhido")).toBeInTheDocument();
+  });
+});
+
+describe("AlocacaoPorDiaCard (DC-295)", () => {
+  const noVisits = { total: 0, uniqueVisitors: 0, firstVisitAt: null, byHour: [], byDow: [] };
+
+  it("mostra totais do período e a série por dia (com/sem), preenchendo dias vazios", () => {
+    render(
+      <AlocacaoPorDiaCard
+        data={makeData(noVisits, undefined, {
+          from: "2026-07-14",
+          toExclusive: "2026-07-17", // 3 dias: 14, 15, 16
+          forwardDays: 3,
+          totals: { total: 30, com: 19, sem: 11 },
+          dias: [
+            { dia: "2026-07-14", total: 10, com: 9, sem: 1 },
+            { dia: "2026-07-16", total: 20, com: 10, sem: 10 },
+            // 2026-07-15 ausente → o front preenche com zero
+          ],
+        })}
+      />,
+    );
+    // KPIs do período.
+    expect(screen.getByText("30")).toBeInTheDocument(); // total
+    expect(screen.getByText("19")).toBeInTheDocument(); // com
+    expect(screen.getByText("11")).toBeInTheDocument(); // sem
+    // Rótulos por posição (backend ancora `from` no hoje-BRT).
+    expect(screen.getByText("Hoje")).toBeInTheDocument();
+    expect(screen.getByText("Amanhã")).toBeInTheDocument();
+    // "N sem" por dia — inclusive o dia ausente preenchido com "0 sem".
+    expect(screen.getByText("1 sem")).toBeInTheDocument();
+    expect(screen.getByText("10 sem")).toBeInTheDocument();
+    expect(screen.getByText("0 sem")).toBeInTheDocument();
   });
 });
 

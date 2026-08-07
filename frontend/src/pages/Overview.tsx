@@ -26,6 +26,7 @@ import {
   DriverFlowGate,
   CadastroDestaqueCard,
   AcessosCard,
+  AlocacaoPorDiaCard,
   FunilCard,
   ValidacaoCard,
   PicoCandidaturaCard,
@@ -488,6 +489,13 @@ const Overview = () => {
                     />
                   </section>
                 )}
+              </DriverFlowGate>
+
+              {/* DC-295: cargas com/sem alocação de motorista por DIA de carregamento
+                  (janela prospectiva — hoje + próximos dias). Visual validado com o Danilo.
+                  hideError: o gate do cadastro acima já exibe o erro da mesma query. */}
+              <DriverFlowGate query={flow.query} skeletons={1} hideError>
+                {(data) => <AlocacaoPorDiaCard data={data} />}
               </DriverFlowGate>
 
               {/* Números-chave · agora (ao vivo, do snapshot) */}
