@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mapSystemCargoToMonitorRow,
   listSystemCargasForMonitor,
@@ -7,6 +7,7 @@ import {
   isHideUnacceptedLaunchedEnabled,
   acceptanceEvidenceTtlHours,
   isAcceptanceEvidenceFresh,
+  __resetDriverOfferGateAlarm,
 } from "./list-system-cargas-monitor.js";
 import { applySpxOperationalStatus } from "./spx-operational-status.js";
 
@@ -490,11 +491,19 @@ describe("listSystemCargasForMonitor: lançada não aceita sai do Monitor", () =
   // Base já CHECADA HÁ POUCO (evidência RECENTE de não-aceite) — é o único estado em
   // que o filtro pode agir. Quem quiser "nunca checado" sobrescreve com null; quem
   // quiser evidência expirada usa horasAtras(48).
+  //
+  // O carregamento é DELIBERADAMENTE vencido (2020). Depois do PORTÃO, uma lançada
+  // OPEN/pública/sem motorista com carregamento no futuro está OFERTADA no portal e
+  // NENHUM filtro consegue escondê-la — um fixture assim não mediria mais o filtro,
+  // mediria o portão. O que sobra para o filtro de aceite é exatamente esta carga: viva
+  // no cadastro, mas já fora da tela do motorista. O portão em ação tem describe próprio
+  // ("portão do frete ofertado"), logo abaixo.
   const carga = (over = {}) => ({
-    id: "x", origem: "A", destino: "B", data: "2026-08-10", horario: "08:00:00",
-    status: "OPEN", lh_manual: null, alloc_motorista: null, alloc_status: null,
-    sheet_status: null, trip_accepted_at: null, trip_acceptance_checked_at: horasAtras(1),
-    sheet_source: null, cliente_id: "cli-shopee", ...over,
+    id: "x", origem: "A", destino: "B", data: "2020-01-01", horario: "08:00:00",
+    agenda_a_confirmar: false, status: "OPEN", lh_manual: null, alloc_motorista: null,
+    alloc_status: null, sheet_status: null, trip_accepted_at: null,
+    trip_acceptance_checked_at: horasAtras(1), sheet_source: null, cliente_id: "cli-shopee",
+    ...over,
   });
 
   const ids = (rows) => rows.map((r) => r.cargoId);
@@ -776,4 +785,179 @@ describe("listSystemCargasForMonitor: lançada não aceita sai do Monitor", () =
       warn.mockRestore();
     }
   });
+});
+
+// ── PORTÃO DO FRETE OFERTADO ────────────────────────────────────────────────────
+//
+// Norma do dono do produto: carga ofertada ao motorista NUNCA pode estar invisível ao
+// operador. Em 30 dias este read model acumulou SEIS regras de ocultação e TRÊS
+// precisaram de correção por esconderem demais; a última (#457) escondia 24 cargas
+// ABERTAS no portal — 57% do frete ofertado. O portão inverte o ônus: em vez de cada
+// filtro ter de lembrar de não esconder frete vivo, NENHUM consegue.
+//
+// Os testes abaixo usam o filtro de aceite como INSTRUMENTO — ele é só o filtro que
+// existe hoje. O que está sendo travado é o portão, que vale para o sétimo filtro
+// também.
+describe("listSystemCargasForMonitor: portão do frete ofertado", () => {
+  // O alarme só anuncia quando a assinatura do resgate MUDA (memória de processo). Sem
+  // zerar entre casos, um teste herdaria o silêncio provocado pelo anterior e passaria
+  // por engano.
+  beforeEach(() => __resetDriverOfferGateAlarm());
+
+  const CLIENTES = [{ id: "cli-shopee", nome: "E-COMMERCE" }];
+  const AMANHA = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+
+  function fakeClient(cargas) {
+    const api = (table) => {
+      const q = {
+        _served: false,
+        select: () => q, is: () => q, eq: () => q, neq: () => q, in: () => q, order: () => q,
+        range: async () => {
+          const first = !q._served;
+          q._served = true;
+          return { data: first ? cargas : [], error: null };
+        },
+        then: table === "clientes" ? (resolve) => resolve({ data: CLIENTES, error: null }) : undefined,
+      };
+      if (table === "load_public_leads") q.then = (resolve) => resolve({ data: [], error: null });
+      return q;
+    };
+    return { from: (t) => api(t) };
+  }
+
+  /** Lançada Shopee inerte e com evidência fresca de não-aceite: o alvo exato do filtro
+   *  de aceite. `data` decide se ela está OFERTADA (amanhã) ou já fora do portal (2020). */
+  const lancadaInerte = (id, over = {}) => ({
+    id, origem: "A", destino: "B", data: AMANHA, horario: "08:00:00",
+    status: "OPEN", lh_manual: `LT-${id}`, alloc_motorista: null, sheet_motorista: null,
+    alloc_status: null, sheet_status: null, viagem_id: null, driver_visibility: "PUBLIC",
+    agenda_a_confirmar: false, trip_accepted_at: null,
+    trip_acceptance_checked_at: horasAtras(1), sheet_source: null, cliente_id: "cli-shopee",
+    ...over,
+  });
+
+  /** Lê o Monitor capturando os eventos do portão. Os eventos são extraídos ANTES do
+   *  `mockRestore()` de propósito: restaurar o spy também LIMPA `mock.calls`, e um
+   *  `expect(...).toHaveLength(0)` sobre a lista já zerada passaria sempre — teste que
+   *  nunca falha é pior que teste nenhum. */
+  async function ler(cargas) {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const rows = await listSystemCargasForMonitor(fakeClient(cargas), { pageSize: 50 });
+      const eventos = warn.mock.calls
+        .filter(([msg]) => String(msg).includes("list-system-cargas-monitor.driver-offer-gate-rescued"))
+        .map(([, payload]) => payload);
+      return { rows, eventos };
+    } finally {
+      warn.mockRestore();
+    }
+  }
+
+  it("filtro de aceite tentando esconder carga OFERTADA: a linha FICA e o alarme sai", async () => {
+    const { rows, eventos } = await ler([lancadaInerte("a")]);
+    expect(rows.map((r) => r.cargoId)).toEqual(["a"]);
+
+    expect(eventos).toHaveLength(1);
+    expect(eventos[0]).toMatchObject({ resgatadas: 1, escondidasPelosFiltros: 1, amostraLhs: ["LT-a"] });
+    // Quem lê o alerta precisa do EFEITO, não do nome do filtro: resgate > 0 em regime
+    // normal significa filtro errado, e é essa a frase que manda investigar.
+    expect(eventos[0].efeito).toContain("portão a repôs");
+  });
+
+  it("carga INERTE (fora do portal) o filtro esconde normalmente, e sem alarme", async () => {
+    // Mesma carga, carregamento vencido: o motorista já não a vê, então o portão não
+    // tem nada a proteger e o filtro faz o trabalho dele.
+    const { rows, eventos } = await ler([lancadaInerte("a", { data: "2020-01-01" })]);
+    expect(rows).toEqual([]);
+    expect(eventos).toHaveLength(0);
+  });
+
+  it("sem nenhum resgate, NENHUM log — o evento é alarme, não ruído de rotina", async () => {
+    const { rows, eventos } = await ler([
+      lancadaInerte("nao-lancada", { lh_manual: null }),          // nem candidata
+      lancadaInerte("vencida", { data: "2020-01-01" }),           // escondida com razão
+    ]);
+    expect(rows.map((r) => r.cargoId)).toEqual(["nao-lancada"]);
+    expect(eventos).toHaveLength(0);
+  });
+
+  it("o portão não duplica linha nem altera a ordem da leitura", async () => {
+    const entrada = [
+      lancadaInerte("intocada", { lh_manual: null }),   // nenhum filtro encosta
+      lancadaInerte("resgatada"),                       // filtro tenta esconder, portão repõe
+      lancadaInerte("vencida", { data: "2020-01-01" }), // some de verdade
+      lancadaInerte("intocada-2", { alloc_motorista: "ANA" }),
+    ];
+    const { rows } = await ler(entrada);
+    const ids = rows.map((r) => r.cargoId);
+    // Ordem da QUERY preservada — a resgatada volta ao LUGAR dela, não ao fim da lista
+    // (o Monitor ordena por data desc na query; concatenar os resgatados no fim
+    // embaralharia a tela sem ninguém perceber).
+    expect(ids).toEqual(["intocada", "resgatada", "intocada-2"]);
+    // Nada aparece duas vezes.
+    expect(new Set(ids).size).toBe(ids.length);
+    // O portão opera sobre o que a QUERY trouxe: ele protege contra filtro em JS, não
+    // contra filtro em SQL — nenhuma linha nova é inventada.
+    expect(ids.every((id) => entrada.some((c) => c.id === id))).toBe(true);
+  });
+
+  it("resgate em massa: o log é UM por leitura, com a contagem cheia e amostra de até 10 LHs", async () => {
+    const { rows, eventos } = await ler(Array.from({ length: 12 }, (_, i) => lancadaInerte(`m${i}`)));
+    expect(rows).toHaveLength(12);
+    expect(eventos).toHaveLength(1); // agregado, não uma linha de log por carga
+    expect(eventos[0].resgatadas).toBe(12);
+    expect(eventos[0].amostraLhs).toHaveLength(10);
+    expect(eventos[0].amostraLhs[0]).toBe("LT-m0");
+  });
+
+  // O portão não depende do filtro de aceite estar ligado nem de conhecer os filtros que
+  // virão: ele compara o que a query trouxe com o que sobrou. Com o filtro desligado
+  // nada é escondido, então o portão não tem trabalho e o log fica quieto.
+  it("com o filtro desligado (kill-switch) o portão fica inerte, sem resgate e sem log", async () => {
+    const prev = process.env.MONITOR_HIDE_UNACCEPTED_LAUNCHED;
+    process.env.MONITOR_HIDE_UNACCEPTED_LAUNCHED = "false";
+    try {
+      const { rows, eventos } = await ler([lancadaInerte("a"), lancadaInerte("b", { data: "2020-01-01" })]);
+      expect(rows.map((r) => r.cargoId)).toEqual(["a", "b"]);
+      expect(eventos).toHaveLength(0);
+    } finally {
+      if (prev === undefined) delete process.env.MONITOR_HIDE_UNACCEPTED_LAUNCHED;
+      else process.env.MONITOR_HIDE_UNACCEPTED_LAUNCHED = prev;
+    }
+  });
+
+  // O alarme só vale se for LIDO. O Monitor refaz fetch a cada 30s por operador, e o
+  // resgate é um estado ESTÁVEL enquanto o filtro errado não for consertado (medido: 27
+  // linhas resgatadas assim que a migration do aceite entrar). Sem esta trava seriam
+  // ~8.600 eventos idênticos por dia, e em duas semanas ninguém leria mais nenhum `warn`
+  // deste read model — inclusive os de `optional-column-missing`, que são acionáveis.
+  it("o alarme fala UMA vez por estado: leitura repetida não repete o evento", async () => {
+    const cargas = [lancadaInerte("a"), lancadaInerte("b")];
+    expect((await ler(cargas)).eventos).toHaveLength(1);
+    expect((await ler(cargas)).eventos).toHaveLength(0); // mesmo conjunto → silêncio
+    expect((await ler(cargas)).eventos).toHaveLength(0);
+  });
+
+  it("o alarme volta a falar quando o CONJUNTO resgatado muda", async () => {
+    expect((await ler([lancadaInerte("a")])).eventos).toHaveLength(1);
+    // Entrou uma carga nova no resgate → assinatura diferente → anuncia de novo.
+    const { eventos } = await ler([lancadaInerte("a"), lancadaInerte("b")]);
+    expect(eventos).toHaveLength(1);
+    expect(eventos[0].resgatadas).toBe(2);
+  });
+
+  it("voltando a zero resgates, o próximo resgate é anunciado (a trava não vira mordaça)", async () => {
+    expect((await ler([lancadaInerte("a")])).eventos).toHaveLength(1);
+    expect((await ler([lancadaInerte("vencida", { data: "2020-01-01" })])).eventos).toHaveLength(0);
+    // Mesmo conjunto de antes: como houve um ciclo limpo no meio, o estado é NOVO.
+    expect((await ler([lancadaInerte("a")])).eventos).toHaveLength(1);
+  });
+
+  // NOTA sobre `amostraCargoId` (carga resgatada sem `lh_manual`): não há teste de
+  // integração porque o caminho é INALCANÇÁVEL hoje — o único filtro que esconde exige
+  // `lh_manual` preenchido, então uma carga sem LH nunca chega a ser resgatada. O campo
+  // existe para o próximo filtro, e o que ele precisa garantir (o uuid sobreviver ao
+  // sanitizador de log) é propriedade do sanitizador, coberta em security-log.
+  // Escrever aqui um teste que força o cenário exigiria burlar o filtro e mediria o
+  // mock, não o comportamento.
 });

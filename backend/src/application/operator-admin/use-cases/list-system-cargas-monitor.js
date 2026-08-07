@@ -7,13 +7,23 @@
 // elas são simplesmente "o valor"). origem/destino/data/horario são as colunas
 // canônicas da carga. lh = lh_manual (editável no grid).
 
+import { isOfferedToDriver } from "../../../domain/operator-admin/driver-offer-visibility.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
 import { logStructuredEvent } from "../../../infrastructure/security-log.js";
 import { nestleClientNameCandidates, normalizeClientName } from "./_shared.js";
 
 // Colunas que existem em qualquer banco onde este read model roda.
+//
+// `sheet_motorista` e `viagem_id` não são usadas pelo mapper — entram por causa do
+// PORTÃO (`isOfferedToDriver`), que precisa da regra INTEIRA do portal: alocação
+// efetiva é COALESCE(alloc_motorista, sheet_motorista, '') e a visibilidade muda de
+// ramo conforme a carga seja avulsa (viagem_id nulo → driver_visibility) ou perna de
+// pacote. Sem elas o portão trataria as duas como desconhecidas e resgataria linhas
+// demais. Não são opcionais: existem no schema há muito tempo (ver test-harness.js) e
+// nenhum banco onde este read model roda está sem elas — por isso não ganham variante
+// no `buildSelectCols`.
 const SELECT_COLS_BASE =
-  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, alloc_cavalo, alloc_carreta, alloc_status, sheet_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta, alloc_pinned, status, driver_visibility, lh_manual, cliente_id, sheet_source";
+  "id, origem, destino, data, horario, sheet_data_descarga, alloc_motorista, sheet_motorista, alloc_cavalo, alloc_carreta, alloc_status, sheet_status, alloc_tipo, alloc_descricao, alloc_vinculo, alloc_tratativas, alloc_checklist_cavalo, alloc_checklist_carreta, alloc_pinned, status, driver_visibility, viagem_id, lh_manual, cliente_id, sheet_source";
 
 /** Monta o SELECT com as colunas OPCIONAIS que o banco tiver — cada uma depende de
  *  uma migration que pode ainda não ter sido aplicada (deploy antes do migrate):
@@ -438,7 +448,101 @@ export async function listSystemCargasForMonitor(
     }
   }
 
-  return hidden.map((c) => mapSystemCargoToMonitorRow(c, clientesById, now));
+  // PORTÃO FINAL — o último passo antes do mapper, por construção. Ver
+  // `applyDriverOfferGate`.
+  const visiveis = applyDriverOfferGate(raw, hidden, { now, correlationId });
+
+  return visiveis.map((c) => mapSystemCargoToMonitorRow(c, clientesById, now));
+}
+
+/**
+ * PORTÃO: repõe toda linha que `isOfferedToDriver` aprova, DEPOIS de todas as regras de
+ * ocultação. Norma do dono do produto: carga ofertada ao motorista nunca pode estar
+ * invisível ao operador.
+ *
+ * Isto inverte quem carrega o ônus. Em 30 dias este read model acumulou seis regras de
+ * ocultação e três precisaram de correção por esconderem demais — a última escondia 27
+ * cargas ABERTAS no portal (64% do frete ofertado, medido em 06/08/2026). Consertar filtro por filtro é
+ * enxugar gelo; com o portão, nenhum filtro CONSEGUE esconder frete vivo, inclusive os
+ * que ainda não foram escritos.
+ *
+ * Escopo, e é uma limitação real: o portão opera sobre `raw` — as linhas que a QUERY
+ * trouxe. Ele protege contra filtro em JS, NÃO contra filtro em SQL. Uma carga excluída
+ * pelo `.neq("status", "DRAFT")` ou pelo `.is("aspx_missing_since", null)` nunca chega
+ * aqui, e o portão não a inventa (nem poderia: não temos a linha). O que o portão
+ * garante é que, do que foi lido, nada ofertado se perde no caminho até a tela.
+ *
+ * O log é o alarme: se o portão resgata, algum filtro está errado — e sem o evento essa
+ * contradição ficaria muda, exatamente como ficou muda por 30 dias.
+ *
+ * Mas o alarme só serve se for LIDO, e é aqui que a primeira versão se sabotava. Ela
+ * afirmava "em regime normal o portão resgata ZERO"; a medição do próprio PR diz 27
+ * resgates assim que a migration entrar, porque este PR NÃO conserta o filtro #457 — ele
+ * o neutraliza. Com o Monitor refazendo fetch a cada 30s por operador, isso seria ~8.600
+ * eventos idênticos por dia. Em duas semanas ninguém leria mais nenhum `warn` deste read
+ * model, incluindo os de `optional-column-missing`, que são acionáveis. Um alarme que
+ * toca sem parar é indistinguível de alarme quebrado.
+ *
+ * Por isso o evento é emitido só quando a ASSINATURA do resgate MUDA — o conjunto de ids
+ * resgatados. Estado estável (mesmo filtro escondendo as mesmas cargas) fala uma vez;
+ * carga nova entrando ou saindo do resgate volta a falar. Memória de processo, sem TTL:
+ * um restart re-anuncia, que é o comportamento desejado.
+ *
+ * A ordem de `raw` é preservada (filtramos `raw`, não concatenamos os resgatados no
+ * fim), e o `Set` por id garante que nada é duplicado.
+ */
+// Assinatura do último resgate anunciado. Só existe para não repetir o mesmo aviso a
+// cada leitura; nunca influencia QUAIS linhas o portão repõe.
+let ultimaAssinaturaResgate = null;
+
+/** Só para os testes: zera a memória do anúncio entre casos. */
+export function __resetDriverOfferGateAlarm() {
+  ultimaAssinaturaResgate = null;
+}
+
+function applyDriverOfferGate(raw, hidden, { now, correlationId = null } = {}) {
+  // Nada foi escondido em JS → não há o que repor. Evita montar o Set no caminho comum.
+  if (hidden.length === raw.length) return hidden;
+
+  const mantidas = new Set(hidden.map((c) => c.id));
+  const gateCtx = { todayIso: now?.todayIso ?? null, nowTimeIso: now?.nowTimeIso ?? null };
+  const resgatadas = [];
+
+  const visiveis = raw.filter((c) => {
+    if (mantidas.has(c.id)) return true;
+    if (!isOfferedToDriver(c, gateCtx)) return false;
+    resgatadas.push(c);
+    return true;
+  });
+
+  if (resgatadas.length > 0) {
+    // Ids ordenados = assinatura estável do estado de resgate.
+    const assinatura = resgatadas.map((c) => c.id).sort().join(",");
+    if (assinatura !== ultimaAssinaturaResgate) {
+      ultimaAssinaturaResgate = assinatura;
+      logStructuredEvent("warn", "list-system-cargas-monitor.driver-offer-gate-rescued", {
+        correlationId,
+        resgatadas: resgatadas.length,
+        escondidasPelosFiltros: raw.length - hidden.length,
+        // Dois campos, e o nome do segundo é deliberado. O sanitizador redige qualquer
+        // token >= 32 chars ([A-Za-z0-9+/=_-]), e um uuid casa: um id embutido em
+        // `amostraLhs` virava `[REDACTED]` — inútil justo quando o id é o único
+        // identificador que existe (11 cargas hoje sem `lh_manual`). A exceção olha o
+        // NOME da chave, com `ID_LIKE_KEY_PATTERN = /(^id$|_id$|[a-z0-9]id$)/i`: termina
+        // em `id`, passa. `amostraCargoIds` (plural) NÃO casa e seria redigida —
+        // verificado contra o sanitizador real. Daí o singular, apesar de ser lista.
+        amostraLhs: resgatadas.map((c) => String(c.lh_manual ?? "").trim()).filter(Boolean).slice(0, 10),
+        amostraCargoId: resgatadas.filter((c) => !String(c.lh_manual ?? "").trim()).slice(0, 10).map((c) => c.id),
+        efeito:
+          "regra de ocultação tentou esconder carga ABERTA no portal do motorista; o portão a repôs — investigar o filtro",
+      });
+    }
+  } else {
+    // Voltou ao normal: o próximo resgate volta a ser anunciado.
+    ultimaAssinaturaResgate = null;
+  }
+
+  return visiveis;
 }
 
 /** Ordem em que as opcionais são desligadas quando o erro NÃO diz qual falta (ver
