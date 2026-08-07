@@ -94,6 +94,21 @@ function makeRoutePrefill(origem: string, destino: string, clienteId: string | n
 }
 
 const fmtDate = (d: string | null) => (d ? d.split("-").reverse().join("/") : "—");
+// DC-292: data + hora de lançamento (created_at ISO) no fuso de São Paulo. Diferente do
+// fmtDate acima (que apenas inverte um "YYYY-MM-DD"): aqui o valor é um timestamp ISO completo.
+const fmtDateTime = (iso: string | null) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
 const routeLabel = (r: ProgramacaoRow) => `${r.origem || "—"} → ${r.destino || "—"}`;
 const rowStatus = (r: ProgramacaoRow) => r.statusOperacional || r.statusRaw || "";
 // Chave comparável 'YYYY-MM-DDTHH:MM' p/ o filtro datetime-local (data+hora). Hora
@@ -197,7 +212,16 @@ export default function Programacao() {
       /* localStorage indisponível — ignora */
     }
   }, [agendaSortDir]);
-  const toggleAgendaSort = () => setAgendaSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
+  // DC-292: coluna de ordenação ativa (agenda = carregamento | lançamento). A direção
+  // (agendaSortDir) é compartilhada: clicar num cabeçalho ativa a coluna; reclicar inverte.
+  const [sortCol, setSortCol] = useState<"agenda" | "lancamento">("agenda");
+  const cycleSort = (col: "agenda" | "lancamento") => {
+    if (sortCol === col) {
+      setAgendaSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortCol(col);
+    }
+  };
 
   // Relógio para manter a tela SEMPRE em dia com o horário atual: a cada 30s
   // reavaliamos quais viagens do Planejado já ficaram atrasadas (carregamento no
@@ -683,6 +707,16 @@ export default function Programacao() {
     // no fim (comportamento anterior).
     const undatedFirst = tab === "planejado";
     return [...list].sort((a, b) => {
+      // DC-292: quando o cabeçalho "Data de lançamento" está ativo, ordena por ele.
+      // Carga ainda não lançada (sem created_at) fica sempre no fim, em qualquer direção.
+      if (sortCol === "lancamento") {
+        const la = a.dataLancamento ? Date.parse(a.dataLancamento) : null;
+        const lb = b.dataLancamento ? Date.parse(b.dataLancamento) : null;
+        if (la == null && lb == null) return 0;
+        if (la == null) return 1;
+        if (lb == null) return -1;
+        return (la - lb) * dir;
+      }
       const ta = a.carregamentoTs;
       const tb = b.carregamentoTs;
       if (ta == null && tb == null) return 0;
@@ -690,7 +724,7 @@ export default function Programacao() {
       if (tb == null) return undatedFirst ? 1 : -1;
       return (ta - tb) * dir;
     });
-  }, [filteredAll, tab, agendaSortDir]);
+  }, [filteredAll, tab, agendaSortDir, sortCol]);
 
   // Paginação da aba atual — mantém a tela leve renderizando só a página visível.
   const PAGE_SIZE = 50;
@@ -703,7 +737,7 @@ export default function Programacao() {
   // Volta p/ a 1ª página quando muda a aba, a ordenação ou qualquer filtro.
   useEffect(() => {
     setPage(1);
-  }, [tab, agendaSortDir, search, fCliente, fRota, fStatus, carregDe, carregAte, descargaDe, descargaAte, fLancado, fAceito]);
+  }, [tab, agendaSortDir, sortCol, search, fCliente, fRota, fStatus, carregDe, carregAte, descargaDe, descargaAte, fLancado, fAceito]);
 
   // DC-279 — ao chegar por ?lh (clique na notificação): FILTRA a lista para o spot
   // (aparece isolado, pronto p/ aceitar) e ativa a aba onde ele está. Cada ação uma
@@ -945,20 +979,46 @@ export default function Programacao() {
                   <th className="px-3 py-2.5">
                     <button
                       type="button"
-                      onClick={toggleAgendaSort}
+                      onClick={() => cycleSort("agenda")}
                       title={
-                        agendaSortDir === "asc"
-                          ? "Carregamento: mais antigo no topo. Clique para inverter."
-                          : "Carregamento: mais novo no topo. Clique para inverter."
+                        sortCol !== "agenda"
+                          ? "Ordenar por carregamento."
+                          : agendaSortDir === "asc"
+                            ? "Carregamento: mais antigo no topo. Clique para inverter."
+                            : "Carregamento: mais novo no topo. Clique para inverter."
                       }
                       className="inline-flex items-center gap-1 uppercase tracking-wide text-muted-foreground/80 transition-colors hover:text-foreground"
                     >
                       Carreg. / Descarga
-                      {agendaSortDir === "asc" ? (
-                        <ArrowUp className="h-3 w-3 text-primary" />
-                      ) : (
-                        <ArrowDown className="h-3 w-3 text-primary" />
-                      )}
+                      {sortCol === "agenda" &&
+                        (agendaSortDir === "asc" ? (
+                          <ArrowUp className="h-3 w-3 text-primary" />
+                        ) : (
+                          <ArrowDown className="h-3 w-3 text-primary" />
+                        ))}
+                    </button>
+                  </th>
+                  {/* DC-292: coluna "Data de lançamento" (cargas.created_at) — ordenável client-side. */}
+                  <th className="px-3 py-2.5">
+                    <button
+                      type="button"
+                      onClick={() => cycleSort("lancamento")}
+                      title={
+                        sortCol !== "lancamento"
+                          ? "Ordenar por data de lançamento."
+                          : agendaSortDir === "asc"
+                            ? "Lançamento: mais antigo no topo. Clique para inverter."
+                            : "Lançamento: mais novo no topo. Clique para inverter."
+                      }
+                      className="inline-flex items-center gap-1 uppercase tracking-wide text-muted-foreground/80 transition-colors hover:text-foreground"
+                    >
+                      Data de lançamento
+                      {sortCol === "lancamento" &&
+                        (agendaSortDir === "asc" ? (
+                          <ArrowUp className="h-3 w-3 text-primary" />
+                        ) : (
+                          <ArrowDown className="h-3 w-3 text-primary" />
+                        ))}
                     </button>
                   </th>
                   <th className="px-3 py-2.5">Status</th>
@@ -996,6 +1056,10 @@ export default function Programacao() {
                     <td className={cn("whitespace-nowrap px-3 py-2.5", !rowColor && "text-muted-foreground")}>
                       <div>{r.data ? `${fmtDate(r.data)}${r.horario ? ` ${r.horario}` : ""}` : <span className={cn(!rowColor && "text-amber-600 dark:text-amber-400")}>A confirmar</span>}</div>
                       <div className="text-[11px]">↓ {r.dataDescarga ? `${fmtDate(r.dataDescarga)}${r.horarioDescarga ? ` ${r.horarioDescarga}` : ""}` : <span className={cn(!rowColor && "text-amber-600 dark:text-amber-400")}>A confirmar</span>}</div>
+                    </td>
+                    {/* DC-292: Data de lançamento (data + hora, fuso SP). "—" quando ainda não lançada. */}
+                    <td className={cn("whitespace-nowrap px-3 py-2.5 text-[11px]", !rowColor && "text-muted-foreground")}>
+                      {fmtDateTime(r.dataLancamento)}
                     </td>
                     <td className="px-3 py-2.5">
                       {/* Em linha colorida, o selo de status vira um chip branco com texto

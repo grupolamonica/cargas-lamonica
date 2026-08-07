@@ -114,6 +114,8 @@ function normalizeRow(t, tab) {
     podeLancar: tab === "planejado",
     // Preenchido adiante (dedup visual do botão "Lançar").
     jaLancada: false,
+    // DC-292: data de lançamento (cargas.created_at) — preenchida adiante junto com jaLancada.
+    dataLancamento: null,
   };
 }
 
@@ -228,6 +230,7 @@ function normalizeNestleRow(o) {
         && NESTLE_OFERTA_ACEITA.has(ofertaStatusUp)
         && !NESTLE_EMB_MORTO.has(embStatusUp)),
     jaLancada: false,
+    dataLancamento: null, // DC-292: preenchida adiante (cargas.created_at)
     tipo: o.tipo || null, // CONTRATO | ADICIONAL | LEILAO (dimensão extra p/ filtro)
   };
 }
@@ -351,10 +354,11 @@ async function fetchNestleOfertasUncached() {
 //   2. o MESMO LH voltava em várias linhas. Este banco tem ~118 pares de carga gêmea
 //      (mesma LH em `lh_manual` de uma carga e em `sheet_lh` de outra), e cada par gastava
 //      duas linhas para responder um único booleano.
-// Agora a diferença de conjuntos é feita NO SERVIDOR: uma coluna, e o UNION (não UNION ALL)
-// deduplica — no máximo uma linha por LH PEDIDO que já virou carga. Resposta idêntica para
-// o chamador (mesma pertinência para todo LH da entrada), com um teto de linhas que passa a
-// ser o tamanho da entrada em vez do número de cargas casadas.
+// Agora a diferença de conjuntos é feita NO SERVIDOR: a coluna do LH e, desde a DC-292, o
+// created_at agregado por GROUP BY (o par gêmeo colapsa numa linha só) — no máximo uma linha
+// por LH PEDIDO que já virou carga. Resposta idêntica para o chamador (mesma pertinência para
+// todo LH da entrada), com um teto de linhas que segue sendo o tamanho da entrada, não o
+// número de cargas casadas.
 // SEM CACHE, de propósito: `jaLancada` governa o botão "Lançar" da Programação. Um TTL aqui
 // mostraria "Lançar" numa carga JÁ lançada (pelo operador ou pelo auto-lançamento) por toda
 // a janela do TTL — convite ao duplo lançamento, que é justamente a origem das cargas
@@ -362,19 +366,31 @@ async function fetchNestleOfertasUncached() {
 // a redução aqui é por linha/coluna, sem envelhecer nada.
 async function defaultListLaunchedLhs(lhs) {
   const unique = [...new Set((lhs || []).filter(Boolean))];
-  if (unique.length === 0) return new Set();
+  if (unique.length === 0) return new Map();
   return withPgClient(async (client) => {
-    // Cada braço filtra por UMA coluna (índice próprio, sem o OR que degrada plano) e o
-    // UNION junta/deduplica. Nenhum NULL sai daqui: `= ANY(...)` já os exclui.
+    // Cada braço filtra por UMA coluna (índice próprio, sem o OR que degrada plano). DC-292:
+    // além da pertinência (jaLancada), trazemos created_at = data de lançamento da carga.
+    // MIN(created_at) por LH agrega NO SERVIDOR, mantendo o teto de 1 linha por LH pedido (o
+    // par gêmeo colapsa) — a otimização de egress acima segue valendo, só troca UNION por
+    // UNION ALL + GROUP BY para permitir a agregação. `= ANY(...)` já exclui LH nulo.
     const { rows } = await client.query(
-      `SELECT sheet_lh AS lh FROM public.cargas WHERE sheet_lh = ANY($1::text[])
-       UNION
-       SELECT lh_manual AS lh FROM public.cargas WHERE lh_manual = ANY($1::text[])`,
+      `SELECT lh, MIN(created_at) AS created_at
+         FROM (
+           SELECT sheet_lh AS lh, created_at FROM public.cargas WHERE sheet_lh = ANY($1::text[])
+           UNION ALL
+           SELECT lh_manual AS lh, created_at FROM public.cargas WHERE lh_manual = ANY($1::text[])
+         ) s
+        GROUP BY lh`,
       [unique],
     );
-    const set = new Set();
-    for (const r of rows) if (r.lh) set.add(r.lh);
-    return set;
+    // Map<lh, createdAtIso|null>: `.has(lh)` preserva o teste de pertinência do chamador
+    // (idêntico ao Set anterior); `.get(lh)` dá a data de lançamento (mais antiga por LH).
+    const map = new Map();
+    for (const r of rows) {
+      if (!r.lh) continue;
+      map.set(r.lh, r.created_at ? new Date(r.created_at).toISOString() : null);
+    }
+    return map;
   });
 }
 
@@ -482,7 +498,13 @@ export async function getProgramacao({ correlationId, force = false, tabs = null
 
   try {
     const launched = await listLaunched(rows.map((r) => r.lh));
-    for (const r of rows) r.jaLancada = r.lh ? launched.has(r.lh) : false;
+    // DC-292: `launched` pode ser Map (default, com created_at) ou Set (deps de teste
+    // antigos). `.has` cobre os dois; só o Map tem `.get` para a data de lançamento.
+    const lancTs = typeof launched.get === "function" ? (lh) => launched.get(lh) ?? null : () => null;
+    for (const r of rows) {
+      r.jaLancada = r.lh ? launched.has(r.lh) : false;
+      r.dataLancamento = r.lh ? lancTs(r.lh) : null;
+    }
   } catch {
     warnings.push("launched_lookup_failed");
   }

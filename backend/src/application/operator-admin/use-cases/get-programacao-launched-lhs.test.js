@@ -176,6 +176,18 @@ describe("Programação — consulta de 'já lançada' (integração pg-mem)", (
     expect(rowsOf(LAUNCHED_SELECT)).toBe(2); // LT-TWIN + LT-SHEET, sem repetição
   });
 
+  it("DC-292: traz a data de lançamento (created_at) por LH; null quando não lançada", async () => {
+    const CREATED = "2026-08-06T14:32:00.000Z";
+    await seedCargo({ sheet_lh: "LT-DATA", created_at: CREATED });
+    sqlLog.length = 0;
+
+    const res = await poll([trip("LT-DATA"), trip("LT-NOVA")]);
+    const byLh = Object.fromEntries(res.payload.rows.map((r) => [r.lh, r.dataLancamento]));
+    expect(byLh["LT-DATA"]).toMatch(/^2026-08-06T14:32/); // created_at da carga (fuso preservado)
+    expect(byLh["LT-NOVA"]).toBeNull();                    // não existe carga → sem data
+    expect(countSql(LAUNCHED_SELECT)).toBe(1);             // ainda uma única consulta por ciclo
+  });
+
   it("nenhum LH na tela → nenhuma consulta ao banco", async () => {
     await seedLaunchedFixture();
     sqlLog.length = 0;

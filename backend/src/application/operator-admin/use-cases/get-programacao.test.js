@@ -156,6 +156,21 @@ describe("getProgramacao (consulta direta ao SPX via sidecar)", () => {
     expect(res.payload.summary.jaLancadas).toBe(1);
   });
 
+  it("DC-292: dataLancamento vem do created_at para LHs lançados; null para os não lançados", async () => {
+    const fetchTripsByTab = makeTripsFn({ 1: [trip("LT1"), trip("LT2")] });
+    const res = await getProgramacao({
+      deps: {
+        ...baseDeps,
+        fetchTripsByTab,
+        // Contrato DC-292: listLaunchedLhs devolve Map<lh, created_at ISO>. LT1 ausente = não lançada.
+        listLaunchedLhs: async () => new Map([["LT2", "2026-08-06T14:32:00.000Z"]]),
+      },
+    });
+    expect(res.payload.rows.find((r) => r.lh === "LT2").dataLancamento).toBe("2026-08-06T14:32:00.000Z");
+    expect(res.payload.rows.find((r) => r.lh === "LT2").jaLancada).toBe(true);
+    expect(res.payload.rows.find((r) => r.lh === "LT1").dataLancamento).toBeNull();
+  });
+
   it("um tab falho → warning, os outros aparecem", async () => {
     const fetchTripsByTab = makeTripsFn({ 1: new Error("boom"), 2: [trip("LT4", { status: "Departed" })], 3: [] });
     const res = await getProgramacao({ deps: { ...baseDeps, fetchTripsByTab } });
