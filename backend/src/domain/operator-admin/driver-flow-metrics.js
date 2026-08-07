@@ -20,6 +20,33 @@ function parseIsoDate(value, fallback) {
 // tudo, sem o teto de MAX_WINDOW_DAYS.
 const ALL_TIME_FROM = new Date("2000-01-01T00:00:00.000Z");
 
+// DC-295 — janela PROSPECTIVA (hoje + próximos dias) do indicador de alocação por dia
+// de CARREGAMENTO. Diferente da janela retrospectiva dos demais indicadores (que olham
+// created_at/leads no passado): aqui o operador planeja os próximos dias — quantas cargas
+// de cada dia ainda estão SEM motorista escalado. Ajustar este N muda o range do bloco.
+const LOAD_ALLOCATION_FORWARD_DAYS = 7;
+
+// "Hoje" no calendário de São Paulo (cargas.data é DATE em wall-clock BRT). en-CA => YYYY-MM-DD.
+function saoPauloTodayIso() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+}
+
+function addDaysIso(iso, days) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+// cargas.data é DATE: o pg devolve Date (contêiner em UTC) e o pg-mem pode devolver Date
+// ou string. Normaliza para "YYYY-MM-DD" via componentes UTC — nunca o fuso local do
+// processo (mesmo padrão do dashboard-read-model; sem ::text, que o pg-mem não casta em DATE).
+function dateOnlyText(value) {
+  if (value === null || value === undefined) return "";
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? "" : value.toISOString().slice(0, 10);
+  return String(value).trim().slice(0, 10);
+}
+
 export function resolveWindow(query) {
   const now = new Date();
   const defaultTo = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
@@ -433,6 +460,51 @@ async function queryPortalAvailability(client, dateFrom, dateTo) {
   };
 }
 
+export async function queryLoadAllocationByDay(client, fromIso, toExclusiveIso) {
+  // DC-295 — por DIA de carregamento (cargas.data é DATE em BRT — sem conversão de fuso),
+  // quantas cargas há e quantas estão SEM motorista escalado. "com motorista" =
+  // alloc_motorista (decisão do operador no Monitor, prioritário) OU sheet_motorista
+  // (planilha) preenchido — mesmo predicado canônico do dashboard. Recorte de cargas
+  // "reais" do dia: não-template, não-terminal (fora DRAFT/CANCELLED/EXPIRED) e visível
+  // (avulsa PUBLIC ou perna de pacote publicado), mesma regra do queryPortalAvailability.
+  // Uma query agregada (SUM(CASE) + GROUP BY — COUNT FILTER não é portável no pg-mem dos
+  // testes), sem migração e sem loop no Node; sem = total - com (invariante com + sem = total).
+  const { rows } = await client.query(
+    `
+      SELECT
+        cargas.data AS dia,
+        COUNT(*) AS total,
+        SUM(CASE WHEN COALESCE(cargas.alloc_motorista, cargas.sheet_motorista, '') <> '' THEN 1 ELSE 0 END) AS com
+      FROM public.cargas
+      LEFT JOIN public.cargas_casadas cc ON cc.id = cargas.viagem_id
+      WHERE cargas.data >= $1::date AND cargas.data < $2::date
+        AND COALESCE(cargas.is_template, false) = false
+        AND cargas.status NOT IN ('DRAFT', 'CANCELLED', 'EXPIRED')
+        AND (
+          (cargas.viagem_id IS NULL AND COALESCE(cargas.driver_visibility, 'PUBLIC') = 'PUBLIC')
+          OR
+          (cargas.viagem_id IS NOT NULL AND cc.status IN ('publicado','reservado','em_andamento'))
+        )
+      GROUP BY cargas.data
+      ORDER BY cargas.data
+    `,
+    [fromIso, toExclusiveIso],
+  );
+
+  const dias = rows.map((r) => {
+    const total = Number(r.total) || 0;
+    const com = Number(r.com) || 0;
+    return { dia: dateOnlyText(r.dia), total, com, sem: total - com };
+  });
+  const totals = dias.reduce(
+    (acc, d) => ({ total: acc.total + d.total, com: acc.com + d.com, sem: acc.sem + d.sem }),
+    { total: 0, com: 0, sem: 0 },
+  );
+  // `dias` traz só os dias COM carga; o front preenche as lacunas do range [from, toExclusive)
+  // com zero (para "Amanhã: 0" aparecer). Datas em YYYY-MM-DD (BRT).
+  return { from: fromIso, toExclusive: toExclusiveIso, forwardDays: LOAD_ALLOCATION_FORWARD_DAYS, totals, dias };
+}
+
 export async function fetchDriverFlowMetrics({ query, correlationId }) {
   const window = resolveWindow(query);
 
@@ -443,7 +515,13 @@ export async function fetchDriverFlowMetrics({ query, correlationId }) {
   });
 
   return withPgClient(async (client) => {
-    const [funnel, accessPeaks, validation, recurrence, portalVisits, cadastros, portalAvailability] = await Promise.all([
+    // DC-295: o indicador de alocação por dia usa uma janela PRÓPRIA e prospectiva
+    // (hoje + N dias, por data de carregamento), independente do seletor de período
+    // retrospectivo que governa os demais indicadores.
+    const loadAllocFrom = saoPauloTodayIso();
+    const loadAllocToExclusive = addDaysIso(loadAllocFrom, LOAD_ALLOCATION_FORWARD_DAYS);
+
+    const [funnel, accessPeaks, validation, recurrence, portalVisits, cadastros, portalAvailability, loadAllocation] = await Promise.all([
       queryFunnel(client, window.dateFrom, window.dateToExclusive),
       queryAccessPeaks(client, window.dateFrom, window.dateToExclusive),
       queryValidationQuality(client, window.dateFrom, window.dateToExclusive),
@@ -451,6 +529,7 @@ export async function fetchDriverFlowMetrics({ query, correlationId }) {
       queryPortalVisits(client, window.dateFrom, window.dateToExclusive),
       queryCadastros(client, window.dateFrom, window.dateToExclusive),
       queryPortalAvailability(client, window.dateFrom, window.dateToExclusive),
+      queryLoadAllocationByDay(client, loadAllocFrom, loadAllocToExclusive),
     ]);
 
     return {
@@ -468,6 +547,7 @@ export async function fetchDriverFlowMetrics({ query, correlationId }) {
         portalVisits,
         cadastros,
         portalAvailability,
+        loadAllocation,
         meta: {
           correlationId: correlationId || null,
         },

@@ -646,3 +646,109 @@ export function RecorrenciaCard({ data }: { data: DriverFlowMetricsResponse }) {
     </Card>
   );
 }
+
+// ─── DC-295: cargas com/sem alocação de motorista por dia de carregamento ─────
+// Série prospectiva (hoje + N dias) vinda do backend (loadAllocation). Rótulo por
+// POSIÇÃO — índice 0 = Hoje, 1 = Amanhã — pois o backend ancora `from` no hoje-BRT.
+
+function eachDayIso(fromIso: string, toExclusiveIso: string): string[] {
+  if (!fromIso || !toExclusiveIso) return [];
+  const [fy, fm, fd] = fromIso.split("-").map(Number);
+  const [ty, tm, td] = toExclusiveIso.split("-").map(Number);
+  const cur = new Date(Date.UTC(fy, fm - 1, fd));
+  const end = new Date(Date.UTC(ty, tm - 1, td));
+  const out: string[] = [];
+  let guard = 0;
+  while (cur < end && guard < 400) {
+    out.push(cur.toISOString().slice(0, 10));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+    guard += 1;
+  }
+  return out;
+}
+
+function alocacaoDiaLabel(iso: string, index: number): { main: string; sub: string } {
+  const [y, m, d] = iso.split("-").map(Number);
+  const sub = `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}`;
+  if (index === 0) return { main: "Hoje", sub };
+  if (index === 1) return { main: "Amanhã", sub };
+  return { main: WEEK_DAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()] ?? "", sub };
+}
+
+export function AlocacaoPorDiaCard({ data }: { data: DriverFlowMetricsResponse }) {
+  const la = data.loadAllocation;
+  const dias = useMemo(() => {
+    const byDia = new Map((la?.dias ?? []).map((d) => [d.dia, d]));
+    return eachDayIso(la?.from ?? "", la?.toExclusive ?? "").map((iso) => {
+      const found = byDia.get(iso);
+      return { dia: iso, total: found?.total ?? 0, com: found?.com ?? 0, sem: found?.sem ?? 0 };
+    });
+  }, [la]);
+  const maxTotal = Math.max(1, ...dias.map((d) => d.total));
+  const totals = la?.totals ?? { total: 0, com: 0, sem: 0 };
+
+  return (
+    <Card className="admin-panel shadow-none">
+      <CardContent className="space-y-4 p-5">
+        <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-foreground">
+          <CalendarRange className="h-4 w-4 text-primary" />
+          Alocação de motorista por dia
+          <span className="ml-auto text-[11px] font-medium text-muted-foreground">
+            por data de carregamento · próximos {la?.forwardDays ?? dias.length} dias
+          </span>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-2xl border border-border/60 bg-muted/30 p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">No período</p>
+            <p className="mt-1 text-xl font-black text-foreground">{formatInt(totals.total)}</p>
+          </div>
+          <div className="rounded-2xl border border-emerald-200/70 bg-emerald-50/60 p-3 dark:border-emerald-400/30 dark:bg-emerald-500/10">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-800 dark:text-emerald-200">Com motorista</p>
+            <p className="mt-1 text-xl font-black text-emerald-700 dark:text-emerald-100">{formatInt(totals.com)}</p>
+          </div>
+          <div className="rounded-2xl border border-amber-200/70 bg-amber-50/60 p-3 dark:border-amber-400/30 dark:bg-amber-500/10">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-800 dark:text-amber-200">Sem alocação</p>
+            <p className="mt-1 text-xl font-black text-amber-700 dark:text-amber-100">{formatInt(totals.sem)}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 text-[11px] text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" /> Com motorista</span>
+          <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-amber-500" /> Sem alocação</span>
+        </div>
+
+        <div className="space-y-2">
+          {dias.map((d, i) => {
+            const { main, sub } = alocacaoDiaLabel(d.dia, i);
+            const barW = Math.round((d.total / maxTotal) * 100);
+            const comW = d.total ? Math.round((d.com / d.total) * 100) : 0;
+            return (
+              <div key={d.dia} className="grid grid-cols-[84px_1fr_84px] items-center gap-2">
+                <div className="text-xs font-semibold leading-tight text-foreground">
+                  {main}
+                  <span className="block text-[10px] font-normal text-muted-foreground">{sub}</span>
+                </div>
+                <div className="flex h-5 items-center">
+                  {d.total > 0 ? (
+                    <div className="flex h-5 overflow-hidden rounded-md" style={{ width: `${Math.max(barW, 6)}%`, minWidth: 44 }}>
+                      <div className="h-full bg-emerald-500" style={{ width: `${comW}%` }} />
+                      <div className="h-full bg-amber-500" style={{ width: `${100 - comW}%` }} />
+                    </div>
+                  ) : (
+                    <span className="h-1.5 w-6 rounded-full bg-muted" title="Sem cargas neste dia" />
+                  )}
+                </div>
+                <div className="text-right text-xs tabular-nums">
+                  <span className="font-bold text-foreground">{d.total}</span>
+                  {" · "}
+                  <span className="font-semibold text-amber-700 dark:text-amber-300">{d.sem} sem</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}

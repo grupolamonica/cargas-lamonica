@@ -2305,6 +2305,27 @@ export interface DriverFlowMetricsPortalAvailability {
   total: number;
 }
 
+/** DC-295: um dia de carregamento, com motorista escalado × sem alocação. */
+export interface DriverFlowMetricsLoadAllocationDay {
+  /** data de carregamento em YYYY-MM-DD (BRT). */
+  dia: string;
+  total: number;
+  com: number;
+  sem: number;
+}
+
+/** DC-295: cargas por dia de carregamento (janela prospectiva), com × sem alocação de motorista. */
+export interface DriverFlowMetricsLoadAllocation {
+  /** início inclusivo da janela (YYYY-MM-DD, BRT). */
+  from: string;
+  /** fim exclusivo da janela (YYYY-MM-DD, BRT). */
+  toExclusive: string;
+  forwardDays: number;
+  totals: { total: number; com: number; sem: number };
+  /** só dias COM carga; o front preenche as lacunas do range [from, toExclusive) com zero. */
+  dias: DriverFlowMetricsLoadAllocationDay[];
+}
+
 export interface DriverFlowMetricsResponse {
   window: {
     from: string;
@@ -2319,6 +2340,8 @@ export interface DriverFlowMetricsResponse {
   portalVisits: DriverFlowMetricsPortalVisits;
   cadastros: DriverFlowMetricsCadastros;
   portalAvailability: DriverFlowMetricsPortalAvailability;
+  /** DC-295: cargas com/sem alocação por dia de carregamento (próximos dias). */
+  loadAllocation: DriverFlowMetricsLoadAllocation;
   meta: {
     correlationId: string | null;
   };
