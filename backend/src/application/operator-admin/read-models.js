@@ -609,6 +609,45 @@ export async function fetchOperatorCargoListReadModel({ query, correlationId }) 
     const clauses = [];
     let index = 1;
 
+    // UMA viagem = UMA linha nesta tela. A carga LANÇADA que já foi substituída pela
+    // linha da planilha (gêmea aposentada pelo sync ou mergeada) não é uma carga
+    // própria: é a sombra histórica da canônica. Listá-la fazia o MESMO LH aparecer
+    // duas vezes, com status contraditórios — o print do operador em 07/08/2026 mostra
+    // LT0Q8802CP881 como "Expirada" (lápide) e "Fechada" (canônica) lado a lado.
+    //
+    // Por que aqui e não numa constraint de banco: o LH da lançada e o da linha da
+    // planilha coexistem POR CONSTRUÇÃO durante o ciclo do sync (o upsert cria a
+    // canônica enquanto a gêmea ainda está viva; é isso que torna legal a
+    // aposentadoria que roda depois, no mesmo ciclo). Um índice único cross-coluna
+    // levantaria 23505 no upsert e mataria o sync da fonte a cada 5 min — ver a
+    // migration 20260807120000 e `merge-launched-twin.js:10-15`.
+    //
+    // Só esconde quando SABEMOS para onde a carga foi: o ponteiro precisa estar
+    // preenchido (`alloc_merged_into_cargo_id` do merge, `superseded_by_cargo_id` da
+    // aposentadoria). Medido em produção 07/08/2026: 271 lápides escondidas, ZERO
+    // delas sem canônica de fato existente. As 5 com ponteiro NULL (o sync não achou
+    // canônica) CONTINUAM visíveis — são o único registro daquela viagem, e escondê-las
+    // perderia a carga.
+    //
+    // Nada é apagado nem fica inacessível: a carga segue alcançável por id, e o
+    // histórico da lápide já é costurado no da canônica na leitura
+    // (`fetch-cargo-history.js`, que segue `alloc_merged_into_cargo_id`).
+    // Sem TRIM() de propósito: o harness pg-mem dos testes não tem a função
+    // (`function trim(text) does not exist`) e um LH só-espaço é impossível aqui —
+    // os dois escritores gravam o valor já trimado, e o ponteiro de merge/aposentadoria
+    // só é preenchido por quem casou o LH contra uma linha REAL da planilha.
+    clauses.push(`
+      NOT (
+        cargas.sheet_lh IS NULL
+        AND cargas.lh_manual IS NOT NULL
+        AND cargas.lh_manual <> ''
+        AND (
+          cargas.alloc_merged_into_cargo_id IS NOT NULL
+          OR cargas.superseded_by_cargo_id IS NOT NULL
+        )
+      )
+    `);
+
     if (search) {
       values.push(`%${search}%`);
       clauses.push(`

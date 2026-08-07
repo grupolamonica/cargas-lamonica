@@ -10,11 +10,15 @@
 // colidiria com o upsert do sync (ver migration 20260625120001_add_lh_manual_to_cargas
 // e google-sheet-loads.js). lh_manual é o campo canônico p/ LH de carga do sistema.
 //
-// Dedup best-effort: antes de inserir, checa se o LH já existe como carga (por
-// sheet_lh OU lh_manual) e devolve a existente (alreadyExists). Não há índice único
-// em lh_manual — o botão fica desabilitado enquanto pendente no front, então o caso
-// comum (re-clique) é coberto; cliques concorrentes de operadores distintos podem,
-// em tese, gerar 2 cargas (sem outage, sem violação de índice).
+// Dedup em DUAS camadas: antes de inserir, checa se o LH já existe como carga (por
+// sheet_lh OU lh_manual) e devolve a existente (alreadyExists) — isso cobre o caso
+// comum (re-clique, botão desabilitado no front) e o LH que já é linha da planilha.
+// Esse SELECT sozinho é TOCTOU: são statements separados, então dois lançamentos
+// simultâneos do MESMO LH passavam os dois e criavam DUAS cargas do sistema — a mesma
+// viagem virava duas linhas no Monitor, sem erro nenhum. A 2ª camada é o índice único
+// parcial `ux_cargas_source_lh_manual_live` (migration 20260807120000), que fecha a
+// corrida no banco; quem perde a corrida cai no catch do INSERT e devolve a carga
+// vencedora como `alreadyExists`, não 500.
 //
 // A carga nasce OPEN/PUBLIC e já JÁ recebe valor/distância/duração/bônus do catálogo
 // de rotas (route_metrics_cache) na criação — denormalizados NA carga p/ ela ser
@@ -36,6 +40,23 @@ import {
   normalizeClientName,
 } from "./_shared.js";
 import { writeAllocationsToSheet, buildSystemCargoShellRow } from "../../google-sheets/sheet-writeback.js";
+
+/**
+ * Violação do índice único da carga lançada VIVA (`ux_cargas_source_lh_manual_live`,
+ * migration 20260807120000) — ou seja: outro lançamento do MESMO (fonte, LH) venceu a
+ * corrida.
+ *
+ * Casa pelo NOME do índice quando o driver o expõe (`err.constraint`) e cai para a
+ * mensagem quando não — o harness pg-mem dos testes não popula `constraint`. Nunca
+ * casa 23505 genérico: uma colisão de OUTRO índice (ex.: `codigo_viagem`) tem de
+ * continuar subindo como erro, senão engoliríamos um defeito diferente.
+ */
+export function isLaunchedLhUniqueViolation(err) {
+  if (err?.code !== "23505") return false;
+  return /ux_cargas_source_lh_manual_live|lh_manual/i.test(
+    `${err?.constraint ?? ""} ${err?.detail ?? ""} ${err?.message ?? ""}`,
+  );
+}
 
 /**
  * @param {{
@@ -236,17 +257,48 @@ export async function launchCargoFromTrip({
     // Monitor exibia as duas igual (94 lançadas na tela em 05/08/2026, 72 nunca
     // aceitas). É a coluna que o read model usa para tirar a não-aceita da tela
     // sem levar junto o frete já comprometido com a agência.
-    const { rows } = await client.query(
-      `INSERT INTO public.cargas
-         (cliente_id, data, horario, origem, destino, perfil, status, is_template,
-          driver_visibility, lh_manual, sheet_data_carregamento, sheet_data_descarga,
-          agenda_a_confirmar, created_by, valor, bonus, distancia_km, duracao_horas, sheet_source,
-          trip_accepted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', false, 'PUBLIC', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-               CASE WHEN $17::boolean THEN now() END)
-       RETURNING id`,
-      [clienteId, dataValue, horarioValue, origemTrim, destinoTrim, perfilValue, lhTrim, carregamentoLabel, descargaValue, aConfirmar, operatorId, valorValue, bonusValue, distanciaValue, duracaoValue, source ?? null, Boolean(accepted)],
-    );
+    let rows;
+    try {
+      ({ rows } = await client.query(
+        `INSERT INTO public.cargas
+           (cliente_id, data, horario, origem, destino, perfil, status, is_template,
+            driver_visibility, lh_manual, sheet_data_carregamento, sheet_data_descarga,
+            agenda_a_confirmar, created_by, valor, bonus, distancia_km, duracao_horas, sheet_source,
+            trip_accepted_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', false, 'PUBLIC', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                 CASE WHEN $17::boolean THEN now() END)
+         RETURNING id`,
+        [clienteId, dataValue, horarioValue, origemTrim, destinoTrim, perfilValue, lhTrim, carregamentoLabel, descargaValue, aConfirmar, operatorId, valorValue, bonusValue, distanciaValue, duracaoValue, source ?? null, Boolean(accepted)],
+      ));
+    } catch (err) {
+      // Corrida PERDIDA para outro lançamento do mesmo (fonte, LH): o índice único
+      // `ux_cargas_source_lh_manual_live` barrou a 2ª inserção. O SELECT de dedup lá
+      // acima não protege contra isto (statements separados). O resultado correto é o
+      // MESMO do caminho já-existente — a viagem está lançada, só não por nós — então
+      // relê a vencedora e devolve `alreadyExists` em vez de estourar 500 no botão.
+      if (!isLaunchedLhUniqueViolation(err)) throw err;
+      const { rows: vencedora } = await client.query(
+        `SELECT id, status FROM public.cargas
+          WHERE lh_manual = $1 AND sheet_lh IS NULL
+          ORDER BY created_at ASC, id ASC LIMIT 1`,
+        [lhTrim],
+      );
+      // Sem vencedora legível o 23505 não era desta corrida — não engole o erro.
+      if (!vencedora[0]) throw err;
+      return {
+        statusCode: 200,
+        payload: {
+          ok: true,
+          alreadyExists: true,
+          updated: false,
+          id: vencedora[0].id,
+          cargo: { id: vencedora[0].id, status: vencedora[0].status },
+          meta: { correlationId },
+        },
+        _source: source,
+        _writeShell: true,
+      };
+    }
 
     return {
       statusCode: 201,

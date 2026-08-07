@@ -214,6 +214,90 @@ describe("operator-admin read models", () => {
     expect(expiredResponse.payload.meta.totalCount).toBe(1);
   });
 
+  it("nao lista a gemea aposentada junto da canonica — um LH, uma linha", async () => {
+    const cliente = await seedCliente({ nome: "Cliente Gemea" });
+    const LH = "LT0Q8802CP881";
+
+    // Canônica: a linha da planilha, viva (o que o operador deve ver).
+    const canonica = await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Simoes Filho / BA",
+      destino: "Jaboatao dos Guararapes / PE",
+      status: "BOOKED",
+      sheet_lh: LH,
+    });
+
+    // Gêmea LANÇADA já substituída pela canônica: mesmo LH em lh_manual, aposentada
+    // pelo sync (retired_reason + superseded_by_cargo_id) e mergeada. É a linha que
+    // aparecia como 2ª "carga" do mesmo LH no print do operador (07/08/2026).
+    const gemea = await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Simoes Filho / BA",
+      destino: "Jaboatao dos Guararapes / PE",
+      status: "EXPIRED",
+      sheet_lh: null,
+    });
+    await withPgClient((client) =>
+      client.query(
+        `UPDATE public.cargas
+            SET lh_manual = $2, retired_reason = 'twin_taken',
+                superseded_by_cargo_id = $3, alloc_merged_into_cargo_id = $3
+          WHERE id = $1`,
+        [gemea.id, LH, canonica.id],
+      ),
+    );
+
+    // Buscar o LH devolve UMA carga: a canônica.
+    const busca = await readModels.fetchOperatorCargoListReadModel({
+      query: { page: "1", pageSize: "10", status: "todos", search: LH },
+      correlationId: "corr-cargo-twin-single-row",
+    });
+
+    expect(busca.statusCode).toBe(200);
+    expect(busca.payload.items).toHaveLength(1);
+    expect(busca.payload.items[0]).toMatchObject({ id: canonica.id, sheet_lh: LH, status: "BOOKED" });
+    expect(busca.payload.meta.totalCount).toBe(1);
+
+    // Nem o filtro explícito de "Expiradas" a ressuscita: ela não expirou, foi
+    // substituída — e contá-la ali inflava o total com um não-evento.
+    const expiradas = await readModels.fetchOperatorCargoListReadModel({
+      query: { page: "1", pageSize: "10", status: "EXPIRED" },
+      correlationId: "corr-cargo-twin-not-expired",
+    });
+
+    expect(expiradas.payload.items).toHaveLength(0);
+    expect(expiradas.payload.meta.totalCount).toBe(0);
+  });
+
+  it("mantem visivel a gemea aposentada SEM canonica conhecida (ponteiro nulo)", async () => {
+    const cliente = await seedCliente({ nome: "Cliente Gemea Orfa" });
+
+    // Aposentada mas o sync não achou canônica (canonica_id NULL — medido em produção:
+    // 65 de 66 `twin_taken`). É o ÚNICO registro daquela viagem: esconder = perder a
+    // carga, então ela continua na lista.
+    const orfa = await seedCargo({
+      cliente_id: cliente.id,
+      origem: "Salvador / BA",
+      destino: "Recife / PE",
+      status: "EXPIRED",
+      sheet_lh: null,
+    });
+    await withPgClient((client) =>
+      client.query(
+        `UPDATE public.cargas SET lh_manual = 'LT0Q8802ORFA1', retired_reason = 'twin_taken' WHERE id = $1`,
+        [orfa.id],
+      ),
+    );
+
+    const response = await readModels.fetchOperatorCargoListReadModel({
+      query: { page: "1", pageSize: "10", status: "EXPIRED" },
+      correlationId: "corr-cargo-twin-orphan-visible",
+    });
+
+    expect(response.payload.items).toHaveLength(1);
+    expect(response.payload.items[0]).toMatchObject({ id: orfa.id, lh_manual: "LT0Q8802ORFA1" });
+  });
+
   it("expõe distancia e valor base da planilha no catalogo de rotas mesmo sem registro persistido", async () => {
     const response = await readModels.fetchOperatorRoutesListReadModel({
       query: {

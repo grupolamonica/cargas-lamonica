@@ -10,7 +10,7 @@ import {
   withPgClient,
 } from "../test-harness.js";
 
-import { launchCargoFromTrip } from "./launch-cargo-from-trip.js";
+import { isLaunchedLhUniqueViolation, launchCargoFromTrip } from "./launch-cargo-from-trip.js";
 
 const deps = { withPgClient };
 
@@ -269,5 +269,114 @@ describe("launchCargoFromTrip", () => {
     });
     expect(res.payload.alreadyExists).toBe(true);
     expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  /** Deps que deixam o pré-check de dedup passar e fazem o INSERT falhar como se outro
+   *  lançamento do MESMO LH tivesse comitado no meio — a corrida que o índice único
+   *  `ux_cargas_source_lh_manual_live` passa a barrar. `erro` monta a exceção. */
+  function depsComCorridaPerdida(erro, aoInserir) {
+    return {
+      withPgClient: (cb) =>
+        withPgClient(async (client) => {
+          const originalFn = client.query;
+          const original = originalFn.bind(client);
+          // One-shot: o INSERT do concorrente (feito via `original`) e o de qualquer
+          // seed não podem re-entrar no interceptador — senão vira recursão infinita.
+          let disparou = false;
+          client.query = async (sql, params) => {
+            if (!disparou && typeof sql === "string" && /^\s*INSERT INTO public\.cargas/i.test(sql)) {
+              disparou = true;
+              if (aoInserir) await aoInserir(original);
+              throw erro();
+            }
+            return original(sql, params);
+          };
+          try {
+            return await cb(client);
+          } finally {
+            client.query = originalFn; // devolve o client limpo ao pool
+          }
+        }),
+    };
+  }
+
+  function erroUnicidadeLh() {
+    const err = new Error('duplicate key value violates unique constraint "ux_cargas_source_lh_manual_live"');
+    err.code = "23505";
+    err.constraint = "ux_cargas_source_lh_manual_live";
+    return err;
+  }
+
+  it("corrida perdida no INSERT devolve a carga VENCEDORA (alreadyExists), não 500", async () => {
+    const cliente = await seedCliente({ nome: "Shopee" });
+    const op = await seedUser({ email: "op-race@test.local" });
+
+    // O concorrente comita a carga com o MESMO LH logo antes do nosso INSERT. Vai pelo
+    // client CRU (`original`) de propósito: passar por seedCargo re-entraria no
+    // interceptador.
+    const vencedoraId = crypto.randomUUID();
+    const deps2 = depsComCorridaPerdida(erroUnicidadeLh, (original) =>
+      original(
+        `INSERT INTO public.cargas
+           (id, cliente_id, data, horario, origem, destino, status, is_template, driver_visibility, lh_manual)
+         VALUES ($1, $2, '2026-07-20', '08:00:00', 'X', 'Y', 'OPEN', false, 'PUBLIC', $3)`,
+        [vencedoraId, cliente.id, validTrip.lh],
+      ),
+    );
+
+    const res = await launchCargoFromTrip({ ...validTrip, operatorId: op.id, correlationId: "c-race", deps: deps2 });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.payload.alreadyExists).toBe(true);
+    expect(res.payload.id).toBe(vencedoraId);
+
+    // E não sobrou carga duplicada: o LH tem UMA carga lançada.
+    const { rows } = await query(
+      "SELECT count(*)::int AS n FROM public.cargas WHERE lh_manual = $1 AND sheet_lh IS NULL",
+      [validTrip.lh],
+    );
+    expect(rows[0].n).toBe(1);
+  });
+
+  // O predicado é compartilhado com updateMonitorCargo (que traduz a mesma violação
+  // para DUPLICATE_TRIP_CODE), então é testado por si — um falso positivo aqui
+  // engoliria a colisão de OUTRO índice como se fosse corrida de lançamento.
+  describe("isLaunchedLhUniqueViolation", () => {
+    it("reconhece pelo nome do índice em err.constraint", () => {
+      expect(isLaunchedLhUniqueViolation({ code: "23505", constraint: "ux_cargas_source_lh_manual_live" })).toBe(true);
+    });
+
+    it("reconhece pela mensagem quando o driver não expõe constraint (harness pg-mem)", () => {
+      expect(
+        isLaunchedLhUniqueViolation({
+          code: "23505",
+          message: 'duplicate key value violates unique constraint "ux_cargas_source_lh_manual_live"',
+        }),
+      ).toBe(true);
+    });
+
+    it("NÃO reconhece 23505 de outro índice", () => {
+      expect(isLaunchedLhUniqueViolation({ code: "23505", constraint: "idx_cargas_codigo_viagem" })).toBe(false);
+    });
+
+    it("NÃO reconhece erro que não é violação de unicidade", () => {
+      expect(isLaunchedLhUniqueViolation({ code: "23502", constraint: "ux_cargas_source_lh_manual_live" })).toBe(false);
+      expect(isLaunchedLhUniqueViolation(null)).toBe(false);
+      expect(isLaunchedLhUniqueViolation(new Error("boom"))).toBe(false);
+    });
+  });
+
+  it("23505 de OUTRO índice (codigo_viagem) continua subindo — não é engolido como corrida", async () => {
+    await seedCliente({ nome: "Shopee" });
+    const deps2 = depsComCorridaPerdida(() => {
+      const err = new Error('duplicate key value violates unique constraint "idx_cargas_codigo_viagem"');
+      err.code = "23505";
+      err.constraint = "idx_cargas_codigo_viagem";
+      return err;
+    });
+
+    await expect(
+      launchCargoFromTrip({ ...validTrip, correlationId: "c-other-idx", deps: deps2 }),
+    ).rejects.toThrow(/idx_cargas_codigo_viagem/);
   });
 });

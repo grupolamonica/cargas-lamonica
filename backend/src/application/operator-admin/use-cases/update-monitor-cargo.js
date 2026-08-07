@@ -8,6 +8,7 @@ import { reconcileMonitorLoadStatus } from "./reconcile-monitor-load-status.js";
 import { writeAllocationsToSheet, formatSheetDateLabel } from "../../google-sheets/sheet-writeback.js";
 import { describeConflicts, duplicateAllocWarnEnabled, findAllocationConflicts } from "./find-allocation-conflicts.js";
 import { alocacaoDesatualizada, concurrentEditWarnEnabled, descreverAlteracaoConcorrente } from "./check-allocation-freshness.js";
+import { isLaunchedLhUniqueViolation } from "./launch-cargo-from-trip.js";
 
 // pg devolve DATE como Date (UTC-midnight) e TIME como string. Normaliza pro
 // formato de parede 'YYYY-MM-DD' / 'HH:MM' (UTC, evita off-by-one).
@@ -261,6 +262,16 @@ export async function updateMonitorCargo({ cargoId, operatorId, payload, request
       // Carimbo REAL do banco → baseline da próxima edição no front (ver
       // check-allocation-freshness.js: usar timestamp do cliente geraria falso aviso).
       allocUpdatedAt = r.rows[0]?.alloc_updated_at ?? null;
+    }).catch((err) => {
+      // O pré-check de DUPLICATE_TRIP_CODE acima é TOCTOU (SELECT e UPDATE separados);
+      // `ux_cargas_source_lh_manual_live` é quem garante de fato. Traduz a violação para
+      // o MESMO erro de negócio do pré-check, senão o operador levaria um 500 opaco ao
+      // digitar um LH que outra carga acabou de tomar.
+      if (!isLaunchedLhUniqueViolation(err)) throw err;
+      throw new ConflictError(
+        `Já existe uma carga com o código de viagem "${lhManual}". Use um código diferente.`,
+        { code: "DUPLICATE_TRIP_CODE" },
+      );
     });
 
     // Reabrir a carga NÃO-reservada: "Disponível" sem motorista → força status=OPEN
