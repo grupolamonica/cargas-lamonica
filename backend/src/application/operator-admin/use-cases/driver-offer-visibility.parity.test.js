@@ -61,7 +61,12 @@ describe.sequential("paridade: isOfferedToDriver × WHERE real do portal (pg-mem
   beforeAll(async () => {
     await resetTestDatabase();
     const clienteId = (await seedCliente({ nome: "Shopee" })).id;
-    const base = { cliente_id: clienteId, status: "OPEN", driver_visibility: "PUBLIC", data: futuro.dateIso, horario: "08:00:00" };
+    // A hora VEM do mesmo instante que a data (`futuro`), nunca fixada. Com
+    // `horario: "08:00:00"` a carga só era futura enquanto em São Paulo ainda não
+    // fossem 08:00 — depois disso a base inteira nascia VENCIDA, saía do recorte do
+    // portal e o teste quebrava sozinho, sem ninguém mexer em nada. Como quase toda
+    // fixture espalha `base`, isso derrubava a suíte durante o dia útil inteiro.
+    const base = { cliente_id: clienteId, status: "OPEN", driver_visibility: "PUBLIC", data: futuro.dateIso, horario: futuro.timeIso };
 
     const pacotePublicado = (await seedPacote({ status: "publicado" })).id;
     const pacoteEmAndamento = (await seedPacote({ status: "em_andamento" })).id;
