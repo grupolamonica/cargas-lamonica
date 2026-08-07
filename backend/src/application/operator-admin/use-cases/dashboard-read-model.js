@@ -1,4 +1,5 @@
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
+import { lastDriverVisibleWriteAt } from "./driver-loads-freshness.js";
 import { parseOperatorDashboardQuery } from "../../../domain/operator-admin/schemas.js";
 import { buildPaginationMeta, parseNullableNumber } from "../../../domain/operator-admin/route-utils.js";
 import { getSaoPauloWallClock } from "../../../domain/sao-paulo-time.js";
@@ -238,9 +239,13 @@ let _driverLoadsInFlight = new Map();
 let _driverLoadsCache = new Map();
 
 function getDriverLoadsCacheTtlMs() {
-  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0;
+  // Override EXPLÍCITO vence sempre — inclusive em teste. Antes o desligamento em
+  // VITEST vinha primeiro, então o caminho com cache (e a invalidação por escrita logo
+  // abaixo) era intestável: nenhum caso conseguia ligar o cache para exercitá-lo.
   const raw = Number.parseInt(process.env.DRIVER_LOADS_CACHE_TTL_MS ?? "", 10);
-  if (Number.isFinite(raw) && raw >= 0) return raw; // respeita override (incl. 0)
+  if (Number.isFinite(raw) && raw >= 0) return raw;
+  // Sem override, segue desligado em teste (não vaza estado entre casos).
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return 0;
   return 8_000; // default produção
 }
 
@@ -278,7 +283,11 @@ export async function fetchDriverLoadsReadModel({ query, correlationId }) {
   const now = Date.now();
 
   const cached = _driverLoadsCache.get(key);
-  if (cached && now - cached.at < ttl) {
+  // Além do TTL, a entrada precisa ser POSTERIOR à última escrita que muda o que o
+  // motorista vê. Sem isso, o operador liberava a carga, o digest mudava, o portal
+  // refazia a busca e recebia esta MESMA entrada pré-escrita — e como o digest não muda
+  // de novo, nada disparava outro refetch. Ver driver-loads-freshness.js.
+  if (cached && now - cached.at < ttl && cached.at > lastDriverVisibleWriteAt()) {
     return { statusCode: 200, payload: { ...cached.payload, meta: { ...cached.payload.meta, correlationId, cached: true } } };
   }
 

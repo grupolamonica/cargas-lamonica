@@ -249,6 +249,61 @@ describe("operator-admin service", () => {
     });
   });
 
+  // O cache de 8 s do read model do motorista só expirava por TEMPO. Isso abria uma
+  // janela em que o operador liberava a carga, a sondagem do digest mudava, o portal
+  // refazia a busca — e recebia a entrada de cache ANTERIOR à liberação. Como o digest
+  // não muda de novo, nada disparava outro refetch e o motorista ficava sem ver a carga.
+  it("cache do read model do motorista é invalidado pela escrita, não só pelo tempo", async () => {
+    const { markDriverVisibleWrite, resetDriverVisibleWriteMarkForTests } = await import(
+      "./use-cases/driver-loads-freshness.js"
+    );
+    resetDriverVisibleWriteMarkForTests();
+    // Liga o cache (em teste ele vem desligado por default; override explícito vence).
+    vi.stubEnv("DRIVER_LOADS_CACHE_TTL_MS", "8000");
+
+    const cliente = await seedCliente({ nome: "Cliente Cache" });
+    const query = { page: "1", pageSize: "10", search: "cachetesteorigem" };
+
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "CacheTesteOrigem / BA",
+      destino: "Simoes Filho / BA",
+      status: "OPEN",
+      is_template: false,
+      data: "2099-04-08",
+      driver_visibility: "PUBLIC",
+    });
+
+    const primeira = await service.fetchDriverLoadsReadModel({ query, correlationId: "c-cache-1" });
+    expect(primeira.payload.items).toHaveLength(1);
+
+    // Nova carga entra no banco, mas SEM marca de escrita: o cache ainda vale e a
+    // segunda busca devolve a foto antiga — é o comportamento que protege o egress.
+    await seedCargo({
+      cliente_id: cliente.id,
+      origem: "CacheTesteOrigem / BA",
+      destino: "Recife / PE",
+      status: "OPEN",
+      is_template: false,
+      data: "2099-04-09",
+      driver_visibility: "PUBLIC",
+    });
+    const segunda = await service.fetchDriverLoadsReadModel({ query, correlationId: "c-cache-2" });
+    expect(segunda.payload.items).toHaveLength(1);
+    expect(segunda.payload.meta.cached).toBe(true);
+
+    // Agora a escrita se anuncia (é o que updateMonitorAllocation/Cargo fazem após o
+    // commit): a MESMA busca tem de enxergar a carga nova, sem esperar o TTL.
+    markDriverVisibleWrite();
+    const terceira = await service.fetchDriverLoadsReadModel({ query, correlationId: "c-cache-3" });
+    expect(terceira.payload.items).toHaveLength(2);
+
+    // Deixa o marcador à frente de qualquer entrada criada aqui — assim nenhum caso
+    // seguinte herda um cache deste teste (o próprio mecanismo faz a limpeza).
+    markDriverVisibleWrite();
+    vi.unstubAllEnvs();
+  });
+
   it("DC-265: escopa as cargas disponiveis por cliente (query.clienteId) usando a mesma definicao do portal", async () => {
     const clienteA = await seedCliente({ nome: "Cliente A DC265" });
     const clienteB = await seedCliente({ nome: "Cliente B DC265" });

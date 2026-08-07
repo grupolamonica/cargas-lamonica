@@ -120,9 +120,11 @@ export async function ensureDriverLoadsSheetFresh({
     return false;
   }
 
+  // Já há um refresh em voo: NÃO entra na fila dele. Antes era
+  // `await driverLoadsSheetRefreshPromise`, então qualquer request que caísse na janela
+  // do sync pagava o tempo restante dele (ver a nota de medição abaixo).
   if (driverLoadsSheetRefreshPromise) {
-    await driverLoadsSheetRefreshPromise;
-    return true;
+    return false;
   }
 
   if (now - lastDriverLoadsSheetRefreshCheckAt < DRIVER_LOADS_SHEET_CHECK_COOLDOWN_MS) {
@@ -162,7 +164,24 @@ export async function ensureDriverLoadsSheetFresh({
       });
 
     driverLoadsSheetRefreshPromise = syncPromise;
-    await syncPromise;
+    // STALE-WHILE-REVALIDATE DE VERDADE: dispara o sync e devolve JÁ, sem esperar.
+    //
+    // Antes havia `await syncPromise` aqui. Os três chamadores
+    // (`/api/operator/cargas`, dashboard do operador e `/api/driver/loads`) já
+    // documentavam a intenção — "serve dados atuais agora, próxima request reflete o
+    // sync" — mas o código esperava o sync INTEIRO terminar. Medido em produção
+    // 07/08/2026 pelos próprios logs do `sheet-sync-periodic`: 9.775 ms e 12.068 ms.
+    // Ou seja, a request que disparasse o refresh travava ~10-12 s antes de responder.
+    //
+    // Intermitente por construção — só dispara quando o snapshot passa de
+    // DRIVER_LOADS_SHEET_STALE_AFTER_MS (7 min) e fora do cooldown de 45 s. É
+    // exatamente o "ÀS VEZES demora bastante" que o operador relatou: na maior parte
+    // dos cliques o sync periódico mantém o snapshot fresco e nada acontece; quando ele
+    // atrasa, o próximo a abrir a tela paga a conta.
+    //
+    // O erro do sync continua tratado dentro de `syncPromise` (o `.catch` acima), então
+    // não há rejeição não-tratada por não aguardar aqui. Nenhum chamador usa o retorno.
+    void syncPromise;
     return true;
   } catch (error) {
     console.error("[driver-loads-sheet-sync-check]", {
@@ -313,15 +332,56 @@ export async function resolveDriverSponsorClickResponse(request) {
   }
 }
 
-// Cheap "did anything change?" probe for the public driver portal.
-// Returns a digest based on MAX(updated_at) + count of OPEN PUBLIC cargas.
-// Frontend polls every 5 min — when digest changes, invalidates the
-// /api/driver/loads-read-model query. No auth: matches /api/driver/loads.
+// Sonda barata de "mudou algo?" para o portal público do motorista.
+// Digest = MAX(updated_at) + contagem das cargas OPEN PUBLIC. Quando o digest muda, o
+// portal invalida a query /api/driver/loads-read-model. Sem auth: igual /api/driver/loads.
+//
+// CACHE + SINGLE-FLIGHT (janela curta): o portal passou a sondar a cada 30 s (antes 5 min)
+// para a carga marcada como "Disponível" aparecer em segundos e não em minutos. Sem o
+// cache, encurtar o intervalo multiplicaria por 10 o número de queries por motorista
+// simultâneo — e o read model do motorista já foi o maior consumidor de egress do pooler
+// num incidente anterior. Com a janela, N motoristas sondando juntos colapsam em UMA
+// query, então o custo no banco fica praticamente o mesmo de antes, com 10x menos latência
+// de percepção.
+//
+// A janela é curta de propósito (2 s): ela existe para colapsar rajadas concorrentes, não
+// para segurar novidade. O atraso que ela adiciona é irrelevante ao lado do intervalo de
+// sondagem, e mantém o digest como fonte de verdade vinda do banco — o que é necessário,
+// já que quem muda a carga pode ser o sync da planilha, e não só a API.
+const DRIVER_LOADS_DIGEST_CACHE_TTL_MS = Math.max(
+  Number.parseInt(process.env.PUBLIC_DRIVER_LOADS_DIGEST_TTL_MS || "", 10) || 2_000,
+  0,
+);
+let _digestCache = null; // { at: number, digest: string }
+let _digestInFlight = null;
+
+/** Zera o cache do digest — só para os testes não vazarem estado entre casos. */
+export function resetDriverLoadsDigestCacheForTests() {
+  _digestCache = null;
+  _digestInFlight = null;
+}
+
 export async function resolveDriverLoadsDigestResponse(request) {
   const correlationId = getCorrelationId(request);
 
+  // Janela de cache: serve o digest recém-calculado sem tocar o banco.
+  const agora = Date.now();
+  if (_digestCache && agora - _digestCache.at < DRIVER_LOADS_DIGEST_CACHE_TTL_MS) {
+    return { statusCode: 200, payload: { digest: _digestCache.digest, meta: { correlationId, cached: true } } };
+  }
+  // Single-flight: uma rajada concorrente compartilha a query em andamento.
+  if (_digestInFlight) {
+    try {
+      const digest = await _digestInFlight;
+      return { statusCode: 200, payload: { digest, meta: { correlationId, cached: true } } };
+    } catch {
+      // A dona da promise já trata e responde 503; aqui só não propaga o erro dela.
+      return { statusCode: 503, payload: { error: "SERVICE_UNAVAILABLE", meta: { correlationId } } };
+    }
+  }
+
   try {
-    const digest = await withPgClient(async (client) => {
+    const promise = withPgClient(async (client) => {
       // Cruza com a planilha (sheet_motorista) para que o digest nao conte
       // cargas ja alocadas no Google Sheets — caso o sync atrase, o frontend
       // nao dispara invalidacao para cargas que ja estao fechadas. Filtro de
@@ -357,6 +417,17 @@ export async function resolveDriverLoadsDigestResponse(request) {
       const r = rows[0] || {};
       return `${r.ts}:${r.cnt}`;
     });
+    _digestInFlight = promise;
+
+    let digest;
+    try {
+      digest = await promise;
+    } finally {
+      // Libera o single-flight SEMPRE — se ficasse preso numa promise rejeitada, todo
+      // sondador seguinte herdaria o erro para sempre.
+      _digestInFlight = null;
+    }
+    _digestCache = { at: Date.now(), digest };
 
     return {
       statusCode: 200,
