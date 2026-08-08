@@ -1,5 +1,6 @@
 import "../config/load-env.js";
 import { logStructuredEvent } from "../security-log.js";
+import { recordSecurityAuditEvent } from "../security-audit.js";
 
 // Cliente HTTP fino para o servico BRK (Brasil Risk). A plataforma e apenas
 // CLIENTE deste endpoint (o robo BRK roda noutra maquina e ja faz toda a
@@ -174,6 +175,30 @@ export async function consultarBrkPainel({ cpf, placas, correlationId } = {}) {
       status: payload?.status || null,
       conjuntoApto: payload?.conjunto_apto ?? null,
       latencyMs: Date.now() - startedAt,
+    });
+
+    // Trilha de auditoria da DIVULGACAO (DC-283 / BX-5). Mandar CPF e placas a
+    // um terceiro e tratamento de dado pessoal e precisa ser demonstravel: sem
+    // registro, nao ha como responder "quais dados de quem foram compartilhados,
+    // com quem e quando" -- que e o que o art.37 exige poder demonstrar.
+    //
+    // Fire-and-forget (recordSecurityAuditEvent ja engole a propria falha, entao
+    // auditoria indisponivel nunca derruba a consulta) e SEM PII crua: so o CPF
+    // mascarado e a CONTAGEM de placas. A trilha prova que houve divulgacao, nao
+    // repete o dado divulgado.
+    void recordSecurityAuditEvent({
+      eventType: "driver-validation.brk.disclosure",
+      severity: "info",
+      actorRole: "system",
+      resourceType: "driver",
+      action: "disclose-to-third-party",
+      outcome: "success",
+      correlationId: correlationId || null,
+      metadata: {
+        destino: "BRK/BrasilRisk",
+        cpf_masked: `${normalizedCpf.slice(0, 3)}***`,
+        placas_enviadas: url.searchParams.getAll("placa").length,
+      },
     });
 
     return {
