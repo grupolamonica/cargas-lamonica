@@ -1,4 +1,5 @@
 import { withPgClient } from "../../../infrastructure/pg/postgres.js";
+import { hashDraftToken } from "../../../domain/candidatura/draft-token.js";
 
 // TTL SLIDING: 72h desde o ultimo updated_at (D-05 + B-03).
 const DRAFT_TTL_MS = 72 * 60 * 60 * 1000;
@@ -102,7 +103,26 @@ export async function getCandidaturaDraft({ driverUserId, cargaId, correlationId
  * @param {string} args.cpf CPF normalizado (11 digitos).
  * @param {string} [args.correlationId]
  */
-export async function getCandidaturaDraftByCpf({ cpf, correlationId }) {
+/**
+ * Le o rascunho anonimo pelo TOKEN DE POSSE (DC-283 / CRIT-3).
+ *
+ * Substitui a leitura por CPF, que era o BOLA: `?cpf=` devolvia a ficha inteira
+ * (CNH, RG, endereco, credencial de rastreador) pra qualquer CPF informado, e
+ * CPF nao e segredo no Brasil.
+ *
+ * A busca e pelo HASH do token, entao nem o CPF entra na consulta — o que
+ * tambem tira o CPF da query string do GET (achado ALTO-17).
+ *
+ * Token invalido, ausente ou expirado devolve 204, igual a "nao existe
+ * rascunho": nao ha como distinguir os casos de fora, entao nao ha oraculo.
+ */
+export async function getCandidaturaDraftByToken({ draftToken, correlationId }) {
+  const tokenHash = hashDraftToken(draftToken);
+
+  if (!tokenHash) {
+    return { statusCode: 204 };
+  }
+
   return withPgClient(async (client) => {
     const result = await client.query(
       `
@@ -111,12 +131,12 @@ export async function getCandidaturaDraftByCpf({ cpf, correlationId }) {
         WHERE status = 'draft'
           AND versao_cadastro = 'v2'
           AND driver_user_id IS NULL
-          AND dados->'motorista'->>'cpf' = $1
+          AND draft_token_hash = $1
           AND updated_at > now() - interval '72 hours'
         ORDER BY updated_at DESC
         LIMIT 1
       `,
-      [cpf],
+      [tokenHash],
     );
 
     if (result.rows.length === 0) {
