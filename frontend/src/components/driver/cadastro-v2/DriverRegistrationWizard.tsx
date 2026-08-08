@@ -497,7 +497,7 @@ export function DriverRegistrationWizard({
       return;
     }
 
-    // Fix F5 publico: a query GET /draft/me?cpf=XXX resolve assincronamente,
+    // Fix F5 publico: a query GET /draft/me (token de posse) resolve assincronamente,
     // entao o effect pode disparar com draft.data ainda vazio (antes da
     // reconciliacao terminar). Adia a marcacao de hasHydratedFromDraftRef
     // ate efetivamente termos uma slice pra hidratar — caso contrario o

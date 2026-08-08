@@ -54,7 +54,7 @@ export function A2Telefone({
   const [secondary, setSecondary] = useState(formatPhone(initialSecondary));
 
   // Sync externo → state interno. Necessario pra hidratacao tardia do draft
-  // (fluxo publico apos F5 — GET /draft/me?cpf=XXX resolve depois do mount).
+  // (fluxo publico apos F5 — GET /draft/me (token de posse) resolve depois do mount).
   //
   // 2026-05-26 — Mesmo pattern do A3Endereco: A2Telefone é fonte da verdade
   // durante edição. Só sincroniza do parent quando o state local ainda está

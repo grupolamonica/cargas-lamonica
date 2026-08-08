@@ -121,7 +121,7 @@ function StepAMotoristaImpl({
     a4: isA4Complete(value?.a4),
   }));
 
-  // Hidratacao tardia do draft (fluxo publico apos F5 — GET /draft/me?cpf=XXX
+  // Hidratacao tardia do draft (fluxo publico apos F5 — GET /draft/me (token de posse)
   // resolve depois do mount do wizard). Re-sincroniza state interno e validity
   // quando o parent troca `value`. Guard de identidade evita loop com
   // onChange-->setStepAData no parent: so reseta quando o REF muda E o valor

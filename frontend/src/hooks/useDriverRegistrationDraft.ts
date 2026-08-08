@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import {
+  clearStoredDraftToken,
   useCandidaturaDraftGet,
   useCandidaturaDraftSave,
 } from "@/api/candidaturaApi";
@@ -131,7 +132,7 @@ export function useDriverRegistrationDraft({
   const [isRestoring, setIsRestoring] = useState<boolean>(true);
 
   // Fix F5 publico: passa o CPF pro server-query quando nao ha session — assim
-  // o GET /api/candidatura/draft/me?cpf=XXX hidrata o draft anonimo apos refresh.
+  // o GET /api/candidatura/draft/me (token de posse) hidrata o draft anonimo apos refresh.
   // Iter #7: passa cargaId pra escopar o draft a esta carga (multi-draft).
   const serverDraftQuery = useCandidaturaDraftGet(driverUserId || null, cpf ?? null, cargaId);
   const saveMutation = useCandidaturaDraftSave();
@@ -451,6 +452,10 @@ export function useDriverRegistrationDraft({
     if (driverUserId) {
       clearDraft(driverUserId);
     }
+    // Token de posse do rascunho anônimo (DC-283): o cadastro terminou, então o
+    // rascunho deixou de ser rascunho. Manter o token seria deixar credencial
+    // órfã no navegador apontando para algo que não é mais editável.
+    clearStoredDraftToken();
     setDataState({});
     setCurrentStepState(DEFAULT_STEP);
     hasReconciledRef.current = true;

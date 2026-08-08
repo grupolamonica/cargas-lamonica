@@ -96,6 +96,11 @@ interface ApiRequestOptions {
   method?: string;
   accessToken?: string;
   idempotencyKey?: string;
+  /**
+   * Token de posse do rascunho anônimo (DC-283 / CRIT-3). Vai em header, não em
+   * query string, para não cair em log de proxy nem no histórico do browser.
+   */
+  draftToken?: string;
   body?: unknown;
   /**
    * Teto de tempo (ms) para a requisição. Quando definido, aborta o fetch e
@@ -195,6 +200,10 @@ async function requestJson<T>(url: string, options: ApiRequestOptions = {}): Pro
 
   if (options.idempotencyKey) {
     headers.set("Idempotency-Key", options.idempotencyKey);
+  }
+
+  if (options.draftToken) {
+    headers.set("X-Draft-Token", options.draftToken);
   }
 
   const requestUrl = resolveCanonicalApiRequestUrl(url);
@@ -387,6 +396,57 @@ export interface CandidaturaDraftSavePayload {
 export interface CandidaturaDraftSaveResponse {
   id: string;
   expiresAt: string;
+  /**
+   * Só vem quando o servidor acabou de emitir o token — rascunho novo, ou
+   * adoção de rascunho legado (criado antes do DC-283). Numa gravação comum o
+   * cliente já tem o dele guardado.
+   */
+  draftToken?: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * Token de posse do rascunho anônimo (DC-283 / CRIT-3)
+ *
+ * Antes, o rascunho público era autorizado pelo CPF: qualquer um que soubesse
+ * um CPF lia a ficha inteira (CNH, RG, endereço, credencial de rastreador).
+ * Agora o servidor emite um token opaco na criação e passa a exigi-lo.
+ *
+ * Guardado em localStorage porque precisa sobreviver ao F5 — é o mesmo lugar
+ * onde o wizard já persiste o rascunho. Chave única, sem CPF dentro: o
+ * navegador é de uma pessoa, e o servidor valida o token contra o CPF de
+ * qualquer forma.
+ *
+ * Consequência aceita: trocar de aparelho ou limpar o navegador faz perder o
+ * rascunho do servidor. É o preço de fechar o buraco — e rascunho é dado
+ * descartável de 72h.
+ * ------------------------------------------------------------------ */
+const DRAFT_TOKEN_STORAGE_KEY = "lamonica-draft-token";
+
+export function readStoredDraftToken(): string | null {
+  try {
+    return window.localStorage.getItem(DRAFT_TOKEN_STORAGE_KEY);
+  } catch {
+    // Modo privado/storage bloqueado: segue sem token — o wizard cai no
+    // caminho de rascunho novo em vez de quebrar.
+    return null;
+  }
+}
+
+export function storeDraftToken(token: string | null | undefined): void {
+  if (!token) return;
+  try {
+    window.localStorage.setItem(DRAFT_TOKEN_STORAGE_KEY, token);
+  } catch {
+    /* storage indisponível — sem token, o autosave segue criando rascunho novo */
+  }
+}
+
+export function clearStoredDraftToken(): void {
+  try {
+    window.localStorage.removeItem(DRAFT_TOKEN_STORAGE_KEY);
+  } catch {
+    /* idem */
+  }
 }
 
 /**
@@ -398,12 +458,18 @@ export interface CandidaturaDraftSaveResponse {
 export function useCandidaturaDraftSave() {
   const auth = useDriverAuth();
   return useMutation<CandidaturaDraftSaveResponse, CandidaturaApiError, CandidaturaDraftSavePayload>({
-    mutationFn: (payload) =>
-      requestJson<CandidaturaDraftSaveResponse>("/api/candidatura/draft", {
+    mutationFn: async (payload) => {
+      const response = await requestJson<CandidaturaDraftSaveResponse>("/api/candidatura/draft", {
         method: "POST",
         body: payload,
         accessToken: auth.session?.access_token,
-      }),
+        draftToken: readStoredDraftToken() ?? undefined,
+      });
+      // Guarda o token na primeira gravação (ou na adoção de rascunho legado);
+      // sem isso o F5 seguinte não reencontra o rascunho no servidor.
+      storeDraftToken(response?.draftToken);
+      return response;
+    },
   });
 }
 
@@ -425,8 +491,13 @@ export interface CandidaturaDraftGetResponse {
  * Retorna o rascunho ativo. Dois fluxos suportados:
  *  - Autenticado: usa `driverUserId` + access_token. Iter #7: quando `cargaId`
  *    e fornecido, escopa o draft a esta carga (multi-draft simultaneo).
- *  - Publico (Bug-8 / fix F5): passa `?cpf=XXX` quando o motorista nao tem
- *    sessao Supabase — backend identifica via `dados->'motorista'->>'cpf'`.
+ *  - Publico: apresenta o TOKEN DE POSSE guardado localmente. O parametro `cpf`
+ *    segue na assinatura só para decidir SE ha um fluxo publico em andamento —
+ *    ele nao vai mais para a requisicao.
+ *
+ * O `?cpf=` foi removido (DC-283 / CRIT-3 + ALTO-17): devolvia a ficha inteira
+ * para qualquer CPF informado, e ainda deixava o CPF em log de proxy e no
+ * historico do browser.
  *
  * Backend responde 204 quando nao ha draft — `requestJson` converte em `null`.
  */
@@ -438,8 +509,11 @@ export function useCandidaturaDraftGet(
   const auth = useDriverAuth();
   const accessToken = auth.session?.access_token ?? null;
   const normalizedCpf = (cpf ?? "").replace(/\D/g, "");
-  const hasPublicKey = normalizedCpf.length === 11;
   const hasAuthKey = !!driverUserId && !!accessToken;
+  const publicDraftToken = hasAuthKey ? null : readStoredDraftToken();
+  // Sem token guardado nao ha o que buscar: o rascunho publico so e alcancavel
+  // por posse. Evita uma ida ao servidor que voltaria 204 garantido.
+  const hasPublicKey = normalizedCpf.length === 11 && !!publicDraftToken;
   const cargaIdNormalized = (cargaId ?? "").trim();
 
   return useQuery<CandidaturaDraftGetResponse | null, CandidaturaApiError>({
@@ -450,15 +524,14 @@ export function useCandidaturaDraftGet(
       cargaIdNormalized || "no-carga",
     ],
     queryFn: () => {
-      let url = hasAuthKey
-        ? "/api/candidatura/draft/me"
-        : `/api/candidatura/draft/me?cpf=${encodeURIComponent(normalizedCpf)}`;
+      let url = "/api/candidatura/draft/me";
       if (cargaIdNormalized) {
-        url += `${url.includes("?") ? "&" : "?"}cargaId=${encodeURIComponent(cargaIdNormalized)}`;
+        url += `?cargaId=${encodeURIComponent(cargaIdNormalized)}`;
       }
       return requestJson<CandidaturaDraftGetResponse | null>(url, {
         method: "GET",
         accessToken: hasAuthKey ? accessToken ?? undefined : undefined,
+        draftToken: publicDraftToken ?? undefined,
       });
     },
     staleTime: 30_000,
