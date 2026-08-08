@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 
 import { supabase } from "@/integrations/supabase/client";
+import { clearStoredRegistrationDrafts } from "@/lib/localStorageHygiene";
 
 interface AuthContextValue {
   user: User | null;
@@ -79,6 +80,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const signOut = async () => {
+    // DC-283 / MED-4: o supabase-js remove so a chave de sessao. Sem isto, a
+    // ficha do motorista aberta no modo resgate (CNH, CPF, endereco, banco)
+    // continuava legivel no aparelho depois de sair da conta.
+    clearStoredRegistrationDrafts();
     await supabase.auth.signOut();
   };
 

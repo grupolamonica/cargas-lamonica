@@ -48,12 +48,23 @@ vi.mock("../../../application/load-claims/service.js", () => ({
 }));
 
 import {
+  resolveDriverProfileResponse,
   resolveGetLoadClaimStatusResponse,
   resolveCreatePublicLoadLeadPreRegistrationResponse,
   resolveQueuePublicLoadLeadViaWhatsAppResponse,
   resolveRegisterDriverResponse,
   resolveRegisterOperatorResponse,
 } from "./handlers.js";
+
+// Gates de elegibilidade lidos por eligibility.js:45-69. O motorista nunca pode
+// escrevê-los — quem define é o operador, via update-driver-profile.js (auditado).
+const COMPLIANCE_FLAGS = [
+  "documents_valid",
+  "antt_valid",
+  "tracking_enabled",
+  "insurance_valid",
+  "monitoring_capable",
+];
 
 const driverRegistrationPayload = {
   email: "motorista@teste.com",
@@ -91,6 +102,44 @@ describe("load-claims handlers", () => {
     expect(response.payload).toMatchObject({
       code: "NOT_FOUND",
       message: "Resource not found.",
+    });
+  });
+
+  it("descarta as flags de conformidade enviadas pelo motorista no cadastro", async () => {
+    mockRegisterDriverUser.mockResolvedValueOnce({ id: "user-1" });
+    mockUpsertDriverProfile.mockResolvedValueOnce({ statusCode: 200, payload: { profile: {} } });
+
+    const response = await resolveRegisterDriverResponse({
+      body: JSON.stringify(driverRegistrationPayload),
+      headers: { "x-forwarded-for": "203.0.113.10" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const { profile } = mockUpsertDriverProfile.mock.calls[0][0];
+    COMPLIANCE_FLAGS.forEach((flag) => {
+      expect(profile).not.toHaveProperty(flag);
+    });
+    expect(profile.full_name).toBe("Motorista Teste");
+  });
+
+  it("descarta as flags de conformidade no PUT /api/drivers/me", async () => {
+    mockRequireDriverSession.mockResolvedValueOnce({ user: { id: "user-1" } });
+    mockUpsertDriverProfile.mockResolvedValueOnce({ statusCode: 200, payload: { profile: {} } });
+
+    const response = await resolveDriverProfileResponse({
+      method: "PUT",
+      body: JSON.stringify({
+        ...driverRegistrationPayload.profile,
+        documents_valid: true,
+        insurance_valid: true,
+      }),
+      headers: { "x-forwarded-for": "203.0.113.11" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const { profile } = mockUpsertDriverProfile.mock.calls[0][0];
+    COMPLIANCE_FLAGS.forEach((flag) => {
+      expect(profile).not.toHaveProperty(flag);
     });
   });
 

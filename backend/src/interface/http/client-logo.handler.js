@@ -7,6 +7,43 @@ const SUCCESS_CACHE_CONTROL = "public, max-age=1800, s-maxage=86400, stale-while
 const DEFAULT_MAX_LOGO_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_LOGO_REDIRECTS = 3;
 
+// Rate-limit dedicado, mesmo padrao de `cadastro/lookup-pis.handler.js`.
+// In-memory: nao cluster-safe — aceitavel em replica unica (DC-95).
+//
+// O teto e alto de proposito: uma tela do operador pode pedir a logo de dezenas
+// de clientes de uma vez. Resposta de sucesso vai com cache de 30 min no browser
+// (SUCCESS_CACHE_CONTROL), entao recarga de tela nao volta pro endpoint. 120/min
+// cobre a rajada legitima e ainda corta uso do proxy como egresso anonimo em massa.
+const LOGO_RATE_LIMIT_WINDOW_MS = 60_000;
+const LOGO_RATE_LIMIT_MAX = 120;
+const logoIpRateLimitMap = new Map();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of logoIpRateLimitMap) {
+    if (entry.resetAt <= now) logoIpRateLimitMap.delete(key);
+  }
+}, 60_000).unref();
+
+function checkLogoRateLimit(ip) {
+  if (!ip) return { limited: false, retryAfterSeconds: 0 };
+  const now = Date.now();
+  const entry = logoIpRateLimitMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    logoIpRateLimitMap.set(ip, { count: 1, resetAt: now + LOGO_RATE_LIMIT_WINDOW_MS });
+    return { limited: false, retryAfterSeconds: 0 };
+  }
+  entry.count += 1;
+  if (entry.count > LOGO_RATE_LIMIT_MAX) {
+    return { limited: true, retryAfterSeconds: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)) };
+  }
+  return { limited: false, retryAfterSeconds: 0 };
+}
+
+export function resetClientLogoRateLimitForTests() {
+  logoIpRateLimitMap.clear();
+}
+
 function parsePositiveIntegerEnv(name, defaultValue) {
   const rawValue = process.env[name]?.trim();
 
@@ -328,7 +365,10 @@ async function fetchLogoUpstreamResponseViaNodeRequest(targetUrl, redirectCount 
     : upstreamResponse.headers.location;
   const redirectTarget = resolveRedirectTargetUrl(targetUrl, redirectHeader);
 
-  if (!redirectTarget || (redirectTarget.protocol !== "https:" && redirectTarget.protocol !== "http:")) {
+  // HTTPS-only tambem no redirect. A URL de entrada ja e obrigada a ser https
+  // (resolveClientLogoResponse), mas aceitar "http:" aqui deixava o upstream
+  // rebaixar a conexao com um 301 — o proxy seguia em cleartext.
+  if (!redirectTarget || redirectTarget.protocol !== "https:") {
     return {
       error: createJsonError(502, "LOGO_FETCH_FAILED", "Nao foi possivel baixar a logo informada."),
     };
@@ -409,7 +449,15 @@ async function readResponseBodyWithLimit(upstreamResponse, maxBytes) {
   return Buffer.concat(chunks, totalBytes);
 }
 
-export async function resolveClientLogoResponse(rawUrl) {
+export async function resolveClientLogoResponse(rawUrl, { requestIp } = {}) {
+  const { limited, retryAfterSeconds } = checkLogoRateLimit(requestIp);
+
+  if (limited) {
+    const response = createJsonError(429, "TOO_MANY_REQUESTS", "Muitas requisicoes. Tente novamente em instantes.");
+    response.headers["Retry-After"] = String(retryAfterSeconds);
+    return response;
+  }
+
   const targetUrl = parseTargetLogoUrl(rawUrl);
 
   if (!targetUrl) {

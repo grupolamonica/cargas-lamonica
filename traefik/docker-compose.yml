@@ -21,7 +21,16 @@ services:
       - "traefik.docker.network=platform_public"
       # Dashboard router with BasicAuth — requires api.insecure: false in traefik.yml
       # Priority 100 ensures it wins over app catch-all routers (lmc-frontend priority=1)
-      - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`) || PathPrefix(`/api`) || PathPrefix(`/dashboard`)"
+      #
+      # A regra casa SÓ o host dedicado. Antes tinha `|| PathPrefix(/api) ||
+      # PathPrefix(/dashboard)`, sem amarrar a host nenhum: no entrypoint `web`
+      # isso publicava a API/dashboard do Traefik em QUALQUER domínio servido aqui,
+      # atrás de um bcrypt versionado. E, com priority=100 contra a prioridade
+      # default do router do backend (derivada do tamanho da regra, ~70), esse
+      # router ainda sequestrava http://<dominio>/api — que passava a pedir
+      # BasicAuth em vez de redirecionar pra HTTPS.
+      # Acesso ao dashboard segue por 127.0.0.1:8080 (ports abaixo), via túnel SSH.
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`)"
       - "traefik.http.routers.dashboard.service=api@internal"
       - "traefik.http.routers.dashboard.middlewares=traefik-auth"
       - "traefik.http.routers.dashboard.entrypoints=web"

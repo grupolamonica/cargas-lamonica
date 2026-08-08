@@ -73,16 +73,16 @@ const canonicalVehicleProfileSchema = z
     message: `Vehicle profile must be one of: ${CANONICAL_VEHICLE_PROFILES.join(", ")}`,
   });
 
+// Compliance flags (documents_valid, antt_valid, tracking_enabled, insurance_valid,
+// monitoring_capable) are deliberately absent: they are the eligibility gates read by
+// eligibility.js:45-69, so a driver able to write them self-attests their own clearance.
+// The operator owns them via update-driver-profile.js (audited); new rows take the
+// column defaults from driver_profiles.
 const driverProfileSchema = z.object({
   full_name: z.string().trim().min(3),
   phone: z.string().trim().min(8),
   document_number: z.string().trim().min(5).optional().or(z.literal("")),
   vehicle_profile: canonicalVehicleProfileSchema,
-  documents_valid: z.boolean().default(true),
-  antt_valid: z.boolean().default(true),
-  tracking_enabled: z.boolean().default(false),
-  insurance_valid: z.boolean().default(false),
-  monitoring_capable: z.boolean().default(false),
   allowed_regions: z.array(z.string().trim().min(2).max(2)).default([]),
   metadata: z.record(z.any()).optional().default({}),
 });

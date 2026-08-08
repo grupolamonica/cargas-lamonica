@@ -87,7 +87,13 @@ beforeEach(() => {
 describe("uploadDraftFile", () => {
   const driverUserId = "11111111-2222-3333-4444-555555555555";
   const cargaId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-  const file = Buffer.from("PNG bytes here");
+  // Buffers com magic bytes REAIS: o use-case confere a assinatura do conteudo
+  // contra o contentType declarado (BX-3), entao fixture de texto solto nao passa.
+  const file = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from("PNG bytes here"),
+  ]);
+  const pdfFile = Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.from("pdf bytes here")]);
 
   it("(a) happy path com driver_user_id", async () => {
     const { client, calls } = makeFakeStorage();
@@ -128,8 +134,8 @@ describe("uploadDraftFile", () => {
       ownerKey: cpf,
       cargaId,
       slot: "cavalo_crlv",
-      file,
-      size: file.length,
+      file: pdfFile,
+      size: pdfFile.length,
       contentType: "application/pdf",
       correlationId: "corr-B",
       supabaseClient: client,
@@ -242,6 +248,27 @@ describe("uploadDraftFile", () => {
 
     expect(result.statusCode).toBe(415);
     expect(result.payload.error).toBe("UNSUPPORTED_TYPE");
+  });
+
+  it("(f2) conteudo que nao confere com o contentType declarado retorna 415", async () => {
+    const { client, calls } = makeFakeStorage();
+
+    const result = await uploadDraftFile({
+      ownerKey: driverUserId,
+      cargaId,
+      slot: "motorista_cnh",
+      // Payload arbitrario rotulado como imagem: o multer so olha o rotulo do
+      // multipart e deixaria passar.
+      file: Buffer.from("<html><script>alert(1)</script></html>"),
+      size: 38,
+      contentType: "image/png",
+      supabaseClient: client,
+    });
+
+    expect(result.statusCode).toBe(415);
+    expect(result.payload.error).toBe("UNSUPPORTED_TYPE");
+    // E, principalmente: nada chegou ao Storage.
+    expect(calls.uploadArgs).toHaveLength(0);
   });
 
   it("(g) arquivo > 8MB retorna 413 FILE_TOO_LARGE", async () => {

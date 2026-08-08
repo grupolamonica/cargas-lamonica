@@ -30,6 +30,12 @@ FROM nginx:alpine AS runtime
 # Remove default nginx config; replace with custom SPA config
 RUN rm /etc/nginx/conf.d/default.conf
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY security-headers.conf /etc/nginx/snippets/security-headers.conf
+
+# Falha o build se a config do nginx nao parsear. Sem isso, um include quebrado
+# so aparece no boot do container em producao — ou seja, em crash-loop depois do
+# deploy, nao no CI.
+RUN nginx -t
 
 # Copy built assets from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
