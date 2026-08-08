@@ -157,13 +157,27 @@ const fakeClient = {
       };
     }
 
-    // DELETE do cleanup (> 72h, drafts v2).
-    if (/DELETE FROM public\.pending_driver_registrations\s+WHERE status = 'draft'\s+AND versao_cadastro = 'v2'\s+AND updated_at < now\(\) - interval '72 hours'\s+RETURNING id/i.test(normalizedSql)) {
+    // Contagem do cleanup em modo report (dryRun) — nao apaga nada.
+    if (/SELECT COUNT\(\*\)::int AS elegiveis\s+FROM public\.pending_driver_registrations/i.test(normalizedSql)) {
       const cutoff = Date.now() - 72 * 3600 * 1000;
-      const toDelete = fakeDb.rows.filter(
-        (r) =>
-          r.status === "draft" && r.versao_cadastro === "v2" && r.updated_at.getTime() < cutoff,
-      );
+      const elegiveis = fakeDb.rows.filter(
+        (r) => r.status === "draft" && r.versao_cadastro === "v2" && r.updated_at.getTime() < cutoff,
+      ).length;
+      return { rows: [{ elegiveis }], rowCount: 1 };
+    }
+
+    // DELETE do cleanup (> 72h, drafts v2), com teto por ciclo (LIMIT $1).
+    if (/DELETE FROM public\.pending_driver_registrations\s+WHERE id IN \(/i.test(normalizedSql)) {
+      const cutoff = Date.now() - 72 * 3600 * 1000;
+      const limit = Number(params?.[0]) || Number.MAX_SAFE_INTEGER;
+      const toDelete = fakeDb.rows
+        .filter(
+          (r) =>
+            r.status === "draft" && r.versao_cadastro === "v2" && r.updated_at.getTime() < cutoff,
+        )
+        // Espelha o ORDER BY updated_at ASC do SQL: o mais antigo sai primeiro.
+        .sort((a, b) => a.updated_at.getTime() - b.updated_at.getTime())
+        .slice(0, limit);
       fakeDb.rows = fakeDb.rows.filter((r) => !toDelete.includes(r));
       return { rows: toDelete.map((r) => ({ id: r.id })), rowCount: toDelete.length };
     }
@@ -187,7 +201,7 @@ vi.mock("../../../infrastructure/pg/postgres.js", () => ({
 // Re-importa apos os mocks.
 const { saveCandidaturaDraft } = await import("./save-draft.js");
 const { getCandidaturaDraft } = await import("./get-draft.js");
-const { cleanupExpiredDrafts } = await import("./cleanup-expired-drafts.js");
+const { cleanupExpiredDrafts, resolveDraftCleanupMode } = await import("./cleanup-expired-drafts.js");
 
 // Helper: setta updated_at de uma row para `N` ms atras (simula draft envelhecido).
 function ageRow(rowId, msAgo) {
@@ -339,6 +353,60 @@ describe("candidatura draft use cases", () => {
     // Restou apenas o fresco.
     expect(fakeDb.rows).toHaveLength(1);
     expect(fakeDb.rows[0].id).toBe(fresh.payload.id);
+  });
+
+  it("(f2) modo report conta os elegiveis e NAO apaga nada", async () => {
+    const driverA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const driverB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+
+    const fresh = await saveCandidaturaDraft({ driverUserId: driverA, cargaId: "L-A", dados: {}, correlationId: "f2-a" });
+    const aged = await saveCandidaturaDraft({ driverUserId: driverB, cargaId: "L-B", dados: {}, correlationId: "f2-b" });
+    ageRow(fresh.payload.id, 10 * 60 * 1000);
+    ageRow(aged.payload.id, 100 * 3600 * 1000);
+
+    const result = await cleanupExpiredDrafts({ dryRun: true });
+
+    expect(result.dryRun).toBe(true);
+    expect(result.eligibleCount).toBe(1);
+    expect(result.deletedCount).toBe(0);
+    // O ponto do modo report: a base fica intacta.
+    expect(fakeDb.rows).toHaveLength(2);
+  });
+
+  it("(f3) o teto por ciclo apaga os mais antigos primeiro e deixa o resto pro proximo", async () => {
+    // Sem teto, o primeiro ciclo enfrenta todo o acumulado historico de uma vez
+    // (382 linhas em prod, ~764 chamadas de Storage num unico tick).
+    const ids = [];
+    for (let i = 0; i < 5; i += 1) {
+      const r = await saveCandidaturaDraft({
+        driverUserId: `dddddddd-dddd-dddd-dddd-${String(i).padStart(12, "0")}`,
+        cargaId: `L-${i}`,
+        dados: {},
+        correlationId: `f3-${i}`,
+      });
+      ids.push(r.payload.id);
+      // Quanto maior o i, MAIS antigo.
+      ageRow(r.payload.id, (80 + i * 10) * 3600 * 1000);
+    }
+
+    const primeiro = await cleanupExpiredDrafts({ limit: 2 });
+    expect(primeiro.deletedCount).toBe(2);
+    expect(fakeDb.rows).toHaveLength(3);
+    // Saiu quem estava ha mais tempo parado.
+    expect(primeiro.deletedIds).toEqual([ids[4], ids[3]]);
+
+    const segundo = await cleanupExpiredDrafts({ limit: 2 });
+    expect(segundo.deletedCount).toBe(2);
+    expect(fakeDb.rows).toHaveLength(1);
+  });
+
+  it("(f4) resolveDraftCleanupMode: default e 'report', valor invalido nao vira 'on'", async () => {
+    expect(resolveDraftCleanupMode(undefined)).toBe("report");
+    expect(resolveDraftCleanupMode("")).toBe("report");
+    expect(resolveDraftCleanupMode("banana")).toBe("report");
+    expect(resolveDraftCleanupMode("true")).toBe("report"); // nao e um dos modos
+    expect(resolveDraftCleanupMode("off")).toBe("off");
+    expect(resolveDraftCleanupMode("ON")).toBe("on");
   });
 
   it("(iter#7-h) saveCandidaturaDraft permite MULTI-DRAFT simultaneo por driver (1 row por carga)", async () => {

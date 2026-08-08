@@ -825,6 +825,58 @@ async function bootstrap() {
     console.info("[revalidate-drivers-angellira] desabilitado (defina ANGELLIRA_DRIVER_REVALIDATE_ENABLED=true para ligar)");
   }
 
+  // 4h. RETENÇÃO DE DADOS PESSOAIS (LGPD art.16 — achado CRIT-4 da auditoria
+  //     DC-283). Os dois mecanismos abaixo já existiam em código e NUNCA eram
+  //     chamados: não havia bootstrap aqui nem `on: schedule` em .github/workflows.
+  //     Na prática, todo rascunho de candidatura (CNH, RG, endereço, dados
+  //     bancários) e todo lead público viviam para sempre.
+  //
+  //     Ambos entram DESLIGADOS para efeito de apagar. São expurgos de estreia:
+  //     enfrentam o acumulado histórico inteiro no primeiro ciclo, e o que apagam
+  //     não volta. Medido em 2026-08-07: 382 drafts elegíveis e 626 leads.
+  //     Por isso o draft-cleanup nasce em `report` (conta e loga, não apaga) e a
+  //     redação de leads em opt-in explícito. Ver docs/runbooks/retencao-lgpd.md.
+  {
+    const { startCandidaturaDraftCleanupWorker } = await import(
+      "./application/candidatura/use-cases/cleanup-expired-drafts.js"
+    );
+    startCandidaturaDraftCleanupWorker();
+  }
+
+  //     Redação de PII de leads públicos encerrados (30d). Já processa em lotes de
+  //     50 por ciclo, então o acumulado drena aos poucos em vez de num único tick.
+  //     Kill-switch: PUBLIC_LEAD_PII_REDACTION_ENABLED=true liga.
+  //     Intervalo: PUBLIC_LEAD_PII_REDACTION_INTERVAL_MIN (default 60min).
+  if (process.env.PUBLIC_LEAD_PII_REDACTION_ENABLED === "true") {
+    const intervalMin = Math.max(1, Number(process.env.PUBLIC_LEAD_PII_REDACTION_INTERVAL_MIN || 60));
+    const retentionDays = Math.max(1, Number(process.env.PUBLIC_LEAD_PII_RETENTION_DAYS || 30));
+    let redactingLeads = false;
+    setInterval(async () => {
+      if (redactingLeads) return;
+      redactingLeads = true;
+      try {
+        const { redactExpiredPublicLeadPii } = await import(
+          "./application/operator-admin/use-cases/redact-public-lead-pii.js"
+        );
+        const r = await redactExpiredPublicLeadPii({ retentionDays });
+        if (r.redactedCount) {
+          console.info(`[public-lead-pii-redaction] ${r.redactedCount} lead(s) redigido(s)`);
+        }
+      } catch (err) {
+        console.error("[public-lead-pii-redaction] erro:", err?.message);
+      } finally {
+        redactingLeads = false;
+      }
+    }, intervalMin * 60 * 1000);
+    console.info(
+      `[public-lead-pii-redaction] timer ativo (intervalo ${intervalMin}min, retenção ${retentionDays}d)`,
+    );
+  } else {
+    console.info(
+      "[public-lead-pii-redaction] desabilitado (defina PUBLIC_LEAD_PII_REDACTION_ENABLED=true para ligar)",
+    );
+  }
+
   // 5. Iniciar HTTP server
   const server = app.listen(PORT, () => {
     console.log(`[lamonica-backend] Servidor ouvindo em http://localhost:${PORT}`);
