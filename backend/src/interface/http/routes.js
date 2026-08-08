@@ -53,6 +53,7 @@ import {
 } from "./driver-outreach/handlers.js";
 
 import { resolveClientLogoResponse } from "./client-logo.handler.js";
+import { resolveCspReportResponse } from "./csp-report.handler.js";
 import { getRequestIp } from "./http-utils.js";
 
 import {
@@ -269,6 +270,11 @@ export function registerRoutes(app) {
   });
 
   // Client logo (resposta binária — não JSON)
+  // Coletor de violações da CSP em modo relatório (DC-283 / MED-3). Público de
+  // propósito: o navegador manda sozinho, sem credencial, inclusive na tela de
+  // login — exigir sessão cegaria justamente as páginas públicas.
+  router.post("/api/csp-report", wrap(resolveCspReportResponse));
+
   router.get("/api/client-logo", async (req, res) => {
     try {
       const rawUrl = req.query.url || "";

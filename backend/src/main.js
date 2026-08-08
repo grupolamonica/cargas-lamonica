@@ -76,6 +76,20 @@ app.use(
 // secret); teto ≈ máximo do bucket (8MB) + overhead do base64 (~33%) + envelope.
 // TODO o resto segue em 1MB (anti-abuse — mutations do operador cabem em ~50KB).
 app.use("/api/webhooks/evolution", express.json({ limit: "20mb" }));
+
+// Relatório de CSP (DC-283 / MED-3): o navegador manda com Content-Type
+// `application/csp-report` (ou `application/reports+json` na Reporting API), e
+// nenhum dos dois é parseado pelo express.json() padrão — sem este parser
+// dedicado o corpo chegaria vazio e o relatório seria descartado em silêncio.
+// Limite apertado: relatório de CSP é pequeno, e o endpoint é público.
+app.use(
+  "/api/csp-report",
+  express.json({
+    limit: "16kb",
+    type: ["application/csp-report", "application/reports+json", "application/json"],
+  }),
+);
+
 app.use(express.json({ limit: "1mb" }));
 
 // Middleware CORS manual (porta fiel de api/[...route].mjs)
