@@ -21,7 +21,9 @@ describe("operator access", () => {
     expect(role).toBe("operator");
   });
 
-  it("defaults legacy operators without access_level to advanced", () => {
+  it("falha FECHADO quando o operador nao tem access_level provisionado", () => {
+    // Antes caia em "advanced": operador criado fora do registerOperatorUser
+    // (seed, convite manual, insert direto) nascia com privilegio maximo.
     const accessLevel = getOperatorAccessLevel({
       app_metadata: {
         role: "operator",
@@ -29,8 +31,25 @@ describe("operator access", () => {
       user_metadata: {},
     });
 
-    expect(accessLevel).toBe("advanced");
-    expect(hasOperatorPermission({ app_metadata: { role: "operator" } }, "clientes:write")).toBe(true);
+    expect(accessLevel).toBe("intermediate");
+
+    const semNivel = { app_metadata: { role: "operator" } };
+    // Continua operando o dia a dia...
+    expect(hasOperatorPermission(semNivel, "operator:read")).toBe(true);
+    expect(hasOperatorPermission(semNivel, "cargos:write")).toBe(true);
+    // ...mas nao herda as permissoes exclusivas do nivel avancado.
+    expect(hasOperatorPermission(semNivel, "clientes:write")).toBe(false);
+    expect(hasOperatorPermission(semNivel, "routes:write")).toBe(false);
+    expect(hasOperatorPermission(semNivel, "cargos:write_values")).toBe(false);
+  });
+
+  it("ignora access_level vindo de user_metadata (gravavel pelo proprio usuario)", () => {
+    const accessLevel = getOperatorAccessLevel({
+      app_metadata: { role: "operator" },
+      user_metadata: { access_level: "advanced" },
+    });
+
+    expect(accessLevel).toBe("intermediate");
   });
 
   it("restricts intermediate operators to cargos and leads mutations", () => {

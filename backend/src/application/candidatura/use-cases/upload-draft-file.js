@@ -1,5 +1,6 @@
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
+import { fileSignatureMatchesDeclaredType } from "../../../domain/candidatura/file-signature.js";
 import { getAdminClient } from "../../load-claims/auth.js";
 
 // ─── Constantes de dominio ───────────────────────────────────────────────────
@@ -134,6 +135,24 @@ export async function uploadDraftFile({
       payload: {
         error: "FILE_TOO_LARGE",
         message: `Arquivo excede o limite de ${DRAFT_FILE_MAX_BYTES} bytes (8 MB).`,
+        meta: { correlationId },
+      },
+    };
+  }
+
+  // Depois do teto de tamanho: arquivo grande DEMAIS e tambem mal rotulado deve
+  // reportar o tamanho, que e o problema acionavel pro motorista.
+  //
+  // O MIME acima veio do multipart, ou seja, de quem enviou. Confere contra a
+  // assinatura real do conteudo: sem isso, qualquer payload chega rotulado como
+  // "image/png", passa a allowlist e depois e servido por signed URL (BX-3).
+  if (!fileSignatureMatchesDeclaredType(file, contentType)) {
+    return {
+      statusCode: 415,
+      payload: {
+        error: "UNSUPPORTED_TYPE",
+        message:
+          "O conteudo do arquivo nao confere com o tipo informado. Use JPEG, PNG, HEIC, HEIF ou PDF.",
         meta: { correlationId },
       },
     };

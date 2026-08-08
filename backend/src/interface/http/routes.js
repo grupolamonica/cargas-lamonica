@@ -53,6 +53,7 @@ import {
 } from "./driver-outreach/handlers.js";
 
 import { resolveClientLogoResponse } from "./client-logo.handler.js";
+import { getRequestIp } from "./http-utils.js";
 
 import {
   resolveApprovePublicLoadLeadResponse,
@@ -271,7 +272,9 @@ export function registerRoutes(app) {
   router.get("/api/client-logo", async (req, res) => {
     try {
       const rawUrl = req.query.url || "";
-      const { statusCode, headers, body } = await resolveClientLogoResponse(rawUrl);
+      const { statusCode, headers, body } = await resolveClientLogoResponse(rawUrl, {
+        requestIp: getRequestIp(req),
+      });
       Object.entries(headers || {}).forEach(([k, v]) => res.setHeader(k, v));
       return res.status(statusCode).send(body);
     } catch (err) {

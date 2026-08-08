@@ -90,7 +90,9 @@ Cargas_Lamonica/                    ← Monorepo (um único .git)
 **Sidecar OCR:** FastAPI (Python, `:8765`) em `cadastro-motorista/backend/` — OCR de documentos + consultas (Infosimples, ANTT, DENATRAN, ViaCEP)
 **Database:** PostgreSQL via Supabase (managed, external) — direct pg connection (pgBouncer transaction mode) + RLS via `current_app_role()`
 **Auth:** Supabase Auth dupla (operator: `lamonica-operator-auth` / driver: `lamonica-driver-auth`) com clientes separados
-**Integrações externas:** Angellira (validação CPF), ASPX directory (CSV), Google Sheets (Shopee sync), Infosimples/ANTT (via sidecar). _Geoapify removido (routing/geocoding) — ver DC-83._
+**Integrações externas:** Angellira (validação CPF), ASPX directory (CSV), Google Sheets (Shopee sync), Infosimples/ANTT (via sidecar), **Geoapify** (routing/geocoding — EU/DE).
+
+> ⚠ **Geoapify NÃO foi removido.** Este documento afirmava que sim (DC-83), mas em 2026-08-07 a integração está viva: rota `GET /api/route-info` → `route-info.handler.js` → `infrastructure/geoapify/`, consumida pelo frontend em `services/routeInfo.ts` → `routeMetrics.ts` (distância/preço de rota), com `GEOAPIFY_API_KEY` setada em produção. Também é lida por `health-snapshot.js`. Enquanto estiver ativa, é um **operador de dados na UE** e precisa constar do registro de sub-operadores (achado INF-2 da auditoria LGPD, DC-283). Concluir a remoção é trabalho de feature — mexe em distância/preço de rota —, não de hardening.
 
 ## Deployment
 

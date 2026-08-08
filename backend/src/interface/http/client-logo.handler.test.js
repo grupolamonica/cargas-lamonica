@@ -17,15 +17,59 @@ vi.mock("node:https", () => ({
   request: mockHttpsRequest,
 }));
 
-import { isPrivateNetworkIpAddress, resolveClientLogoResponse } from "./client-logo.handler.js";
+import {
+  isPrivateNetworkIpAddress,
+  resetClientLogoRateLimitForTests,
+  resolveClientLogoResponse,
+} from "./client-logo.handler.js";
 
 describe("client logo proxy guards", () => {
   afterEach(() => {
     mockLookup.mockReset();
     mockHttpsRequest.mockReset();
+    resetClientLogoRateLimitForTests();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  it("corta o proxy anonimo em rajada acima do teto por IP", async () => {
+    // URL invalida de proposito: o rate-limit roda ANTES de qualquer egresso,
+    // entao o teste nao precisa de rede nem de mock de upstream.
+    const requestIp = "203.0.113.50";
+
+    for (let i = 0; i < 120; i += 1) {
+      const allowed = await resolveClientLogoResponse("nao-e-url", { requestIp });
+      expect(allowed.statusCode).toBe(400);
+    }
+
+    const blocked = await resolveClientLogoResponse("nao-e-url", { requestIp });
+    expect(blocked.statusCode).toBe(429);
+    expect(blocked.headers["Retry-After"]).toBeDefined();
+
+    // Outro IP nao herda o bloqueio.
+    const other = await resolveClientLogoResponse("nao-e-url", { requestIp: "203.0.113.51" });
+    expect(other.statusCode).toBe(400);
+  });
+
+  it("recusa redirect que rebaixa https para http", async () => {
+    mockLookup.mockResolvedValue([{ address: "93.184.216.34" }]);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(null, {
+          status: 301,
+          // Host publico e valido — o unico problema e o downgrade de protocolo.
+          headers: { location: "http://example.com/logo.png" },
+        }),
+      ),
+    );
+
+    const response = await resolveClientLogoResponse("https://example.com/logo.png");
+
+    expect(response.statusCode).toBe(502);
+    expect(response.body.toString("utf8")).toContain("LOGO_FETCH_FAILED");
   });
 
   it("blocks private and local network ip addresses", () => {

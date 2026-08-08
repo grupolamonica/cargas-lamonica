@@ -1,6 +1,15 @@
 const REDACTED_VALUE = "[REDACTED]";
+// Tokens curtos (rg/cep/pis) vão ancorados por "_" ou início/fim de chave: solto,
+// "rg" casaria dentro de "cargoId" e redigiria meio Monitor.
+//
+// Deliberadamente FORA da lista:
+//  - "name" solto — casaria statusName/clientName/filename/trip_status_name, que são
+//    operacionais e sustentam o debug do Monitor;
+//  - "motorista" — o botão Reverter lê metadata->'moves'->>'motorista' pra restaurar
+//    a alocação (a alocação grava só o NOME). Redigir aqui quebra o desfazer.
+// Nome de pessoa entra pelas chaves específicas abaixo.
 const SENSITIVE_KEY_PATTERN =
-  /(authorization|token|secret|password|cookie|cpf|phone|plate|document|email|whatsapp|set-cookie|idempotency|request_hash|fingerprint)/i;
+  /(authorization|token|secret|password|cookie|cpf|phone|plate|document|email|whatsapp|set-cookie|idempotency|request_hash|fingerprint|full_name|fullname|driver_name|drivername|first_name|firstname|last_name|lastname|previousname|cnh|endereco|logradouro|nascimento|filiacao|(^|_)(rg|cep|pis)(_|$))/i;
 const MAX_DEPTH = 4;
 const MAX_STRING_LENGTH = 500;
 const INLINE_SECRET_PATTERN =
