@@ -209,6 +209,28 @@ const ROTAS_CONHECIDAS = [
   "PUT /api/operator/routes/trecho",
   "PUT /api/operator/settings/auto-approve-angellira",];
 
+/**
+ * Rotas ja revisadas que chegam por PRs irmaos do mesmo plano (DC-283) e podem
+ * ou nao estar presentes, dependendo da ordem de merge.
+ *
+ * Existe pra o guard nao virar um problema de ordenacao: sem isto, mergear o
+ * #486/#487 deixaria a main vermelha ate alguem editar esta lista, e teste que
+ * fica vermelho por motivo burocratico e teste que o time aprende a ignorar.
+ *
+ * Ambas ja passaram pela decisao que o guard existe pra forcar:
+ *  - POST /api/auth/session-event (ALTO-16): exige Bearer token; o ator sai do
+ *    TOKEN, nunca do corpo — nao da pra registrar login de terceiro.
+ *  - POST /api/csp-report (MED-3): PUBLICA por necessidade (o navegador manda
+ *    sem credencial, inclusive na tela de login), contida por teto de 60/min/IP
+ *    e por nao registrar PII do relatorio.
+ *
+ * Ao mergear tudo, mova as duas pra ROTAS_CONHECIDAS e esvazie esta lista.
+ */
+const ROTAS_DE_PRS_IRMAOS = [
+  "POST /api/auth/session-event",
+  "POST /api/csp-report",
+];
+
 function inventariarRotas() {
   const app = express();
   registerRoutes(app);
@@ -232,7 +254,9 @@ describe("inventario de rotas HTTP", () => {
     const atuais = inventariarRotas();
     const conhecidas = [...ROTAS_CONHECIDAS].sort();
 
-    const novas = atuais.filter((r) => !conhecidas.includes(r));
+    const novas = atuais.filter(
+      (r) => !conhecidas.includes(r) && !ROTAS_DE_PRS_IRMAOS.includes(r),
+    );
     const sumidas = conhecidas.filter((r) => !atuais.includes(r));
 
     expect(
