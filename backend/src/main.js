@@ -30,6 +30,14 @@ function resolveAllowedOrigin(requestOrigin) {
     : null;
 }
 
+// DC-283 / MED-9 — lê o modo do expurgo da trilha sem carregar o use-case só
+// para decidir o gate no boot. Espelha resolveAuditPurgeMode; valor inválido
+// cai em "report", nunca em "on".
+function resolveAuditPurgeModeAtBoot() {
+  const v = String(process.env.AUDIT_LOG_PURGE_MODE ?? "").trim().toLowerCase();
+  return ["off", "report", "on"].includes(v) ? v : "report";
+}
+
 // ─── App Express ─────────────────────────────────────────────────────────────
 
 const app = express();
@@ -823,6 +831,64 @@ async function bootstrap() {
     );
   } else {
     console.info("[revalidate-drivers-angellira] desabilitado (defina ANGELLIRA_DRIVER_REVALIDATE_ENABLED=true para ligar)");
+  }
+
+  // 4i. RETENÇÃO DA PRÓPRIA TRILHA DE AUDITORIA (DC-283 / MED-9).
+  //     `security_audit_logs` guarda dado pessoal — IP, e-mail do ator, nome de
+  //     motorista dentro de metadata.moves. O comentário do índice já dizia 90
+  //     dias, mas nunca houve job: a trilha crescia para sempre, recriando
+  //     dentro da auditoria a mesma retenção indefinida que o CRIT-4 apontou na
+  //     base.
+  //
+  //     Modo `report` por padrão (AUDIT_LOG_PURGE_MODE=off|report|on), mesma
+  //     escolha do expurgo de rascunhos e pelo mesmo motivo: é expurgo de
+  //     estreia, enfrenta todo o acumulado no primeiro ciclo e não tem undo.
+  if (resolveAuditPurgeModeAtBoot() !== "off") {
+    const intervalHours = Math.max(1, Number(process.env.AUDIT_LOG_PURGE_INTERVAL_HOURS || 24));
+    const retentionDays = Math.max(1, Number(process.env.AUDIT_LOG_RETENTION_DAYS || 90));
+    const batch = Math.max(1, Number(process.env.AUDIT_LOG_PURGE_BATCH || 500));
+    let purging = false;
+
+    const runPurge = async () => {
+      if (purging) return;
+      purging = true;
+      try {
+        const { purgeExpiredAuditLogs, resolveAuditPurgeMode } = await import(
+          "./application/operator-admin/use-cases/purge-expired-audit-logs.js"
+        );
+        const mode = resolveAuditPurgeMode();
+        if (mode === "off") return;
+
+        const r = await purgeExpiredAuditLogs({
+          retentionDays,
+          limit: batch,
+          dryRun: mode === "report",
+        });
+
+        if (r.dryRun) {
+          console.info(
+            "[audit-retention] modo report — nada foi apagado",
+            JSON.stringify({
+              elegiveis: r.eligibleCount,
+              retencao_dias: retentionDays,
+              para_habilitar: "AUDIT_LOG_PURGE_MODE=on",
+            }),
+          );
+        } else if (r.deletedCount) {
+          console.info(`[audit-retention] ${r.deletedCount} evento(s) expurgado(s) (corte ${r.cutoff})`);
+        }
+      } catch (err) {
+        console.error("[audit-retention] erro:", err?.message);
+      } finally {
+        purging = false;
+      }
+    };
+
+    void runPurge();
+    setInterval(runPurge, intervalHours * 60 * 60 * 1000).unref();
+    console.info(`[audit-retention] timer ativo (intervalo ${intervalHours}h, retenção ${retentionDays}d)`);
+  } else {
+    console.info("[audit-retention] desabilitado (AUDIT_LOG_PURGE_MODE=off)");
   }
 
   // 5. Iniciar HTTP server
