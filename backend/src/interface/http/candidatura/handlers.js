@@ -12,7 +12,7 @@ import { saveCandidaturaDraft } from "../../../application/candidatura/use-cases
 import { saveCandidaturaDraftByCpf } from "../../../application/candidatura/use-cases/save-draft-by-cpf.js";
 import {
   getCandidaturaDraft,
-  getCandidaturaDraftByCpf,
+  getCandidaturaDraftByToken,
 } from "../../../application/candidatura/use-cases/get-draft.js";
 import { listIncompleteCadastroDrafts } from "../../../application/candidatura/use-cases/list-incomplete-drafts.js";
 import { submitCandidaturaFinal } from "../../../application/candidatura/use-cases/submit-final.js";
@@ -603,6 +603,10 @@ export async function resolveCandidaturaDraftSaveResponse(request) {
       cpf: parsedInput.cpf,
       cargaId: parsedInput.cargaId,
       dados: parsedInput.dados,
+      // Token de posse (DC-283 / ALTO-3): sem ele nao se escreve em rascunho
+      // que ja tem dono. Vem em header pelo mesmo motivo do GET — nao cair em
+      // log de proxy. Ausente = rascunho novo, ou adocao de rascunho legado.
+      draftToken: getHeaderValue(request, "X-Draft-Token"),
       requestIp,
       correlationId,
     });
@@ -669,13 +673,14 @@ export async function resolveCandidaturaDraftGetResponse(request) {
       });
     }
 
-    const rawCpf = getQueryParam(request, "cpf");
-    const cpfDigits = String(rawCpf || "").replace(/\D/g, "");
-    if (cpfDigits.length !== 11) {
-      return { statusCode: 204 };
-    }
-
-    return await getCandidaturaDraftByCpf({ cpf: cpfDigits, correlationId });
+    // Fluxo publico: autoriza pelo TOKEN DE POSSE emitido na criacao do
+    // rascunho, nunca mais por `?cpf=` (DC-283 / CRIT-3 — BOLA). Token em
+    // header, nao em query string, pra nao cair em log de nginx/Traefik nem no
+    // historico do browser (ALTO-17).
+    return await getCandidaturaDraftByToken({
+      draftToken: getHeaderValue(request, "X-Draft-Token"),
+      correlationId,
+    });
   } catch (err) {
     console.error("[candidatura.draft.get]", {
       correlationId,

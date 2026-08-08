@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 import { withPgTransaction } from "../../../infrastructure/pg/postgres.js";
 import { insertSecurityAuditEvent } from "../../../infrastructure/security-audit.js";
+import { draftTokenMatches, mintDraftToken } from "../../../domain/candidatura/draft-token.js";
 
 // TTL SLIDING: 72 horas desde o ultimo updated_at (D-05 + B-03).
 const DRAFT_TTL_MS = 72 * 60 * 60 * 1000;
@@ -37,6 +38,7 @@ export async function saveCandidaturaDraftByCpf({
   cpf,
   cargaId,
   dados,
+  draftToken,
   requestIp,
   correlationId,
 }) {
@@ -61,7 +63,7 @@ export async function saveCandidaturaDraftByCpf({
 
     const existing = await client.query(
       `
-        SELECT id, id_cadastro
+        SELECT id, id_cadastro, draft_token_hash
         FROM public.pending_driver_registrations
         WHERE status = 'draft'
           AND versao_cadastro = 'v2'
@@ -75,23 +77,70 @@ export async function saveCandidaturaDraftByCpf({
 
     let row;
     let idCadastro;
+    // Só volta preenchido quando um token NOVO é emitido (rascunho novo ou
+    // adoção de legado). Numa gravação normal o cliente já tem o dele.
+    let issuedToken = null;
 
     if (existing.rows.length > 0) {
       const draftId = existing.rows[0].id;
       idCadastro = existing.rows[0].id_cadastro;
+      const storedHash = existing.rows[0].draft_token_hash;
+
+      let tokenHashToPersist = storedHash;
+
+      if (storedHash) {
+        // Rascunho já tem dono. Sem o token certo, não se escreve nele — este é
+        // o fecho do ALTO-3 (poisoning anônimo de rascunho alheio por CPF).
+        if (!draftTokenMatches(draftToken, storedHash)) {
+          await insertSecurityAuditEvent(client, {
+            eventType: "driver.candidatura.draft_token_rejected",
+            actorUserId: null,
+            actorRole: "anonymous_driver",
+            resourceType: "pending_driver_registration",
+            resourceId: draftId,
+            action: "update",
+            outcome: "denied",
+            requestIp,
+            correlationId,
+            metadata: { cpf_masked: maskCpf(cpf), reason: draftToken ? "token_mismatch" : "token_missing" },
+          });
+
+          return {
+            statusCode: 403,
+            payload: {
+              error: "Forbidden",
+              message:
+                "Este rascunho pertence a outra sessao. Recomece o cadastro neste dispositivo.",
+              meta: { correlationId },
+            },
+          };
+        }
+      } else {
+        // Rascunho LEGADO (criado antes da migration, sem token). Adota: emite
+        // um token agora e devolve pro cliente. A janela em que um rascunho
+        // legado pode ser adotado por quem souber o CPF é a mesma exposicao que
+        // ja existia, e fecha sozinha — rascunho expira em 72h.
+        const minted = mintDraftToken();
+        issuedToken = minted.token;
+        tokenHashToPersist = minted.hash;
+      }
+
       const updated = await client.query(
         `
           UPDATE public.pending_driver_registrations
           SET dados = $2::jsonb,
-              carga_id = $3
+              carga_id = $3,
+              draft_token_hash = $4
           WHERE id = $1
           RETURNING id, updated_at
         `,
-        [draftId, JSON.stringify(dadosWithCpf), cargaId],
+        [draftId, JSON.stringify(dadosWithCpf), cargaId, tokenHashToPersist],
       );
       row = updated.rows[0];
     } else {
       idCadastro = `CAD-V2-${crypto.randomUUID()}`;
+      const minted = mintDraftToken();
+      issuedToken = minted.token;
       const inserted = await client.query(
         `
           INSERT INTO public.pending_driver_registrations (
@@ -100,12 +149,13 @@ export async function saveCandidaturaDraftByCpf({
             versao_cadastro,
             driver_user_id,
             carga_id,
-            dados
+            dados,
+            draft_token_hash
           )
-          VALUES ($1, 'draft', 'v2', NULL, $2, $3::jsonb)
+          VALUES ($1, 'draft', 'v2', NULL, $2, $3::jsonb, $4)
           RETURNING id, updated_at
         `,
-        [idCadastro, cargaId, JSON.stringify(dadosWithCpf)],
+        [idCadastro, cargaId, JSON.stringify(dadosWithCpf), minted.hash],
       );
       row = inserted.rows[0];
     }
@@ -135,6 +185,9 @@ export async function saveCandidaturaDraftByCpf({
       payload: {
         id,
         expiresAt,
+        // Só presente quando o token acabou de ser emitido. O cliente guarda e
+        // reapresenta nas leituras/gravações seguintes.
+        ...(issuedToken ? { draftToken: issuedToken } : {}),
         meta: { correlationId },
       },
     };

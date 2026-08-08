@@ -176,7 +176,7 @@ function StepBCavaloImpl({
   const [manualMode, setManualMode] = useState(value?.ocr_fallback_manual ?? false);
 
   // Hidratação tardia: quando o draft é restaurado depois do mount (caso F5
-  // público — GET /draft/me?cpf=XXX resolve após render), sincronizar com o
+  // público — GET /draft/me (token de posse) resolve após render), sincronizar com o
   // novo `value`. Mesmo padrão aplicado em A2/A3/StepAMotorista. Guard por
   // identidade evita loop com onChange→setStepBData no parent.
   useEffect(() => {

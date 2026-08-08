@@ -12,8 +12,11 @@ import { registerRoutes } from "./interface/http/routes.js";
 
 // ─── Constantes de middleware ─────────────────────────────────────────────────
 
+// X-Draft-Token: token de posse do rascunho anônimo de candidatura (DC-283).
+// Sem ele nesta lista, o preflight barra o header e o wizard público quebra em
+// qualquer origem cruzada (dev com proxy do Vite, preview).
 const DEFAULT_ALLOWED_HEADERS =
-  "Authorization,Content-Type,Idempotency-Key,X-Correlation-Id";
+  "Authorization,Content-Type,Idempotency-Key,X-Correlation-Id,X-Draft-Token";
 const GENERIC_ALLOWED_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
 
 // ─── CORS helper (porta lógica exata de api/[...route].mjs) ──────────────────

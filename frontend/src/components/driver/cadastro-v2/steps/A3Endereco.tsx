@@ -92,7 +92,7 @@ export function A3Endereco({
   const lastLookedUpCepRef = useRef<string>("");
 
   // Sync externo → state interno. Roda no mount E quando o parent troca `value`
-  // (ex.: hidratacao tardia via GET /api/candidatura/draft/me?cpf=XXX no F5
+  // (ex.: hidratacao tardia via GET /api/candidatura/draft/me (token de posse) no F5
   // publico).
   //
   // 2026-05-26 — Removida lógica de setData(value) on field-mismatch porque
