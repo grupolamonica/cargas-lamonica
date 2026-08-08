@@ -46,7 +46,27 @@ services:
       - "traefik.http.routers.lmc-cadastro-ocr-https.entrypoints=websecure"
       - "traefik.http.routers.lmc-cadastro-ocr-https.tls.certresolver=letsencrypt"
       - "traefik.http.routers.lmc-cadastro-ocr-https.priority=30"
-      - "traefik.http.routers.lmc-cadastro-ocr-https.middlewares=lmc-ocr-strip"
+      # DC-283 / CRIT-2 — CONTENÇÃO, não correção.
+      #
+      # O sidecar de OCR/consulta está publicado na internet SEM autenticação:
+      # /api/consulta/cpf, /cnpj, /antt, /veiculo-situacao respondem a qualquer
+      # um, consumindo o token pago da Infosimples e permitindo colher PII de
+      # terceiros. É o achado crítico que segue aberto.
+      #
+      # A correção do relatório ("não rotear o sidecar no edge") quebraria o
+      # cadastro: o browser chama /ocr-api direto (frontend/src/services/
+      # cadastroApi.ts, BASE = "/ocr-api"), inclusive as consultas pagas. Fechar
+      # de verdade exige mover essas consultas pro backend Node — trabalho de
+      # feature, não de configuração.
+      #
+      # Até lá, o teto por IP transforma "colheita em massa" em "colheita lenta
+      # o bastante pra aparecer no monitoramento". 30/min com burst 20 é folgado
+      # para um cadastro real (upload de OCR é sequencial e leva segundos cada),
+      # e apertado para um script varrendo lista de CPF.
+      - "traefik.http.middlewares.lmc-ocr-ratelimit.ratelimit.average=30"
+      - "traefik.http.middlewares.lmc-ocr-ratelimit.ratelimit.period=1m"
+      - "traefik.http.middlewares.lmc-ocr-ratelimit.ratelimit.burst=20"
+      - "traefik.http.routers.lmc-cadastro-ocr-https.middlewares=lmc-ocr-strip,lmc-ocr-ratelimit"
       - "traefik.http.services.lmc-cadastro-ocr.loadbalancer.server.port=8765"
       # HTTP /ocr-api → HTTPS redirect
       - "traefik.http.routers.lmc-cadastro-ocr-http.rule=Host(`${DOMAIN}`) && PathPrefix(`/ocr-api`)"
