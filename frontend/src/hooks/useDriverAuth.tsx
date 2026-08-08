@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 
 import { driverSupabase } from "@/integrations/supabase/driver-client";
+import { clearStoredRegistrationDrafts } from "@/lib/localStorageHygiene";
 import { registerDriverAccount, updateDriverProfile } from "@/services/loadClaims";
 
 interface DriverProfileInput {
@@ -103,6 +104,10 @@ export function DriverAuthProvider({ children }: { children: ReactNode }) {
     };
 
     const signOut = async () => {
+      // DC-283 / MED-4: a ficha do cadastro (CNH, CPF, endereco, dados
+      // bancarios) mora em localStorage. Sem esta limpeza, ela sobrevivia ao
+      // logout -- e num aparelho compartilhado o proximo motorista a lia.
+      clearStoredRegistrationDrafts();
       await driverSupabase.auth.signOut();
     };
 
