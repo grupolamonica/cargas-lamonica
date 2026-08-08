@@ -16,6 +16,7 @@ import {
 
 import DriverPortalNavbar from "@/components/driver/DriverPortalNavbar";
 import CargasProximasCard from "@/components/driver/CargasProximasCard";
+import { getActiveDriverCampaign, type DriverCampaign } from "@/lib/driverCampaigns";
 
 import FilterChip from "@/components/FilterChip";
 import { Button } from "@/components/ui/button";
@@ -66,6 +67,7 @@ import {
   toFilterDateLabel,
   splitLocation,
   formatCityDisplay,
+  normalizeText,
   type FilterOption,
 } from "@/hooks/useDriverLoads";
 import { useLeadNotifications } from "@/hooks/useLeadNotifications";
@@ -255,6 +257,7 @@ const DriverPortal = () => {
     isTodayQuickFilter,
     isTomorrowQuickFilter,
     clearAllFilters,
+    applyRouteFilter,
     clearMobileDraftFilters,
     syncMobileDraftsWithApplied,
     applyMobileFilters,
@@ -708,6 +711,42 @@ const DriverPortal = () => {
     [handlePageChange, page],
   );
 
+  // Campanha promocional (primeiro slide do carrossel de propagandas).
+  // `null` fora da janela de vigência.
+  const activeCampaign = useMemo(() => getActiveDriverCampaign(), []);
+
+  /**
+   * O facet devolve a cidade CRUA ("SIMOES FILHO") e a opção do filtro é a versão
+   * apresentável ("Simoes Filho"). Casamos sem acento/caixa para mandar ao backend
+   * exatamente o valor que ele reconhece — com acento a busca volta zero carga.
+   */
+  const resolveCampaignFilterValue = useCallback((raw: string, options: FilterOption[]) => {
+    const target = normalizeText(raw);
+    const matched = options.find((option) => normalizeText(option.value) === target);
+    return matched?.value ?? raw;
+  }, []);
+
+  const handleApplyCampaignRoute = useCallback(
+    (campaign: DriverCampaign) => {
+      applyRouteFilter(
+        [resolveCampaignFilterValue(campaign.origem, origemOptions)],
+        [resolveCampaignFilterValue(campaign.destino, destinoOptions)],
+      );
+      toast({
+        title: "Filtro da campanha aplicado",
+        description: `Mostrando só as cargas de ${campaign.rotaLabel}.`,
+      });
+      window.requestAnimationFrame(() => {
+        const target =
+          typeof window !== "undefined" && window.innerWidth < 1024
+            ? resultsSectionRef.current
+            : desktopFiltersRef.current;
+        target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+      });
+    },
+    [applyRouteFilter, destinoOptions, origemOptions, resolveCampaignFilterValue, toast],
+  );
+
   const supportHref = buildDriverSupportWhatsAppUrl(DRIVER_SAC_MESSAGE);
 
 
@@ -882,7 +921,11 @@ const DriverPortal = () => {
             </div>
 
             <div className="mb-3 sm:mb-5">
-              <SponsoredCarousel inline />
+              <SponsoredCarousel
+                inline
+                campaign={activeCampaign}
+                onCampaignClick={handleApplyCampaignRoute}
+              />
             </div>
 
             <div className="grid grid-cols-3 gap-2">
@@ -915,7 +958,11 @@ const DriverPortal = () => {
             <div className="mt-0 flex items-start gap-5 xl:gap-6">
               {/* carousel — left */}
               <div className="min-w-0 flex-1">
-                <SponsoredCarousel inline />
+                <SponsoredCarousel
+                inline
+                campaign={activeCampaign}
+                onCampaignClick={handleApplyCampaignRoute}
+              />
               </div>
 
               {/* cargas próximas — right */}
