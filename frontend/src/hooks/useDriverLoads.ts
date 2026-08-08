@@ -462,6 +462,29 @@ export function useDriverLoads() {
     setMobileDateToDraft(undefined);
   };
 
+  /**
+   * Aplica de uma vez o filtro de uma rota anunciada (card de campanha).
+   *
+   * Zera perfil/cliente/período junto: se sobrasse um filtro antigo o motorista
+   * tocaria no banner e cairia numa lista vazia sem entender o motivo. Os drafts
+   * do drawer mobile são espelhados para o gaveta abrir já refletindo a rota.
+   */
+  const applyRouteFilter = (origem: string[], destino: string[]) => {
+    setOrigemFilter(origem);
+    setDestinoFilter(destino);
+    setPerfilFilter([]);
+    setClienteFilter([]);
+    setDateFrom(undefined);
+    setDateTo(undefined);
+    setMobileOrigemDraft(origem);
+    setMobileDestinoDraft(destino);
+    setMobilePerfilDraft([]);
+    setMobileClienteDraft([]);
+    setMobileDateFromDraft(undefined);
+    setMobileDateToDraft(undefined);
+    setPage(1);
+  };
+
   const clearMobileDraftFilters = () => {
     setMobileOrigemDraft([]);
     setMobileDestinoDraft([]);
@@ -548,6 +571,7 @@ export function useDriverLoads() {
     isTomorrowQuickFilter,
     // Actions
     clearAllFilters,
+    applyRouteFilter,
     clearMobileDraftFilters,
     syncMobileDraftsWithApplied,
     applyMobileFilters,

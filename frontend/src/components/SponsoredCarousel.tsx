@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import useEmblaCarousel from "embla-carousel-react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+
+import type { DriverCampaign } from "@/lib/driverCampaigns";
 
 interface Slide {
   src: string;
@@ -77,34 +79,36 @@ const SLIDES: Slide[] = [
 
 const AUTOPLAY_DELAY = 10000;
 
-export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
+/**
+ * Item do carrossel. Patrocínio abre link externo; campanha é ação INTERNA
+ * (aplica o filtro da rota anunciada), então vira `<button>` em vez de `<a>`.
+ */
+type CarouselItem =
+  | { kind: "sponsor"; slide: Slide }
+  | { kind: "campaign"; campaign: DriverCampaign };
+
+interface SponsoredCarouselProps {
+  inline?: boolean;
+  /** Campanha vigente — entra como PRIMEIRO slide do carrossel. */
+  campaign?: DriverCampaign | null;
+  onCampaignClick?: (campaign: DriverCampaign) => void;
+}
+
+export function SponsoredCarousel({ inline = false, campaign, onCampaignClick }: SponsoredCarouselProps) {
   const [emblaRef, emblaApi] = useEmblaCarousel({ loop: true });
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const autoplayRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const stopAutoplay = useCallback(() => {
-    if (autoplayRef.current !== null) {
-      clearInterval(autoplayRef.current);
-      autoplayRef.current = null;
-    }
-  }, []);
-
-  const startAutoplay = useCallback(() => {
-    stopAutoplay();
-    autoplayRef.current = setInterval(() => {
-      emblaApi?.scrollNext();
-    }, AUTOPLAY_DELAY);
-  }, [emblaApi, stopAutoplay]);
+  /** Incrementado a cada navegação manual — reinicia a contagem do slide atual. */
+  const [autoplayNudge, setAutoplayNudge] = useState(0);
 
   const scrollPrev = useCallback(() => {
     emblaApi?.scrollPrev();
-    startAutoplay();
-  }, [emblaApi, startAutoplay]);
+    setAutoplayNudge((n) => n + 1);
+  }, [emblaApi]);
 
   const scrollNext = useCallback(() => {
     emblaApi?.scrollNext();
-    startAutoplay();
-  }, [emblaApi, startAutoplay]);
+    setAutoplayNudge((n) => n + 1);
+  }, [emblaApi]);
 
   useEffect(() => {
     if (!emblaApi) return;
@@ -113,10 +117,25 @@ export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
     return () => { emblaApi.off("select", onSelect); };
   }, [emblaApi]);
 
+  const items = useMemo<CarouselItem[]>(
+    () => [
+      ...(campaign ? [{ kind: "campaign" as const, campaign }] : []),
+      ...SLIDES.map((slide) => ({ kind: "sponsor" as const, slide })),
+    ],
+    [campaign],
+  );
+
+  // Autoplay com dwell POR SLIDE (antes era um intervalo fixo para todos): o slide
+  // da campanha fica o tempo que a campanha pedir, os patrocinadores seguem em
+  // AUTOPLAY_DELAY. Reagenda a cada troca de slide e a cada navegação manual.
   useEffect(() => {
-    startAutoplay();
-    return stopAutoplay;
-  }, [startAutoplay, stopAutoplay]);
+    if (!emblaApi) return;
+    const current = items[selectedIndex];
+    const delay =
+      current?.kind === "campaign" ? current.campaign.autoplayDelayMs : AUTOPLAY_DELAY;
+    const timer = setTimeout(() => emblaApi.scrollNext(), delay);
+    return () => clearTimeout(timer);
+  }, [emblaApi, items, selectedIndex, autoplayNudge]);
 
   const wrapperClass = inline
     ? "w-full"
@@ -130,10 +149,40 @@ export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
         <div className="relative overflow-hidden rounded-2xl">
           <div ref={emblaRef} className="overflow-hidden rounded-2xl">
             <div className="flex">
-              {SLIDES.map((slide, i) => (
+              {items.map((item, i) => (
                 <div key={i} className="min-w-0 shrink-0 grow-0 basis-full">
+                  {item.kind === "campaign" ? (
+                    <button
+                      type="button"
+                      onClick={() => onCampaignClick?.(item.campaign)}
+                      data-testid="campaign-slide"
+                      aria-label={`${item.campaign.ctaLabel}: ${item.campaign.rotaLabel}`}
+                      className="relative block w-full overflow-hidden"
+                      style={{ aspectRatio: "1536 / 785" }}
+                    >
+                      {/* `contain` deixa faixa lateral quando a arte não é panorâmica —
+                          a cópia desfocada por trás preenche em vez de faixa preta.
+                          Com `cover` (arte já na proporção do banner) a camada de trás
+                          fica invisível, então nem é renderizada. */}
+                      {item.campaign.fit === "contain" ? (
+                        <img
+                          src={item.campaign.imageSrc}
+                          alt=""
+                          aria-hidden="true"
+                          className="absolute inset-0 h-full w-full scale-125 object-cover opacity-55 blur-2xl"
+                        />
+                      ) : null}
+                      <img
+                        src={item.campaign.imageSrc}
+                        alt={item.campaign.alt}
+                        className={`absolute inset-0 h-full w-full ${
+                          item.campaign.fit === "contain" ? "object-contain" : "object-cover"
+                        }`}
+                      />
+                    </button>
+                  ) : (
                   <a
-                    href={slide.href}
+                    href={item.slide.href}
                     target="_blank"
                     rel="noreferrer"
                     className="relative block overflow-hidden"
@@ -142,7 +191,7 @@ export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
                       void fetch("/api/driver/sponsor-click", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ brand: slide.brand }),
+                        body: JSON.stringify({ brand: item.slide.brand }),
                       }).catch(() => {});
                     }}
                   >
@@ -150,15 +199,15 @@ export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
                         Lamonica Postos preenche 100% sem corte nem barra. As fotos de
                         patrocinio (Rotula) se adaptam via object-cover sem prejuizo. */}
                     <img
-                      src={slide.src}
-                      alt={slide.alt}
+                      src={item.slide.src}
+                      alt={item.slide.alt}
                       className="absolute inset-0 h-full w-full object-cover"
-                      style={{ objectPosition: slide.objectPosition ?? "center" }}
+                      style={{ objectPosition: item.slide.objectPosition ?? "center" }}
                     />
 
                     {/* Overlay (gradiente + texto + CTA) so quando a imagem NAO e self-contained.
                         Slides self-contained ja trazem o copy embutido no design. */}
-                    {!slide.selfContained ? (
+                    {!item.slide.selfContained ? (
                       <>
                         {/* gradient overlay */}
                         <div
@@ -175,22 +224,23 @@ export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
                             Parceiro
                           </p>
                           <p className="mt-0.5 text-sm font-extrabold leading-tight tracking-wide text-white sm:text-base">
-                            {slide.brand}
+                            {item.slide.brand}
                           </p>
                           <p className="mt-0.5 text-[11px] text-white/75 sm:text-xs">
-                            {slide.tagline}
+                            {item.slide.tagline}
                           </p>
                           <span className="mt-2.5 inline-flex w-fit items-center gap-1.5 rounded-full bg-green-500 px-3 py-1 text-[11px] font-semibold text-white shadow sm:text-xs">
                             <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-current" aria-hidden="true">
                               <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z" />
                               <path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.118 1.528 5.852L0 24l6.335-1.508A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.818 9.818 0 01-5.007-1.375l-.36-.214-3.727.977.994-3.634-.235-.373A9.77 9.77 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z" />
                             </svg>
-                            {slide.cta}
+                            {item.slide.cta}
                           </span>
                         </div>
                       </>
                     ) : null}
                   </a>
+                  )}
                 </div>
               ))}
             </div>
@@ -220,13 +270,13 @@ export function SponsoredCarousel({ inline = false }: { inline?: boolean }) {
 
           {/* carousel-indicators */}
           <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-1.5">
-            {SLIDES.map((_, i) => (
+            {items.map((_, i) => (
               <button
                 key={i}
                 type="button"
                 aria-label={`Slide ${i + 1}`}
                 aria-current={i === selectedIndex}
-                onClick={() => { emblaApi?.scrollTo(i); startAutoplay(); }}
+                onClick={() => { emblaApi?.scrollTo(i); setAutoplayNudge((n) => n + 1); }}
                 className={`h-[3px] rounded-full transition-all duration-300 ${
                   i === selectedIndex
                     ? "w-6 bg-white"
