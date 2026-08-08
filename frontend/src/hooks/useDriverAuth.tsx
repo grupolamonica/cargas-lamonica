@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 
 import { driverSupabase } from "@/integrations/supabase/driver-client";
+import { reportSignedIn, reportSigningOut } from "@/lib/authSessionBeacon";
 import { registerDriverAccount, updateDriverProfile } from "@/services/loadClaims";
 
 interface DriverProfileInput {
@@ -75,6 +76,10 @@ export function DriverAuthProvider({ children }: { children: ReactNode }) {
     } = driverSupabase.auth.onAuthStateChange((_event, nextSession) => {
       try {
         assertDriverRole(nextSession?.user ?? null);
+        // Beacon de auditoria (DC-283 / ALTO-16) — só DEPOIS de validar o role,
+        // pra sessão rejeitada não virar "login" na trilha. Deduplicado por
+        // token, então reidratação e refresh não contam como entrada nova.
+        reportSignedIn(nextSession?.access_token);
         syncSession(nextSession);
       } catch {
         void driverSupabase.auth.signOut();
@@ -103,6 +108,9 @@ export function DriverAuthProvider({ children }: { children: ReactNode }) {
     };
 
     const signOut = async () => {
+      // ANTES do signOut: depois não há mais token pra provar quem estava saindo.
+      const { data } = await driverSupabase.auth.getSession();
+      reportSigningOut(data.session?.access_token);
       await driverSupabase.auth.signOut();
     };
 

@@ -11,6 +11,7 @@
 
 import "../config/load-env.js";
 import { logStructuredEvent } from "../security-log.js";
+import { recordSecurityAuditEvent } from "../security-audit.js";
 // Nota: cliente de TEXTO LIVRE (driver-outreach compõe a mensagem na camada
 // application). Sem catálogo de templates — evita acoplar a templates de outros
 // fluxos (cadastro/claim).
@@ -341,6 +342,31 @@ export async function sendWhatsappText({ to, text, correlationId, delayMs, insta
       correlationId: correlationId || null,
       maskedPhone,
       durationMs: Date.now() - startedAt,
+    });
+
+    // Trilha de auditoria do CONTATO (DC-283 / BX-5). Mandar mensagem pro
+    // telefone do motorista e tratamento de dado pessoal, e passa por um
+    // operador nos EUA (Meta). Sem registro nao ha como responder ao titular
+    // "quando voces me contataram e por qual canal".
+    //
+    // Fire-and-forget e SEM conteudo: telefone mascarado (mesmo formato do log,
+    // 2 ultimos digitos) e tamanho do texto. A trilha prova que houve contato,
+    // nao guarda a conversa -- o conteudo ja vive em whatsapp_messages, com
+    // finalidade e retencao proprias.
+    void recordSecurityAuditEvent({
+      eventType: "driver-outreach.message.sent",
+      severity: "info",
+      actorRole: "system",
+      resourceType: "driver",
+      action: "contact-driver",
+      outcome: "success",
+      correlationId: correlationId || null,
+      metadata: {
+        canal: "whatsapp",
+        destino: "Evolution/Meta",
+        telefone_masked: maskedPhone,
+        tamanho_texto: String(text).length,
+      },
     });
 
     return { ok: true };

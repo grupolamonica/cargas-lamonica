@@ -22,6 +22,17 @@ const AUDIT_LOGS_MAX_PAGE_SIZE = 200;
 const OPERATOR_DIRECTORY_TTL_MS = 300_000;
 let operatorDirectoryCache = { at: 0, map: new Map() };
 
+/**
+ * "joao.silva@x.com" -> "Joao Silva". Extraido do diretorio pra ser reusado no
+ * fallback do ator apagado (DC-283 / BX-4): sem isto, um evento de operador
+ * excluido apareceria com e-mail cru onde o resto da tela mostra nome.
+ */
+export function prettifyEmailLocalPart(email) {
+  const localPart = email ? String(email).split("@")[0] : "";
+  if (!localPart) return null;
+  return localPart.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export async function resolveOperatorDirectory() {
   const now = Date.now();
   if (now - operatorDirectoryCache.at < OPERATOR_DIRECTORY_TTL_MS) {
@@ -33,10 +44,7 @@ export async function resolveOperatorDirectory() {
     const map = new Map();
     for (const user of data?.users || []) {
       const email = user.email || null;
-      const localPart = email ? email.split("@")[0] : "";
-      const prettyName = localPart
-        ? localPart.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
-        : null;
+      const prettyName = prettifyEmailLocalPart(email);
       const role = user?.app_metadata?.role || user?.user_metadata?.role || null;
       const accessLevelRaw =
         user?.app_metadata?.access_level || user?.user_metadata?.access_level || null;
@@ -141,6 +149,7 @@ export async function fetchOperatorAuditLogsReadModel({ query, correlationId }) 
           event_type,
           severity,
           actor_user_id,
+          actor_email,
           actor_role,
           resource_type,
           resource_id,
@@ -186,8 +195,11 @@ export async function fetchOperatorAuditLogsReadModel({ query, correlationId }) 
             categoryLabel: category.label,
             severity: row.severity,
             actorUserId: row.actor_user_id,
-            actorEmail: resolved?.email || null,
-            actorDisplayName: resolved?.displayName || null,
+            // Diretorio ao vivo primeiro (pega renomeacao de e-mail), com queda
+            // pro valor gravado no momento do fato. Sem essa queda, apagar um
+            // operador apaga a autoria do historico inteiro dele (DC-283/BX-4).
+            actorEmail: resolved?.email || row.actor_email || null,
+            actorDisplayName: resolved?.displayName || prettifyEmailLocalPart(row.actor_email),
             actorRole: row.actor_role,
             resourceType: row.resource_type,
             resourceId: row.resource_id,

@@ -53,6 +53,7 @@ import {
 } from "./driver-outreach/handlers.js";
 
 import { resolveClientLogoResponse } from "./client-logo.handler.js";
+import { resolveAuthSessionEventResponse } from "./auth-events.handler.js";
 
 import {
   resolveApprovePublicLoadLeadResponse,
@@ -284,6 +285,11 @@ export function registerRoutes(app) {
   router.post("/api/public/cadastro/finalizar", wrap(resolveFinalizarCadastroResponse));
 
   // Cadastro v2 — driver-authenticated wizard endpoints
+  // Beacon do ciclo de autenticacao (DC-283 / ALTO-16). O login roda no GoTrue
+  // do lado do cliente, entao o backend nunca ve a sessao nascer — sem este
+  // aviso, "quem entrou no sistema e quando" nao existe na trilha.
+  router.post("/api/auth/session-event", wrap(resolveAuthSessionEventResponse));
+
   router.post("/api/candidatura/pre-check", wrap(resolveCandidaturaPreCheckResponse));
   router.post("/api/candidatura/attach-selfie", wrap(resolveAttachSelfieResponse));
   router.post("/api/candidatura/draft", wrap(resolveCandidaturaDraftSaveResponse));
