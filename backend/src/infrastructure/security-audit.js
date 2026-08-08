@@ -12,6 +12,16 @@ function normalizeAuditMetadata(metadata) {
 export async function insertSecurityAuditEvent(client, event) {
   const metadata = normalizeAuditMetadata(event.metadata);
 
+  // actor_email sai de uma subquery no proprio INSERT (DC-283 / BX-4).
+  //
+  // Denormalizar a autoria no momento do fato e o que faz a trilha sobreviver a
+  // exclusao do operador: `actor_user_id` tem ON DELETE SET NULL e a tela
+  // resolve o nome ao vivo, entao apagar um usuario hoje anula a autoria de
+  // todo o historico dele de uma vez.
+  //
+  // Subquery em vez de parametro novo porque sao 65 pontos de chamada: threading
+  // o e-mail por todos seria invasivo pra um dado que o banco ja tem a mao, sem
+  // round-trip extra. Ator nulo (evento de sistema) devolve NULL.
   await client.query(
     `
       INSERT INTO public.security_audit_logs (
@@ -25,9 +35,13 @@ export async function insertSecurityAuditEvent(client, event) {
         outcome,
         request_ip,
         correlation_id,
-        metadata
+        metadata,
+        actor_email
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb,
+        (SELECT email FROM auth.users WHERE id = $3)
+      )
     `,
     [
       event.eventType,

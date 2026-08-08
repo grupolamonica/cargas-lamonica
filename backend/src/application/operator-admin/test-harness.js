@@ -19,6 +19,7 @@ const schemaSql = `
     severity text NOT NULL DEFAULT 'info',
     actor_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
     actor_role text,
+    actor_email text,
     resource_type text,
     resource_id text,
     action text,
