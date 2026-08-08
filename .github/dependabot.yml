@@ -1,0 +1,80 @@
+version: 2
+
+# Dependabot é o mecanismo que de fato queima o backlog de vulnerabilidades que
+# o job `security` do ci.yml apenas reporta. Sem ele, o relatório vira ruído
+# recorrente que ninguém age.
+#
+# `open-pull-requests-limit` baixo de propósito: o objetivo é um fluxo constante
+# de PRs pequenos e revisáveis, não 30 PRs abertos de uma vez que ninguém lê.
+updates:
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"
+      prefix-development: "build(deps-dev)"
+    groups:
+      # Agrupa patches para não gerar um PR por bump trivial.
+      patches-menores:
+        update-types:
+          - patch
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"
+      prefix-development: "build(deps-dev)"
+    groups:
+      patches-menores:
+        update-types:
+          - patch
+
+  # Sidecars Python (bots/ + OCR). requirements.txt por serviço.
+  - package-ecosystem: pip
+    directory: /bots/angelira
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "build(deps)"
+
+  - package-ecosystem: pip
+    directory: /bots/spx
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "build(deps)"
+
+  # Actions do próprio CI — bumps de actions/checkout, setup-node etc.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci(deps)"
+
+  # Imagens base dos Dockerfiles (node:22-slim, nginx:alpine, python:3.12).
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "build(docker)"
+
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "build(docker)"

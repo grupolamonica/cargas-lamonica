@@ -146,3 +146,94 @@ jobs:
           python -c "import sys; sys.path.insert(0, 'backend'); from main import app; print('unificada OK:', app.title)"
           pytest -q || echo "no tests yet — ok"
         working-directory: bots/unificada
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Varreduras de segurança (achado ALTO-13 da auditoria LGPD — DC-283).
+  # Antes deste job, `grep 'trivy|gitleaks|npm audit|dependabot' .github/` = vazio.
+  #
+  # Desenho deliberado: BLOQUEIA o que dá para bloquear hoje, REPORTA o que tem
+  # backlog. Medido em 2026-08-07: backend 15 vulnerabilidades (1 crítica, 7
+  # altas), frontend 11 (1 crítica, 6 altas). Um gate bloqueante de dependência
+  # reprovaria todo PR desde o primeiro dia — e varredura que trava tudo é
+  # desligada na primeira semana, deixando o repositório pior do que sem ela.
+  #
+  # - Segredo novo   → BLOQUEIA (hoje não há nenhum; o histórico conhecido está
+  #                    allowlistado por caminho em .gitleaks.toml)
+  # - Dependência    → REPORTA no resumo do job; quem queima o backlog é o
+  #                    Dependabot (.github/dependabot.yml)
+  # - Config de infra→ REPORTA (superfície do MED-7: container como root)
+  #
+  # Para virar bloqueante depois de zerar o backlog: trocar `continue-on-error`
+  # por `--audit-level=high` sem `|| true` e marcar como required check.
+  # ─────────────────────────────────────────────────────────────────────────
+  security:
+    name: Segurança — segredos + dependências
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        # fetch-depth: 0 — o gitleaks precisa do histórico completo para varrer
+        # commits antigos, não só a árvore atual.
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── BLOQUEANTE: nenhum segredo novo entra na main ──────────────────────
+      # Roda a CLI oficial (MIT, gratuita) em vez de gitleaks-action: a Action
+      # exige licenca paga quando o dono do repo e uma organizacao
+      # ("[grupolamonica] is an organization. License key is required.").
+      #
+      # --redact e obrigatorio aqui: sem ele, um achado imprime o segredo em
+      # texto puro no log do CI, ou seja, a varredura vazaria o que veio
+      # denunciar. Imagem pinada por versao, nao :latest.
+      - name: Gitleaks — varredura de segredos
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/repo" \
+            -w /repo \
+            ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            detect --config .gitleaks.toml --redact --no-banner --verbose --exit-code 1
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # ── REPORTE: dependências (backlog real, ver comentário do job) ────────
+      - name: Auditoria de dependências — backend
+        id: audit_backend
+        continue-on-error: true
+        working-directory: backend
+        run: |
+          echo "### Backend — npm audit" >> "$GITHUB_STEP_SUMMARY"
+          npm audit --omit=dev --audit-level=high >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          npm audit --omit=dev --json 2>/dev/null \
+            | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.stringify(JSON.parse(s).metadata.vulnerabilities))}catch{console.log('n/a')}})" \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Auditoria de dependências — frontend
+        id: audit_frontend
+        continue-on-error: true
+        working-directory: frontend
+        run: |
+          echo "### Frontend — npm audit" >> "$GITHUB_STEP_SUMMARY"
+          npm audit --omit=dev --audit-level=high >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          npm audit --omit=dev --json 2>/dev/null \
+            | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.stringify(JSON.parse(s).metadata.vulnerabilities))}catch{console.log('n/a')}})" \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      # ── REPORTE: má configuração de container (superfície do MED-7) ────────
+      - name: Trivy — má configuração de Dockerfile e compose
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '0'
+          format: table

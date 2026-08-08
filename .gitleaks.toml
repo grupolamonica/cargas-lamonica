@@ -1,0 +1,68 @@
+# Configuração do gitleaks (varredura de segredos no CI).
+#
+# Estende o conjunto de regras padrão em vez de substituí-lo.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Falsos positivos conhecidos e o vazamento histórico já catalogado"
+
+paths = [
+  # Arquivos de exemplo mostram o FORMATO da variável; os valores são
+  # placeholders (`__set-a-strong-secret-via-openssl-rand-hex-32__`).
+  '''\.env\.example$''',
+
+  # Fixtures de teste usam tokens sintéticos (`sbp_super_secret_value_...`)
+  # justamente para provar que o sanitizador de log os redige.
+  '''.*\.test\.(js|ts|tsx)$''',
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # DÍVIDA CONHECIDA — chave service_role de produção no histórico
+  #
+  # Encontrado pela PRÓPRIA varredura que este PR adiciona, no primeiro run:
+  # 38 achados (25 JWT + 13 header de autorização), todos neste arquivo, com
+  # destaque para um JWT `role: service_role` do projeto de produção
+  # (lbpzkdecwraipbjbaajs), válido até 2036 — a chave que ignora RLS.
+  #
+  # Situação:
+  #  - o arquivo JÁ foi removido do rastreamento e está no .gitignore, então a
+  #    árvore atual está limpa;
+  #  - o commit não é alcançável por nenhuma branch, mas sobrevive em
+  #    `refs/pull/*` do GitHub, que persiste mesmo depois de apagar a branch;
+  #  - a impressão digital da chave vazada NÃO bate com a que roda em produção
+  #    hoje, ou seja, ela já foi rotacionada em algum momento.
+  #
+  # Allowlist por caminho é segura aqui justamente porque o arquivo é
+  # gitignored e não rastreado: ela não pode esconder vazamento novo em
+  # arquivo versionado.
+  #
+  # Pendente de confirmação humana: checar no painel do Supabase que a chave
+  # antiga está de fato revogada, e não apenas substituída.
+  # Ver docs/security/credenciais-vazadas-no-historico.md.
+  # ─────────────────────────────────────────────────────────────────────────
+  '''\.claude/settings\.local\.json$''',
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # DÍVIDA CONHECIDA — REMOVER ESTA ENTRADA (achado CRIT-1, DC-283)
+  #
+  # A senha real do portal SPX/Agency foi commitada neste arquivo e está em
+  # TODO o histórico do git. O literal já saiu da versão atual (seed vazio),
+  # mas o histórico não pode ser reescrito num PR: exige git filter-repo e
+  # re-clone por todo mundo.
+  #
+  # Sem esta entrada, o gitleaks reprova todo PR por um segredo que ninguém
+  # consegue remover num PR — e varredura que trava tudo é desligada na
+  # primeira semana. Com ela, a varredura fica BLOQUEANTE para qualquer
+  # segredo NOVO, que é o que dá para impedir hoje.
+  #
+  # Allowlist por CAMINHO, de propósito: escrever o segredo aqui como regex
+  # apenas o recommitaria em outro arquivo.
+  #
+  # Ordem para apagar esta entrada:
+  #   1. rotacionar a credencial no portal (segue válida em cada clone);
+  #   2. purgar o histórico;
+  #   3. remover esta linha e conferir que o CI segue verde.
+  # Runbook: docs/security/credenciais-vazadas-no-historico.md
+  # ─────────────────────────────────────────────────────────────────────────
+  '''backend/supabase/migrations/20260420120000_create_aspx_drivers\.sql$''',
+]

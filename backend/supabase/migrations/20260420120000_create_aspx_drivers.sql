@@ -49,12 +49,19 @@ TO service_role
 USING (TRUE)
 WITH CHECK (TRUE);
 
--- Seed inicial (pode ser rotacionado via UPDATE manualmente).
+-- Seed VAZIO do singleton. Mesmo padrao de brk_credentials, que tambem guarda
+-- credencial de portal externo e nasce sem segredo no arquivo.
+--
+-- Este INSERT trazia login, senha em texto puro e device_id reais do portal
+-- SPX/Agency (achado CRIT-1 da auditoria LGPD, DC-283). Tirar daqui NAO
+-- desfaz o vazamento: o valor continua em todo o historico do git e em todo
+-- clone existente. A credencial tem de ser tratada como comprometida e
+-- ROTACIONADA no portal — ver docs/security/credenciais-vazadas-no-historico.md.
+--
+-- Popular apos rotacionar:
+--   UPDATE public.aspx_credentials
+--      SET email = '...', password = '...', device_id = '...', updated_at = now()
+--    WHERE id = 1;
 INSERT INTO public.aspx_credentials (id, email, password, device_id)
-VALUES (
-  1,
-  'cynthia.rios@grupolamonica.com.br',
-  'Lamonica@2024',
-  'e17e5dcd53c211d038a0cd1a950702df'
-)
+VALUES (1, '', '', NULL)
 ON CONFLICT (id) DO NOTHING;
