@@ -165,6 +165,17 @@ services:
       HOST: "0.0.0.0"
     volumes:
       - cadastro_anexos:/app/backend/anexos_tmp
+    # DC-283 / MED-7 — hardening do container mais exposto do conjunto.
+    # no-new-privileges: mesmo que um binário setuid escape do processo, ele não
+    #   consegue escalar privilégio.
+    # cap_drop ALL: um sidecar HTTP que lê arquivo e chama API externa não precisa
+    #   de capability nenhuma do kernel.
+    # read_only NÃO é aplicado aqui: o serviço grava em anexos_tmp (volume) e o
+    #   uvicorn/openai escrevem em /tmp — ligar sem mapear tmpfs derrubaria o OCR.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     # Não expõe porta externamente — Traefik roteia /ocr-api/* para este container
     expose:
       - "8765"
