@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 
 import { supabase } from "@/integrations/supabase/client";
+import { reportSignedIn, reportSigningOut } from "@/lib/authSessionBeacon";
 
 interface AuthContextValue {
   user: User | null;
@@ -69,6 +70,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
+      // Beacon de auditoria (DC-283 / ALTO-16) — deduplicado por token, então
+      // reidratação de storage e refresh não viram "login" novo.
+      reportSignedIn(session?.access_token);
       void syncSession(session);
     });
 
@@ -79,6 +83,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const signOut = async () => {
+    // ANTES do signOut: depois não há mais token pra provar quem estava saindo.
+    const { data } = await supabase.auth.getSession();
+    reportSigningOut(data.session?.access_token);
     await supabase.auth.signOut();
   };
 
